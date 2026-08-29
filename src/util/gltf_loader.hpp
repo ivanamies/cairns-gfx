@@ -5,7 +5,13 @@
 #include "rhi/resource_manager.hpp"
 #include "rhi/resources.hpp"
 #include "util/cpu_arena.hpp"  // BumpArena + ArenaSlice (name interning)
+#include "util/fnv1a.hpp"      // material dedup hash
+#include "util/material_gpu.hpp"
 #include "util/material_map.hpp"  // kNoMaterialTexture + MapMaterialTextures
+#include "util/shader_table.hpp"
+
+#include <algorithm>
+#include <utility>
 
 #include <cstdio>
 #include <cstdlib>
@@ -323,8 +329,80 @@ struct Material {
     struct Cold {
         rhi::Handle<rhi::Texture> color;
         rhi::Handle<rhi::Sampler> sampler;
+        ShaderKey shader_key = ShaderKey::kUnlit;
+        rhi::MaterialGpu params;
+        rhi::Handle<rhi::Texture> tex1;  // effect-specific (TAM pair etc.)
+        rhi::Handle<rhi::Texture> tex2;
     };
 };
+
+// Everything that identifies a material. POD so dedup can hash + compare it.
+struct MaterialDesc {
+    ShaderKey shader_key = ShaderKey::kUnlit;
+    rhi::Handle<rhi::Texture> color;
+    rhi::Handle<rhi::Sampler> sampler;
+    rhi::Handle<rhi::Texture> tex1;
+    rhi::Handle<rhi::Texture> tex2;
+    rhi::MaterialGpu params;
+};
+
+using MaterialDedupEntry = std::pair<uint64_t, cairns::Handle<Material>>;
+
+// Create-or-reuse: hash the desc, binary-search the sorted (hash, handle)
+// table, full-compare against Cold on a hit (collisions handled); entries
+// whose material was released are validated lazily and skipped. The caller
+// owns `dedup` (Engine keeps it on cpu_block_). `scope_salt` bounds sharing:
+// the loader salts per prefab so identical descs collapse WITHIN a prefab
+// (atlas GLBs) but never across prefabs -- cross-prefab sharing would let one
+// prefab's unload release a material another prefab still draws.
+template <typename DedupVec>
+inline cairns::Handle<Material> CreateMaterialDeduped(
+    cairns::ResourceManager<Material>& materials, DedupVec& dedup,
+    const MaterialDesc& desc, uint64_t scope_salt) {
+    cairns::Fnv1a h;
+    h.WritePod(scope_salt);
+    h.WritePod(desc.shader_key);
+    h.WritePod(desc.color);
+    h.WritePod(desc.sampler);
+    h.WritePod(desc.tex1);
+    h.WritePod(desc.tex2);
+    h.WritePod(desc.params);
+    const uint64_t hash = h.Digest();
+    const MaterialDedupEntry probe{hash, {}};
+    const auto by_hash = [](const MaterialDedupEntry& a,
+                            const MaterialDedupEntry& b) {
+        return a.first < b.first;
+    };
+    for (auto it = std::lower_bound(dedup.begin(), dedup.end(), probe, by_hash);
+         it != dedup.end() && it->first == hash; ++it) {
+        Material::Cold* cold = materials.GetCold(it->second);
+        if (cold == nullptr) {
+            continue;  // released since insertion
+        }
+        if (cold->shader_key == desc.shader_key &&
+            cold->color.index == desc.color.index &&
+            cold->color.generation == desc.color.generation &&
+            cold->sampler.index == desc.sampler.index &&
+            cold->sampler.generation == desc.sampler.generation &&
+            cold->tex1.index == desc.tex1.index &&
+            cold->tex2.index == desc.tex2.index &&
+            std::memcmp(&cold->params, &desc.params,
+                        sizeof(rhi::MaterialGpu)) == 0) {
+            return it->second;
+        }
+    }
+    const cairns::Handle<Material> mat_id = materials.Acquire();
+    Material::Cold* mcold = materials.GetCold(mat_id);
+    mcold->color = desc.color;
+    mcold->sampler = desc.sampler;
+    mcold->shader_key = desc.shader_key;
+    mcold->params = desc.params;
+    mcold->tex1 = desc.tex1;
+    mcold->tex2 = desc.tex2;
+    dedup.insert(std::lower_bound(dedup.begin(), dedup.end(), probe, by_hash),
+                 MaterialDedupEntry{hash, mat_id});
+    return mat_id;
+}
 
 // Aaltonen Hot/Cold split. Pooled via cairns::ResourceManager<Prefab> on
 // Engine; PrefabId = Handle<Prefab>. Hot is what extract reads at draw-build
@@ -1000,9 +1078,12 @@ inline bool LoadPrefabFromGltf(const std::filesystem::path& path,
 
 // Takes split-out Prefab Hot+Cold; reads CPU temporaries from Cold and
 // writes resolved handles into Hot.
+template <typename DedupVec>
 inline void PreparePrefabResources(Prefab::Hot& hot, Prefab::Cold& cold,
                                    rhi::Resources& rm, rhi::Allocator& alloc,
-                                   cairns::ResourceManager<Material>& materials) {
+                                   cairns::ResourceManager<Material>& materials,
+                                   DedupVec& material_dedup,
+                                   uint64_t dedup_scope) {
     // Textures
     for (const auto& texDescIn : cold.loaded_textures) {
         rhi::TextureDesc d;
@@ -1068,13 +1149,19 @@ inline void PreparePrefabResources(Prefab::Hot& hot, Prefab::Cold& cold,
         } else if (!cold.samplerHandles.empty()) {
             s = cold.samplerHandles[0];
         }
-        // Acquire a pool slot, populate Cold. Hot.set2 (the bind group) is
-        // filled in later by Engine::initRenderPipeline, which needs
-        // rhi_.frames/resources to build the descriptor.
-        const cairns::Handle<Material> mat_id = materials.Acquire();
-        Material::Cold* mcold = materials.GetCold(mat_id);
-        mcold->color = t;
-        mcold->sampler = s;
+        // Create via the dedup seam. Hot.set2 (the bind group) is filled in
+        // later by Engine::initRenderPipeline, which needs rhi_.frames/
+        // resources to build the descriptor. The glTF path salts per material
+        // ordinal -- pool slots stay 1:1 with glTF indices, so draw keys (and
+        // depth tie-breaks) are byte-identical to the pre-dedup engine.
+        // Collapse fires for AUTHORED materials (effects/editor), which pass
+        // a shared scope.
+        MaterialDesc mdesc{};
+        mdesc.color = t;
+        mdesc.sampler = s;
+        const cairns::Handle<Material> mat_id = CreateMaterialDeduped(
+            materials, material_dedup, mdesc,
+            dedup_scope | (static_cast<uint64_t>(i) << 32));
         hot.materials.push_back(mat_id);
     }
 }

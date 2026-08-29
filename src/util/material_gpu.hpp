@@ -7,14 +7,17 @@
 
 namespace cairns::rhi {
 
+// Per-MATERIAL dynamic-offset UBO (slot 2, Draw::dynamic_buffer_offsets[0]).
+// std140-safe 64 B: four vec4-aligned rows. One block per referenced material
+// per frame, offset shared across its draws. ids.x/.y keep the old
+// tex_color_id/sampler_id semantics.
 struct MaterialGpu {
-    uint32_t tex_color_id = std::numeric_limits<uint32_t>::max();
-    uint32_t wip1 = std::numeric_limits<uint32_t>::max();
-    uint32_t wip2 = std::numeric_limits<uint32_t>::max();
-    uint32_t wip3 = std::numeric_limits<uint32_t>::max();
-    uint32_t wip4 = std::numeric_limits<uint32_t>::max();
-    uint32_t sampler_id = std::numeric_limits<uint32_t>::max();
+    glm::vec4 base_color = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+    glm::vec4 params0 = glm::vec4(0.0f);
+    glm::vec4 params1 = glm::vec4(0.0f);
+    glm::uvec4 ids = glm::uvec4(std::numeric_limits<uint32_t>::max());
 };
+static_assert(sizeof(MaterialGpu) == 64, "std140 block layout");
 
 struct DrawTmp {
     glm::mat4 model_matrix;

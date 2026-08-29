@@ -61,14 +61,17 @@ SCENARIO("GpuChannel + GpuSampler + GpuActorRecord layouts",
     REQUIRE(ar.time == 0.0f);
 }
 
-SCENARIO("MaterialGpu defaults to invalid handles",
+SCENARIO("MaterialGpu is a std140 64-byte block with sane defaults",
          "[spec][asset][gpu][material]") {
     rhi::MaterialGpu m{};
-    REQUIRE(m.tex_color_id == 0xFFFFFFFFu);
-    REQUIRE(m.sampler_id == 0xFFFFFFFFu);
-    REQUIRE(m.wip1 == 0xFFFFFFFFu);
-    // Size: 6 uint32 = 24 bytes -- consumed by the bindless material set.
-    REQUIRE(sizeof(rhi::MaterialGpu) == 24u);
+    // ids.x/.y carry the tex_color/sampler slots; invalid by default.
+    REQUIRE(m.ids.x == 0xFFFFFFFFu);
+    REQUIRE(m.ids.y == 0xFFFFFFFFu);
+    REQUIRE(m.base_color.r == 1.0f);
+    REQUIRE(m.base_color.a == 1.0f);
+    REQUIRE(m.params0.x == 0.0f);
+    // Four vec4-aligned rows: uploadable as a UBO on all three backends.
+    REQUIRE(sizeof(rhi::MaterialGpu) == 64u);
 }
 
 SCENARIO("DrawTmp default entity_id is 0 (background marker)",

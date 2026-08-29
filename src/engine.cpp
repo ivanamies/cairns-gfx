@@ -2349,15 +2349,38 @@ void Engine::EncodeDraws(const FramePacket& pkt) {
                     s.proxies.primitives.size());
         }
 
-        // 2. Per-draw material + draw_tmp UBOs in stable_idx order.
-        const cairns::rhi::MaterialGpu material_gpu {};
+        // 2. ONE MaterialGpu per referenced material (offset shared across its
+        // draws -- the per-material dynamic-offset channel), then the per-draw
+        // draw_tmp UBOs in stable_idx order. The offset cache lives on the
+        // slot arena, indexed by material pool slot.
+        const uint32_t mat_cap = prefab_store_.materials.Capacity();
+        uint32_t* mat_offset_cache = s.arena.AllocateArray<uint32_t>(mat_cap);
+        memset(mat_offset_cache, 0xFF, mat_cap * sizeof(uint32_t));
         for (size_t i = 0; i < s.drawList.size(); ++i) {
-            uint32_t material_offset = 0;
-            void* mptr = rhi_.alloc.BumpAllocate(
-                sizeof(cairns::rhi::MaterialGpu), rhi_.alloc.UboAlign(),
-                rhi::Memory::kDynamic, &material_offset);
-            assert(mptr && "bump alloc failed: material");
-            memcpy(mptr, &material_gpu, sizeof(material_gpu));
+            const cairns::Handle<cairns::Material> mid = s.draw_material_ids[i];
+            uint32_t material_offset = UINT32_MAX;
+            if (!mid.IsNull() && mid.index < mat_cap) {
+                material_offset = mat_offset_cache[mid.index];
+                if (material_offset == UINT32_MAX) {
+                    void* mptr = rhi_.alloc.BumpAllocate(
+                        sizeof(cairns::rhi::MaterialGpu), rhi_.alloc.UboAlign(),
+                        rhi::Memory::kDynamic, &material_offset);
+                    assert(mptr && "bump alloc failed: material");
+                    const cairns::Material::Cold* mcold =
+                        prefab_store_.materials.GetCold(mid);
+                    const cairns::rhi::MaterialGpu defaults{};
+                    memcpy(mptr, mcold != nullptr ? &mcold->params : &defaults,
+                           sizeof(cairns::rhi::MaterialGpu));
+                    mat_offset_cache[mid.index] = material_offset;
+                }
+            } else {
+                void* mptr = rhi_.alloc.BumpAllocate(
+                    sizeof(cairns::rhi::MaterialGpu), rhi_.alloc.UboAlign(),
+                    rhi::Memory::kDynamic, &material_offset);
+                assert(mptr && "bump alloc failed: material");
+                const cairns::rhi::MaterialGpu defaults{};
+                memcpy(mptr, &defaults, sizeof(defaults));
+            }
 
             cairns::rhi::DrawTmp draw_tmp { .model_matrix = s.draw_world_matrices[i] };
             draw_tmp.entity_id = s.draw_entity_ids[i];
@@ -2572,6 +2595,9 @@ bool Engine::BuildMeshOpaqueDraws(uint32_t slot) {
             s.arena.AllocateArray<glm::mat4>(total_draws), total_draws};
         s.draw_entity_ids = {
             s.arena.AllocateArray<uint32_t>(total_draws), total_draws};
+        s.draw_material_ids = {
+            s.arena.AllocateArray<cairns::Handle<cairns::Material>>(total_draws),
+            total_draws};
 
         // Per-proxy starting stable_idx via prefix sum over primitive_count.
         // Lives on the per-slot arena so the workers can read it concurrently
@@ -2718,6 +2744,7 @@ bool Engine::BuildMeshOpaqueDraws(uint32_t slot) {
                     // can readback the real id from id_target_ regardless of
                     // outline state.
                     s.draw_entity_ids[stable_idx] = mp.entity_id;
+                    s.draw_material_ids[stable_idx] = mat_id;
                     ++stable_idx;
                 }
             }
@@ -3235,6 +3262,7 @@ bool Engine::initResourceManagers() {
         // POD loose vectors re-seat + reserve onto cpu_block_.
         ReseatOnBlock(prefab_store_.prefab_ids, kPrefabResidencyCap);
         ReseatOnBlock(prefab_store_.per_prefab_asset, kPrefabResidencyCap);
+        ReseatOnBlock(material_dedup_, 8192);
         ReseatOnBlock(prefab_store_.resident_textures, kPrefabResidencyCap * 4);
         prefab_store_.glb_paths.reserve(kPrefabResidencyCap);  // path strings stay heap (not interned)
         prefab_store_.per_batch_shared_skin.reserve(64);
@@ -4078,7 +4106,10 @@ uint32_t Engine::UnloadAllPrefabs() {
                 }
                 for (cairns::Handle<cairns::Material> matid : phot->materials) {
                     cairns::Material::Hot* mathot = prefab_store_.materials.GetHot(matid);
-                    if (mathot && !mathot->set2.IsNull()) {
+                    if (mathot == nullptr) {
+                        continue;  // deduped repeat already released this pass
+                    }
+                    if (!mathot->set2.IsNull()) {
                         rhi_.resources.DeferFree(mathot->set2);
                     }
                     prefab_store_.materials.Release(matid);
@@ -4268,7 +4299,10 @@ bool Engine::ReloadPrefab(uint32_t idx, const std::filesystem::path& path) {
         }
         for (cairns::Handle<cairns::Material> matid : old_materials) {
             cairns::Material::Hot* mathot = prefab_store_.materials.GetHot(matid);
-            if (mathot && !mathot->set2.IsNull()) {
+            if (mathot == nullptr) {
+                continue;  // deduped repeat already released this pass
+            }
+            if (!mathot->set2.IsNull()) {
                 rhi_.resources.DeferFree(mathot->set2);
             }
             prefab_store_.materials.Release(matid);
@@ -4845,8 +4879,11 @@ Engine::LoadPrefabBatchResult Engine::LoadPrefabBatch(
                 prefab_store_.prefabs.Release(sid);
                 continue;
             }
-            cairns::PreparePrefabResources(*shot, *scold, rhi_.resources,
-                                            rhi_.alloc, prefab_store_.materials);
+            cairns::PreparePrefabResources(
+                *shot, *scold, rhi_.resources, rhi_.alloc,
+                prefab_store_.materials, material_dedup_,
+                /*dedup_scope=*/(static_cast<uint64_t>(sid.index) << 16) |
+                    sid.generation);
             prefab_store_.prefab_ids.push_back(sid);
             ++r.count;
         }

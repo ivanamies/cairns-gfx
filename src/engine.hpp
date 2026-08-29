@@ -149,6 +149,10 @@ public:
         // Parallel to draw_world_matrices; baked from MeshProxy::entity_id
         // by BuildMeshOpaqueDraws so unlit.frag can write the per-fragment id.
         std::span<uint32_t> draw_entity_ids;
+        // Parallel: each draw's material, so the UBO encode uploads ONE
+        // MaterialGpu per referenced material (offset shared across its
+        // draws) -- the Draw struct itself never carries it.
+        std::span<cairns::Handle<cairns::Material>> draw_material_ids;
         // Multi-scene fan-out: every distinct scene any viewport binds is
         // extracted into the single s.proxies union; this records each scene's
         // [mesh) range (at extract) and [draw) range (after the prefix sum) so
@@ -1612,6 +1616,11 @@ private:
     // cpu_block_ + prefab_arena_ stay on Engine (declared earlier) so they
     // outlive the store's pools + interned slices.
     cairns::PrefabStore prefab_store_;
+    // Material create-or-reuse table (hash -> handle, sorted, binary-searched;
+    // no maps). Re-seated onto cpu_block_ in initResourceManagers.
+    std::vector<cairns::MaterialDedupEntry,
+                cairns::ChunkStdAllocator<cairns::MaterialDedupEntry>>
+        material_dedup_;
     // APPEND-only debug snapshot stashed between two NDJSON op calls
     // (cairns.debug.snapshotPrefabHandles -> cairns.debug.assertAppendOnly).
     // Empty until first snapshot call.
