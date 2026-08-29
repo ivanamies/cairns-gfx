@@ -1594,6 +1594,9 @@ void Engine::RecordFrame(FramePacket& pkt) {
         // produces visible silhouettes. We only insert the pass when the
         // engine carries highlights, so the no-op cost is zero by default.
         std::array<rhi::GraphTexture, kNumViewports> outline_off{};
+        // #229 C3: per-viewport "did the outline pass run" (chrome gate is now
+        // per-viewport, so the swap read can't use one global outline_on).
+        std::array<bool, kNumViewports> outline_ran{};
         // #224 L8: editor-chrome separation. The selection outline IS
         // editor chrome -- meta-UI that marks "this entity is selected
         // *in the editor*", drawn on top of the scene. Stylized
@@ -1603,11 +1606,19 @@ void Engine::RecordFrame(FramePacket& pkt) {
         // a capture or scroll so the selection outline drops out but
         // the stylized look survives. selection STATE (picking_.highlights) is
         // preserved -- only the outline-pass DRAWING is suppressed.
-        const bool outline_on =
-            editor_chrome_enabled_ && !picking_.highlights.empty();
-        if (outline_on) {
+        // #229 C3: editor-chrome is now per-viewport (Viewport::Cold::
+        // chrome_enabled). Selection STATE (picking_.highlights) is global;
+        // each viewport draws the outline only when its own chrome is on.
+        const bool have_highlights = !picking_.highlights.empty();
+        if (have_highlights) {
             for (int v = 0; v < viewport_mgr_.active_count; ++v) {
                 const int vp_idx = v;
+                const cairns::Viewport::Cold* vp_cold =
+                    viewport_mgr_.pool.GetCold(viewport_mgr_.ids[vp_idx]);
+                if (!vp_cold || !vp_cold->chrome_enabled) {
+                    continue;
+                }
+                outline_ran[vp_idx] = true;
                 const char* pass_name =
                     (vp_idx == 0) ? "outline_vp0" : "outline_vp1";
                 graph_->AddPass(
@@ -1684,7 +1695,7 @@ void Engine::RecordFrame(FramePacket& pkt) {
                 for (int v = 0; v < viewport_mgr_.active_count; ++v) {
                     // #207 swap reads outline_off when the outline pass ran
                     // this frame, else color_off. Both are sampled-readonly.
-                    b.AddAttachmentInput(outline_on ? outline_off[v]
+                    b.AddAttachmentInput(outline_ran[v] ? outline_off[v]
                                                     : color_off[v]);
                     b.AddAttachmentInput(depth_off[v]);
                 }
@@ -1693,7 +1704,7 @@ void Engine::RecordFrame(FramePacket& pkt) {
                 std::array<rhi::Handle<rhi::Texture>, kNumViewports> vp_color{};
                 std::array<rhi::Handle<rhi::Texture>, kNumViewports> vp_depth{};
                 for (int v = 0; v < viewport_mgr_.active_count; ++v) {
-                    vp_color[v] = res.Resolve(outline_on ? outline_off[v]
+                    vp_color[v] = res.Resolve(outline_ran[v] ? outline_off[v]
                                                           : color_off[v]);
                     vp_depth[v] = res.Resolve(depth_off[v]);
                 }

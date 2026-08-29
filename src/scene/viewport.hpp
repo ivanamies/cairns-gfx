@@ -78,6 +78,11 @@ struct Viewport {
         // G3 right viewport sets true while left sets false, with the
         // global flag on.
         bool particles_enabled = true;
+        // #229 C3: per-viewport editor-chrome gate (was Engine::
+        // editor_chrome_enabled_). The selection-outline pass draws for this
+        // viewport only when set. Default on. [N-node] node K can drop its
+        // outline for a capture while node J keeps it.
+        bool chrome_enabled = true;
     };
 };
 

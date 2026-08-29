@@ -473,9 +473,22 @@ public:
     const cairns::ValidationReport& LastValidationReport() const {
         return prefab_store_.last_validation_report;
     }
-    // #224 L8: editor-chrome toggle for cairns.editor.chrome op.
-    bool EditorChromeEnabled() const { return editor_chrome_enabled_; }
-    void SetEditorChromeEnabled(bool on) { editor_chrome_enabled_ = on; }
+    // #224 L8 / #229 C3: editor-chrome now lives per-viewport
+    // (Viewport::Cold::chrome_enabled). These stay as thin API: read the
+    // active viewport, write all active viewports (wire-compatible {on}).
+    bool EditorChromeEnabled() {
+        const cairns::Viewport::Cold* vc = viewport_mgr_.pool.GetCold(
+            viewport_mgr_.ids[viewport_mgr_.active_index]);
+        return vc ? vc->chrome_enabled : true;
+    }
+    void SetEditorChromeEnabled(bool on) {
+        for (int v = 0; v < viewport_mgr_.active_count; ++v) {
+            if (cairns::Viewport::Cold* vc =
+                    viewport_mgr_.pool.GetCold(viewport_mgr_.ids[v])) {
+                vc->chrome_enabled = on;
+            }
+        }
+    }
 
     // #224 L6: snapshot/assert helpers exposed to the NDJSON debug ops.
     uint32_t DebugSnapshotPrefabHandles() {
@@ -1238,10 +1251,7 @@ private:
     // (declared earlier) so they outlive the store's pools + interned slices.
     cairns::PrefabStore prefab_store_;
     // #224 L3: the instrument. Populated each LoadPrefabBatch call.
-    // #224 L8: editor-chrome toggle (selection outline pass gate).
-    // Default on; remixer/canvas flips to false to suppress meta-UI
-    // before captures. Stylized highlight (materials) untouched.
-    bool editor_chrome_enabled_ = true;
+    // #229 C3: editor-chrome gate moved to Viewport::Cold::chrome_enabled.
     // #224 L6: APPEND-only debug snapshot stashed between two NDJSON
     // op calls (cairns.debug.snapshotPrefabHandles ->
     // cairns.debug.assertAppendOnly). Empty until first snapshot call.
