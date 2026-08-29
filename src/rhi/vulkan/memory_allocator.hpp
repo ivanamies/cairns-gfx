@@ -87,8 +87,8 @@ public:
                    VkImage image, VkImageView view, uint32_t retire_frame);
 
     // Per-frame bump ring.
-    void* BumpAllocate(uint32_t bytes, uint32_t align, Memory mem);
-    uint32_t BumpOffset(void* ptr) const;
+    void* BumpAllocate(uint32_t bytes, uint32_t align, Memory mem,
+                       uint32_t* out_offset = nullptr);
     uint32_t BumpMasterHeapIndex(Memory mem) const;
 
     // Save/restore the current bump cursor. Used to reclaim transient staging

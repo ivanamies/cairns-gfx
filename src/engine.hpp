@@ -39,6 +39,13 @@ inline static constexpr uint32_t kHotArenaMemorySize = 1 << 29;
 inline static constexpr uint32_t kUboAlign = 32;
 inline static constexpr uint32_t kMeshPosBindSlot = 0;
 
+// TODO: these four DrawKey fields are mocked to 0; hook them into the RDG
+// (render dependency graph) later.
+inline static constexpr uint32_t kMockTranslucency = 0;
+inline static constexpr uint32_t kMockViewport = 0;
+inline static constexpr uint32_t kMockViewportLayer = 0;
+inline static constexpr uint32_t kMockFullscreenLayer = 0;
+
 class Engine {
 public:
     
@@ -242,6 +249,7 @@ public:
         const glm::mat4 proj_matrix = glm::perspectiveRH_ZO(fov, aspect_ratio, near_z, far_z);
         
         { // set up render pass globals
+            cairns::Timer t_build("set up render pass globals", 3);
             // set up camera
             const float screen_width = swapchain_.Width();
             const float screen_height = swapchain_.Height();
@@ -255,10 +263,9 @@ public:
             };
             void* gptr = rhi_.alloc.BumpAllocate(
                 sizeof(cairns::rhi::RenderPassGlobals), rhi_.alloc.UboAlign(),
-                rhi::Memory::kDynamic);
+                rhi::Memory::kDynamic, &globals_offset_);
             assert(gptr && "bump alloc failed: render pass globals");
             memcpy(gptr, &render_pass_globals, sizeof(render_pass_globals));
-            globals_offset_ = rhi_.alloc.BumpOffset(gptr);
             if (frame_ <= 6) {
                 fprintf(stderr,
                         "[FLAKE] frame=%u w=%u h=%u aspect=%.9f vp00=%.9f vp11=%.9f "
@@ -269,6 +276,7 @@ public:
             }
         }
 
+        cairns::Timer t_build("build opaque draw list", 4);
         for ( size_t scene_xform_idx = 0; scene_xform_idx < debugSceneXforms_.size(); ++scene_xform_idx ) {
             size_t scene_idx = scene_xform_idx % scenes_.size();
             const glm::mat4& scene_xform = debugSceneXforms_[scene_xform_idx];
@@ -293,8 +301,6 @@ public:
                 [[maybe_unused]] const BufHandle attr = mesh.attrHandle;
                 const BufHandle index = mesh.indexHandle;
                 
-                // warning @iamies alot of time is being lost between timers 2 and 3 and timers 5 and 6.
-                // I am pretty sure this means cache misses.
                 for(const auto& prim : mesh.primitives) {
                     const uint32_t scene_mat_idx = prim.materialIndex;
                     const MatId mat_id = scene.materialIds[scene_mat_idx];
@@ -309,26 +315,28 @@ public:
                         .tex_color_id = gpu_tex_id,
                         .sampler_id = gpu_sampler_id,
                     };
+                    uint32_t material_offset = 0;
                     void* mptr = rhi_.alloc.BumpAllocate(
                         sizeof(cairns::rhi::MaterialGpu), rhi_.alloc.UboAlign(),
-                        rhi::Memory::kDynamic);
+                        rhi::Memory::kDynamic, &material_offset);
                     assert(mptr && "bump alloc failed: material");
                     memcpy(mptr, &material_gpu, sizeof(material_gpu));
-                    const uint32_t material_offset = rhi_.alloc.BumpOffset(mptr);
 
+                    // todo @iamies not a good idea
                     const glm::mat4 model_matrix = scene_xform * rot_matrix;
+                    const glm::mat4 world_mat = node.globalTransform * model_matrix;
                     const cairns::rhi::DrawTmp draw_tmp {
-                        .model_matrix = node.globalTransform * model_matrix,
+                        .model_matrix = world_mat,
                         .mesh_id = gpu_attr_idx,
                         .tex_id = gpu_tex_id,
                         .sampler_id = gpu_sampler_id
                     };
+                    uint32_t drawtmp_offset = 0;
                     void* tptr = rhi_.alloc.BumpAllocate(
                         sizeof(cairns::rhi::DrawTmp), rhi_.alloc.UboAlign(),
-                        rhi::Memory::kDynamic);
+                        rhi::Memory::kDynamic, &drawtmp_offset);
                     assert(tptr && "bump alloc failed: draw tmp");
                     memcpy(tptr, &draw_tmp, sizeof(draw_tmp));
-                    const uint32_t drawtmp_offset = rhi_.alloc.BumpOffset(tptr);
 
                     cairns::Draw draw{};
                     draw.index_buffer = index;
@@ -342,8 +350,18 @@ public:
                     draw.dynamic_buffer_offsets[1] = drawtmp_offset;
                     assert(prim.indexCount % 3 == 0);
                     draw.triangle_count = prim.indexCount / 3;
-                    
-                    drawListSorted_.emplace_back(cairns::BuildDrawKey(draw),drawList_.size());
+
+                    const glm::vec4 view_pos = view_matrix * world_mat[3];
+                    const float view_depth = -view_pos.z;
+                    const float d01 = glm::clamp(
+                        (view_depth - near_z) / (far_z - near_z), 0.0f, 1.0f);
+                    const uint32_t depth_q =
+                        static_cast<uint32_t>(d01 * float((1u << 24) - 1));
+                    drawListSorted_.emplace_back(
+                        cairns::BuildDrawKey(mat_id & 0x3FFFFFFFu, depth_q,
+                                             kMockTranslucency, kMockViewport,
+                                             kMockViewportLayer, kMockFullscreenLayer),
+                        drawList_.size());
                     drawList_.push_back(draw);
                 }
                 for(int32_t c : node.children) {
@@ -379,10 +397,8 @@ public:
             return false;
         }
         t_build.End();
-        std::sort(drawListSorted_.begin(), drawListSorted_.end());
-        sorted_draw_indices_.clear();
-        for (const auto& [key, idx] : drawListSorted_) {
-            sorted_draw_indices_.push_back(static_cast<uint32_t>(idx));
+        {
+            std::sort(drawListSorted_.begin(), drawListSorted_.end());
         }
         resident_textures_.clear();
         for (auto& s : scenes_) {
@@ -392,11 +408,12 @@ public:
         }
 
         cairns::Timer t_record("record", 2);
+        uint32_t dt_off = 0;
         float* dt_ptr = static_cast<float*>(
-            rhi_.alloc.BumpAllocate(sizeof(float), rhi_.alloc.UboAlign(), rhi::Memory::kDynamic));
+            rhi_.alloc.BumpAllocate(sizeof(float), rhi_.alloc.UboAlign(),
+                                    rhi::Memory::kDynamic, &dt_off));
         assert(dt_ptr && "bump alloc failed: delta time");
         *dt_ptr = delta_time;
-        const uint32_t dt_off = rhi_.alloc.BumpOffset(dt_ptr);
 
         rhi::BoundBuffer cbufs[3] = {
             {0, rhi_.alloc.BumpMasterBuffer(rhi::Memory::kDynamic), dt_off},
@@ -424,8 +441,8 @@ public:
 
         rhi::MeshDrawList ml{};
         ml.draws = std::span<const cairns::Draw>(drawList_.data(), drawList_.size());
-        ml.sorted_indices =
-            std::span<const uint32_t>(sorted_draw_indices_.data(), sorted_draw_indices_.size());
+        ml.sorted_draws = std::span<const std::pair<cairns::DrawKey, uint32_t>>(
+            drawListSorted_.data(), drawListSorted_.size());
         ml.pipeline = unlit_;
         ml.bindless = bindless_bg_;
         ml.globals_offset = globals_offset_;
@@ -448,7 +465,9 @@ public:
         particle_parity_ ^= 1;
         t_frame.End();
         if (frame_ % 120 == 0) {
-            cairns::Timer::PrintReport(true);
+            printf("draws: %zu\n", drawList_.size());
+            cairns::Timer::PrintReport();
+            cairns::Timer::Reset();
         }
         return true;
     }
@@ -656,7 +675,6 @@ private:
 
     std::vector<std::pair<cairns::DrawKey,uint32_t>,cairns::Allocator<std::pair<cairns::DrawKey,uint32_t>>> drawListSorted_;
     std::vector<cairns::Draw,cairns::Allocator<cairns::Draw>> drawList_;
-    std::vector<uint32_t> sorted_draw_indices_;
     std::vector<rhi::Handle<rhi::Texture>> resident_textures_;
     
     rhi::Rhi rhi_;

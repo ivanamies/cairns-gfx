@@ -38,12 +38,13 @@ class Timer {
     static constexpr uint32_t kMaxSlots = 16;
     static std::array<uint64_t, kMaxSlots> accum_times_;
     static std::array<uint64_t, kMaxSlots> accum_itrs_;
+    static std::array<const char*, kMaxSlots> slot_names_;
 
-  explicit Timer(const std::string& task_name, uint32_t slot)
-      : task_name_(task_name),
-        slot_(slot),
+  explicit Timer(const char* task_name, uint32_t slot)
+      : slot_(slot),
         is_running_(true),
         start_time_(timestamp_ns()) {
+    slot_names_[slot] = task_name;
   }
 
   ~Timer() {
@@ -66,17 +67,21 @@ class Timer {
     is_running_ = false;
   }
 
-    static void PrintReport(bool average) {
+    static void PrintReport() {
         printf("==============\n");
         for ( uint32_t i = 0; i < kMaxSlots; ++i ) {
-            if ( average ) {
-                printf("slot %d average: %lld (us)\n",i,
-                       accum_itrs_[i] ? accum_times_[i]/accum_itrs_[i] : 0);
+            if ( accum_itrs_[i] == 0 ) {
+                continue;
             }
-            else { // accum
-                printf("slot %d accum: %lld (us)\n",i,accum_times_[i]);
-            }
+            printf("slot %d (%s): accum %lld us, avg %lld us over %lld frames\n", i,
+                   slot_names_[i] ? slot_names_[i] : "?", accum_times_[i],
+                   accum_times_[i] / accum_itrs_[i], accum_itrs_[i]);
         }
+    }
+
+    static void Reset() {
+        accum_times_ = {};
+        accum_itrs_ = {};
     }
 
   // Prevent copying to ensure one timer per scope/task
@@ -85,14 +90,13 @@ class Timer {
 
   // Allow moving if ownership needs to be transferred
   Timer(Timer&& other) noexcept
-      : task_name_(std::move(other.task_name_)),
+      : slot_(other.slot_),
         is_running_(other.is_running_),
         start_time_(other.start_time_) {
     other.is_running_ = false;
   }
 
  private:
-  std::string_view task_name_;
     uint32_t slot_;
   bool is_running_;
   uint64_t start_time_;
@@ -101,5 +105,6 @@ class Timer {
 // todo @iamies move this out
 std::array<uint64_t, Timer::kMaxSlots> Timer::accum_times_ = {};
 std::array<uint64_t, Timer::kMaxSlots> Timer::accum_itrs_ = {};
+std::array<const char*, Timer::kMaxSlots> Timer::slot_names_ = {};
 
 } // namespace cairns

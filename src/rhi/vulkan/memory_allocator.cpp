@@ -347,7 +347,8 @@ void MemoryAllocator::FreeImage(uint32_t heap_index,
     pending_frees_[retire_frame % kFramesInFlight].push_back(p);
 }
 
-void* MemoryAllocator::BumpAllocate(uint32_t bytes, uint32_t align, Memory mem) {
+void* MemoryAllocator::BumpAllocate(uint32_t bytes, uint32_t align, Memory mem,
+                                   uint32_t* out_offset) {
     BumpRing& r = rings_[static_cast<size_t>(mem)];
     if (r.block_bytes == 0) {
         return nullptr;
@@ -370,6 +371,9 @@ void* MemoryAllocator::BumpAllocate(uint32_t bytes, uint32_t align, Memory mem) 
     }
     r.cursors[slot] = off + bytes;
 
+    if (out_offset) {
+        *out_offset = off;
+    }
     HeapBlock& blk = blocks_[r.block_indices[slot]];
     return static_cast<uint8_t*>(blk.mapped_ptr) + off;
 }
@@ -382,21 +386,6 @@ uint32_t MemoryAllocator::BumpSaveCursor(Memory mem) const {
 void MemoryAllocator::BumpRestoreCursor(Memory mem, uint32_t cursor) {
     BumpRing& r = rings_[static_cast<size_t>(mem)];
     r.cursors[r.current_slot] = cursor;
-}
-
-uint32_t MemoryAllocator::BumpOffset(void* ptr) const {
-    for (uint32_t i = 0; i < blocks_.size(); ++i) {
-        const HeapBlock& b = blocks_[i];
-        if (!b.mapped_ptr) {
-            continue;
-        }
-        uint8_t* base = static_cast<uint8_t*>(b.mapped_ptr);
-        uint8_t* p = static_cast<uint8_t*>(ptr);
-        if (p >= base && p < base + b.size_bytes) {
-            return static_cast<uint32_t>(p - base);
-        }
-    }
-    return 0xFFFFFFFFu;
 }
 
 uint32_t MemoryAllocator::BumpMasterHeapIndex(Memory mem) const {

@@ -68,8 +68,8 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     enc->setVertexBuffer(dyn_master, 0, cairns::kDrawTmpBindSlot);
 
     uint32_t last_mat_off = std::numeric_limits<uint32_t>::max();
-    for (size_t i = 0; i < list.sorted_indices.size(); ++i) {
-        const cairns::Draw& draw = list.draws[list.sorted_indices[i]];
+    for (size_t i = 0; i < list.sorted_draws.size(); ++i) {
+        const cairns::Draw& draw = list.draws[list.sorted_draws[i].second];
         {
             uint32_t pos_off = 0;
             MTL::Buffer* pos_buf = res.GetMtlBuffer(

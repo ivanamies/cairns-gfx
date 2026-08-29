@@ -33,12 +33,9 @@ void Allocator::Deinit() {
     inited_ = false;
 }
 
-void* Allocator::BumpAllocate(uint32_t bytes, uint32_t align, Memory mem) {
-    return memory_.BumpAllocate(bytes, align, mem);
-}
-
-uint32_t Allocator::BumpOffset(void* ptr) const {
-    return memory_.BumpOffset(ptr);
+void* Allocator::BumpAllocate(uint32_t bytes, uint32_t align, Memory mem,
+                              uint32_t* out_offset) {
+    return memory_.BumpAllocate(bytes, align, mem, out_offset);
 }
 
 Handle<Buffer> Allocator::BumpMasterBuffer(Memory mem) const {

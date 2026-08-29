@@ -220,13 +220,13 @@ Handle<Buffer> Resources::CreateBuffer(Allocator& alloc, const BufferDesc& d) {
             }
         } else {
             uint32_t saved_cursor = alloc.memory_.BumpSaveCursor(Memory::kUpload);
+            uint32_t src_off = 0;
             void* staging = alloc.memory_.BumpAllocate(
                 static_cast<uint32_t>(d.initial_data.size()), 16,
-                Memory::kUpload);
+                Memory::kUpload, &src_off);
             if (staging) {
                 std::memcpy(staging, d.initial_data.data(),
                             d.initial_data.size());
-                uint32_t src_off = alloc.memory_.BumpOffset(staging);
                 uint32_t src_hi =
                     alloc.memory_.BumpMasterHeapIndex(Memory::kUpload);
                 MTL::Buffer* src = alloc.memory_.HeapMasterBuffer(src_hi);

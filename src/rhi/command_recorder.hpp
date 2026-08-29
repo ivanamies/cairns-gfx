@@ -7,9 +7,11 @@
 #pragma once
 
 #include <cstdint>
+#include <utility>
 
 #include "rhi/resource_manager.hpp"
 #include "util/draw.hpp"
+#include "util/draw_key.hpp"
 #if CAIRNS_VULKAN
 #include <vulkan/vulkan.h>
 #elif CAIRNS_METAL
@@ -68,7 +70,7 @@ struct ComputeDispatch {
 
 struct MeshDrawList {
     std::span<const cairns::Draw> draws;
-    std::span<const uint32_t> sorted_indices;
+    std::span<const std::pair<DrawKey, uint32_t>> sorted_draws;
     Handle<Shader> pipeline;
     Handle<BindGroup> bindless;
     uint32_t globals_offset = 0;

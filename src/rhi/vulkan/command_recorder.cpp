@@ -121,8 +121,8 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_layout, 0, 1,
                             &bindless, 0, nullptr);
 
-    for (size_t i = 0; i < list.sorted_indices.size(); ++i) {
-        const cairns::Draw& draw = list.draws[list.sorted_indices[i]];
+    for (size_t i = 0; i < list.sorted_draws.size(); ++i) {
+        const cairns::Draw& draw = list.draws[list.sorted_draws[i].second];
         uint32_t pos_off = 0;
         VkBuffer pos_buf =
             res.GetVkBuffer(alloc,draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);

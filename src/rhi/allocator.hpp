@@ -35,8 +35,8 @@ public:
     void Deinit();
 
     // Per-frame bump ring (transient data). CALLER: ENGINE (frame globals/UBOs).
-    void* BumpAllocate(uint32_t bytes, uint32_t align, Memory mem);
-    uint32_t BumpOffset(void* ptr) const;
+    void* BumpAllocate(uint32_t bytes, uint32_t align, Memory mem,
+                       uint32_t* out_offset = nullptr);
     Handle<Buffer> BumpMasterBuffer(Memory mem) const;
 
     // Minimum dynamic-UBO / SSBO offset alignment. CALLER: ENGINE, RESOURCES.
