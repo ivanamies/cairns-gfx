@@ -47,6 +47,9 @@ class Timer {
     // inside the encoding window. Use kDrawableAcquireSlot to split that out.
     static constexpr uint32_t kGpuSlot = 8;
     static constexpr uint32_t kDrawableAcquireSlot = 9;
+    // dispatch_semaphore_wait / vkWaitForFences at top of Frames::Begin --
+    // the kFramesInFlight gate blocking on previous GPU completions.
+    static constexpr uint32_t kFramesBeginWaitSlot = 10;
     static std::array<uint64_t, kMaxSlots> accum_times_;
     static std::array<uint64_t, kMaxSlots> accum_itrs_;
     static std::array<const char*, kMaxSlots> slot_names_;

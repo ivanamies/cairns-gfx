@@ -95,8 +95,12 @@ void Frames::SetDumpPath(const std::filesystem::path& path) {
 }
 
 FrameContext Frames::Begin(Resources& resources, Allocator& alloc) {
+    const uint64_t bw_start_ns = cairns::timestamp_ns();
     dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(frame_semaphore_),
                             DISPATCH_TIME_FOREVER);
+    const uint64_t bw_end_ns = cairns::timestamp_ns();
+    cairns::Timer::Accum(cairns::Timer::kFramesBeginWaitSlot, "frames begin wait",
+                         (bw_end_ns - bw_start_ns) / 1000);
     resources.AdvanceFrame(alloc);  // bump ring reset
 
     MTL::CommandBuffer* cmd = queue_->commandBuffer();
