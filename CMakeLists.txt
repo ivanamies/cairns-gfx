@@ -432,6 +432,12 @@ if (NOT ANDROID AND NOT IOS AND NOT EMSCRIPTEN)
             "${CMAKE_CURRENT_SOURCE_DIR}/assets/*.metal")
         list(APPEND _cairns_serve_assets ${_cairns_serve_metal_files})
     endif()
+    # WebGPU loads .wgsl source at runtime (CreateGraphicsPipeline reads the
+    # file). Backend-agnostic glob; the copy is a no-op for metal/vk builds.
+    file(GLOB _cairns_serve_wgsl_files
+        RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/*.wgsl")
+    list(APPEND _cairns_serve_assets ${_cairns_serve_wgsl_files})
     foreach(_asset ${_cairns_serve_assets})
         if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/${_asset}")
             add_custom_command(POST_BUILD

@@ -58,6 +58,11 @@ void Frames::EndSubmit(const SwapResolveTarget& target, FrameCapture& frame_capt
         ri.plat.cmd_ = nullptr;
     }
     wgpuDevicePoll(plat.device_, /*wait=*/true, nullptr);
+    // GPU is idle now -- safe to drop the per-draw bind groups the recorder held.
+    for (WGPUBindGroup bg : ri.plat.transient_bind_groups_) {
+        wgpuBindGroupRelease(bg);
+    }
+    ri.plat.transient_bind_groups_.clear();
 }
 void Frames::Present(const SwapResolveTarget& target, FrameCapture& frame_capture, FrameContext& fc) {
     (void)target; (void)frame_capture; (void)fc;

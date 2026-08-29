@@ -47,6 +47,22 @@ WGPUTextureUsage ToWgpuTexUsage(TextureUsage u) {
     if (u & kTexUsageTransferDst) out |= WGPUTextureUsage_CopyDst;
     return static_cast<WGPUTextureUsage>(out);
 }
+WGPUFilterMode ToWgpuFilter(Filter f) {
+    return f == Filter::kNearest ? WGPUFilterMode_Nearest : WGPUFilterMode_Linear;
+}
+WGPUMipmapFilterMode ToWgpuMipFilter(Filter f) {
+    return f == Filter::kNearest ? WGPUMipmapFilterMode_Nearest
+                                 : WGPUMipmapFilterMode_Linear;
+}
+WGPUAddressMode ToWgpuAddress(AddressMode m) {
+    switch (m) {
+        case AddressMode::kRepeat: return WGPUAddressMode_Repeat;
+        case AddressMode::kMirroredRepeat: return WGPUAddressMode_MirrorRepeat;
+        case AddressMode::kClampToEdge: return WGPUAddressMode_ClampToEdge;
+        case AddressMode::kClampToBorder: return WGPUAddressMode_ClampToEdge;
+        default: return WGPUAddressMode_Repeat;
+    }
+}
 }  // namespace
 
 Resources::~Resources() {}
@@ -112,7 +128,32 @@ Handle<Texture> Resources::CreateTexture(Allocator& alloc, const TextureDesc& d)
     return h;
 }
 
-Handle<Sampler> Resources::CreateSampler(const SamplerDesc& d) { (void)d; return Handle<Sampler>::Null; }
+Handle<Sampler> Resources::CreateSampler(const SamplerDesc& d) {
+    WGPUSamplerDescriptor sd = {};
+    const WGPUAddressMode addr = ToWgpuAddress(d.address_mode);
+    sd.addressModeU = addr;
+    sd.addressModeV = addr;
+    sd.addressModeW = addr;
+    sd.magFilter = ToWgpuFilter(d.mag_filter);
+    sd.minFilter = ToWgpuFilter(d.min_filter);
+    sd.mipmapFilter = ToWgpuMipFilter(d.mip_filter);
+    sd.lodMinClamp = 0.0f;
+    sd.lodMaxClamp = d.max_lod > 0.0f ? d.max_lod : 32.0f;
+    // WebGPU only permits anisotropy > 1 when min/mag/mip are all Linear; metal/
+    // vk silently ignore it for nearest filters, so clamp to 1 to match them.
+    const bool all_linear = d.mag_filter == Filter::kLinear &&
+                            d.min_filter == Filter::kLinear &&
+                            d.mip_filter == Filter::kLinear;
+    sd.maxAnisotropy = (all_linear && d.max_anisotropy > 1.0f)
+                           ? static_cast<uint16_t>(d.max_anisotropy) : 1;
+    sd.compare = WGPUCompareFunction_Undefined;
+    WGPUSampler s = wgpuDeviceCreateSampler(plat.device_, &sd);
+    if (!s) { return Handle<Sampler>::Null; }
+    Handle<Sampler> h = samplers.Acquire();
+    samplers.GetHot(h)->api_sampler = static_cast<void*>(s);
+    samplers.GetCold(h)->debug_name = d.debug_name;
+    return h;
+}
 Handle<BindGroup> Resources::CreateBindGroup(const BindGroupDesc& d) { (void)d; return Handle<BindGroup>::Null; }
 Handle<BindGroup> Resources::CreateSkinGroupA(Allocator& a, Frames& f, Pipelines& p, const BindGroupDesc& d) { (void)a; (void)f; (void)p; (void)d; return Handle<BindGroup>::Null; }
 Handle<DynamicBuffers> Resources::CreateDynamicBuffers(const DynamicBuffersDesc& d) {

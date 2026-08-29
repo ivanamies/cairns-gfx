@@ -92,6 +92,8 @@ const char* PlatformKey() {
     return "macos-metal";
 #    elif CAIRNS_VULKAN
     return "macos-vk";
+#    elif CAIRNS_WEBGPU
+    return "macos-webgpu";
 #    else
     return "macos-unknown";
 #    endif

@@ -158,6 +158,7 @@ if(CAIRNS_GFX_BUILD_GOLDEN_TESTS)
         "/Users/ivanamies/dev/gfx/assets/riot/lol_champions/staging")
     file(GLOB _cairns_metal_shaders "${_cairns_assets_root}/*.metal")
     file(GLOB _cairns_spv_shaders   "${_cairns_assets_root}/*.spv")
+    file(GLOB _cairns_wgsl_shaders  "${_cairns_assets_root}/*.wgsl")
     file(GLOB _cairns_glbs          "${_cairns_assets_root}/*.glb")
     file(GLOB _cairns_ext_glbs      "${_cairns_ext_glbs_root}/*.glb")
     set(_cairns_misc_assets
@@ -186,7 +187,8 @@ if(CAIRNS_GFX_BUILD_GOLDEN_TESTS)
         # MACOSX_PACKAGE_LOCATION doesn't apply. Copy assets next to the
         # binary instead (SDL_GetBasePath returns its directory).
         foreach(F ${_cairns_misc_assets} ${_cairns_metal_shaders}
-                  ${_cairns_spv_shaders} ${_cairns_glbs} ${_cairns_ext_glbs})
+                  ${_cairns_spv_shaders} ${_cairns_wgsl_shaders}
+                  ${_cairns_glbs} ${_cairns_ext_glbs})
             get_filename_component(_name "${F}" NAME)
             if(EXISTS "${F}")
                 add_custom_command(POST_BUILD TARGET cairns_golden_tests
