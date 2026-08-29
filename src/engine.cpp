@@ -1265,6 +1265,39 @@ bool Engine::initRenderPipeline() {
                 kuwahara_filter_pip_ = ShaderHandle::Null;
             }
 
+            // Bloom quad: bright/down/up run on the RGBA16F ladder; combine
+            // writes BGRA like the forward color it replaces.
+            rhi::GraphicsPipelineDesc bbd = ktd;
+            bbd.logical_shader = "bloom_bright";
+            bbd.debug_name = "bloom_bright";
+            bloom_bright_pip_ = rhi_.pipelines.CreateGraphicsPipeline(
+                rhi_.resources, rhi_.frames, bbd);
+            rhi::GraphicsPipelineDesc bdd = ktd;
+            bdd.logical_shader = "bloom_down";
+            bdd.debug_name = "bloom_down";
+            bloom_down_pip_ = rhi_.pipelines.CreateGraphicsPipeline(
+                rhi_.resources, rhi_.frames, bdd);
+            rhi::GraphicsPipelineDesc bud = ktd;
+            bud.logical_shader = "bloom_up";
+            bud.debug_name = "bloom_up";
+            bloom_up_pip_ = rhi_.pipelines.CreateGraphicsPipeline(
+                rhi_.resources, rhi_.frames, bud);
+            rhi::GraphicsPipelineDesc bcd = opd;
+            bcd.logical_shader = "bloom_combine";
+            bcd.debug_name = "bloom_combine";
+            bloom_combine_pip_ = rhi_.pipelines.CreateGraphicsPipeline(
+                rhi_.resources, rhi_.frames, bcd);
+            if (bloom_bright_pip_.IsNull() || bloom_down_pip_.IsNull() ||
+                bloom_up_pip_.IsNull() || bloom_combine_pip_.IsNull()) {
+                CAIRNS_PRINT_ERR(
+                    "[postfx] bloom PSOs unavailable -- bloom disabled on "
+                    "this backend\n");
+                bloom_bright_pip_ = ShaderHandle::Null;
+                bloom_down_pip_ = ShaderHandle::Null;
+                bloom_up_pip_ = ShaderHandle::Null;
+                bloom_combine_pip_ = ShaderHandle::Null;
+            }
+
             if (composite_pip_.IsNull() || depthviz_.IsNull() ||
                 outline_pip_.IsNull()) {
                 std::exit(0);
@@ -1836,18 +1869,30 @@ void Engine::RecordFrame(FramePacket& pkt) {
                    kNumViewports> fx_tfm{};
         std::array<std::array<rhi::GraphTexture, PerSlot::kMaxPostEffects>,
                    kNumViewports> fx_out{};
+        // Bloom ladder (levels 0..3 = vp/2 .. vp/16) + the 3 upsample rungs.
+        std::array<std::array<std::array<rhi::GraphTexture, 4>,
+                              PerSlot::kMaxPostEffects>,
+                   kNumViewports> fx_bloom_down{};
+        std::array<std::array<std::array<rhi::GraphTexture, 3>,
+                              PerSlot::kMaxPostEffects>,
+                   kNumViewports> fx_bloom_up{};
         // Declared at pass-build scope (NOT inside the if): the execute
         // lambdas capture this by reference and run at graph Execute.
+        // screen carries the SOURCE dims (texel size for neighborhood
+        // taps); the viewport is the DEST dims -- they differ in bloom's
+        // resolution ladder.
         auto push_params = [&](rhi::CommandRecorder& cmd,
                                uint32_t fx_idx,
+                               uint32_t src_w, uint32_t src_h,
+                               uint32_t dst_w, uint32_t dst_h,
                                rhi::Handle<rhi::Shader> pso,
                                std::span<const rhi::Handle<rhi::Texture>>
                                    texs) {
             PostFxParamsGpu pp{};
-            pp.screen = glm::vec4(1.0f / static_cast<float>(vp_w),
-                                  1.0f / static_cast<float>(vp_h),
-                                  static_cast<float>(vp_w),
-                                  static_cast<float>(vp_h));
+            pp.screen = glm::vec4(1.0f / static_cast<float>(src_w),
+                                  1.0f / static_cast<float>(src_h),
+                                  static_cast<float>(src_w),
+                                  static_cast<float>(src_h));
             pp.p0 = s.post_effects[fx_idx].p0;
             pp.p1 = s.post_effects[fx_idx].p1;
             uint32_t off = 0;
@@ -1857,25 +1902,188 @@ void Engine::RecordFrame(FramePacket& pkt) {
                 return;
             }
             std::memcpy(ptr, &pp, sizeof(pp));
-            cmd.SetViewport(0.0f, 0.0f, static_cast<float>(vp_w),
-                            static_cast<float>(vp_h));
-            cmd.SetScissor(0, 0, vp_w, vp_h);
+            cmd.SetViewport(0.0f, 0.0f, static_cast<float>(dst_w),
+                            static_cast<float>(dst_h));
+            cmd.SetScissor(0, 0, dst_w, dst_h);
             cmd.DrawFullscreenParams(rhi_.resources, rhi_.alloc, pso,
                                      texs, composite_sampler_,
                                      dyn_postfx_, off);
         };
-        if (s.post_effect_count > 0 && !kuwahara_filter_pip_.IsNull()) {
+        if (s.post_effect_count > 0) {
             for (int v = 0; v < viewport_mgr_.active_count; ++v) {
                 const int vp_idx = v;
                 rhi::GraphTexture cur = outline_ran[vp_idx]
                                             ? outline_off[vp_idx]
                                             : color_off[vp_idx];
                 for (uint32_t f = 0; f < s.post_effect_count; ++f) {
-                    if (s.post_effects[f].type !=
-                        cairns::PostEffectType::kKuwahara) {
-                        continue;  // other types land with M4+.
-                    }
                     const uint32_t fx_idx = f;
+                    if (s.post_effects[f].type ==
+                            cairns::PostEffectType::kBloom &&
+                        !bloom_combine_pip_.IsNull()) {
+                        // Half-res ladder: level i = vp >> (i+1), floor 1.
+                        uint32_t lw[4];
+                        uint32_t lh[4];
+                        for (int li = 0; li < 4; ++li) {
+                            lw[li] = std::max(vp_w >> (li + 1), 1u);
+                            lh[li] = std::max(vp_h >> (li + 1), 1u);
+                        }
+                        auto ladder_target = [&](uint32_t w, uint32_t h,
+                                                 rhi::PassBuilder& b) {
+                            rhi::GraphTextureDesc td{};
+                            td.width = w;
+                            td.height = h;
+                            td.format = rhi::Format::kRgba16F;
+                            td.usage = rhi::kTexUsageColorTarget |
+                                       rhi::kTexUsageSampled;
+                            return b.CreateColorTarget(td);
+                        };
+                        graph_->AddPass(
+                            (vp_idx == 0) ? "bloom_bright_vp0"
+                                          : "bloom_bright_vp1",
+                            rhi::PassType::kGraphics,
+                            [&, vp_idx, fx_idx, cur](rhi::PassBuilder& b) {
+                                fx_bloom_down[vp_idx][fx_idx][0] =
+                                    ladder_target(lw[0], lh[0], b);
+                                b.AddAttachmentInput(cur);
+                                const float fc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                                b.AddColorOutput(
+                                    "bloom_bright",
+                                    fx_bloom_down[vp_idx][fx_idx][0],
+                                    rhi::LoadOp::kClear, fc);
+                            },
+                            [&, fx_idx, cur, dw = lw[0], dh = lh[0]](
+                                rhi::CommandRecorder& cmd,
+                                const rhi::PassResources& res) {
+                                const rhi::Handle<rhi::Texture> srcs[1] = {
+                                    res.Resolve(cur)};
+                                push_params(cmd, fx_idx, vp_w, vp_h, dw, dh,
+                                            bloom_bright_pip_,
+                                            std::span<const rhi::Handle<
+                                                rhi::Texture>>(srcs, 1));
+                            });
+                        for (int li = 1; li < 4; ++li) {
+                            graph_->AddPass(
+                                (vp_idx == 0) ? "bloom_down_vp0"
+                                              : "bloom_down_vp1",
+                                rhi::PassType::kGraphics,
+                                [&, vp_idx, fx_idx, li](rhi::PassBuilder& b) {
+                                    fx_bloom_down[vp_idx][fx_idx][li] =
+                                        ladder_target(lw[li], lh[li], b);
+                                    b.AddAttachmentInput(
+                                        fx_bloom_down[vp_idx][fx_idx][li - 1]);
+                                    const float fc[4] = {0.0f, 0.0f, 0.0f,
+                                                         0.0f};
+                                    b.AddColorOutput(
+                                        "bloom_down",
+                                        fx_bloom_down[vp_idx][fx_idx][li],
+                                        rhi::LoadOp::kClear, fc);
+                                },
+                                [&, vp_idx, fx_idx, li, sw = lw[li - 1],
+                                 sh = lh[li - 1], dw = lw[li], dh = lh[li]](
+                                    rhi::CommandRecorder& cmd,
+                                    const rhi::PassResources& res) {
+                                    const rhi::Handle<rhi::Texture> srcs[1] = {
+                                        res.Resolve(fx_bloom_down[vp_idx]
+                                                                 [fx_idx]
+                                                                 [li - 1])};
+                                    push_params(cmd, fx_idx, sw, sh, dw, dh,
+                                                bloom_down_pip_,
+                                                std::span<const rhi::Handle<
+                                                    rhi::Texture>>(srcs, 1));
+                                });
+                        }
+                        for (int uj = 0; uj < 3; ++uj) {
+                            // rung uj: lower (L3-uj) + skip (L2-uj) -> L2-uj.
+                            const int skip_lvl = 2 - uj;
+                            const int lower_lvl = 3 - uj;
+                            graph_->AddPass(
+                                (vp_idx == 0) ? "bloom_up_vp0"
+                                              : "bloom_up_vp1",
+                                rhi::PassType::kGraphics,
+                                [&, vp_idx, fx_idx, uj, skip_lvl](
+                                    rhi::PassBuilder& b) {
+                                    fx_bloom_up[vp_idx][fx_idx][uj] =
+                                        ladder_target(lw[skip_lvl],
+                                                      lh[skip_lvl], b);
+                                    b.AddAttachmentInput(
+                                        (uj == 0)
+                                            ? fx_bloom_down[vp_idx][fx_idx][3]
+                                            : fx_bloom_up[vp_idx][fx_idx]
+                                                         [uj - 1]);
+                                    b.AddAttachmentInput(
+                                        fx_bloom_down[vp_idx][fx_idx]
+                                                     [skip_lvl]);
+                                    const float fc[4] = {0.0f, 0.0f, 0.0f,
+                                                         0.0f};
+                                    b.AddColorOutput(
+                                        "bloom_up",
+                                        fx_bloom_up[vp_idx][fx_idx][uj],
+                                        rhi::LoadOp::kClear, fc);
+                                },
+                                [&, vp_idx, fx_idx, uj, skip_lvl,
+                                 sw = lw[lower_lvl], sh = lh[lower_lvl],
+                                 dw = lw[skip_lvl], dh = lh[skip_lvl]](
+                                    rhi::CommandRecorder& cmd,
+                                    const rhi::PassResources& res) {
+                                    const rhi::Handle<rhi::Texture> srcs[2] = {
+                                        res.Resolve(
+                                            (uj == 0)
+                                                ? fx_bloom_down[vp_idx][fx_idx]
+                                                               [3]
+                                                : fx_bloom_up[vp_idx][fx_idx]
+                                                             [uj - 1]),
+                                        res.Resolve(fx_bloom_down[vp_idx]
+                                                                 [fx_idx]
+                                                                 [skip_lvl])};
+                                    push_params(cmd, fx_idx, sw, sh, dw, dh,
+                                                bloom_up_pip_,
+                                                std::span<const rhi::Handle<
+                                                    rhi::Texture>>(srcs, 2));
+                                });
+                        }
+                        graph_->AddPass(
+                            (vp_idx == 0) ? "bloom_combine_vp0"
+                                          : "bloom_combine_vp1",
+                            rhi::PassType::kGraphics,
+                            [&, vp_idx, fx_idx, cur](rhi::PassBuilder& b) {
+                                rhi::GraphTextureDesc td{};
+                                td.width = vp_w;
+                                td.height = vp_h;
+                                td.format = rhi::Format::kBgra8Unorm;
+                                td.usage = rhi::kTexUsageColorTarget |
+                                           rhi::kTexUsageSampled;
+                                fx_out[vp_idx][fx_idx] =
+                                    b.CreateColorTarget(td);
+                                b.AddAttachmentInput(cur);
+                                b.AddAttachmentInput(
+                                    fx_bloom_up[vp_idx][fx_idx][2]);
+                                const float fc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                                b.AddColorOutput("bloom_combine",
+                                                 fx_out[vp_idx][fx_idx],
+                                                 rhi::LoadOp::kClear, fc);
+                            },
+                            [&, vp_idx, fx_idx, cur](
+                                rhi::CommandRecorder& cmd,
+                                const rhi::PassResources& res) {
+                                const rhi::Handle<rhi::Texture> srcs[2] = {
+                                    res.Resolve(cur),
+                                    res.Resolve(
+                                        fx_bloom_up[vp_idx][fx_idx][2])};
+                                push_params(cmd, fx_idx, vp_w, vp_h, vp_w,
+                                            vp_h, bloom_combine_pip_,
+                                            std::span<const rhi::Handle<
+                                                rhi::Texture>>(srcs, 2));
+                            });
+                        cur = fx_out[vp_idx][fx_idx];
+                        chain_out[vp_idx] = cur;
+                        chain_ran[vp_idx] = true;
+                        continue;
+                    }
+                    if (s.post_effects[f].type !=
+                            cairns::PostEffectType::kKuwahara ||
+                        kuwahara_filter_pip_.IsNull()) {
+                        continue;  // other types land with M5+.
+                    }
                     graph_->AddPass(
                         (vp_idx == 0) ? "kuwahara_tensor_vp0"
                                       : "kuwahara_tensor_vp1",
@@ -1898,7 +2106,8 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                          const rhi::PassResources& res) {
                             const rhi::Handle<rhi::Texture> srcs[1] = {
                                 res.Resolve(cur)};
-                            push_params(cmd, fx_idx, kuwahara_tensor_pip_,
+                            push_params(cmd, fx_idx, vp_w, vp_h, vp_w, vp_h,
+                                        kuwahara_tensor_pip_,
                                         std::span<const rhi::Handle<
                                             rhi::Texture>>(srcs, 1));
                         });
@@ -1924,7 +2133,8 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                             const rhi::PassResources& res) {
                             const rhi::Handle<rhi::Texture> srcs[1] = {
                                 res.Resolve(fx_tensor[vp_idx][fx_idx])};
-                            push_params(cmd, fx_idx, kuwahara_tfm_pip_,
+                            push_params(cmd, fx_idx, vp_w, vp_h, vp_w, vp_h,
+                                        kuwahara_tfm_pip_,
                                         std::span<const rhi::Handle<
                                             rhi::Texture>>(srcs, 1));
                         });
@@ -1953,7 +2163,8 @@ void Engine::RecordFrame(FramePacket& pkt) {
                             const rhi::Handle<rhi::Texture> srcs[2] = {
                                 res.Resolve(cur),
                                 res.Resolve(fx_tfm[vp_idx][fx_idx])};
-                            push_params(cmd, fx_idx, kuwahara_filter_pip_,
+                            push_params(cmd, fx_idx, vp_w, vp_h, vp_w, vp_h,
+                                        kuwahara_filter_pip_,
                                         std::span<const rhi::Handle<
                                             rhi::Texture>>(srcs, 2));
                         });

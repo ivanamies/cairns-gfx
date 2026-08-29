@@ -362,6 +362,18 @@ VkShaderFiles resolve_vk_shader(const char* logical) {
     if (std::strcmp(logical, "kuwahara_filter") == 0) {
         return {"composite_pip.vert.spv", "kuwahara_filter.frag.spv", nullptr};
     }
+    if (std::strcmp(logical, "bloom_bright") == 0) {
+        return {"composite_pip.vert.spv", "bloom_bright.frag.spv", nullptr};
+    }
+    if (std::strcmp(logical, "bloom_down") == 0) {
+        return {"composite_pip.vert.spv", "bloom_down.frag.spv", nullptr};
+    }
+    if (std::strcmp(logical, "bloom_up") == 0) {
+        return {"composite_pip.vert.spv", "bloom_up.frag.spv", nullptr};
+    }
+    if (std::strcmp(logical, "bloom_combine") == 0) {
+        return {"composite_pip.vert.spv", "bloom_combine.frag.spv", nullptr};
+    }
     if (std::strcmp(logical, "skin") == 0) {
         // Skin compute kernel (no vert/frag).
         return {nullptr, nullptr, "skin.comp.spv"};
@@ -596,7 +608,9 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
         // outline share this layout.
         set_layouts = {plat.composite_set_layout_};
     } else if (ls == "kuwahara_tensor" || ls == "kuwahara_tfm" ||
-               ls == "kuwahara_filter") {
+               ls == "kuwahara_filter" || ls == "bloom_bright" ||
+               ls == "bloom_down" || ls == "bloom_up" ||
+               ls == "bloom_combine") {
         // Post-effect family: composite textures at set 0 + the dyn-UBO
         // params block at set 1 (same shape as globals, so the layout is
         // reusable; DrawFullscreenParams binds it with the frame's offset).

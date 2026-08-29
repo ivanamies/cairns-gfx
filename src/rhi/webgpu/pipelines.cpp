@@ -104,6 +104,20 @@ ShaderInfo Classify(const char* logical) {
         // binding 0 = scene color, 1 = the tensor-flow-map, sampler @2.
         return {Kind::kFullscreen, "kuwahara_filter", 2, false, false, true};
     }
+    if (std::strcmp(logical, "bloom_bright") == 0) {
+        return {Kind::kFullscreen, "bloom_bright", 1, false, false, true};
+    }
+    if (std::strcmp(logical, "bloom_down") == 0) {
+        return {Kind::kFullscreen, "bloom_down", 1, false, false, true};
+    }
+    if (std::strcmp(logical, "bloom_up") == 0) {
+        // binding 0 = lower mip, 1 = the skip texture, sampler @2.
+        return {Kind::kFullscreen, "bloom_up", 2, false, false, true};
+    }
+    if (std::strcmp(logical, "bloom_combine") == 0) {
+        // binding 0 = scene color, 1 = bloom, sampler @2.
+        return {Kind::kFullscreen, "bloom_combine", 2, false, false, true};
+    }
     if (std::strcmp(logical, "depthviz") == 0) {
         return {Kind::kFullscreen, "depthviz", 1, true};
     }

@@ -516,6 +516,8 @@ if (NOT ANDROID AND NOT IOS AND NOT EMSCRIPTEN)
         "outline.vert.spv" "outline.frag.spv"
         "kuwahara_tensor.frag.spv" "kuwahara_tfm.frag.spv"
         "kuwahara_filter.frag.spv"
+        "bloom_bright.frag.spv" "bloom_down.frag.spv"
+        "bloom_up.frag.spv" "bloom_combine.frag.spv"
         "skin.comp.spv"
         "anim_eval.comp.spv"
     )
@@ -684,6 +686,10 @@ else()
     copy_helper("kuwahara_tensor.frag.spv")
     copy_helper("kuwahara_tfm.frag.spv")
     copy_helper("kuwahara_filter.frag.spv")
+    copy_helper("bloom_bright.frag.spv")
+    copy_helper("bloom_down.frag.spv")
+    copy_helper("bloom_up.frag.spv")
+    copy_helper("bloom_combine.frag.spv")
     copy_helper("skin.comp.spv")
     copy_helper("anim_eval.comp.spv")
     # Scenario picker scripts -> assets/scripts. SDL_EnumerateDirectory finds

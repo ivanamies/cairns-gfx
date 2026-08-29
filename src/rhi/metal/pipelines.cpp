@@ -176,6 +176,22 @@ MetalShaderInfo resolve_metal_shader(const char* logical) {
         return {"kuwahara.metal", "kuwahara::fullscreen_vertex",
                 "kuwahara::filter_fragment", nullptr};
     }
+    if (std::strcmp(logical, "bloom_bright") == 0) {
+        return {"bloom.metal", "bloom::fullscreen_vertex",
+                "bloom::bright_fragment", nullptr};
+    }
+    if (std::strcmp(logical, "bloom_down") == 0) {
+        return {"bloom.metal", "bloom::fullscreen_vertex",
+                "bloom::down_fragment", nullptr};
+    }
+    if (std::strcmp(logical, "bloom_up") == 0) {
+        return {"bloom.metal", "bloom::fullscreen_vertex",
+                "bloom::up_fragment", nullptr};
+    }
+    if (std::strcmp(logical, "bloom_combine") == 0) {
+        return {"bloom.metal", "bloom::fullscreen_vertex",
+                "bloom::combine_fragment", nullptr};
+    }
     if (std::strcmp(logical, "skin") == 0) {
         // Skin compute kernel (no vert/frag).
         return {"skin.metal", nullptr, nullptr, "skin_compute"};

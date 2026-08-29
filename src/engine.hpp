@@ -1847,6 +1847,12 @@ private:
     ShaderHandle kuwahara_tensor_pip_ = ShaderHandle::Null;
     ShaderHandle kuwahara_tfm_pip_ = ShaderHandle::Null;
     ShaderHandle kuwahara_filter_pip_ = ShaderHandle::Null;
+    // Bloom quad (bright -> down xN -> up xN -> combine); down/up PSOs are
+    // reused across ladder levels. Same Null-disables rule.
+    ShaderHandle bloom_bright_pip_ = ShaderHandle::Null;
+    ShaderHandle bloom_down_pip_ = ShaderHandle::Null;
+    ShaderHandle bloom_up_pip_ = ShaderHandle::Null;
+    ShaderHandle bloom_combine_pip_ = ShaderHandle::Null;
     // Post-effect params: per-FIF dyn-UBO set over the kDynamic master
     // (dyn_globals_ shape, 64B blocks); DrawFullscreenParams binds it.
     rhi::Handle<rhi::DynamicBuffers> dyn_postfx_;

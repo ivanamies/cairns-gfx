@@ -11,3 +11,7 @@ glslc lit_noid.frag -o lit_noid.frag.spv
 glslc kuwahara_tensor.frag -o kuwahara_tensor.frag.spv
 glslc kuwahara_tfm.frag -o kuwahara_tfm.frag.spv
 glslc kuwahara_filter.frag -o kuwahara_filter.frag.spv
+glslc bloom_bright.frag -o bloom_bright.frag.spv
+glslc bloom_down.frag -o bloom_down.frag.spv
+glslc bloom_up.frag -o bloom_up.frag.spv
+glslc bloom_combine.frag -o bloom_combine.frag.spv
