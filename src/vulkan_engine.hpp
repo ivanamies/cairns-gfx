@@ -460,7 +460,7 @@ private:
         }
         if (!createLogicalDevice()) return false;
         if (!createCommandPool()) return false;
-        if (!sc_.Init(device, physicalDevice, surface, window_, commandPool, graphicsQueue, msaaSamples, vk_debug_has(vk_debug::kDumpSwapchain))) return false;
+        if (!sc_.Init(device, physicalDevice, surface, window_, commandPool, graphicsQueue, msaaSamples, true)) return false;
         if (!initResourceManager()) return false;
         if (!loadScenes()) return false;
         if (!createBindlessRegistry()) return false;
@@ -491,6 +491,7 @@ private:
             fr.compute_sets = computeDescriptorSets.data();
             fr.point_sets = descriptorSets2.data();
             fr.compute_ubo_range = sizeof(ParameterUBO);
+            fr.dump_path = &dumpPath_;
             rm_.VkRegisterFrame(fr);
         }
         return true;
@@ -2042,6 +2043,11 @@ private:
     }
 
     bool drawFrame() {
+        frame_++;
+        if (frame_ == 5 && dumpPath_.empty()) {
+            dumpPath_ = "/tmp/cairns_dump.png";
+        }
+
         rhi::FrameContext fc = rm_.BeginFrame(sc_);
 
         const uint64_t now_ticks = SDL_GetTicks();
@@ -2118,18 +2124,8 @@ private:
         fc.cmd.EndRenderPass();
         rm_.EndFrame(fc);
         particle_parity_ ^= 1;
-
-        if constexpr (vk_debug_has(vk_debug::kDumpSwapchain)) {
-            if ( dumpFrameCounter == 60 ) {
-                vkQueueWaitIdle(presentQueue);
-                dumpSwapchainToPng(fc.swapchain_image_index, "/tmp/tut_dump.png");
-            }
-            ++dumpFrameCounter;
-        }
         return true;
     }
-
-    uint32_t dumpFrameCounter = 0;
 
     void updateUniformBuffer(uint32_t currentImage) {
         static auto startTime = std::chrono::high_resolution_clock::now();
@@ -2403,6 +2399,8 @@ private:
     std::vector<rhi::Handle<rhi::Texture>> resident_textures_;
     uint32_t particle_parity_ = 0;
     uint64_t last_ticks_ = 0;
+    int frame_ = 0;
+    std::filesystem::path dumpPath_;
 
     VkDescriptorPool descriptorPool;
     std::vector<VkDescriptorSet> descriptorSets;

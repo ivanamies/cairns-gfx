@@ -563,6 +563,7 @@ struct VkFrameResources {
     const VkDescriptorSet* compute_sets = nullptr;
     const VkDescriptorSet* point_sets = nullptr;
     uint32_t compute_ubo_range = 0;
+    std::filesystem::path* dump_path = nullptr;
 };
 #elif CAIRNS_METAL
 struct BackendInitParams {

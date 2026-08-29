@@ -16,6 +16,8 @@
 #include <string>
 #include <vector>
 
+#include <stb_image_write.h>
+
 #include "rhi/vulkan/memory_allocator.hpp"
 #include "rhi/command_recorder.hpp"
 #include "rhi/swap_chain.hpp"
@@ -183,6 +185,103 @@ void end_single_time(VkDevice device, VkCommandPool pool, VkQueue queue,
     vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE);
     vkQueueWaitIdle(queue);
     vkFreeCommandBuffers(device, pool, 1, &cmd);
+}
+
+uint32_t find_memory_type_idx(VkPhysicalDevice phys, uint32_t type_bits,
+                              VkMemoryPropertyFlags props) {
+    VkPhysicalDeviceMemoryProperties mp{};
+    vkGetPhysicalDeviceMemoryProperties(phys, &mp);
+    for (uint32_t i = 0; i < mp.memoryTypeCount; ++i) {
+        if ((type_bits & (1u << i)) &&
+            (mp.memoryTypes[i].propertyFlags & props) == props) {
+            return i;
+        }
+    }
+    return 0;
+}
+
+void dump_swapchain_image(VkDevice device, VkPhysicalDevice phys,
+                          VkCommandPool pool, VkQueue queue, VkImage image,
+                          VkFormat format, uint32_t w, uint32_t h,
+                          const char* path) {
+    const VkDeviceSize buf_size = static_cast<VkDeviceSize>(w) * h * 4;
+
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = buf_size;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VkBuffer buf = VK_NULL_HANDLE;
+    vkCreateBuffer(device, &bci, nullptr, &buf);
+
+    VkMemoryRequirements mr{};
+    vkGetBufferMemoryRequirements(device, buf, &mr);
+    VkMemoryAllocateInfo mai{};
+    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.allocationSize = mr.size;
+    mai.memoryTypeIndex = find_memory_type_idx(
+        phys, mr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    vkAllocateMemory(device, &mai, nullptr, &mem);
+    vkBindBufferMemory(device, buf, mem, 0);
+
+    VkCommandBuffer cmd = begin_single_time(device, pool);
+    VkImageMemoryBarrier to_src{};
+    to_src.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    to_src.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    to_src.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    to_src.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_src.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_src.image = image;
+    to_src.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    to_src.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+    to_src.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
+                         1, &to_src);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {w, h, 1};
+    vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1,
+                           &region);
+
+    VkImageMemoryBarrier to_present = to_src;
+    to_present.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    to_present.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    to_present.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    to_present.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
+                         1, &to_present);
+    end_single_time(device, pool, queue, cmd);
+
+    void* mapped = nullptr;
+    vkMapMemory(device, mem, 0, buf_size, 0, &mapped);
+    const uint8_t* src = static_cast<const uint8_t*>(mapped);
+    const bool is_bgra = (format == VK_FORMAT_B8G8R8A8_SRGB ||
+                          format == VK_FORMAT_B8G8R8A8_UNORM);
+    std::vector<uint8_t> rgba(static_cast<size_t>(buf_size));
+    for (uint32_t i = 0; i < w * h; ++i) {
+        if (is_bgra) {
+            rgba[i * 4 + 0] = src[i * 4 + 2];
+            rgba[i * 4 + 1] = src[i * 4 + 1];
+            rgba[i * 4 + 2] = src[i * 4 + 0];
+            rgba[i * 4 + 3] = src[i * 4 + 3];
+        } else {
+            rgba[i * 4 + 0] = src[i * 4 + 0];
+            rgba[i * 4 + 1] = src[i * 4 + 1];
+            rgba[i * 4 + 2] = src[i * 4 + 2];
+            rgba[i * 4 + 3] = src[i * 4 + 3];
+        }
+    }
+    vkUnmapMemory(device, mem);
+    stbi_write_png(path, static_cast<int>(w), static_cast<int>(h), 4, rgba.data(),
+                   static_cast<int>(w * 4));
+
+    vkDestroyBuffer(device, buf, nullptr);
+    vkFreeMemory(device, mem, nullptr);
 }
 
 void transition_to_transfer_dst(VkDevice device, VkCommandPool pool,
@@ -1447,6 +1546,18 @@ void ResourceManager::EndFrame(FrameContext& fc) {
     pi.pSwapchains = swapchains;
     pi.pImageIndices = &fc.swapchain_image_index;
     vkQueuePresentKHR(fr.present_queue, &pi);
+
+    if (fr.dump_path && !fr.dump_path->empty()) {
+        vkQueueWaitIdle(fr.present_queue);
+        dump_swapchain_image(impl_->params.device, impl_->params.physical,
+                             impl_->params.command_pool, impl_->params.queue,
+                             ri->sc->swapChainImages[fc.swapchain_image_index],
+                             ri->sc->swapChainImageFormat,
+                             ri->sc->swapChainExtent.width,
+                             ri->sc->swapChainExtent.height,
+                             fr.dump_path->string().c_str());
+        fr.dump_path->clear();
+    }
 
     impl_->recorder_frame = (cf + 1) % fr.frames_in_flight;
     delete ri;
