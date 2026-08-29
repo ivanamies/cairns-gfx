@@ -121,6 +121,7 @@ if(CAIRNS_GFX_BUILD_GOLDEN_TESTS)
     add_executable(cairns_golden_tests
         test_golden_scenarios.cpp
         test_golden_stress.cpp
+        test_state_hash.cpp
         test_js_smoke.cpp
         test_seams.cpp
         test_refs.cpp

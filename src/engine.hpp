@@ -1555,6 +1555,11 @@ public:
     void SetImguiInGolden(bool on) { imgui_in_golden_ = on; }
     bool ImguiInGolden() const { return imgui_in_golden_; }
 
+    // #229 P7: per-frame SIM determinism digest (golden mode only; 0 otherwise).
+    // Stable frame-to-frame under FixedClock + a static scene, and run-to-run
+    // across independent Engine instances. test_state_hash asserts both.
+    uint64_t LastSimHash() const { return last_sim_hash_; }
+
     // A.12: read the currently-bound particle ssbo bytes for the G1
     // cross-platform buffer SECTION. Gated on A.10 (Resources::ReadBackBuffer)
     // being implemented -- today returns false so G1 buffer SECTION SKIPs
@@ -3440,8 +3445,9 @@ public:
             sim.WritePod(render_angle_deg_);
             sim.WritePod(accumulator_);
             sim.WritePod(sim_frame_);
+            last_sim_hash_ = sim.Digest();
             std::fprintf(stderr, "[STATEHASH] frame=%u sim=%016llx used=%zu\n",
-                         frame_, (unsigned long long)sim.Digest(),
+                         frame_, (unsigned long long)last_sim_hash_,
                          s.arena.Used());
         }
 
@@ -5896,6 +5902,9 @@ private:
     float sim_angle_deg_ = 0.0f;
     float render_angle_deg_ = 0.0f;
     uint32_t sim_steps_this_frame_ = 0;
+    // #229 P7: last per-frame SIM determinism digest (FixedClock + static scene
+    // => byte-identical every frame and run-to-run). Read by test_state_hash.
+    uint64_t last_sim_hash_ = 0;
     bool golden_ = false;
     // Subset of golden_: only true when dump_path != "" (the CLI byte-gate
     // path). Tests use use_fixed_clock => golden_=true, dump_and_exit_=false.
