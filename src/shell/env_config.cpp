@@ -46,6 +46,12 @@ EngineConfig LoadEngineConfigFromEnv() {
     // #269: CAIRNS_N / CAIRNS_SCALE / CAIRNS_HERO_SLICES / CAIRNS_SKIN_MODE
     // retired. Entity spawn moved to cairns.world.spawnHero NDJSON.
 
+    // A.2: CLI shells default particles ON (the windowed/serve app expects
+    // them); tests use EngineConfig::particles_enabled=false default and
+    // flip on per-scenario via Engine::EnableParticles(true).
+    // CAIRNS_NO_PARTICLES env override for headless debugging.
+    cfg.particles_enabled = (std::getenv("CAIRNS_NO_PARTICLES") == nullptr);
+
     return cfg;
 }
 

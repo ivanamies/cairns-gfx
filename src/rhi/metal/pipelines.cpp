@@ -145,6 +145,12 @@ MetalShaderInfo resolve_metal_shader(const char* logical) {
         return {"depthviz.metal", "depthvizfx::depthviz_vertex",
                 "depthvizfx::depthviz_fragment", nullptr};
     }
+    if (std::strcmp(logical, "red_triangle") == 0) {
+        // A.3: L1 single red triangle. No texture/sampler bindings; vertex
+        // shader emits 3 NDC verts from vertex_id.
+        return {"red_triangle.metal", "red_trianglefx::red_triangle_vertex",
+                "red_trianglefx::red_triangle_fragment", nullptr};
+    }
     if (std::strcmp(logical, "outline") == 0) {
         // #207 outline fullscreen post-process.
         return {"outline.metal", "cube::vertexShader", "cube::fragmentShader",

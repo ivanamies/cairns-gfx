@@ -71,6 +71,13 @@ struct Viewport {
         // happens once per frame in BuildMeshOpaqueDraws.
         entt::entity camera_entity = entt::null;
         FlyController fly;
+        // A.5: per-viewport particle draw toggle. The engine's global
+        // particles_enabled_ gates the compute pass + ssbo writes; this
+        // per-viewport flag gates the DrawPoints call in each viewport's
+        // forward pass. Default true (back-compat with the global gate);
+        // G3 right viewport sets true while left sets false, with the
+        // global flag on.
+        bool particles_enabled = true;
     };
 };
 

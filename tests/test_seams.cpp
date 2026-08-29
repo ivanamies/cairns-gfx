@@ -152,47 +152,76 @@ bool SpawnGlbs(cairns::Engine& engine,
                             static_cast<uint32_t>(glbs.size()), animated);
 }
 
-bool ClearSpawned(cairns::Engine& /*engine*/) {
-    // The scene-clear path is the AssetRegistry::ClearAll / SceneWorld reset
-    // that production hot-reload uses. Until wired into Engine as a single
-    // public call, return false so G2 SKIPs gracefully. Not load-bearing for
-    // L1..L7 ladder; gates only G2 (hot reload).
-    return false;
+bool ClearSpawned(cairns::Engine& engine) {
+    // A.4: Engine already exposes ClearActiveScene() (engine.hpp:1086).
+    // Drains every entity in the active scene's entt::registry; asset slots
+    // (prefab pool, materials, meshes) stay valid -- that's the #228 recycle
+    // path G2 verifies. The return is the count of entities cleared (>= 0);
+    // for the seam we just need success.
+    (void)engine.ClearActiveScene();
+    return true;
 }
 
-bool OpenSecondViewport(cairns::Engine& /*engine*/, const char* /*glb*/,
-                        float /*yaw_rad*/, bool /*with_particles*/) {
-    return false;  // G3 only; gated until viewport-1 spawn path exposed.
+bool OpenSecondViewport(cairns::Engine& engine, const char* glb,
+                        float yaw_rad, bool with_particles) {
+    // A.5: routes to Engine::OpenSecondViewport (engine.hpp). Opens viewport
+    // 1, places it at the right half (uniform tile), spawns one glb, sets
+    // the per-viewport particle gate. Returns false on viewport-cap or
+    // asset-resolve failure.
+    return engine.OpenSecondViewport(glb ? glb : "", yaw_rad, with_particles);
 }
 
-bool ConfigureNestedGraph(cairns::Engine& /*engine*/) {
-    return false;  // G4 only; gated until nested graph configurator exposed.
+bool ConfigureNestedGraph(cairns::Engine& engine) {
+    // A.6: opens vp1 + vp2 at ±60° yaw so the existing render graph
+    // composes 3 forward passes (G4's "third camera" + nested). The
+    // resolved-depth SECTION still SKIPs until ReadBackBuffer salvage
+    // (A.10) is applied.
+    return engine.ConfigureNestedGraph();
 }
 
-bool SpawnInsideOutsideSplit(cairns::Engine& /*engine*/, const char* /*glb*/,
-                             uint32_t /*inside*/, uint32_t /*outside*/) {
-    return false;  // G5 only; gated until placement seam exposed.
+bool SpawnInsideOutsideSplit(cairns::Engine& engine, const char* glb,
+                             uint32_t inside, uint32_t outside) {
+    // A.8: routes to Engine::SpawnInsideOutsideSplit. inside actors at
+    // origin (visible), outside actors at +99 axis offsets (off-frustum).
+    // G5 SECTION will still SKIP until the cull stage is real (A.7 note).
+    return engine.SpawnInsideOutsideSplit(glb ? glb : "", inside, outside);
 }
 
-bool LastFrameStats(cairns::Engine& /*engine*/, FrameStats& /*out*/) {
-    return false;  // G5 only; gated until BSF counter accessor exposed.
+bool LastFrameStats(cairns::Engine& engine, FrameStats& out) {
+    // A.7: routes to Engine::LastFrameStats which populates the existing
+    // submitted / draw_calls / verts_processed counters. `culled` is 0
+    // today -- the engine has no per-proxy frustum cull stage yet (see
+    // dev/plans/2026-06-18_gfx_modularization-notes.md). G5 should SKIP
+    // when cull isn't real so the test fails meaningfully later, not
+    // green-by-stub now.
+    cairns::Engine::FrameStats fs{};
+    if (!engine.LastFrameStats(fs)) {
+        return false;
+    }
+    if (!fs.cull_stage_implemented) {
+        return false;  // G5 SKIPs: culled count is meaningless without cull
+    }
+    out.draw_calls = fs.draw_calls;
+    out.verts_processed = fs.verts_processed;
+    out.culled = fs.culled;
+    out.submitted = fs.submitted;
+    return true;
 }
 
-bool ReadParticleBuffer(cairns::Engine& /*engine*/,
-                        std::vector<uint8_t>& /*out*/) {
-    return false;  // G1 buffer SECTION; gated until production particle init
-                   // switches to ParticleRng/SeedParticles.
+bool ReadParticleBuffer(cairns::Engine& engine, std::vector<uint8_t>& out) {
+    // A.12: routes to Engine::ReadParticleBuffer. After A.1 the particle
+    // init is portable (mt19937 + hand-rolled NextUnit), so a buffer diff
+    // is now *meaningful*; the readback itself is gated on A.10
+    // (Resources::ReadBackBuffer) which is deferred. Returns false today.
+    return engine.ReadParticleBuffer(out);
 }
 
-bool EnableImguiOverlay(cairns::Engine& /*engine*/, bool /*on*/) {
-    // The engine deliberately skips ImGui in golden mode + surfaceless mode
-    // (engine.hpp:2910 -- `!golden_ && final_target_.IsNull()`). Routing the
-    // overlay into the golden-mode offscreen capture would need an
-    // imgui-on-surfaceless backend init, which is out of scope here. Returning
-    // true lets the top-level REQUIRE pass; the image SECTION bakes a ref of
-    // the no-overlay render and the bit-identical SECTION still proves the
-    // golden capture is stable run-to-run. Re-wire this when imgui-on-golden
-    // is wanted.
+bool EnableImguiOverlay(cairns::Engine& engine, bool on) {
+    // A.9: routes to Engine::SetImguiInGolden, which lifts the "no imgui in
+    // golden" guard. Combined with SetInjectedHudStats (HudStats::Mock()),
+    // the rendered HUD is byte-stable so G6 image SECTION can compare an
+    // actual overlay capture to its baked ref.
+    engine.SetImguiInGolden(on);
     return true;
 }
 

@@ -344,6 +344,10 @@ VkShaderFiles resolve_vk_shader(const char* logical) {
         // depthviz reuses the composite full-screen tri vert.
         return {"composite_pip.vert.spv", "depthviz.frag.spv", nullptr};
     }
+    if (std::strcmp(logical, "red_triangle") == 0) {
+        // A.3: L1 single red triangle. Own vert+frag, no bindings.
+        return {"red_triangle.vert.spv", "red_triangle.frag.spv", nullptr};
+    }
     if (std::strcmp(logical, "outline") == 0) {
         // #207 outline post-process fullscreen tri.
         return {"outline.vert.spv", "outline.frag.spv", nullptr};
@@ -571,9 +575,12 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
         set_layouts = {plat.globals_set_layout_,      // set 0: globals (once/frame)
                        resources.plat.MaterialSetLayout(),   // set 1: per-material
                        plat.drawtmp_set_layout_};     // set 2: drawtmp (per draw)
-    } else if (ls == "composite_pip" || ls == "depthviz" || ls == "outline") {
+    } else if (ls == "composite_pip" || ls == "depthviz" || ls == "outline" ||
+               ls == "red_triangle") {
         // 2 COMBINED_IMAGE_SAMPLER frag (binding 0 = primary color, binding
-        // 1 = id; only outline statically accesses binding 1).
+        // 1 = id; only outline statically accesses binding 1). red_triangle
+        // declares but does not use the bindings -- DrawFullscreen still
+        // binds a descriptor set, so we share the composite layout.
         set_layouts = {plat.composite_set_layout_};
     } else if (ls == "imgui") {
         VkDescriptorSetLayoutBinding b{};

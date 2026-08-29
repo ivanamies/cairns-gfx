@@ -29,6 +29,7 @@
 #include "util/hud_stats.hpp"
 #include "util/animation_runtime.hpp"  // #221 Phase 9: SelectWalkingClip + sampler.
 #include "render/render_proxy.hpp"  // #221 Phase 3: SkinnedAttachment Hot/Cold.
+#include "render/particle_emitter.hpp"  // A.1: ParticleRng (portable mt19937)
 
 #include "gfx_api.hpp"
 #include "rhi/init_config.hpp"
@@ -71,6 +72,14 @@
 #include "imgui_impl_sdl3.h"
 
 namespace cairns {
+
+// A.5 forward decl: OpenSecondViewport (engine.hpp body) calls into the
+// headless free-function layer, but engine_headless.hpp transitively
+// includes engine.hpp -- this avoids the include cycle.
+class Engine;
+namespace headless {
+uint32_t RuntimeLoadGlbPath(Engine* engine, const std::string& path);
+}
 
 inline static constexpr uint32_t kUboAlign = 32;
 inline static constexpr uint32_t kMeshPosBindSlot = 0;
@@ -116,6 +125,14 @@ struct EngineConfig {
     // (CLI behaviour preserved); this bool is the only way to ask for fixed
     // clock without the dump+exit path.
     bool use_fixed_clock = false;
+
+    // A.2: gate particle_sim + particle_draw at the source. Default OFF for
+    // every ladder rung + every scenario except G1 (and G3-right viewport).
+    // Particle compute writes via std::rand-shaped paths consumed downstream;
+    // with this off, L1 "pipeline + clear + one draw" is actually that.
+    // Set via Engine::EnableParticles(bool) at runtime; CLI app and serve
+    // shell default ON via main / serve_main lowering.
+    bool particles_enabled = false;
 };
 
 class Engine {
@@ -232,6 +249,22 @@ public:
     // TryCreateSkinForScene (so [SKIN-FAIL] logs cover the failure modes).
     uint32_t InstantiatePrefab(uint32_t scene_idx, const glm::mat4& world,
                         float time_phase) {
+        return InstantiatePrefabImpl(scene_idx, world, time_phase,
+                                      /*attach_skin=*/true);
+    }
+
+    // A.11: no-skin spawn variant. Skips TryCreateSkinForScene so the
+    // entity renders in its bind pose without animation. Used by L5
+    // "static LoL" rung so it diverges visibly from L6 "anim LoL".
+    uint32_t InstantiatePrefabNoSkin(uint32_t scene_idx,
+                                     const glm::mat4& world) {
+        return InstantiatePrefabImpl(scene_idx, world, /*time_phase=*/0.0f,
+                                      /*attach_skin=*/false);
+    }
+
+    // Shared implementation. Public because both wrappers are inline.
+    uint32_t InstantiatePrefabImpl(uint32_t scene_idx, const glm::mat4& world,
+                                    float time_phase, bool attach_skin) {
         if (scene_idx >= prefab_ids_.size() ||
             scene_idx >= per_prefab_asset_.size()) {
             return UINT32_MAX;
@@ -252,10 +285,12 @@ public:
         rdr.layer_mask = 0xFFFFFFFFu;
         rdr.flags = cairns::kProxyVisible;
         reg.emplace<cairns::Renderable>(e, rdr);
-        cairns::SkinId sid =
-            TryCreateSkinForScene(prefab_ids_[scene_idx], time_phase);
-        if (!sid.IsNull()) {
-            reg.emplace<cairns::SkinRef>(e, cairns::SkinRef{sid});
+        if (attach_skin) {
+            cairns::SkinId sid =
+                TryCreateSkinForScene(prefab_ids_[scene_idx], time_phase);
+            if (!sid.IsNull()) {
+                reg.emplace<cairns::SkinRef>(e, cairns::SkinRef{sid});
+            }
         }
         // Mark world dirty so the proxy extract picks up the new entity.
         if (auto* wh = scenes_.GetHot(active_scene_)) {
@@ -1431,6 +1466,163 @@ public:
         return injected_hud_stats_;
     }
 
+    // A.2: runtime particle gate. Default off (EngineConfig::particles_enabled
+    // = false). G1 particles scenario + G3 right-viewport flip on; everything
+    // else stays off so the captured frames are "pipeline + clear + meshes",
+    // no std::rand-shaped contamination.
+    void EnableParticles(bool on) { particles_enabled_ = on; }
+    bool ParticlesEnabled() const { return particles_enabled_; }
+
+    // A.9: drop the implicit "no imgui in golden" gate. G6 imgui stability
+    // scenario flips this on so the HUD/overlay renders into the golden
+    // capture. Implicit constraint: SetInjectedHudStats should be called
+    // alongside this so the rendered HUD numbers are byte-stable
+    // (HudStats::Mock() = 60 fps flat).
+    void SetImguiInGolden(bool on) { imgui_in_golden_ = on; }
+    bool ImguiInGolden() const { return imgui_in_golden_; }
+
+    // A.12: read the currently-bound particle ssbo bytes for the G1
+    // cross-platform buffer SECTION. Gated on A.10 (Resources::ReadBackBuffer)
+    // being implemented -- today returns false so G1 buffer SECTION SKIPs
+    // honestly. When ReadBackBuffer lands, this resolves
+    // particle_ssbo_[latest_parity_out_] and copies its bytes into `out`.
+    bool ReadParticleBuffer(std::vector<uint8_t>& /*out*/) {
+        // TODO(A.10): wire to rhi_.resources.ReadBackBuffer(
+        //   particle_ssbo_[latest_parity_out_], kParticleCount*sizeof(Particle), out);
+        return false;
+    }
+
+    // A.5: open viewport 1, place its camera, spawn one glb into the active
+    // scene, set its per-viewport particle gate. The G3 scenario drives this:
+    // vp0 stays at default (left half, particles off), vp1 lands at right
+    // half (particles on per the `particles_on` arg). Layout: equal halves
+    // (OpenViewport itself does the uniform re-tile). Returns true iff a
+    // viewport + a prefab + an entity all came up.
+    // A.6: program viewports 1 + 2 around the existing scene to test
+    // multi-pass render-graph behavior under the same backend submission.
+    // Viewport 0 stays at default; viewports 1 + 2 open at yaws +60° / -60°
+    // off heading. Particle gates default off (G4 isn't a particle test).
+    // The "resolved-depth" readback is wired to ReadResolvedDepth in
+    // test_seams; that path stays SKIP until the ReadBackBuffer salvage
+    // (A.10) lands. Returns true iff both extra viewports came up.
+    // A.8: deterministic spawn helper for G5 frustum-cull test. Loads `glb`
+    // once, then instantiates `inside` actors near the origin (visible to
+    // the default cam) and `outside` actors at +99x / +99y / +50z (far off
+    // the active frustum). Real cull stage isn't implemented yet
+    // (cull_stage_implemented==false on the FrameStats) -- G5 SKIPs based
+    // on that flag, this method just sets the scene up for when it lands.
+    bool SpawnInsideOutsideSplit(const std::string& glb, uint32_t inside,
+                                 uint32_t outside) {
+        const uint32_t prefab_idx =
+            cairns::headless::RuntimeLoadGlbPath(this, glb);
+        if (prefab_idx == UINT32_MAX) {
+            return false;
+        }
+        for (uint32_t i = 0; i < inside; ++i) {
+            glm::mat4 world(1.0f);
+            world[3] = glm::vec4(
+                static_cast<float>(i) * 1.5f - 1.5f, 0.0f, 0.0f, 1.0f);
+            if (InstantiatePrefab(prefab_idx, world, 0.0f) == UINT32_MAX) {
+                return false;
+            }
+        }
+        const glm::vec4 out_offsets[3] = {
+            { 99.0f,   0.0f,  0.0f, 1.0f},
+            {  0.0f,  99.0f,  0.0f, 1.0f},
+            {  0.0f,   0.0f, 50.0f, 1.0f},
+        };
+        for (uint32_t i = 0; i < outside; ++i) {
+            glm::mat4 world(1.0f);
+            world[3] = out_offsets[i % 3];
+            // Distribute beyond the first 3 axis directions by scaling.
+            if (i >= 3) {
+                world[3].x *= static_cast<float>(1 + i / 3);
+                world[3].y *= static_cast<float>(1 + i / 3);
+                world[3].z *= static_cast<float>(1 + i / 3);
+            }
+            if (InstantiatePrefab(prefab_idx, world, 0.0f) == UINT32_MAX) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // A.7: per-frame draw / cull / vert counters. Populated at the end of
+    // BuildMeshOpaqueDraws each frame. `culled` is 0 today -- the engine
+    // doesn't yet run a frustum cull stage (frustum.hpp is currently only
+    // consumed by the spec test). Adding the cull stage is in the Phase G
+    // backlog; once it lands, fill `culled` and reduce `draw_calls` /
+    // `verts_processed` accordingly.
+    struct FrameStats {
+        uint32_t draw_calls = 0;
+        uint64_t verts_processed = 0;
+        uint32_t culled = 0;       // currently always 0 -- see note above
+        uint32_t submitted = 0;
+        bool cull_stage_implemented = false;  // false => G5 SKIPs honestly
+    };
+    bool LastFrameStats(FrameStats& out) const {
+        out = last_frame_stats_;
+        return true;
+    }
+
+    bool ConfigureNestedGraph() {
+        if (active_viewport_count_ >= kNumViewports - 1) {
+            return false;  // need room for vp1 + vp2
+        }
+        constexpr float kSideYaw = 1.0471975511965976f;  // 60° in radians
+        const uint32_t name1 = OpenViewport();
+        if (name1 == UINT32_MAX) {
+            return false;
+        }
+        if (auto* vc = viewports_.GetCold(
+                viewport_ids_[active_viewport_count_ - 1])) {
+            vc->fly.yaw = kSideYaw;
+            vc->particles_enabled = false;
+        }
+        const uint32_t name2 = OpenViewport();
+        if (name2 == UINT32_MAX) {
+            return false;
+        }
+        if (auto* vc = viewports_.GetCold(
+                viewport_ids_[active_viewport_count_ - 1])) {
+            vc->fly.yaw = -kSideYaw;
+            vc->particles_enabled = false;
+        }
+        nested_graph_mode_ = true;
+        return true;
+    }
+
+    bool OpenSecondViewport(const std::string& glb_name, float yaw_rad,
+                            bool particles_on) {
+        const uint32_t name = OpenViewport();
+        if (name == UINT32_MAX) {
+            return false;
+        }
+        // Newest viewport is at the highest index (OpenViewport appends).
+        const int vp_idx = active_viewport_count_ - 1;
+        cairns::ViewportId vid = viewport_ids_[vp_idx];
+        cairns::Viewport::Hot* vh = viewports_.GetHot(vid);
+        cairns::Viewport::Cold* vc = viewports_.GetCold(vid);
+        if (!vh || !vc) {
+            return false;
+        }
+        vc->fly.yaw = yaw_rad;
+        vc->particles_enabled = particles_on;
+        vh->camera_dirty = true;
+
+        // Load + instantiate. Path resolution goes through the engine's
+        // static-resource lookup (GetStaticResourceFilepath); the seam can
+        // pass a bare name like "aatrox.glb".
+        const uint32_t prefab_idx =
+            cairns::headless::RuntimeLoadGlbPath(this, glb_name);
+        if (prefab_idx == UINT32_MAX) {
+            return false;
+        }
+        const uint32_t entity = InstantiatePrefab(prefab_idx, glm::mat4(1.0f),
+                                                   /*time_phase=*/0.0f);
+        return entity != UINT32_MAX;
+    }
+
     // #194 runtime viewport management. #220 Step 4: handle-pilled +
     // vpN wire-name layer.
     int ActiveViewportCount() const { return active_viewport_count_; }
@@ -1874,6 +2066,7 @@ public:
         dump_and_exit_ = !engine_cfg_.dump_path.empty();
         golden_ = engine_cfg_.use_fixed_clock || dump_and_exit_;
         tiny_quad_test_ = engine_cfg_.tiny_quad;
+        particles_enabled_ = engine_cfg_.particles_enabled;
 
         // #220 Step 4: viewport pool must be set up BEFORE the cam_pose
         // override walks it. InitInitialViewport acquires vp0 and primes
@@ -2638,6 +2831,23 @@ public:
             });
         }
 
+        // A.7: stamp FrameStats at end of build. cull_stage_implemented stays
+        // false until a real per-proxy frustum cull lands (Phase G). G5 reads
+        // this flag and SKIPs honestly when cull isn't real.
+        {
+            FrameStats fs{};
+            fs.submitted = n_proxies;
+            fs.draw_calls = static_cast<uint32_t>(s.drawList.size());
+            uint64_t verts = 0;
+            for (const cairns::Draw& d : s.drawList) {
+                verts += static_cast<uint64_t>(d.triangle_count) * 3u;
+            }
+            fs.verts_processed = verts;
+            fs.culled = 0;
+            fs.cull_stage_implemented = false;
+            last_frame_stats_ = fs;
+        }
+
         return true;
     }
 
@@ -2909,13 +3119,21 @@ public:
         s.pkt.resident_textures = std::span<const rhi::Handle<rhi::Texture>>(
             resident_textures_.data(), resident_textures_.size());
 
-        // Skip ImGui in golden-dump mode (windowed CAIRNS_DUMP, no overlay
-        // in the byte-gate) AND in surfaceless mode (cairns_serve has no
-        // SDL3 platform backend init'd; ImGui_ImplSDL3_NewFrame would
-        // assert. final_target_ being non-null is the surfaceless marker).
-        const bool draw_imgui = !golden_ && final_target_.IsNull();
+        // A.9: imgui-in-golden opt-in. The original guard skipped imgui
+        // whenever golden_=true OR when final_target_ was non-null
+        // (surfaceless). Tests now ask for imgui in golden mode (G6) via
+        // SetImguiInGolden(true). The SDL3 NewFrame call still gets skipped
+        // in surfaceless because cairns_serve doesn't init SDL3; ImGui
+        // proper runs (CreateContext done by test harness, NewFrame on
+        // ImGui itself, font atlas already built).
+        const bool surfaceless = !final_target_.IsNull();
+        const bool draw_imgui =
+            (!golden_ && !surfaceless) ||
+            (golden_ && imgui_in_golden_);
         if (draw_imgui) {
-            ImGui_ImplSDL3_NewFrame();
+            if (!surfaceless) {
+                ImGui_ImplSDL3_NewFrame();
+            }
             ImGui::NewFrame();
             ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_FirstUseEver);
             ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, 0.85f));
@@ -3486,7 +3704,10 @@ public:
 
         // pass 1: particle_sim kCompute. import the writer ssbo so prune keeps
         // it (external side effect -- game thread reads particle_parity_out).
+        // A.2 gate: when particles_enabled_=false the pass is omitted entirely;
+        // sim_out stays default-null, no readers downstream so prune drops it.
         rhi::GraphBuffer sim_out;
+        if (particles_enabled_) {
         graph_->AddPass(
             "particle_sim", rhi::PassType::kCompute,
             [&](rhi::PassBuilder& b) {
@@ -3515,6 +3736,7 @@ public:
                     cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
                 }
             });
+        }  // particles_enabled_
 
         // pass 2: forward, ONCE PER VIEWPORT. Each pass writes to a private
         // half-width color+depth target. Particles render into both viewports
@@ -3565,7 +3787,29 @@ public:
                 },
                 [&, vp_idx](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
                     cmd.DrawMeshes(rhi_.resources, rhi_.alloc, mls[vp_idx]);
-                    cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
+                    // A.2 + A.5 gate: global particles_enabled_ gates the
+                    // compute sim above; per-viewport
+                    // Viewport::Cold::particles_enabled gates each
+                    // viewport's particle draw. G3 drives the per-vp split.
+                    bool vp_particles = true;
+                    if (auto* vc = viewports_.GetCold(viewport_ids_[vp_idx])) {
+                        vp_particles = vc->particles_enabled;
+                    }
+                    if (particles_enabled_ && vp_particles) {
+                        cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
+                    }
+                    // A.3: L1 single red triangle. tiny_quad_test_ flips this
+                    // on; with no glbs loaded DrawMeshes is a no-op, so the
+                    // captured frame is pipeline + clear + this one draw.
+                    // Hard-coded NDC triangle from gl_VertexIndex; the shader
+                    // ignores its texture/sampler bindings but DrawFullscreen
+                    // unconditionally dereferences the sampler handle, so we
+                    // pass composite_sampler_ (already created).
+                    if (tiny_quad_test_) {
+                        cmd.DrawFullscreen(rhi_.resources, red_triangle_pip_,
+                            std::span<const rhi::Handle<rhi::Texture>>{},
+                            composite_sampler_);
+                    }
                 });
         }
 
@@ -3707,8 +3951,11 @@ public:
                                        composite_sampler_);
                 }
                 // Active viewport's depth PIP (bottom-right 25% of the active
-                // viewport's layout_rect).
-                {
+                // viewport's layout_rect). A.3: skip in golden mode -- it's
+                // a debug overlay that polluted every L1..L7 capture with a
+                // black corner (depthviz of an empty depth buffer = 0
+                // brightness).
+                if (!golden_) {
                     const glm::vec4& av_rect =
                         viewports_.GetHot(active_viewport_)->layout_rect;
                     const float av_w = av_rect.z * fb_fw;
@@ -3895,6 +4142,24 @@ public:
             depthviz_ = rhi_.pipelines.CreateGraphicsPipeline(
                 rhi_.resources, rhi_.frames, dvd);
 
+            // A.3: red_triangle. Drawn inside the forward pass so attachment
+            // shape must match unlit's (BGRA8 + D32F + sampleCount MSAA).
+            // depth_test/write off so we don't actually touch the depth
+            // buffer; cull=none because gl_VertexIndex winding is fixed.
+            rhi::GraphicsPipelineDesc rtd{};
+            rtd.logical_shader = "red_triangle";
+            rtd.debug_name = "red_triangle";
+            rtd.shader_dir = shader_dir.c_str();
+            rtd.topology = rhi::PrimitiveTopology::kTriangleList;
+            rtd.cull = rhi::CullMode::kNone;
+            rtd.depth_test = false;
+            rtd.depth_write = false;
+            rtd.color_format = rhi::Format::kBgra8Unorm;
+            rtd.depth_format = rhi::Format::kD32F;
+            rtd.sample_count = sampleCount;
+            red_triangle_pip_ = rhi_.pipelines.CreateGraphicsPipeline(
+                rhi_.resources, rhi_.frames, rtd);
+
             // #207 outline: same shape; samples color_off + id_off (2 textures
             // via the shared composite descriptor layout), renders into
             // outline_off (BGRA, same dims as color_off). Surfaceless: targets
@@ -3911,7 +4176,7 @@ public:
                 rhi_.resources, rhi_.frames, opd);
 
             if (composite_pip_.IsNull() || depthviz_.IsNull() ||
-                outline_pip_.IsNull()) {
+                outline_pip_.IsNull() || red_triangle_pip_.IsNull()) {
                 std::exit(0);
             }
 
@@ -4999,19 +5264,25 @@ public:
     // parity DynamicBuffers can grab their handles before the kernel
     // pipeline is built (pipeline layout is sourced from parity[0]).
     bool initParticleSsbos() {
-        // Deterministic particle seed -- matches the golden capture path.
+        // A.1: portable mt19937 + hand-rolled [0,1) mapping. std::rand is
+        // implementation-defined (libc++ vs NDK vs glibc all differ), and
+        // its consumption order depended on heap layout, which is what was
+        // flaking macOS triangle hashes. ParticleRng (cairns::ParticleRng,
+        // src/render/particle_emitter.hpp) is the spec-test path -- same
+        // engine, same (NextU32()>>8) * (1/16777216) mapping. Byte-stable
+        // across runs and across libc++ flavors.
         // Override via Engine::SetRandomSeed before GreaterInit if you need
         // a different starting state (e.g. the rng.seed NDJSON op).
-        std::srand(random_seed_);
+        cairns::ParticleRng rng(random_seed_);
         std::vector<Particle> particles(kParticleCount);
         for (uint32_t i = 0; i < kParticleCount; ++i) {
-            const float r = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+            const float r = rng.NextUnit();
             const float theta = r * 2.0f * static_cast<float>(std::numbers::pi);
-            const float radius = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+            const float radius = rng.NextUnit();
             particles[i].position[0] = radius * std::cos(theta);
             particles[i].position[1] = radius * std::sin(theta);
-            const float vx = (static_cast<float>(rand()) / static_cast<float>(RAND_MAX) - 0.5f) * 0.5f;
-            const float vy = (static_cast<float>(rand()) / static_cast<float>(RAND_MAX) - 0.5f) * 0.5f;
+            const float vx = (rng.NextUnit() - 0.5f) * 0.5f;
+            const float vy = (rng.NextUnit() - 0.5f) * 0.5f;
             particles[i].velocity[0] = vx;
             particles[i].velocity[1] = vy;
             const float t = static_cast<float>(i) / static_cast<float>(kParticleCount);
@@ -5293,6 +5564,11 @@ private:
     rhi::Handle<rhi::DynamicBuffers> dyn_particle_parity_[2];
     ShaderHandle composite_pip_ = ShaderHandle::Null;
     ShaderHandle depthviz_ = ShaderHandle::Null;
+    // A.3: L1 single-red-triangle pipeline. Three NDC vertices from
+    // gl_VertexIndex, no vertex buffer, solid red frag. Drawn via
+    // DrawFullscreen (which takes 3 vertices regardless) only when
+    // tiny_quad_test_ is set.
+    ShaderHandle red_triangle_pip_ = ShaderHandle::Null;
     ShaderHandle outline_pip_ = ShaderHandle::Null;
     rhi::Handle<rhi::Sampler> composite_sampler_ = rhi::Handle<rhi::Sampler>::Null;
     // #207 nearest sampler for outline's id_off binding -- R32_UINT can't be
@@ -5412,6 +5688,21 @@ private:
     // the HUD draw path reads from this instead of HudFromTimer. Set via
     // SetInjectedHudStats from the golden test harness.
     std::optional<cairns::HudStats> injected_hud_stats_;
+    // A.2: particle_sim + particle_draw gate. Mirrors
+    // EngineConfig::particles_enabled at GreaterInit; runtime-mutable via
+    // Engine::EnableParticles(bool). Tests default false; CLI shells default
+    // true via shell/env_config.cpp.
+    bool particles_enabled_ = false;
+    // A.6: flag indicating ConfigureNestedGraph has been called. Currently
+    // informational only -- the engine's render graph composes the right
+    // shape (multiple forward passes, one per active viewport) regardless.
+    // Will gate the resolved-depth path once A.10 (ReadBackBuffer salvage)
+    // is wired.
+    bool nested_graph_mode_ = false;
+    // A.7: stamped at end of BuildMeshOpaqueDraws every frame.
+    FrameStats last_frame_stats_{};
+    // A.9: G6 opt-in; render imgui into the golden capture.
+    bool imgui_in_golden_ = false;
     // Diagnostic: pin every draw to 2 triangles. Draw count + submission
     // identical, geometry throughput ~700x smaller. Isolates draw-submission
     // overhead vs geometry-throughput in the forward pass cost.

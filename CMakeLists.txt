@@ -492,6 +492,8 @@ else()
     copy_helper("outline.frag.spv")
     copy_helper("skin.comp.spv")     # #221 Phase 9
     copy_helper("anim_eval.comp.spv") # #221 Phase 5b
+    copy_helper("red_triangle.vert.spv") # A.3 L1 single red triangle
+    copy_helper("red_triangle.frag.spv")
 endif()
 
 # set some extra configs for each platform
