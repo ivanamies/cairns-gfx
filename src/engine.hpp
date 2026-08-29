@@ -5029,6 +5029,42 @@ public:
         return true;
     }
 
+    // Flatten every loaded scene's animation tables into the GPU buffers the
+    // anim_eval kernel reads. Keeping pose evaluation + palette build on the GPU
+    // (one workgroup per actor over global flattened tables) follows Aaltonen's
+    // GPU-driven approach from "Modern Mobile Rendering" (HypeHype Advances 2023,
+    // talks/AaltonenHypeHypeAdvances2023.pdf): do the per-frame work on the GPU,
+    // address shared data by offset rather than per-object bindings.
+    //
+    // #231 SSBO pack. The kernel used to take 12 separate storage buffers; WebGPU
+    // guarantees only 8 storage buffers per stage (Chrome caps at 10, and there is
+    // no portable tier at 12), so the 10 read-only tables are folded into 3 buffers
+    // grouped by element stride. The data was already offset-addressed (every
+    // SceneHeader.*_off), so packing is just sharing one buffer per stride class;
+    // the offsets become element offsets into the packed buffer. The 6 buffers:
+    //
+    //   1  ae_i32 (int)      -- skeleton wiring + clip timestamps. Packs: parent[]
+    //        (each node's parent index, for the world-compose walk), topo[] (the
+    //        topological node order that walk follows), joint_nodes[] (joint ->
+    //        node map used to gather the palette), times[] (keyframe timestamps,
+    //        stored as float bit-patterns and bitcast back to float on read).
+    //   2  ae_vec4 (vec4)    -- every vec4-stride animation value. Packs:
+    //        bind_pose[] (each node's rest transform as 3 vec4 = translation /
+    //        rotation-quaternion / scale), values[] (keyframe values: xyz for
+    //        translate+scale, xyzw quaternion for rotate), inverse_binds[] (each
+    //        joint's inverse bind matrix as 4 vec4 columns).
+    //   3  ae_word16 (uvec4) -- the two 16-byte clip descriptors, one uvec4 each.
+    //        Packs: channels[] (which node + path a curve drives, plus its sampler
+    //        index) and samplers[] (a curve's keyframe range + interpolation mode).
+    //   4  scene_headers     -- per-scene index: node/joint/channel/sampler counts,
+    //        the *_off element offsets into buffers 1-3 for this scene, the mesh
+    //        node, and the clip duration. headers[actor.scene_idx] tells each
+    //        workgroup where its scene's slice lives. Read-only.
+    //   5  world_scratch     -- RW scratch: the composed world-space matrix per
+    //        node, per actor (stage 3 writes it walking topo, stage 4 reads it).
+    //   6  palette_out       -- the result: inv(mesh_world) * world[joint] *
+    //        inverse_bind, one mat4 per joint per actor. The skin kernel consumes
+    //        it. (binding 0 is the per-frame ActorRecord UBO, not packed here.)
     void uploadAnimTablesGpu() {
         if (anim_eval_kernel_.IsNull()) {
             return;
