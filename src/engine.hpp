@@ -280,7 +280,6 @@ public:
         const glm::mat4 proj_matrix = glm::perspectiveRH_ZO(fov, aspect_ratio, near_z, far_z);
         
         { // set up render pass globals
-            cairns::Timer t_build("set up render pass globals", 3);
             // set up camera
             const float screen_width = swapchain_.Width();
             const float screen_height = swapchain_.Height();
@@ -307,7 +306,6 @@ public:
             }
         }
 
-        cairns::Timer t_build("build opaque draw list", 4);
         world_.root_transform = rot_matrix;
         cairns::Extract(world_, proxies_);
         for (const cairns::MeshProxy& mp : proxies_.meshes.data) {
@@ -495,11 +493,16 @@ public:
                 if (cairns::Timer::accum_itrs_[s] == 0) {
                     continue;
                 }
-                ImGui::Text("%-12s %5.2f ms",
-                            cairns::Timer::slot_names_[s]
-                                ? cairns::Timer::slot_names_[s]
-                                : "?",
-                            slot_avg_ms(s));
+                const char* nm = cairns::Timer::slot_names_[s]
+                                     ? cairns::Timer::slot_names_[s]
+                                     : "?";
+                if (std::strcmp(nm, "set up render pass globals") == 0 ||
+                    std::strcmp(nm, "build opaque draw list") == 0 ||
+                    std::strcmp(nm, "particle_sim") == 0 ||
+                    std::strcmp(nm, "forward") == 0) {
+                    continue;
+                }
+                ImGui::Text("%-12s %5.2f ms", nm, slot_avg_ms(s));
             }
             char overlay[32];
             std::snprintf(overlay, sizeof(overlay), "%.2f ms", cpu_ms_last_);
@@ -708,8 +711,18 @@ public:
                 return false;
             }
 
-            // imgui font atlas -> Texture.
+            // imgui font atlas -> Texture. Scale font + style by surface
+            // width so HiDPI / mobile displays don't render a postage-stamp
+            // overlay. 1280px is the desktop reference width.
             ImGuiIO& io = ImGui::GetIO();
+            const float kRefWidth = 1280.0f;
+            const float dpi_scale =
+                std::max(1.0f, static_cast<float>(swapchain_.Width()) / kRefWidth);
+            ImFontConfig fc;
+            fc.SizePixels = 13.0f * dpi_scale;
+            io.Fonts->Clear();
+            io.Fonts->AddFontDefault(&fc);
+            ImGui::GetStyle().ScaleAllSizes(dpi_scale);
             unsigned char* pixels = nullptr;
             int fw = 0;
             int fh = 0;
