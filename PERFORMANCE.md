@@ -1252,3 +1252,58 @@ This was the "last good performant baseline" before threading and the second
 allocator-architecture pass. No weird frame-time oscillations. Steady v-sync
 on desktop, drop to ~28 fps on iPhone 15 because of the 8.3 ms CPU
 build_draws.
+
+---
+
+## 2026-06-21 — SDL windowed, post cpu_block_ compaction + string interning
+
+Apple-silicon Mac, **SDL windowed** (real swapchain, 1280×720 window → 2560×1440
+retina), **Release**, **500 actors (100 GLBs × 5)**, the run.js boot scene. Numbers
+read live via `cairns.perf.last` after ~12 s of rendering. State = end of the #229
+arena work (all CPU state in `cpu_block_`, prefab tables interned to `prefab_arena_`).
+Windowed teardown now exits 0 (the 100-GLB oversize-Free use-after-free is fixed).
+
+NOTE: the `frame` slot here is **CPU frame work only** (build+record+dispatch),
+NOT the old vsync-inclusive frame time — present pacing is a separate slot now.
+Thermally sensitive (±2–3× across runs on this throttling laptop); single snapshot.
+
+### Metal (Release, windowed, 60 Hz vsync)
+```
+slot 0  frame              1430 us    (CPU frame work)
+slot 1  build_draws        1231 us
+slot 2  record              934 us
+slot 3  skinning_compute   5444 us    (GPU compute -- 500 skinned actors, heaviest)
+slot 4  particle_sim        109 us
+slot 5  forward_vp0        1820 us    (GPU forward raster)
+slot 6  swap                128 us
+slot 7  present_pacing    10252 us    (vsync lock -- CPU idle here, fills to 16.6 ms)
+slot 8  skin_eval            46 us
+slot 9  present_wait          0 us
+```
+CPU frame work ~1.4 ms; vsync-locked at 60 fps (present_pacing absorbs the slack).
+GPU skinning_compute (5.4 ms) is the dominant real cost.
+
+### Vulkan / MoltenVK (Release, windowed)
+```
+slot 0  frame              1639 us    (CPU frame work)
+slot 1  build_draws        1385 us
+slot 2  record              374 us    (vk records far cheaper than metal's 934)
+slot 3  skinning_compute   5404 us
+slot 4  particle_sim          4 us
+slot 5  forward_vp0        2088 us
+slot 6  swap                 97 us
+slot 8  skin_eval            51 us
+slot 9  present_wait         31 us
+slot 10 acquire_wait         19 us
+slot 11 fence_wait            2 us
+```
+Different present model: MoltenVK swapchain (`present_wait`+`acquire_wait`+`fence_wait`
+≈ 52 µs) vs Metal main-thread `present_pacing` (≈ 10 ms). CPU frame work ~1.6 ms.
+
+### Takeaways
+- **GPU skinning (`skinning_compute` ~5.4 ms)** is the single biggest cost on both
+  backends — 500 skinned actors through the anim_eval/palette compute path.
+- CPU frame work is cheap (~1.4–1.6 ms); `build_draws` dominates it (~1.2–1.4 ms).
+- Metal `record` (0.93 ms) is ~2.5× vk `record` (0.37 ms).
+- Present accounting differs by backend (Metal main-thread pacing vs MoltenVK
+  swapchain) — compare CPU/GPU work slots across backends, not the present slots.
