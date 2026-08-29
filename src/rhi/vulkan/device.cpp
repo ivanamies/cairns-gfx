@@ -10,6 +10,7 @@
 #if CAIRNS_VULKAN
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <set>
@@ -439,6 +440,39 @@ bool Device::Init(const InitConfig& cfg) {
             }
         }
         caps.resident_budget_bytes = device_local_bytes;
+
+        // CAIRNS_DUMP_CAPS=1: dump the SSBO/UBO limits per stage. Vulkan reports
+        // ONE maxPerStageDescriptorStorageBuffers that bounds EACH stage equally
+        // (vertex, fragment, compute each get up to that count); the per-stage
+        // difference that actually matters is WRITE capability -- vertex/fragment
+        // stores are gated by features, compute can always store.
+        if (std::getenv("CAIRNS_DUMP_CAPS")) {
+            VkPhysicalDeviceFeatures feat{};
+            vkGetPhysicalDeviceFeatures(plat.physical_, &feat);
+            const double mb = 1024.0 * 1024.0;
+            CAIRNS_PRINT_ERR("[CAPS] device: %s\n", pp.deviceName);
+            CAIRNS_PRINT_ERR(
+                "[CAPS] SSBO binds per stage (vertex=fragment=compute): %u | "
+                "per descriptor set (all stages): %u\n",
+                pp.limits.maxPerStageDescriptorStorageBuffers,
+                pp.limits.maxDescriptorSetStorageBuffers);
+            CAIRNS_PRINT_ERR(
+                "[CAPS] SSBO max binding size: %u B (%.0f MB)\n",
+                pp.limits.maxStorageBufferRange,
+                pp.limits.maxStorageBufferRange / mb);
+            CAIRNS_PRINT_ERR(
+                "[CAPS] SSBO writes/atomics by stage: vertex=%s fragment=%s "
+                "compute=yes\n",
+                feat.vertexPipelineStoresAndAtomics ? "yes" : "no",
+                feat.fragmentStoresAndAtomics ? "yes" : "no");
+            CAIRNS_PRINT_ERR(
+                "[CAPS] UBO binds per stage: %u | UBO max binding size: %u B "
+                "(%.0f MB) | per-stage resources: %u\n",
+                pp.limits.maxPerStageDescriptorUniformBuffers,
+                pp.limits.maxUniformBufferRange,
+                pp.limits.maxUniformBufferRange / mb,
+                pp.limits.maxPerStageResources);
+        }
     }
 
     inited_ = true;

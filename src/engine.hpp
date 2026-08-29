@@ -2289,19 +2289,16 @@ public:
             CAIRNS_PRINT("GreaterInit: device.Init failed\n");
             return false;
         }
-        // Boot compute floor: refuse devices below the 10-SSBO / 256 MB
-        // storage-binding minimums (device_caps.hpp). WebGPU's spec floor is 8
-        // storage buffers and 128 MB; we demand 10 + 256 MB across all backends
-        // so the packed anim set + whole-pool skin bind always fit rather than
-        // silently garble (the 2026-06-17 S22 class of bug).
+        // Boot compute floor: refuse devices below the 10-storage-buffer/stage
+        // minimum (device_caps.hpp; we use 6, 10 is headroom). The storage SIZE
+        // floor is per-platform (128 MB Android / 256 MB else = the skin pool) and
+        // is enforced by SkinPoolFitsDevice just below.
         if (!cairns::DeviceMeetsComputeRequirements(rhi_.device.caps)) {
             CAIRNS_PRINT_ERR(
                 "[FATAL] device below compute floor: storage_buffers_per_stage=%u "
-                "(need >=%u), max_storage_buffer_range=%u (need >=%u bytes).\n",
+                "(need >=%u).\n",
                 rhi_.device.caps.max_storage_buffers_per_stage,
-                cairns::kMinStorageBuffersPerStage,
-                rhi_.device.caps.max_storage_buffer_range,
-                cairns::kMinStorageBufferRangeBytes);
+                cairns::kMinStorageBuffersPerStage);
             std::abort();
         }
         // Boot device-cap invariant. The 2026-06-17 S22 garble (Adreno 730
@@ -5030,16 +5027,15 @@ public:
     }
 
     // Flatten every loaded scene's animation tables into the GPU buffers the
-    // anim_eval kernel reads. Keeping pose evaluation + palette build on the GPU
-    // (one workgroup per actor over global flattened tables) follows Aaltonen's
-    // GPU-driven approach from "Modern Mobile Rendering" (HypeHype Advances 2023,
-    // talks/AaltonenHypeHypeAdvances2023.pdf): do the per-frame work on the GPU,
-    // address shared data by offset rather than per-object bindings.
+    // anim_eval kernel reads. Pose evaluation + palette build run on the GPU -- one
+    // workgroup per actor over global flattened tables -- so per-frame skinning
+    // stays off the CPU and shared data is addressed by offset, not per-object
+    // bindings.
     //
-    // #231 SSBO pack. The kernel used to take 12 separate storage buffers; WebGPU
-    // guarantees only 8 storage buffers per stage (Chrome caps at 10, and there is
-    // no portable tier at 12), so the 10 read-only tables are folded into 3 buffers
-    // grouped by element stride. The data was already offset-addressed (every
+    // The kernel used to take 12 separate storage buffers; WebGPU guarantees only
+    // 8 storage buffers per stage (Chrome caps at 10, and there is no portable tier
+    // at 12), so the 10 read-only tables are folded into 3 buffers grouped by
+    // element stride. The data was already offset-addressed (every
     // SceneHeader.*_off), so packing is just sharing one buffer per stride class;
     // the offsets become element offsets into the packed buffer. The 6 buffers:
     //
@@ -5327,6 +5323,33 @@ public:
                      i32_flat.size(), target.i32,
                      vec4_flat.size(), target.vec4,
                      word16_flat.size(), target.word16);
+        // The pack concatenates several tables into one buffer, so each packed
+        // SSBO is bigger than the unpacked parts were -- and upload_at pads to 4x.
+        // The anim kernel binds these whole (VK_WHOLE_SIZE), so a packed buffer
+        // larger than max_storage_buffer_range would garble (the S22 class of
+        // bug). Report the allocated sizes vs the device range and abort if any
+        // overflows -- packing must not push a buffer past what the unpacked set
+        // would have.
+        const uint32_t i32_sz = rhi_.resources.GetBufferByteSize(ae_i32_buf_);
+        const uint32_t vec4_sz = rhi_.resources.GetBufferByteSize(ae_vec4_buf_);
+        const uint32_t w16_sz = rhi_.resources.GetBufferByteSize(ae_word16_buf_);
+        const uint32_t range = rhi_.device.caps.max_storage_buffer_range;
+        const double mb = 1024.0 * 1024.0;
+        if (std::getenv("CAIRNS_DUMP_CAPS")) {
+            CAIRNS_PRINT_ERR(
+                "[CAPS] packed anim SSBO alloc: i32=%.1f vec4=%.1f word16=%.1f MB "
+                "(largest %.1f MB vs device range %.1f MB)\n",
+                i32_sz / mb, vec4_sz / mb, w16_sz / mb,
+                std::max({i32_sz, vec4_sz, w16_sz}) / mb, range / mb);
+        }
+        if (i32_sz > range || vec4_sz > range || w16_sz > range) {
+            CAIRNS_PRINT_ERR(
+                "[FATAL] packed anim SSBO exceeds device range %u B: "
+                "i32=%u vec4=%u word16=%u -- the 12->6 pack overflowed this "
+                "device's storage-buffer limit.\n",
+                range, i32_sz, vec4_sz, w16_sz);
+            std::abort();
+        }
     }
 
     // #221 Phase 4: best-effort load of skin compute kernel. Failing the

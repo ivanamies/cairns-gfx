@@ -59,10 +59,12 @@ struct MemoryBudget {
 #else
         b.cpu_persistent_bytes = 1024ull * 1024 * 1024;  // 1 GB
         b.gpu_resident_bytes = 1024ull * 1024 * 1024;    // 1 GB
-        // Capped at 256 MB (was 1 GB): a whole-pool storage bind of 1 GB is 8x
-        // the WebGPU 128 MB floor and only ~88% of devices can bind it; 256 MB
-        // is the boot floor we require (device_caps.hpp) so the bind always fits.
-        b.gpu_skin_pool_bytes = 256ull * 1024 * 1024;    // 256 MB (SSBO bind cap)
+        // 128 MB everywhere (was 1 GB, briefly 256 MB). A whole-pool storage bind
+        // must fit max_storage_buffer_range; 128 MB is both the WebGPU spec floor
+        // AND the measured Adreno-730 / S22 range, so one uniform 128 MB pool +
+        // floor binds on every target. The 100-actor stress uses ~40 MB, so 128 MB
+        // is ample headroom; SkinPoolFitsDevice enforces the bind.
+        b.gpu_skin_pool_bytes = 128ull * 1024 * 1024;    // 128 MB (SSBO bind floor)
 #endif
         b.cpu_frame_slab_bytes = 16ull * 1024 * 1024;    // 16 MB / slot (existing)
         b.gpu_staging_ring_bytes = 64ull * 1024 * 1024;  // 64 MB / slot (existing)

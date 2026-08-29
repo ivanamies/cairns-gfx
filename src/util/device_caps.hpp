@@ -60,16 +60,22 @@ struct DeviceCaps {
     uint64_t resident_budget_bytes = 0;
 };
 
-// Boot floors. A device below either of these is refused at GreaterInit rather
-// than left to garble (the 256 MB range is the Adreno-730 storage-buffer floor;
-// the 10-SSBO count is the WebGPU-driven minimum we standardize on across all
-// backends so the skin pool binds whole + the packed anim set always fits).
+// Boot floor for the per-stage storage-buffer COUNT only. The packed anim_eval
+// set uses 6 SSBOs; we require 10 as cross-backend headroom (WebGPU's spec floor
+// is 8; native Vulkan reports far more -- the measured S22 / Adreno-730 gives
+// 524288, so it clears this trivially).
+//
+// The storage-buffer-SIZE floor is a uniform 128 MB on every platform. It lives
+// as the skin-pool size in MemoryBudget and is enforced by SkinPoolFitsDevice
+// against max_storage_buffer_range. 128 MB is both the WebGPU spec floor AND the
+// real Adreno-730 / S22 maxStorageBufferRange (measured on-device 2026-06-22 --
+// the old "256 MB Adreno" comment was wrong; an earlier fixed 256 MB floor
+// rejected the actual S22). The web3dsurvey 256-MiB tier (~96.5%) is
+// desktop-dominated and not representative of mobile, so we don't rely on it.
 inline constexpr uint32_t kMinStorageBuffersPerStage = 10u;
-inline constexpr uint32_t kMinStorageBufferRangeBytes = 256u * 1024u * 1024u;
 
 constexpr bool DeviceMeetsComputeRequirements(const DeviceCaps& caps) {
-    return caps.max_storage_buffers_per_stage >= kMinStorageBuffersPerStage &&
-           caps.max_storage_buffer_range >= kMinStorageBufferRangeBytes;
+    return caps.max_storage_buffers_per_stage >= kMinStorageBuffersPerStage;
 }
 
 // THE garble invariant. A storage buffer must fit entirely within the
