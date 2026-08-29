@@ -72,32 +72,15 @@ uvec4 skin_joints_at(uint vid) {
                  (p >> 16) & 0xFFu, (p >> 24) & 0xFFu);
 }
 
-// #222 Phase S.1: cooperative LDS palette. 64 threads x mat4 = 64 B/thread =
-// 16 KB max at kMaxJointsPerSkin=256. At/under Adreno's threadgroup budget
-// and the WebGPU 16 KB default. Cuts the 4 UCHE mat4 gathers per thread
-// to 4 LDS reads. The cooperative load MUST happen BEFORE the
-// vid >= vertex_count early-out -- threads that exit early would skip
-// the barrier and break uniformity.
-shared mat4 s_palette[256];
-
 void main() {
     uint inst = gl_WorkGroupID.y;
     uint vid = gl_GlobalInvocationID.x;
-    uint lid = gl_LocalInvocationID.x;
-    uvec2 meta = inst_meta[inst];
-    uint palette_off = meta.x;
-    uint output_off = meta.y;
-
-    // Cooperative load -- run on ALL threads (including those past
-    // vertex_count) so the barrier is uniform across the workgroup.
-    for (uint j = lid; j < params.joint_count; j += 64u) {
-        s_palette[j] = palette[palette_off + j];
-    }
-    barrier();
-
     if (vid >= params.vertex_count) {
         return;
     }
+    uvec2 meta = inst_meta[inst];
+    uint palette_off = meta.x;
+    uint output_off = meta.y;
 
     vec4 p = mesh_pos[vid];
     vec4 out_p;
@@ -116,12 +99,12 @@ void main() {
         }
         mat4 m;
         if (params.mode == kSkinModeOnePalette) {
-            m = s_palette[0];
+            m = palette[palette_off];
         } else {
-            m = s_palette[j.x] * w.x
-              + s_palette[j.y] * w.y
-              + s_palette[j.z] * w.z
-              + s_palette[j.w] * w.w;
+            m = palette[palette_off + j.x] * w.x
+              + palette[palette_off + j.y] * w.y
+              + palette[palette_off + j.z] * w.z
+              + palette[palette_off + j.w] * w.w;
         }
         out_p = m * vec4(p.xyz, 1.0);
     }
