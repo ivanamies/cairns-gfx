@@ -371,3 +371,86 @@ SCENARIO("imgui overlay is stable when fed mocked numbers",
         REQUIRE(seam::Md5Hex(a) == seam::Md5Hex(b));
     }
 }
+
+// #229 C4.2/C4.4: entity-op contract driven through the real op path
+// (dispatch -> headless -> engine). No pixels -- pure state assertions. Covers
+// the TRS round-trip, the parent cycle guard, the destroy selection-scrub, and
+// [N-node] per-scene isolation (an explicit-scene setTRS must not perturb a
+// different scene's entity).
+SCENARIO("entity ops: TRS round-trip + cycle guard + destroy + N-node isolation",
+         "[spec][scenarios][entity]") {
+    if (!seam::AssetsPresent({"aatrox.glb", "ahri.glb"})) {
+        SKIP("assets absent");
+    }
+    seam::EnsureImguiContext();
+    cairns::rhi::InitConfig icfg{};
+    icfg.surfaceless = true;
+    icfg.width = 256;
+    icfg.height = 256;
+    cairns::EngineConfig ecfg{};
+    ecfg.use_fixed_clock = true;
+    cairns::Engine e;
+    REQUIRE(e.GreaterInit(icfg, ecfg));
+    cairns::control::CommandRegistry& reg = cairns::golden::SetupJs(e);
+    auto disp = [&](const char* op, const cairns::json& args) -> cairns::json {
+        return reg.Dispatch({{"op", op}, {"args", args}});
+    };
+
+    // Scene 0 (primary) = aatrox; scene 1 (secondary) = ahri.
+    disp("cairns.scene.spawnFitted",
+         {{"glbs", {"aatrox.glb"}}, {"instances", 1}});
+    disp("cairns.scene.use", {{"index", 1}});
+    disp("cairns.scene.spawnFitted",
+         {{"glbs", {"ahri.glb"}}, {"instances", 1}});
+    disp("cairns.scene.use", {{"index", 0}});
+
+    const cairns::json l0 =
+        disp("cairns.scene.listEntities", cairns::json::object());
+    REQUIRE(l0["ok"] == true);
+    REQUIRE(l0["result"]["entities"].size() >= 1);
+    const uint32_t e0 = l0["result"]["entities"][0].get<uint32_t>();
+
+    // TRS round-trip.
+    disp("cairns.entity.setTRS",
+         {{"entity", e0}, {"t", {1.5, 2.5, 3.5}}, {"s", {2.0, 2.0, 2.0}}});
+    const cairns::json g = disp("cairns.entity.getTRS", {{"entity", e0}});
+    REQUIRE(g["result"]["ok"] == true);
+    REQUIRE(g["result"]["t"][0].get<float>() == 1.5f);
+    REQUIRE(g["result"]["t"][2].get<float>() == 3.5f);
+    REQUIRE(g["result"]["s"][1].get<float>() == 2.0f);
+    REQUIRE(g["result"]["r"][3].get<float>() == 1.0f);  // identity quat w
+
+    // Parent cycle guard: self-parent is rejected.
+    const cairns::json p =
+        disp("cairns.entity.setParent", {{"entity", e0}, {"parent", e0}});
+    REQUIRE(p["result"]["ok"] == false);
+
+    // Name + find.
+    disp("cairns.entity.setName", {{"entity", e0}, {"name", "hero0"}});
+    const cairns::json f = disp("cairns.entity.find", {{"name", "hero0"}});
+    REQUIRE(f["result"]["found"] == true);
+    REQUIRE(f["result"]["entity"].get<uint32_t>() == e0);
+
+    // [N-node] isolation: read scene 1's entity, mutate scene 0's via the
+    // explicit {scene:0} arg, assert scene 1's transform is untouched.
+    disp("cairns.scene.use", {{"index", 1}});
+    const cairns::json l1 =
+        disp("cairns.scene.listEntities", cairns::json::object());
+    REQUIRE(l1["result"]["entities"].size() >= 1);
+    const uint32_t e1 = l1["result"]["entities"][0].get<uint32_t>();
+    const cairns::json g1a =
+        disp("cairns.entity.getTRS", {{"scene", 1}, {"entity", e1}});
+    REQUIRE(g1a["result"]["ok"] == true);
+    const float e1_tx = g1a["result"]["t"][0].get<float>();
+    disp("cairns.entity.setTRS",
+         {{"scene", 0}, {"entity", e0}, {"t", {9.0, 9.0, 9.0}}});
+    const cairns::json g1b =
+        disp("cairns.entity.getTRS", {{"scene", 1}, {"entity", e1}});
+    REQUIRE(g1b["result"]["t"][0].get<float>() == e1_tx);
+
+    // Destroy + scrub: find-by-name no longer resolves.
+    disp("cairns.scene.use", {{"index", 0}});
+    disp("cairns.entity.destroy", {{"entity", e0}});
+    const cairns::json f2 = disp("cairns.entity.find", {{"name", "hero0"}});
+    REQUIRE(f2["result"]["found"] == false);
+}
