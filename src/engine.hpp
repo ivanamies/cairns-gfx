@@ -37,6 +37,7 @@
 #include "util/offset_allocator.hpp"
 #include "util/gltf_loader.hpp"
 #include "util/debug_asset.hpp"
+#include "util/load_trace.hpp"  // #224 L3: LoadTrace / LoaderCounters PODs.
 #include "util/draw.hpp"
 #include "util/draw_key.hpp"
 #include "util/material_gpu.hpp"
@@ -285,7 +286,14 @@ public:
         LoadPrefabBatchResult r{};
         r.first_prefab_idx = static_cast<uint32_t>(prefab_ids_.size());
 
+        // #224 L3: per-stage timing. steady_clock so the trace numbers
+        // are wall-clock; the byte-gate doesn't reference them.
+        using Clock = std::chrono::steady_clock;
+        const auto t_total = Clock::now();
+        cairns::LoadTrace trace{};
+
         // ── parse + prepare resources per glb (no GPU upload yet) ──
+        const auto t_parse = Clock::now();
         for (const std::filesystem::path& p : glbs) {
             cairns::PrefabId sid = prefabs_.Acquire();
             cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
@@ -302,11 +310,19 @@ public:
             prefab_ids_.push_back(sid);
             ++r.count;
         }
+        trace.Add("parse_gltf",
+                   std::chrono::duration<double, std::milli>(
+                       Clock::now() - t_parse).count(),
+                   0, r.count);
         if (r.count == 0) {
+            trace.total_ms = std::chrono::duration<double, std::milli>(
+                Clock::now() - t_total).count();
+            last_load_trace_ = trace;
             return r;
         }
 
         // ── upload the new batch's prefabs to NEW kDefault buffers ──
+        const auto t_upload = Clock::now();
         rhi::Handle<rhi::Buffer> batch_shared_skin =
             rhi::Handle<rhi::Buffer>::Null;
         std::span<const cairns::PrefabId> new_span(
@@ -317,13 +333,21 @@ public:
             CAIRNS_PRINT_ERR(
                 "[LoadPrefabBatch] LoadPrefabsGpu failed for %u prefabs\n",
                 r.count);
+            trace.total_ms = std::chrono::duration<double, std::milli>(
+                Clock::now() - t_total).count();
+            last_load_trace_ = trace;
             return r;
         }
+        trace.Add("upload_kdefault",
+                   std::chrono::duration<double, std::milli>(
+                       Clock::now() - t_upload).count(),
+                   0, r.count);
 
         // ── stamp batch_id + append shared-skin handle ──
         const uint16_t batch_id =
             static_cast<uint16_t>(per_batch_shared_skin_.size());
         per_batch_shared_skin_.push_back(batch_shared_skin);
+        uint32_t batch_mesh_count = 0;
         for (cairns::PrefabId sid : new_span) {
             cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
             if (!shot) {
@@ -332,11 +356,13 @@ public:
             for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
                 if (cairns::Mesh::Hot* mhot = meshes_.GetHot(mid)) {
                     mhot->batch_id = batch_id;
+                    ++batch_mesh_count;
                 }
             }
         }
 
         // ── Group A descriptor set for each new skinned mesh ──
+        const auto t_group_a = std::chrono::steady_clock::now();
         for (cairns::PrefabId sid : new_span) {
             cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
             if (!shot) {
@@ -372,7 +398,13 @@ public:
             }
         }
 
+        trace.Add("skin_group_a",
+                   std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - t_group_a).count(),
+                   0, r.count);
+
         // ── per-new-prefab CleanupTmps + per-new-mesh cpu temp clear ──
+        const auto t_cleanup = std::chrono::steady_clock::now();
         for (cairns::PrefabId sid : new_span) {
             if (cairns::Prefab::Cold* sc = prefabs_.GetCold(sid)) {
                 sc->CleanupTmps();
@@ -391,8 +423,41 @@ public:
                 }
             }
         }
+        trace.Add("cleanup_tmps",
+                   std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - t_cleanup).count());
+
+        // ── finalize trace + bump counters ──
+        trace.total_ms = std::chrono::duration<double, std::milli>(
+            Clock::now() - t_total).count();
+        trace.prefabs_added = r.count;
+        trace.meshes_added = batch_mesh_count;
+        last_load_trace_ = trace;
+        ++loader_counters_.batches_loaded;
+        loader_counters_.prefabs_resident += r.count;
+        loader_counters_.meshes_resident += batch_mesh_count;
+        loader_counters_.last_batch_ms = trace.total_ms;
+        if (trace.total_ms > loader_counters_.peak_batch_ms) {
+            loader_counters_.peak_batch_ms = trace.total_ms;
+        }
 
         return r;
+    }
+
+    // #224 L3: instrument accessors.
+    const cairns::LoadTrace& LastLoadTrace() const { return last_load_trace_; }
+    cairns::LoaderCounters Counters() {
+        // Live-derive actors_live + textures_resident from the registry +
+        // pools. Cached fields (prefabs/meshes/batches) are updated in
+        // LoadPrefabBatch.
+        cairns::LoaderCounters c = loader_counters_;
+        if (cairns::Scene::Cold* wc = scenes_.GetCold(active_scene_)) {
+            c.actors_live = static_cast<uint32_t>(
+                wc->registry.storage<entt::entity>().size());
+        }
+        c.textures_resident =
+            static_cast<uint32_t>(resident_textures_.size());
+        return c;
     }
 
     // #269: bind-pose extent (max axis component of aabb_max - aabb_min)
@@ -3875,6 +3940,9 @@ private:
     // batches do they differ. Per-mesh resolution:
     //   ResolvedSharedSkin(mhot) == per_batch_shared_skin_[mhot.batch_id]
     std::vector<rhi::Handle<rhi::Buffer>> per_batch_shared_skin_;
+    // #224 L3: the instrument. Populated each LoadPrefabBatch call.
+    cairns::LoadTrace      last_load_trace_{};
+    cairns::LoaderCounters loader_counters_{};
     std::vector<int32_t> root_nodes_stack_cache_;
 
     // #220 Step 1: handle-pilled pool. Bind group lives on Hot;

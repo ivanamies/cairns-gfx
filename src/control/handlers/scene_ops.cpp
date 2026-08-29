@@ -162,6 +162,55 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
                     {"prefab", prefab}};
         });
 
+    // ── #224 L3: the instrument (`cairns.loader.*`) ──
+    registry.Register(
+        "cairns.loader.trace",
+        json::object(),
+        "Last LoadPrefabBatch trace: per-stage timings + total + counts. "
+        "Returns: {total_ms, prefabs_added, meshes_added, ms:{stage:ms,…}, "
+        "stages:[{name, ms, bytes, count}]}.",
+        [&engine](const json&) -> json {
+            const cairns::LoadTrace t =
+                cairns::headless::LastLoadTrace(&engine);
+            json stages = json::array();
+            json ms = json::object();
+            for (uint8_t i = 0; i < t.stage_count; ++i) {
+                stages.push_back({{"name", t.stages[i].name},
+                                  {"ms",   t.stages[i].ms},
+                                  {"bytes",t.stages[i].bytes},
+                                  {"count",t.stages[i].count}});
+                ms[t.stages[i].name] = t.stages[i].ms;
+            }
+            return {{"total_ms",            t.total_ms},
+                    {"bytes_uploaded",      t.bytes_uploaded},
+                    {"prefabs_added",       t.prefabs_added},
+                    {"meshes_added",        t.meshes_added},
+                    {"actors_instantiated", t.actors_instantiated},
+                    {"stages",              std::move(stages)},
+                    {"ms",                  std::move(ms)}};
+        });
+
+    registry.Register(
+        "cairns.loader.counters",
+        json::object(),
+        "Live LoaderCounters: residency + batch stats. Returns: "
+        "{prefabs_resident, meshes_resident, textures_resident, "
+        "actors_live, bytes_resident, bytes_uploaded_total, "
+        "batches_loaded, last_batch_ms, peak_batch_ms}.",
+        [&engine](const json&) -> json {
+            const cairns::LoaderCounters c =
+                cairns::headless::Counters(&engine);
+            return {{"bytes_resident",       c.bytes_resident},
+                    {"prefabs_resident",     c.prefabs_resident},
+                    {"meshes_resident",      c.meshes_resident},
+                    {"textures_resident",    c.textures_resident},
+                    {"actors_live",          c.actors_live},
+                    {"bytes_uploaded_total", c.bytes_uploaded_total},
+                    {"batches_loaded",       c.batches_loaded},
+                    {"last_batch_ms",        c.last_batch_ms},
+                    {"peak_batch_ms",        c.peak_batch_ms}};
+        });
+
     // ── viewport ops ──
     registry.Register(
         "cairns.viewport.open",

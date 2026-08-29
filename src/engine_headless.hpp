@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "scene/selection.hpp"
+#include "util/load_trace.hpp"
 
 namespace cairns {
 
@@ -101,6 +102,10 @@ std::vector<uint32_t> ListActiveSceneEntities(Engine* engine);
 bool SetEntityTransform(Engine* engine, uint32_t entity_int,
                          float x, float y, float z, float scale);
 uint32_t ClearActiveScene(Engine* engine);
+
+// #224 L3: the instrument.
+LoadTrace LastLoadTrace(Engine* engine);
+LoaderCounters Counters(Engine* engine);
 
 }  // namespace headless
 }  // namespace cairns

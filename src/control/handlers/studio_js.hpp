@@ -214,6 +214,13 @@ const Cairns = {
             "Cairns.onFrame: events.frame channel not yet wired. " +
             "Surface reserved; lands when the event/subscribe channel ships.");
     },
+    // #224 L3: the loading-system instrument.
+    loader: {
+        trace()    { const r = cairns.dispatch("cairns.loader.trace", {});
+                     return r && r.ok ? r.result : null; },
+        counters() { const r = cairns.dispatch("cairns.loader.counters", {});
+                     return r && r.ok ? r.result : null; },
+    },
 };
 
 // =====================================================================

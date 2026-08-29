@@ -209,4 +209,12 @@ uint32_t ClearActiveScene(Engine* engine) {
     return engine ? engine->ClearActiveScene() : 0;
 }
 
+LoadTrace LastLoadTrace(Engine* engine) {
+    return engine ? engine->LastLoadTrace() : LoadTrace{};
+}
+
+LoaderCounters Counters(Engine* engine) {
+    return engine ? engine->Counters() : LoaderCounters{};
+}
+
 }  // namespace cairns::headless
