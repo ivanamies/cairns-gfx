@@ -296,6 +296,16 @@ bool GetEntityRenderable(Engine* engine, int scene_index, uint32_t entity,
                   : false;
 }
 
+void TimeNow(Engine* engine, double& time, double& dt, uint64_t& frame) {
+    if (!engine) {
+        time = 0.0;
+        dt = 0.0;
+        frame = 0;
+        return;
+    }
+    engine->TimeNow(time, dt, frame);
+}
+
 uint32_t ClearActiveScene(Engine* engine) {
     return engine ? engine->ClearActiveScene() : 0;
 }

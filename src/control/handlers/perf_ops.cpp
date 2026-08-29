@@ -67,6 +67,21 @@ void RegisterPerfOps(CommandRegistry& registry, cairns::Engine& engine) {
             return {{"t", t}, {"note", "stub; render.frame({dt}) planned"}};
         });
 
+    // #229 C4.2: deterministic sim clock (Unity Time.{time,deltaTime,
+    // frameCount}). Fixed timestep; read-only.
+    registry.Register(
+        "cairns.time.get",
+        /*schema=*/json::object(),
+        /*doc=*/"Deterministic sim clock: {time (s), dt (s), frame}. Fixed "
+                "timestep -- time = frame * dt.",
+        [&engine](const json&) -> json {
+            double time = 0.0;
+            double dt = 0.0;
+            uint64_t frame = 0;
+            cairns::headless::TimeNow(&engine, time, dt, frame);
+            return {{"time", time}, {"dt", dt}, {"frame", frame}};
+        });
+
     registry.RegisterAlias("perf.last", "cairns.perf.last");
     registry.RegisterAlias("rng.seed", "cairns.rng.seed");
     registry.RegisterAlias("time.set", "cairns.time.set");

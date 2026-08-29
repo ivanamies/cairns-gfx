@@ -856,6 +856,15 @@ public:
         return true;
     }
 
+    // #229 C4.2: deterministic sim-clock snapshot for cairns.time.get. Fixed
+    // timestep (Fiedler): time = sim_frame_ * kFixedDt. Read-only -- never
+    // ticks the clock.
+    void TimeNow(double& time, double& dt, uint64_t& frame) {
+        frame = sim_frame_;
+        dt = cairns::kFixedDt;
+        time = static_cast<double>(sim_frame_) * cairns::kFixedDt;
+    }
+
     uint32_t ClearActiveScene() {
         cairns::Scene::Cold* wc = scene_mgr_.pool.GetCold(scene_mgr_.active);
         if (!wc) {

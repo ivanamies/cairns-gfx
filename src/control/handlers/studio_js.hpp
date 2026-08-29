@@ -250,6 +250,18 @@ class Component {
     get type()       { return this._type; }
 }
 
+// #229 C4.2: Unity Time, lowered onto cairns.time.get (deterministic sim
+// clock, fixed timestep). Read each access -- no client-side caching.
+const Time = {
+    _snap() {
+        const r = cairns.dispatch("cairns.time.get", {});
+        return r.ok && r.result ? r.result : { time: 0, dt: 0, frame: 0 };
+    },
+    get time()       { return this._snap().time; },
+    get deltaTime()  { return this._snap().dt; },
+    get frameCount() { return this._snap().frame; },
+};
+
 // =====================================================================
 // Static surfaces. Camera.main is loud-strict (Refinement 1): no
 // silent return-first-or-tagged. Cairns.onFrame is reserved so it

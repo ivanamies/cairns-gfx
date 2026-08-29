@@ -650,3 +650,44 @@ SCENARIO("C4.2 generic component ops: table round-trip + studio.js lowering",
     REQUIRE(out["lm"].get<uint32_t>() == 7u);
     REQUIRE(out["camNull"] == true);
 }
+
+// #229 C4.2: cairns.time.get is a read-only deterministic sim clock (fixed
+// timestep; time == frame * dt), and studio.js Time lowers onto it.
+SCENARIO("C4.2 time.get: deterministic sim clock + studio.js Time",
+         "[spec][scenarios][time]") {
+    seam::EnsureImguiContext();
+    cairns::rhi::InitConfig icfg{};
+    icfg.surfaceless = true;
+    icfg.width = 128;
+    icfg.height = 128;
+    cairns::EngineConfig ecfg{};
+    ecfg.use_fixed_clock = true;
+    cairns::Engine e;
+    REQUIRE(e.GreaterInit(icfg, ecfg));
+    cairns::control::CommandRegistry& reg = cairns::golden::SetupJs(e);
+    auto disp = [&](const char* op, const cairns::json& args) -> cairns::json {
+        return reg.Dispatch({{"op", op}, {"args", args}});
+    };
+
+    const cairns::json t0 = disp("cairns.time.get", cairns::json::object());
+    REQUIRE(t0["result"]["frame"].get<uint64_t>() == 0u);
+    REQUIRE(t0["result"]["time"].get<double>() == 0.0);
+    const double dt = t0["result"]["dt"].get<double>();
+    REQUIRE(dt > 0.0);
+
+    disp("cairns.render.advanceFrames", {{"count", 12}});
+    const cairns::json t1 = disp("cairns.time.get", cairns::json::object());
+    const uint64_t f1 = t1["result"]["frame"].get<uint64_t>();
+    const double time1 = t1["result"]["time"].get<double>();
+    REQUIRE(f1 >= 1u);                                    // clock advanced
+    REQUIRE(time1 == static_cast<double>(f1) * dt);       // time == frame * dt
+
+    // studio.js Time mirrors it (no frames advance between here and the read).
+    const cairns::json ev = disp(
+        "cairns.script.eval",
+        {{"code", "JSON.stringify({f:Time.frameCount, t:Time.time})"}});
+    const cairns::json out =
+        cairns::json::parse(ev["result"]["result"].get<std::string>());
+    REQUIRE(out["f"].get<uint64_t>() == f1);
+    REQUIRE(out["t"].get<double>() == time1);
+}
