@@ -185,9 +185,11 @@ bool VikingPresent() {
     return cairns::test_seams::AssetsPresent({"viking_room.glb"});
 }
 
-// Small occluder sphere hovering over a large ground sphere, near-vertical
-// light. setTransform overrides the fitted placement.
-Image RenderShadowScene(float light_dx, bool cast) {
+// Large ground sphere seen from a bird-view camera, optionally with a small
+// occluder sphere at `occluder_y` over it. setTransform overrides the fitted
+// placement.
+Image RenderShadowSceneAt(float light_dx, bool cast, bool with_occluder,
+                          float occluder_y) {
     PropEngine pe;
     std::string js = R"JS(
         // Bird view: eye (0,6,8) pitched down at the origin, so the ground
@@ -202,24 +204,38 @@ Image RenderShadowScene(float light_dx, bool cast) {
         const _b1 = cairns.dispatch("cairns.scene.listEntities", {})
                         .result.entities;
         const ground = _b1.filter(e => !_b0.includes(e))[0];
-        cairns.dispatch("cairns.primitive.create",
-                        { type: "ellipsoid", color: [0.9, 0.2, 0.2, 1] });
-        const _b2 = cairns.dispatch("cairns.scene.listEntities", {})
-                        .result.entities;
-        const occluder = _b2.filter(e => !_b1.includes(e))[0];
         cairns.dispatch("cairns.scene.setTransform",
                         { entity: ground, x: 0, y: -9.5, z: 0, scale: 9 });
-        cairns.dispatch("cairns.scene.setTransform",
-                        { entity: occluder, x: 0, y: 1.2, z: 0, scale: 0.5 });
-        cairns.dispatch("cairns.scene.setMaterialShaderAll",
-                        { shader: "lit" });
     )JS";
+    if (with_occluder) {
+        char buf[512];
+        std::snprintf(
+            buf, sizeof(buf),
+            "const _b2 = cairns.dispatch('cairns.scene.listEntities', {})"
+            "                .result.entities;"
+            "cairns.dispatch('cairns.primitive.create',"
+            "                { type: 'ellipsoid', color: [0.9, 0.2, 0.2, 1] });"
+            "const _b3 = cairns.dispatch('cairns.scene.listEntities', {})"
+            "                .result.entities;"
+            "const occluder = _b3.filter(e => !_b2.includes(e))[0];"
+            "cairns.dispatch('cairns.scene.setTransform',"
+            "                { entity: occluder, x: 0, y: %f, z: 0,"
+            "                  scale: 0.5 });",
+            static_cast<double>(occluder_y));
+        js += buf;
+    }
+    js += "cairns.dispatch('cairns.scene.setMaterialShaderAll',"
+          "                { shader: 'lit' });";
     // dz tilts the rays toward the camera so the shadow lands on the
     // camera-facing slope of the ground sphere (a straight-down shadow sits
     // on the sphere's crown, edge-on to the +Z camera and barely visible).
     js += LightJs(light_dx, -1.0f, 0.3f, 1.2f, cast);
     cairns::golden::DriveJs(pe.e, js);
     return Grab(pe.e, 9);
+}
+
+Image RenderShadowScene(float light_dx, bool cast) {
+    return RenderShadowSceneAt(light_dx, cast, true, 1.2f);
 }
 
 }  // namespace
@@ -319,6 +335,45 @@ SCENARIO("npr property: shadow displaces along the light's tilt",
     const double mid = static_cast<double>(off_r.w) / 2.0;
     REQUIRE(right.darken_cx > mid + 3.0);
     REQUIRE(left.darken_cx < mid - 3.0);
+}
+
+SCENARIO("npr property: no shadow acne on unoccluded geometry",
+         "[npr_property][golden]") {
+#if CAIRNS_WEBGPU
+    SKIP("webgpu stubs the depth-only shadow PSO -- shadows honestly off");
+#endif
+    // The ground sphere alone: convex, so every camera-visible pixel is
+    // light-facing and nothing legitimately occludes it. castShadows on must
+    // render IDENTICAL to off -- any diff is self-shadow acne, i.e. the
+    // slope-scaled bias in shadow_factor is too small for the shadow map's
+    // depth precision over this ortho range.
+    const Image off = RenderShadowSceneAt(0.45f, false, false, 0.0f);
+    const Image on = RenderShadowSceneAt(0.45f, true, false, 0.0f);
+    const DiffStats st = Diff(off, on, 1);
+    INFO("acne: max_darken=" << st.max_darken
+                             << " max_brighten=" << st.max_brighten);
+    REQUIRE(st.max_darken <= 1);
+    REQUIRE(st.max_brighten <= 1);
+}
+
+SCENARIO("npr property: near-contact shadow survives the bias (no peter-pan)",
+         "[npr_property][golden]") {
+#if CAIRNS_WEBGPU
+    SKIP("webgpu stubs the depth-only shadow PSO -- shadows honestly off");
+#endif
+    // Occluder 0.3 world units above the ground: a gap larger than the
+    // acne bias's world-space cost (~0.13 at this ortho range), so a correct
+    // bias keeps a STRONG shadow here; an overtuned one detaches it. The
+    // hard 1.2 X-tilt slides the umbra out from under the occluder's own
+    // silhouette (a gentler tilt leaves it hidden from the bird camera --
+    // physically correct but unmeasurable).
+    const Image off = RenderShadowSceneAt(1.2f, false, true, 0.3f);
+    const Image on = RenderShadowSceneAt(1.2f, true, true, 0.3f);
+    const DiffStats st = Diff(off, on, 10);
+    INFO("near-contact: darkened=" << st.darkened
+                                   << " max_darken=" << st.max_darken);
+    REQUIRE(st.darkened > 100);
+    REQUIRE(st.max_darken > 40);
 }
 
 // ---- M3: kuwahara + the params plumbing ---------------------------------------
