@@ -295,10 +295,11 @@ public:
             cairns::rhi::RenderGraphToyTest(rhi_.resources, rhi_.alloc);
         }
 
-        // Spawn the render thread. From here on, RecordFrame runs there;
-        // the game (main) thread fills packets_[slot] and signals the slot's
-        // condition_variable; render thread waits on that.
-        render_thread_ = std::thread(&Engine::RenderThreadLoop, this);
+        // Threads fused -- RecordFrame runs synchronously on the game thread
+        // at the end of draw(). Compare-to-old-numbers mode. Re-enable by
+        // restoring the std::thread spawn here + the cv wait/notify in
+        // draw()/RenderThreadLoop.
+        // render_thread_ = std::thread(&Engine::RenderThreadLoop, this);
         return true;
     }
 
@@ -786,15 +787,7 @@ public:
         }
 
         const uint32_t s = frame_ % rhi::kFramesInFlight;
-        // Take the slot. Initial state is kConsumerDone so the first two
-        // iterations don't actually wait; subsequent iterations block until
-        // the render thread finishes RecordFrame for this slot.
-        {
-            std::unique_lock<std::mutex> lk(slot_mu_[s]);
-            slot_cv_[s].wait(lk, [&] {
-                return slot_state_[s] == SlotState::kConsumerDone;
-            });
-        }
+        // Threads fused: no cv wait. RecordFrame runs synchronously below.
         cairns::FramePacket& pkt = packets_[s];
         if (pkt.imgui != nullptr) {
             cairns::FreeImGuiSnapshot(pkt.imgui);
@@ -828,22 +821,11 @@ public:
         if (!BuildFrame(pkt)) {
             return false;
         }
-        if (pkt.imgui != nullptr) {
-            pkt.imgui = cairns::CloneImGuiDrawData(pkt.imgui);
-        }
-        {
-            std::lock_guard<std::mutex> lk(slot_mu_[s]);
-            slot_state_[s] = SlotState::kProducerFilled;
-        }
-        slot_cv_[s].notify_one();
-        if (pkt.request_dump) {
-            // Deterministic golden handshake: wait until the render thread has
-            // dumped (slot returned to kConsumerDone) before letting the
-            // game thread fall through to the next iteration's exit gate.
-            std::unique_lock<std::mutex> lk(slot_mu_[s]);
-            slot_cv_[s].wait(lk, [&] {
-                return slot_state_[s] == SlotState::kConsumerDone;
-            });
+        // Skip ImGui clone -- no cross-thread reader anymore. pkt.imgui still
+        // points at ImGui's internal data, valid until next NewFrame (which
+        // happens at the top of the next iteration of draw()).
+        if (!RecordFrame(pkt)) {
+            return false;
         }
 
         t_frame.End();
@@ -947,27 +929,7 @@ public:
                 }
                 pkt.particle_parity_out = cur;
             });
-        pkt.graph->AddPass(
-            "depth_prepass", rhi::PassType::kGraphics,
-            [&pkt](rhi::PassBuilder& b) {
-                rhi::GraphTextureDesc dd{};
-                dd.width = pkt.fb_w;
-                dd.height = pkt.fb_h;
-                dd.format = rhi::Format::kD32F;
-                dd.usage = rhi::kTexUsageDepthTarget | rhi::kTexUsageSampled;
-                pkt.depth_tex = b.CreateDepthTarget(dd);
-                b.AddDepthOutput("depth", pkt.depth_tex, rhi::LoadOp::kClear, 1.0f);
-            },
-            [&pkt, this](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
-                rhi::MeshDrawList dl{};
-                dl.draws = std::span<const cairns::Draw>(pkt.draws.data(), pkt.draws.size());
-                dl.sorted_draws = pkt.sorted;
-                dl.pipeline = depth_only_;
-                dl.globals_offset = pkt.globals_offset;
-                dl.resident_textures = pkt.resident_textures;
-                dl.resident_buffers = pkt.resident_buffers;
-                cmd.DrawMeshes(rhi_.resources, rhi_.alloc, dl);
-            });
+        // depth_prepass disabled -- workload reduction test.
         pkt.graph->AddPass(
             "forward", rhi::PassType::kGraphics,
             [&pkt](rhi::PassBuilder& b) {
@@ -1005,13 +967,11 @@ public:
                 pkt.swap_tex = b.ImportTexture(rhi::Handle<rhi::Texture>::Null, td);
                 b.AddColorOutput("swapchain", pkt.swap_tex, rhi::LoadOp::kClear, pkt.clear_color);
                 b.AddAttachmentInput(pkt.color_tex);
-                b.AddAttachmentInput(pkt.depth_tex);
                 b.ReadBuffer(pkt.sim_ssbo);
             },
             [&pkt, this](rhi::CommandRecorder& cmd, const rhi::PassResources& res) {
-                const rhi::Handle<rhi::Texture> texs[2] = {res.Resolve(pkt.color_tex),
-                                                           res.Resolve(pkt.depth_tex)};
-                cmd.DrawFullscreen(rhi_.resources, composite_, texs, 2,
+                const rhi::Handle<rhi::Texture> texs[1] = {res.Resolve(pkt.color_tex)};
+                cmd.DrawFullscreen(rhi_.resources, composite_, texs, 1,
                                    composite_sampler_);
                 rhi::PointDraw pd{};
                 pd.pipeline = particle_render_shader_;
