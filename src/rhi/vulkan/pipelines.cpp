@@ -1,58 +1,39 @@
-// rhi/vulkan/resource_manager.cpp
+// rhi/vulkan/pipelines.cpp
 //
-// Vulkan implementation of cairns::rhi::ResourceManager.
+// Vulkan implementation of cairns::rhi::Pipelines.
 
 #include "util/define.hpp"
 
 #if CAIRNS_VULKAN
 
-#include "rhi/resource_manager.hpp"
+#include "rhi/pipelines.hpp"
 
-#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <optional>
-#include <set>
 #include <string>
 #include <vector>
 
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_vulkan.h>
-#include <vulkan/vulkan_beta.h>
-#include <stb_image_write.h>
+#include <vulkan/vulkan.h>
 
-#include "rhi/vulkan/memory_allocator.hpp"
-#include "rhi/command_recorder.hpp"
-#include "rhi/vulkan/command_recorder_impl.hpp"
+#include "rhi/resource_manager.hpp"
 #include "rhi/device.hpp"
 #include "rhi/vulkan/internal/device_impl.hpp"
-#include "rhi/allocator.hpp"
-#include "rhi/vulkan/internal/allocator_impl.hpp"
 #include "rhi/resources.hpp"
 #include "rhi/bindless.hpp"
 #include "rhi/vulkan/internal/bindless_impl.hpp"
 #include "rhi/frames.hpp"
 #include "rhi/vulkan/internal/frames_impl.hpp"
 #include "rhi/swap_chain.hpp"
-#include "util/render_pass_globals.hpp"
-#include "util/material_gpu.hpp"
 
 namespace cairns::rhi {
 
-struct ResourceManager::Impl {
-    BackendInitParams params;
-    Allocator* alloc = nullptr;  // borrowed; owns the MemoryAllocator + aligns
-
-    // Device handles mirrored from Device; used by InitSwapChain + pipelines.
-    VkSurfaceKHR surface = VK_NULL_HANDLE;
-    VkQueue graphics_queue = VK_NULL_HANDLE;
-    VkSampleCountFlagBits msaa_samples = VK_SAMPLE_COUNT_1_BIT;
-
-    Resources* res = nullptr;       // borrowed; owns the 7 pools + frame counter
-    Bindless* bindless = nullptr;   // borrowed; CreateGraphicsPipeline reads its layout
-    Frames* frames = nullptr;       // borrowed; pipeline reads its set layouts
+struct Pipelines::Impl {
+    VkDevice device = VK_NULL_HANDLE;  // mirrored from Device
+    Resources* res = nullptr;          // borrowed; stores compiled Shader/Kernel
+    Bindless* bindless = nullptr;      // borrowed; graphics layout reads its set layout
+    Frames* frames = nullptr;          // borrowed; pipeline reads its set layouts
 };
 
 namespace {
@@ -78,31 +59,26 @@ VkFormat to_vk_format(Format f) {
 
 }  // namespace
 
-ResourceManager::~ResourceManager() {
-    Deinit();
+Pipelines::~Pipelines() { Deinit(); }
+
+bool Pipelines::Init(Device& device, Resources& resources, Bindless& bindless,
+                     Frames& frames) {
+    if (impl_) {
+        return true;
+    }
+    impl_ = new Impl();
+    impl_->device = device.impl_->device;
+    impl_->res = &resources;
+    impl_->bindless = &bindless;
+    impl_->frames = &frames;
+    return true;
 }
 
-void ResourceManager::Deinit() {
+void Pipelines::Deinit() {
     if (!impl_) {
         return;
     }
-    VkDevice dev = impl_->params.device;
-    impl_->res->textures.ForEachLive([dev](Texture::Hot& hot, Texture::Cold& cold) {
-        if (hot.api_view) {
-            vkDestroyImageView(dev, static_cast<VkImageView>(hot.api_view), nullptr);
-            hot.api_view = nullptr;
-        }
-        if (cold.api_image) {
-            vkDestroyImage(dev, static_cast<VkImage>(cold.api_image), nullptr);
-            cold.api_image = nullptr;
-        }
-    });
-    impl_->res->samplers.ForEachLive([dev](Sampler::Hot& hot, Sampler::Cold&) {
-        if (hot.api_sampler) {
-            vkDestroySampler(dev, static_cast<VkSampler>(hot.api_sampler), nullptr);
-            hot.api_sampler = nullptr;
-        }
-    });
+    VkDevice dev = impl_->device;
     impl_->res->shaders.ForEachLive([dev](Shader::Hot& hot, Shader::Cold&) {
         if (hot.vk_pipeline) {
             vkDestroyPipeline(dev, hot.vk_pipeline, nullptr);
@@ -123,96 +99,8 @@ void ResourceManager::Deinit() {
             hot.vk_layout = VK_NULL_HANDLE;
         }
     });
-    // memory allocator dtor frees device memory; the device/instance/surface/
-    // command-pool teardown is owned by Device::Deinit, which the engine calls
-    // AFTER this (so heaps free against a live device).
     delete impl_;
     impl_ = nullptr;
-}
-
-bool ResourceManager::InitDevice(Device& dev, Allocator& alloc, Resources& res,
-                                 Bindless& bindless, Frames& frames) {
-    impl_ = new Impl();
-    impl_->res = &res;            // borrowed; owns the 7 pools + frame counter
-    impl_->bindless = &bindless;  // borrowed; CreateGraphicsPipeline reads its layout
-    impl_->frames = &frames;      // borrowed; pipeline reads its set layouts
-
-    // Mirror the subset of device handles still used here (InitSwapChain +
-    // pipeline creation). Device owns creation + teardown; RM only borrows.
-    impl_->surface = dev.impl_->surface;
-    impl_->params.physical = dev.impl_->physical;
-    impl_->params.device = dev.impl_->device;
-    impl_->graphics_queue = dev.impl_->graphics_queue;
-    impl_->params.command_pool = dev.impl_->command_pool;
-    impl_->params.queue = dev.impl_->graphics_queue;
-    impl_->params.queue_family_index = dev.impl_->queue_family_index;
-    impl_->msaa_samples = dev.impl_->msaa_samples;
-    impl_->alloc = &alloc;  // Allocator owns the MemoryAllocator + aligns (Init'd already)
-    return true;
-}
-
-
-bool ResourceManager::InitSwapChain(SwapChain& sc, SDL_Window* window) {
-    return sc.Init(impl_->params.device, impl_->params.physical, impl_->surface,
-                   window, impl_->params.command_pool, impl_->graphics_queue,
-                   impl_->msaa_samples, true);
-}
-
-Handle<Buffer> ResourceManager::CreateBuffer(const BufferDesc& d) {
-    return impl_->res->CreateBuffer(d);
-}
-
-Handle<Texture> ResourceManager::CreateTexture(const TextureDesc& d) {
-    return impl_->res->CreateTexture(d);
-}
-
-Handle<Sampler> ResourceManager::CreateSampler(const SamplerDesc& d) {
-    return impl_->res->CreateSampler(d);
-}
-
-Handle<BindGroup> ResourceManager::CreateBindGroup(const BindGroupDesc& d) {
-    return impl_->res->CreateBindGroup(d);
-}
-
-void ResourceManager::Destroy(Handle<Shader> h) {
-    impl_->res->shaders.Release(h);
-}
-
-Shader::Hot* ResourceManager::GetHot(Handle<Shader> h) {
-    return impl_->res->shaders.GetHot(h);
-}
-
-Handle<DynamicBuffers> ResourceManager::CreateDynamicBuffers(
-    const DynamicBuffersDesc& d) {
-    return impl_->res->CreateDynamicBuffers(d);
-}
-
-void ResourceManager::Destroy(Handle<Buffer> h) { impl_->res->Destroy(h); }
-
-void ResourceManager::Destroy(Handle<Texture> h) { impl_->res->Destroy(h); }
-
-void ResourceManager::Destroy(Handle<Sampler> h) {
-    Sampler::Hot* hot = impl_->res->samplers.GetHot(h);
-    if (!hot) {
-        return;
-    }
-    if (hot->api_sampler) {
-        vkDestroySampler(impl_->params.device,
-                         static_cast<VkSampler>(hot->api_sampler), nullptr);
-    }
-    impl_->res->samplers.Release(h);
-}
-
-void ResourceManager::Destroy(Handle<BindGroup> h) {
-    impl_->res->bind_groups.Release(h);
-}
-
-void ResourceManager::Destroy(Handle<DynamicBuffers> h) {
-    impl_->res->dynamic_buffers.Release(h);
-}
-
-void ResourceManager::Destroy(Handle<Kernel> h) {
-    impl_->res->kernels.Release(h);
 }
 
 namespace {
@@ -313,9 +201,9 @@ VkShaderFiles resolve_vk_shader(const char* logical) {
 
 }  // namespace
 
-Handle<Shader> ResourceManager::CreateGraphicsPipeline(
+Handle<Shader> Pipelines::CreateGraphicsPipeline(
     const GraphicsPipelineDesc& desc) {
-    VkDevice device = impl_->params.device;
+    VkDevice device = impl_->device;
     const VkShaderFiles files = resolve_vk_shader(desc.logical_shader);
     const std::filesystem::path dir = desc.shader_dir ? desc.shader_dir : "";
 
@@ -488,9 +376,9 @@ Handle<Shader> ResourceManager::CreateGraphicsPipeline(
     return h;
 }
 
-Handle<Kernel> ResourceManager::CreateComputePipeline(
+Handle<Kernel> Pipelines::CreateComputePipeline(
     const ComputePipelineDesc& desc) {
-    VkDevice device = impl_->params.device;
+    VkDevice device = impl_->device;
     const VkShaderFiles files = resolve_vk_shader(desc.logical_shader);
     const std::filesystem::path dir = desc.shader_dir ? desc.shader_dir : "";
 
@@ -541,54 +429,6 @@ Handle<Kernel> ResourceManager::CreateComputePipeline(
     hot->vk_layout = layout;
     impl_->res->kernels.GetCold(h)->debug_name = desc.debug_name;
     return h;
-}
-
-Kernel::Hot* ResourceManager::GetHot(Handle<Kernel> h) {
-    return impl_->res->kernels.GetHot(h);
-}
-
-Buffer::Hot* ResourceManager::GetHot(Handle<Buffer> h) {
-    return impl_->res->buffers.GetHot(h);
-}
-
-Texture::Hot* ResourceManager::GetHot(Handle<Texture> h) {
-    return impl_->res->textures.GetHot(h);
-}
-
-Sampler::Hot* ResourceManager::GetHot(Handle<Sampler> h) {
-    return impl_->res->samplers.GetHot(h);
-}
-
-BindGroup::Hot* ResourceManager::GetHot(Handle<BindGroup> h) {
-    return impl_->res->bind_groups.GetHot(h);
-}
-
-DynamicBuffers::Hot* ResourceManager::GetHot(Handle<DynamicBuffers> h) {
-    return impl_->res->dynamic_buffers.GetHot(h);
-}
-
-uint32_t ResourceManager::GetBufferByteSize(Handle<Buffer> h) const {
-    Buffer::Cold* cold = impl_->res->buffers.GetCold(h);
-    if (!cold) {
-        return 0;
-    }
-    return cold->size_bytes;
-}
-
-VkBuffer ResourceManager::GetVkBumpMasterBuffer(Memory mem) {
-    return impl_->res->GetVkBumpMasterBuffer(mem);
-}
-
-uint32_t ResourceManager::BufferBaseOffset(Handle<Buffer> h) {
-    return impl_->res->BufferBaseOffset(h);
-}
-
-VkBuffer ResourceManager::GetVkBuffer(Handle<Buffer> h, uint32_t* out_offset) {
-    return impl_->res->GetVkBuffer(h, out_offset);
-}
-
-uint8_t* ResourceManager::MappedPtr(Handle<Buffer> h) {
-    return impl_->res->MappedPtr(h);
 }
 
 }  // namespace cairns::rhi

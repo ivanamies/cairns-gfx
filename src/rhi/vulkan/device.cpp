@@ -23,6 +23,7 @@
 
 #include "rhi/device.hpp"
 #include "rhi/vulkan/internal/device_impl.hpp"
+#include "rhi/swap_chain.hpp"
 
 namespace cairns::rhi {
 
@@ -344,6 +345,12 @@ void Device::Deinit() {
     }
     delete impl_;
     impl_ = nullptr;
+}
+
+bool Device::InitSwapChain(SwapChain& sc, SDL_Window* window) {
+    return sc.Init(impl_->device, impl_->physical, impl_->surface, window,
+                   impl_->command_pool, impl_->graphics_queue, impl_->msaa_samples,
+                   true);
 }
 
 }  // namespace cairns::rhi

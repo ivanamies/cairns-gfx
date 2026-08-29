@@ -35,7 +35,7 @@ public:
     void Finalize(Handle<BindGroup> reg);
 
 private:
-    friend class ResourceManager;  // Vulkan pipeline layout reads bindless_layout
+    friend class Pipelines;  // Vulkan pipeline layout reads bindless_layout
 
     struct Impl;
     Impl* impl_ = nullptr;

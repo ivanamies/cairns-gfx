@@ -2,6 +2,7 @@
 
 #include "sampler.hpp"
 #include "rhi/resource_manager.hpp"
+#include "rhi/resources.hpp"
 #include "util/std_allocator.hpp"
 
 #include <fastgltf/glm_element_traits.hpp>
@@ -354,7 +355,7 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene) {
     return true;
 }
 
-inline void PrepareSceneResources(Scene& scene, rhi::ResourceManager& rm, std::vector<LoadedMaterial>& materials) {
+inline void PrepareSceneResources(Scene& scene, rhi::Resources& rm, std::vector<LoadedMaterial>& materials) {
     // Textures
     for (const auto& texDescIn : scene.loaded_textures) {
         rhi::TextureDesc d;

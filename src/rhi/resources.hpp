@@ -84,7 +84,6 @@ public:
     uint32_t FrameIndex() const;
 
 private:
-    friend class ResourceManager;
     friend class Bindless;
     friend class CommandRecorder;
 

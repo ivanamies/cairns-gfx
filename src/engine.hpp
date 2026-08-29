@@ -36,6 +36,7 @@
 #include "rhi/resources.hpp"
 #include "rhi/bindless.hpp"
 #include "rhi/frames.hpp"
+#include "rhi/pipelines.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/command_recorder.hpp"
 
@@ -68,7 +69,7 @@ public:
     }
     
     bool initSwapChain(SDL_Window* window) {
-        if ( !rm_.InitSwapChain(swapchain_, window)) {
+        if ( !device_.InitSwapChain(swapchain_, window)) {
             return false;
         }
 
@@ -128,7 +129,7 @@ public:
         if (!frames_.Init(device_, resources_)) {
             return false;
         }
-        if (!rm_.InitDevice(device_, alloc_, resources_, bindless_, frames_)) {
+        if (!pipelines_.Init(device_, resources_, bindless_, frames_)) {
             return false;
         }
         if ( !initSwapChain(window)) {
@@ -191,9 +192,9 @@ public:
                 if (!cairns::LoadSceneFromGltf(filepath, scene)) {
                     return false;
                 }
-                cairns::PrepareSceneResources(scene, rm_, materials_);
+                cairns::PrepareSceneResources(scene, resources_, materials_);
 
-                if (!cairns::rhi::LoadSceneGpu(scene, rm_)) {
+                if (!cairns::rhi::LoadSceneGpu(scene, resources_)) {
                     return false;
                 }
 
@@ -335,7 +336,7 @@ public:
 
                     cairns::Draw draw{};
                     draw.index_buffer = index;
-                    const uint32_t index_base_off = rm_.BufferBaseOffset(index);
+                    const uint32_t index_base_off = resources_.BufferBaseOffset(index);
                     draw.index_offset = index_base_off + (prim.firstIndex * sizeof(uint32_t));
                     draw.vertex_offset = prim.vertexOffset;
                     draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot] = pos;
@@ -469,7 +470,7 @@ public:
                 cairns::Scene& scene = scenes_[i];
                 for (size_t j = 0; j < scene.textureHandles.size(); ++j) {
                     auto h = scene.textureHandles[j];
-                    rhi::Texture::Hot* hot = rm_.GetHot(h);
+                    rhi::Texture::Hot* hot = resources_.GetHot(h);
                     if (hot && hot->api_view) {
                         texture_id_map_[h.index] =
                             bindless_.AddTexture(bindless_bg_, h);
@@ -518,7 +519,7 @@ public:
             desc.push_constant_bytes = sizeof(uint32_t);
             desc.debug_name = "unlit";
             desc.swap_chain = &swapchain_;
-            unlit_ = rm_.CreateGraphicsPipeline(desc);
+            unlit_ = pipelines_.CreateGraphicsPipeline(desc);
             if (unlit_.IsNull()) {
                 std::exit(0);
             }
@@ -541,7 +542,7 @@ public:
             desc.logical_shader = "particle";
             desc.shader_dir = shader_dir.c_str();
             desc.debug_name = "particle_compute";
-            particle_kernel_ = rm_.CreateComputePipeline(desc);
+            particle_kernel_ = pipelines_.CreateComputePipeline(desc);
             if (particle_kernel_.IsNull()) {
                 return false;
             }
@@ -579,7 +580,7 @@ public:
             desc.push_constant_bytes = 0;
             desc.debug_name = "particle_render";
             desc.swap_chain = &swapchain_;
-            particle_render_shader_ = rm_.CreateGraphicsPipeline(desc);
+            particle_render_shader_ = pipelines_.CreateGraphicsPipeline(desc);
             if (particle_render_shader_.IsNull()) {
                 return false;
             }
@@ -611,16 +612,16 @@ public:
         bd.usage = rhi::kUsageStorage | rhi::kUsageVertex;
         bd.memory = rhi::Memory::kDefault;
         bd.initial_data = init_data;
-        particle_ssbo_[0] = rm_.CreateBuffer(bd);
+        particle_ssbo_[0] = resources_.CreateBuffer(bd);
         bd.initial_data = init_data;
-        particle_ssbo_[1] = rm_.CreateBuffer(bd);
+        particle_ssbo_[1] = resources_.CreateBuffer(bd);
 
         return !particle_ssbo_[0].IsNull() && !particle_ssbo_[1].IsNull();
     }
 
     bool deinit() {
         swapchain_.Deinit();
-        rm_.Deinit();
+        pipelines_.Deinit();
         frames_.Deinit();
         bindless_.Deinit();
         resources_.Deinit();
@@ -656,7 +657,7 @@ private:
     rhi::Resources resources_;
     rhi::Bindless bindless_;
     rhi::Frames frames_;
-    rhi::ResourceManager rm_;
+    rhi::Pipelines pipelines_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
     rhi::Handle<rhi::BindGroup> bindless_bg_;
     std::unordered_map<uint32_t, uint32_t> texture_id_map_;

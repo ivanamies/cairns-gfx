@@ -40,7 +40,6 @@ public:
     void AdvanceFrame(uint32_t frame_index);
 
 private:
-    friend class ResourceManager;
     friend class Resources;
     friend class Frames;
     friend class CommandRecorder;

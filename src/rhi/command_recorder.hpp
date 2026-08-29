@@ -83,7 +83,6 @@ public:
     void EndRenderPass();
 
 private:
-    friend class ResourceManager;
     friend class Frames;
     struct Impl;
     Impl* impl_ = nullptr;

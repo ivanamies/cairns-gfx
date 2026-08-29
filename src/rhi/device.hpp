@@ -14,6 +14,8 @@ struct SDL_Window;
 
 namespace cairns::rhi {
 
+struct SwapChain;
+
 class Device {
 public:
     Device() = default;
@@ -24,13 +26,16 @@ public:
     [[nodiscard]] bool Init(SDL_Window* window);
     void Deinit();
 
+    // Neutral swapchain bring-up using the owned device objects.
+    [[nodiscard]] bool InitSwapChain(SwapChain& sc, SDL_Window* window);
+
 private:
-    friend class ResourceManager;
     friend class Allocator;
     friend class Resources;
     friend class Bindless;
     friend struct SwapChain;
     friend class Frames;
+    friend class Pipelines;
     friend class CommandRecorder;
 
     struct Impl;

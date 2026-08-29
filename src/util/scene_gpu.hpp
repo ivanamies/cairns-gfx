@@ -2,10 +2,11 @@
 
 #include "util/gltf_loader.hpp"
 #include "rhi/resource_manager.hpp"
+#include "rhi/resources.hpp"
 
 namespace cairns::rhi {
 
-inline bool LoadMeshGpu(Mesh& mesh, ResourceManager& rm) {
+inline bool LoadMeshGpu(Mesh& mesh, Resources& rm) {
     auto process = [&](Handle<Buffer>& h, const void* srcData,
                        size_t srcSize) -> bool {
         if (srcSize == 0) {
@@ -36,7 +37,7 @@ inline bool LoadMeshGpu(Mesh& mesh, ResourceManager& rm) {
     return true;
 }
 
-inline bool LoadSceneGpu(Scene& scene, ResourceManager& rm) {
+inline bool LoadSceneGpu(Scene& scene, Resources& rm) {
     for (size_t i = 0; i < scene.meshes.size(); ++i) {
         if (!LoadMeshGpu(scene.meshes[i], rm)) {
             return false;

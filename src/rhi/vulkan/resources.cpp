@@ -290,6 +290,23 @@ void Resources::Deinit() {
     if (!impl_) {
         return;
     }
+    VkDevice dev = impl_->device;
+    textures.ForEachLive([dev](Texture::Hot& hot, Texture::Cold& cold) {
+        if (hot.api_view) {
+            vkDestroyImageView(dev, static_cast<VkImageView>(hot.api_view), nullptr);
+            hot.api_view = nullptr;
+        }
+        if (cold.api_image) {
+            vkDestroyImage(dev, static_cast<VkImage>(cold.api_image), nullptr);
+            cold.api_image = nullptr;
+        }
+    });
+    samplers.ForEachLive([dev](Sampler::Hot& hot, Sampler::Cold&) {
+        if (hot.api_sampler) {
+            vkDestroySampler(dev, static_cast<VkSampler>(hot.api_sampler), nullptr);
+            hot.api_sampler = nullptr;
+        }
+    });
     delete impl_;
     impl_ = nullptr;
 }

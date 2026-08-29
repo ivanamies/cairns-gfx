@@ -41,7 +41,7 @@ public:
     void SetDumpPath(const std::filesystem::path& path);
 
 private:
-    friend class ResourceManager;  // Vulkan pipeline layout reads the set layouts
+    friend class Pipelines;  // Vulkan pipeline layout reads the set layouts
 
     struct Impl;
     Impl* impl_ = nullptr;

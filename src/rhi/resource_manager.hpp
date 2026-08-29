@@ -63,7 +63,6 @@ using ApiArgBufferHandle = void*;
 using ApiKernelHandle = void*;
 #endif
 
-class ResourceManager;
 class Device;
 class Allocator;
 class Resources;
@@ -526,72 +525,5 @@ struct BackendInitParams;
 inline constexpr uint32_t kFramesInFlight = 2;
 inline constexpr uint32_t kHeapBlockBytes = 128u * 1024u * 1024u;
 inline constexpr uint32_t kLargeThreshold = 64u * 1024u * 1024u;
-
-class ResourceManager {
-public:
-    ResourceManager() = default;
-    ~ResourceManager();
-
-    ResourceManager(const ResourceManager&) = delete;
-    ResourceManager& operator=(const ResourceManager&) = delete;
-
-    // Mirrors the device handles + borrows the allocator, then initializes the
-    // per-frame command/sync/descriptor state. Device + Allocator must be Init'd
-    // first (the engine owns construction order).
-    bool InitDevice(Device& device, Allocator& alloc, Resources& res,
-                    Bindless& bindless, Frames& frames);
-    // Neutral swapchain bring-up: fills `sc` using the device objects InitDevice
-    // owns (Vulkan: device/surface/queues/pool/samples; Metal: device).
-    bool InitSwapChain(SwapChain& sc, SDL_Window* window);
-    void Deinit();
-
-    Handle<Buffer> CreateBuffer(const BufferDesc& desc);
-    Handle<Texture> CreateTexture(const TextureDesc& desc);
-    Handle<Sampler> CreateSampler(const SamplerDesc& desc);
-    Handle<BindGroup> CreateBindGroup(const BindGroupDesc& desc);
-    Handle<DynamicBuffers> CreateDynamicBuffers(const DynamicBuffersDesc& desc);
-    Handle<Shader> CreateGraphicsPipeline(const GraphicsPipelineDesc& desc);
-    Handle<Kernel> CreateComputePipeline(const ComputePipelineDesc& desc);
-
-    void Destroy(Handle<Buffer> h);
-    void Destroy(Handle<Texture> h);
-    void Destroy(Handle<Sampler> h);
-    void Destroy(Handle<BindGroup> h);
-    void Destroy(Handle<DynamicBuffers> h);
-    void Destroy(Handle<Shader> h);
-    void Destroy(Handle<Kernel> h);
-
-    Buffer::Hot* GetHot(Handle<Buffer> h);
-    Texture::Hot* GetHot(Handle<Texture> h);
-    Sampler::Hot* GetHot(Handle<Sampler> h);
-    BindGroup::Hot* GetHot(Handle<BindGroup> h);
-    DynamicBuffers::Hot* GetHot(Handle<DynamicBuffers> h);
-    Shader::Hot* GetHot(Handle<Shader> h);
-    Kernel::Hot* GetHot(Handle<Kernel> h);
-
-    uint32_t GetBufferByteSize(Handle<Buffer> h) const;
-    // Byte offset of a buffer within its backing master allocation. Neutral.
-    uint32_t BufferBaseOffset(Handle<Buffer> h);
-
-#if CAIRNS_VULKAN
-    // Native-handle access used by the Vulkan CommandRecorder.
-    VkBuffer GetVkBuffer(Handle<Buffer> h, uint32_t* out_offset);
-    // Returns the current bump-ring slot's master VkBuffer for mem type.
-    // Forces ring initialization if the current slot is uninitialized.
-    VkBuffer GetVkBumpMasterBuffer(Memory mem);
-    uint8_t* MappedPtr(Handle<Buffer> h);
-#endif  // CAIRNS_VULKAN
-
-#if CAIRNS_METAL
-    // Native-handle access used by the Metal CommandRecorder.
-    MTL::Buffer* GetMtlBuffer(Handle<Buffer> h, uint32_t* out_offset);
-    uint8_t* MappedPtr(Handle<Buffer> h);
-    MTL::Buffer* GetBumpMasterBuffer(Memory mem) const;
-#endif  // CAIRNS_METAL
-
-private:
-    struct Impl;
-    Impl* impl_ = nullptr;
-};
 
 }  // namespace cairns::rhi

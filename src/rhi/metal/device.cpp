@@ -13,6 +13,7 @@
 
 #include "rhi/device.hpp"
 #include "rhi/metal/internal/device_impl.hpp"
+#include "rhi/swap_chain.hpp"
 
 namespace cairns::rhi {
 
@@ -44,6 +45,10 @@ void Device::Deinit() {
     }
     delete impl_;
     impl_ = nullptr;
+}
+
+bool Device::InitSwapChain(SwapChain& sc, SDL_Window* window) {
+    return sc.Init(impl_->device, window);
 }
 
 }  // namespace cairns::rhi
