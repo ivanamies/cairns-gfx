@@ -12,7 +12,7 @@
 namespace cairns {
 
 static constexpr uint32_t kDebugGlbsToParseStart = 3;
-static constexpr uint32_t kDebugGlbsToParse = 50;
+static constexpr uint32_t kDebugGlbsToParse = 100;
 
 static constexpr std::array kDebugGlbs = {
     "die.glb",

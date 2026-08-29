@@ -762,7 +762,6 @@ public:
                 ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_FirstUseEver);
             }
             ImGui::Begin("cairns", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
-            const float fps = cpu_ms_last_ > 0.0f ? 1000.0f / cpu_ms_last_ : 0.0f;
             float ms_max = 1.0f;
             float ms_avg = 0.0f;
             for (int i = 0; i < kCpuMsHistory; ++i) {
@@ -770,10 +769,12 @@ public:
                 ms_avg += cpu_ms_history_[i];
             }
             ms_avg /= static_cast<float>(kCpuMsHistory);
-            ImGui::Text("CPU %.2f ms   |   %.0f FPS", cpu_ms_last_, fps);
-            ImGui::Text("avg %.2f ms   |   peak %.2f ms", ms_avg, ms_max);
+            const float fps_avg = ms_avg > 0.0f ? 1000.0f / ms_avg : 0.0f;
+            ImGui::Text("CPU %.2f ms   |   %.0f FPS  (avg/120f)", ms_avg, fps_avg);
+            ImGui::Text("peak %.2f ms", ms_max);
+            ImGui::Text("draws %zu", drawList_.size());
             char overlay[32];
-            std::snprintf(overlay, sizeof(overlay), "%.2f ms", cpu_ms_last_);
+            std::snprintf(overlay, sizeof(overlay), "%.2f ms", ms_avg);
             ImGui::PlotLines("##cpuhist", cpu_ms_history_, kCpuMsHistory, cpu_ms_head_,
                              overlay, 0.0f, ms_max * 1.15f, ImVec2(300.0f, 110.0f));
             ImGui::End();
@@ -1283,7 +1284,7 @@ private:
     uint32_t particle_parity_ = 0;
     uint32_t globals_offset_ = 0;
     // cpu frame-time history (wall-clock between draw() calls) for the imgui graph
-    static constexpr int kCpuMsHistory = 128;
+    static constexpr int kCpuMsHistory = 120;
     float cpu_ms_history_[kCpuMsHistory] = {};
     int cpu_ms_head_ = 0;
     float cpu_ms_last_ = 0.0f;
