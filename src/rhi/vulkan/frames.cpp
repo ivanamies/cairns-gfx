@@ -658,10 +658,12 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
         VkResult acquire = vkAcquireNextImageKHR(dev, sc->plat.swapChain, UINT64_MAX,
                                                  plat.image_available_[cf], VK_NULL_HANDLE,
                                                  &image_index);
-        if (acquire == VK_ERROR_OUT_OF_DATE_KHR) {
-            sc->plat.RecreateSwapChain();
-            vkAcquireNextImageKHR(dev, sc->plat.swapChain, UINT64_MAX,
-                                  plat.image_available_[cf], VK_NULL_HANDLE, &image_index);
+        if (acquire == VK_ERROR_OUT_OF_DATE_KHR || acquire == VK_SUBOPTIMAL_KHR ||
+            acquire == VK_ERROR_SURFACE_LOST_KHR) {
+            plat.recreate_pending_.store(true, std::memory_order_release);
+            FrameContext fc{};
+            fc.skip_frame = true;
+            return fc;
         }
     }
     vkResetFences(dev, 1, &plat.in_flight_[cf]);
@@ -741,6 +743,7 @@ void Frames::EndSubmit(const SwapResolveTarget& target, FrameContext& fc) {
     gsi.signalSemaphoreCount = surfaceless ? 0u : 1u;
     gsi.pSignalSemaphores = surfaceless ? nullptr : &plat.render_finished_[cf];
     vkQueueSubmit(plat.graphics_queue_, 1, &gsi, plat.in_flight_[cf]);
+    plat.recorder_frame_ = (cf + 1) % plat.frames_in_flight_;
 }
 
 // MAIN-THREAD ONLY. vkQueuePresentKHR on MoltenVK calls into CALayer
@@ -748,13 +751,15 @@ void Frames::EndSubmit(const SwapResolveTarget& target, FrameContext& fc) {
 // Calling from a render-thread worker fires CA_ASSERT_MAIN_THREAD_TRANSACTIONS
 // under Instruments (and is undefined behavior otherwise).
 void Frames::Present(const SwapResolveTarget& target, FrameContext& fc) {
+    if (fc.skip_frame) {
+        return;
+    }
     const uint32_t cf = fc.frame_index;
     // Surfaceless: no swapchain to present to. Wait for the graphics
     // submit to finish so io.dumpTexture / final_target_ sampling sees
     // the rendered pixels, then advance the frame counter.
     if (target.plat.swap_chain == nullptr) {
         vkWaitForFences(plat.device_, 1, &plat.in_flight_[cf], VK_TRUE, UINT64_MAX);
-        plat.recorder_frame_ = (cf + 1) % plat.frames_in_flight_;
         return;
     }
     SwapChain& sc = *target.plat.swap_chain;
@@ -772,6 +777,9 @@ void Frames::Present(const SwapResolveTarget& target, FrameContext& fc) {
         std::lock_guard<std::mutex> lk(plat.swapchain_mutex_);
         present = vkQueuePresentKHR(plat.present_queue_, &pi);
     }
+    if (present == VK_ERROR_OUT_OF_DATE_KHR || present == VK_SUBOPTIMAL_KHR) {
+        plat.recreate_pending_.store(true, std::memory_order_release);
+    }
 
     if (!dump_path_.empty()) {
         vkQueueWaitIdle(plat.present_queue_);
@@ -785,11 +793,6 @@ void Frames::Present(const SwapResolveTarget& target, FrameContext& fc) {
         dump_path_.clear();
     }
 
-    if (present == VK_ERROR_OUT_OF_DATE_KHR || present == VK_SUBOPTIMAL_KHR) {
-        sc.plat.RecreateSwapChain();
-    }
-
-    plat.recorder_frame_ = (cf + 1) % plat.frames_in_flight_;
 }
 
 }  // namespace cairns::rhi

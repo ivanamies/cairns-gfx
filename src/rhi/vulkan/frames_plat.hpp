@@ -3,6 +3,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -21,6 +22,7 @@ struct FramesPlat {
     VkQueue compute_queue_ = VK_NULL_HANDLE;
     VkQueue present_queue_ = VK_NULL_HANDLE;
     std::mutex swapchain_mutex_;
+    std::atomic<bool> recreate_pending_{false};
     uint32_t frames_in_flight_ = 0;
     uint32_t recorder_frame_ = 0;
     std::vector<VkCommandBuffer> graphics_cmds_;

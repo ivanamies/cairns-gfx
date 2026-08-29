@@ -1491,6 +1491,23 @@ public:
     }
 
     bool draw() {
+#if CAIRNS_VULKAN
+        if (rhi_.frames.plat.recreate_pending_.load(std::memory_order_acquire)) {
+            if (render_thread_) {
+                render_thread_->Drain();
+            }
+            rhi_.device.WaitIdle();
+            if (final_target_.IsNull()) {
+                swapchain_.plat.RecreateSwapChain();
+                rhi_.frames.OnSurfaceResize();
+            }
+            rhi_.frames.plat.recreate_pending_.store(false, std::memory_order_release);
+            for (uint32_t i = 0; i < kFramesInFlight; ++i) {
+                slots_[i].present_ready = false;
+            }
+            prev_present_slot_ = -1;
+        }
+#endif
         ApplyPendingResize();
         if (final_target_.IsNull() &&
             (swapchain_.Width() == 0 || swapchain_.Height() == 0)) {
@@ -1710,18 +1727,6 @@ public:
         slot_lock.unlock();
         render_thread_->Submit(slot, &s.pkt);
 
-#if defined(__ANDROID__)
-        {
-            PerSlot& ps = slots_[slot];
-            std::unique_lock<std::mutex> lk(present_m_);
-            present_cv_.wait(lk, [&] { return ps.present_ready; });
-            rhi::FrameContext present_fc = ps.present_fc;
-            rhi::SwapResolveTarget present_target = ps.present_target;
-            ps.present_ready = false;
-            lk.unlock();
-            rhi_.frames.Present(present_target, present_fc);
-        }
-#else
         if (prev_present_slot_ >= 0) {
             PerSlot& ps = slots_[prev_present_slot_];
             std::unique_lock<std::mutex> lk(present_m_);
@@ -1733,7 +1738,6 @@ public:
             rhi_.frames.Present(present_target, present_fc);
         }
         prev_present_slot_ = static_cast<int32_t>(slot);
-#endif
 
         // Under CAIRNS_DUMP, collapse to depth-1 pipelining: wait for the
         // render thread to fully complete this frame before the next iteration
@@ -1847,6 +1851,14 @@ public:
         // the engine-owned offscreen, with no drawable so it doesn't present.
         rhi::SwapResolveTarget swap_target = AcquireFrameSwapTarget();
         rhi::FrameContext fc = rhi_.frames.Begin(rhi_.resources, rhi_.alloc, swap_target);
+        if (fc.skip_frame) {
+            std::lock_guard<std::mutex> lk(present_m_);
+            s.present_fc = fc;
+            s.present_target = swap_target;
+            s.present_ready = true;
+            present_cv_.notify_all();
+            return;
+        }
 
         cairns::Timer t_record("record", 2);
         EncodeDraws(pkt);
