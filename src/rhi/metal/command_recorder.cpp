@@ -60,8 +60,14 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     enc->setVertexBuffer(dyn_master, 0, cairns::kMaterialBindSlot);
     enc->setVertexBuffer(dyn_master, 0, cairns::kDrawTmpBindSlot);
 
+    // Pack-meshes (slide 26): bind streams only when the mesh buffer changes;
+    // drawIndexedPrimitives already selects the primitive via baseVertex.
     uint32_t last_mat_off = std::numeric_limits<uint32_t>::max();
     uint32_t last_mat_bg = std::numeric_limits<uint32_t>::max();
+    MTL::Buffer* last_pos_buf = nullptr;
+    uint32_t last_pos_off = std::numeric_limits<uint32_t>::max();
+    MTL::Buffer* last_attr_buf = nullptr;
+    uint32_t last_attr_off = std::numeric_limits<uint32_t>::max();
     for (size_t i = 0; i < list.sorted_draws.size(); ++i) {
         const cairns::Draw& draw = list.draws[list.sorted_draws[i].second];
         // set 2: per-material argument buffer, bound (fragment) on material change.
@@ -76,15 +82,23 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
             uint32_t pos_off = 0;
             MTL::Buffer* pos_buf = res.GetMtlBuffer(
                 alloc, draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
-            enc->useResource(pos_buf, MTL::ResourceUsageRead, MTL::RenderStageVertex);
-            enc->setVertexBuffer(pos_buf, pos_off, 0);
+            if (pos_buf != last_pos_buf || pos_off != last_pos_off) {
+                last_pos_buf = pos_buf;
+                last_pos_off = pos_off;
+                enc->useResource(pos_buf, MTL::ResourceUsageRead, MTL::RenderStageVertex);
+                enc->setVertexBuffer(pos_buf, pos_off, 0);
+            }
         }
         {
             uint32_t attr_off = 0;
             MTL::Buffer* attr_buf = res.GetMtlBuffer(
                 alloc, draw.vertex_buffers[cairns::Draw::kVertexBufferAttrSlot], &attr_off);
-            enc->useResource(attr_buf, MTL::ResourceUsageRead, MTL::RenderStageVertex);
-            enc->setVertexBuffer(attr_buf, attr_off, cairns::kMeshAttrVertexBindSlot);
+            if (attr_buf != last_attr_buf || attr_off != last_attr_off) {
+                last_attr_buf = attr_buf;
+                last_attr_off = attr_off;
+                enc->useResource(attr_buf, MTL::ResourceUsageRead, MTL::RenderStageVertex);
+                enc->setVertexBuffer(attr_buf, attr_off, cairns::kMeshAttrVertexBindSlot);
+            }
         }
         {
             const uint32_t mat_off = draw.dynamic_buffer_offsets[0];

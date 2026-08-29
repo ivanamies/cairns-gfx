@@ -117,7 +117,16 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     Shader::Hot* unlit = res.GetHot(list.pipeline);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_pipeline);
 
+    // Pack-meshes (Aaltonen slide 26): bind each stream at its mesh-region base
+    // and select the primitive via baseVertex/baseIndex in the draw call, so the
+    // VB/IB binds are emitted only when the mesh buffer actually changes.
     uint32_t last_mat_bg = 0xFFFFFFFFu;
+    VkBuffer last_pos_buf = VK_NULL_HANDLE;
+    uint32_t last_pos_off = 0xFFFFFFFFu;
+    VkBuffer last_attr_buf = VK_NULL_HANDLE;
+    uint32_t last_attr_off = 0xFFFFFFFFu;
+    VkBuffer last_idx_buf = VK_NULL_HANDLE;
+    uint32_t last_idx_off = 0xFFFFFFFFu;
     for (size_t i = 0; i < list.sorted_draws.size(); ++i) {
         const cairns::Draw& draw = list.draws[list.sorted_draws[i].second];
         // set 2: per-material bind group, bound only when the material changes
@@ -133,26 +142,36 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
         uint32_t pos_off = 0;
         VkBuffer pos_buf =
             res.GetVkBuffer(alloc,draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
+        if (pos_buf != last_pos_buf || pos_off != last_pos_off) {
+            last_pos_buf = pos_buf;
+            last_pos_off = pos_off;
+            VkDeviceSize off = pos_off;
+            vkCmdBindVertexBuffers(cb, 0, 1, &pos_buf, &off);
+        }
         uint32_t attr_off = 0;
         VkBuffer attr_buf =
             res.GetVkBuffer(alloc,draw.vertex_buffers[cairns::Draw::kVertexBufferAttrSlot], &attr_off);
-        VkDeviceSize pos_off_dev =
-            pos_off + static_cast<VkDeviceSize>(draw.vertex_offset) * 16u;
-        VkDeviceSize attr_off_dev =
-            attr_off + static_cast<VkDeviceSize>(draw.vertex_offset) * 64u;
-        vkCmdBindVertexBuffers(cb, 0, 1, &pos_buf, &pos_off_dev);
-        vkCmdBindVertexBuffers(cb, cairns::kMeshAttrVertexBindSlot, 1, &attr_buf, &attr_off_dev);
+        if (attr_buf != last_attr_buf || attr_off != last_attr_off) {
+            last_attr_buf = attr_buf;
+            last_attr_off = attr_off;
+            VkDeviceSize off = attr_off;
+            vkCmdBindVertexBuffers(cb, cairns::kMeshAttrVertexBindSlot, 1, &attr_buf, &off);
+        }
         uint32_t idx_base = 0;
         VkBuffer idx_buf = res.GetVkBuffer(alloc,draw.index_buffer, &idx_base);
-        vkCmdBindIndexBuffer(cb, idx_buf, idx_base, VK_INDEX_TYPE_UINT32);
+        if (idx_buf != last_idx_buf || idx_base != last_idx_off) {
+            last_idx_buf = idx_buf;
+            last_idx_off = idx_base;
+            vkCmdBindIndexBuffer(cb, idx_buf, idx_base, VK_INDEX_TYPE_UINT32);
+        }
         const uint32_t first_index = (draw.index_offset - idx_base) / sizeof(uint32_t);
         std::array<uint32_t, 3> dyn_offsets = {list.globals_offset,
                                                draw.dynamic_buffer_offsets[0],
                                                draw.dynamic_buffer_offsets[1]};
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_layout, 0, 1,
                                 &dyn_set, 3, dyn_offsets.data());
-        vkCmdDrawIndexed(cb, draw.triangle_count * 3, draw.instance_count, first_index, 0,
-                         draw.instance_offset);
+        vkCmdDrawIndexed(cb, draw.triangle_count * 3, draw.instance_count, first_index,
+                         static_cast<int32_t>(draw.vertex_offset), draw.instance_offset);
     }
 }
 
