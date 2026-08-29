@@ -114,7 +114,10 @@ public:
     using BufHandle = rhi::Handle<rhi::Buffer>;
     using DynBufId = uint32_t;
     using ShaderHandle = rhi::Handle<rhi::Shader>;
-    using MatId = uint32_t;
+    // #220 Step 1: MatId is now a generational Handle into Engine::materials_
+    // (cairns::ResourceManager<LoadedMaterial>). Stale slots fail safe at
+    // GetHot/GetCold instead of silently aliasing a recycled bind group.
+    using MatId = cairns::Handle<cairns::LoadedMaterial>;
     using SamplerHandle = rhi::Handle<rhi::Sampler>;
     using BindGroupId = uint32_t;
 
@@ -998,7 +1001,8 @@ public:
                 const MatId mat_id = prim.material_id;
 
                 cairns::Draw draw{};
-                draw.bind_groups[1] = material_bind_groups_[mat_id];
+                // #220 Step 1: bind group lives in LoadedMaterial::Hot.
+                draw.bind_groups[1] = materials_.GetHot(mat_id)->set2;
                 draw.index_buffer = index;
                 draw.index_offset = index_base_off + (prim.first_index * sizeof(uint32_t));
                 draw.vertex_offset = prim.vertex_offset;
@@ -1017,7 +1021,11 @@ public:
                 // viewport re-sort. Material + pipeline ordering still
                 // preserves batching across both viewports.
                 s.drawListSorted[stable_idx] = std::make_pair(
-                    cairns::BuildDrawKey(mat_id & 0x3FFFFFFFu, /*depth=*/0,
+                    // #220 Step 1: BuildDrawKey wants a uint32 material id;
+                    // feed it Handle::index (uint16; 0x3FFFFFFF mask is a
+                    // no-op but kept for shape parity with prior code).
+                    cairns::BuildDrawKey(static_cast<uint32_t>(mat_id.index) & 0x3FFFFFFFu,
+                                         /*depth=*/0,
                                          kMockTranslucency, kMockViewport,
                                          kMockViewportLayer, kMockFullscreenLayer),
                     stable_idx);
@@ -1811,18 +1819,22 @@ public:
 
     bool initRenderPipeline() {
         {
-            // set-2 per-material bind groups (portable path). Dense, indexed by
-            // MatId. Texture+sampler arrive via this group, not the global table.
-            material_bind_groups_.assign(materials_.size(),
-                                         rhi::Handle<rhi::BindGroup>::Null);
-            for (size_t m = 0; m < materials_.size(); ++m) {
-                const rhi::TextureBinding tb{0, materials_[m].color};
-                const rhi::SamplerBinding sb{0, materials_[m].sampler};
-                rhi::BindGroupDesc bgd{};
-                bgd.textures = std::span<const rhi::TextureBinding>(&tb, 1);
-                bgd.samplers = std::span<const rhi::SamplerBinding>(&sb, 1);
-                material_bind_groups_[m] = rhi_.resources.CreateBindGroup(bgd);
-            }
+            // #220 Step 1: set-2 per-material bind groups now live IN the
+            // material's Hot record (cairns::ResourceManager<LoadedMaterial>).
+            // Walk every live material; build its BindGroup from Cold's
+            // texture+sampler; store into Hot.set2. Replaces the parallel
+            // material_bind_groups_ vector that had a fragile size-parity
+            // invariant with materials_.
+            materials_.ForEachLive(
+                [&](cairns::LoadedMaterial::Hot& hot,
+                    cairns::LoadedMaterial::Cold& cold) {
+                    const rhi::TextureBinding tb{0, cold.color};
+                    const rhi::SamplerBinding sb{0, cold.sampler};
+                    rhi::BindGroupDesc bgd{};
+                    bgd.textures = std::span<const rhi::TextureBinding>(&tb, 1);
+                    bgd.samplers = std::span<const rhi::SamplerBinding>(&sb, 1);
+                    hot.set2 = rhi_.resources.CreateBindGroup(bgd);
+                });
         }
 
         {  // unlit graphics pipeline via rhi
@@ -2161,9 +2173,12 @@ private:
 
     std::vector<glm::mat4> debugSceneXforms_;
 
-    std::vector<cairns::LoadedMaterial> materials_;
-    // set-2 per-material bind groups, dense by MatId (NO hash). Built once at load.
-    std::vector<rhi::Handle<rhi::BindGroup>> material_bind_groups_;
+    // #220 Step 1: handle-pilled pool. Bind group lives on Hot;
+    // texture+sampler on Cold. Stale-slot reads fail at GetHot/GetCold
+    // instead of silently aliasing a recycled bind group, which the
+    // prior parallel material_bind_groups_ vector could not detect.
+    cairns::ResourceManager<cairns::LoadedMaterial> materials_;
+    // material_bind_groups_ DELETED -- set2 now lives in Hot.
 
     // Per-slot frame buffers (drawList / drawListSorted / proxies /
     // resident_textures / draw_world_matrices / pending_globals / globals_offset

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sampler.hpp"
+#include "core/handle.hpp"  // #220 Step 1: cairns::Handle / ResourceManager
 #include "rhi/resource_manager.hpp"
 #include "rhi/resources.hpp"
 
@@ -92,9 +93,19 @@ struct LoadedSampler {
     rhi::SamplerAddressMode addressModeV = rhi::SamplerAddressMode::Repeat;
 };
 
+// #220 Step 1: Aaltonen Hot/Cold split. Hot is what the recorder reads
+// every draw (the set-2 bind group only); Cold is the material's
+// constituent texture + sampler, read at bind-group-build time. Pooled
+// via cairns::ResourceManager<LoadedMaterial> on Engine; MatId is now
+// Handle<LoadedMaterial> instead of a bare uint32_t index.
 struct LoadedMaterial {
-    rhi::Handle<rhi::Texture> color;
-    rhi::Handle<rhi::Sampler> sampler;
+    struct Hot {
+        rhi::Handle<rhi::BindGroup> set2;
+    };
+    struct Cold {
+        rhi::Handle<rhi::Texture> color;
+        rhi::Handle<rhi::Sampler> sampler;
+    };
 };
 
 struct Scene {
@@ -113,7 +124,7 @@ struct Scene {
     // Bindless Registry Data
     std::vector<rhi::Handle<rhi::Texture>> textureHandles;
     std::vector<rhi::Handle<rhi::Sampler>> samplerHandles;
-    std::vector<uint32_t> materialIds;
+    std::vector<cairns::Handle<LoadedMaterial>> materialIds;  // #220 Step 1
 
     void CleanupTmps() {
         for ( size_t i = 0; i < loaded_textures.size(); ++i ) {
@@ -351,7 +362,8 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene) {
     return true;
 }
 
-inline void PrepareSceneResources(Scene& scene, rhi::Resources& rm, rhi::Allocator& alloc, std::vector<LoadedMaterial>& materials) {
+inline void PrepareSceneResources(Scene& scene, rhi::Resources& rm, rhi::Allocator& alloc,
+                                   cairns::ResourceManager<LoadedMaterial>& materials) {
     // Textures
     for (const auto& texDescIn : scene.loaded_textures) {
         rhi::TextureDesc d;
@@ -402,8 +414,13 @@ inline void PrepareSceneResources(Scene& scene, rhi::Resources& rm, rhi::Allocat
         uint32_t gltf_sampler_idx = scene.materialToSamplerIndex[i];
         auto t = scene.textureHandles[gltf_tex_idx];
         auto s = scene.samplerHandles[gltf_sampler_idx];
-        const uint32_t mat_id = static_cast<uint32_t>(materials.size());
-        materials.push_back(LoadedMaterial{t, s});
+        // #220 Step 1: acquire pool slot, populate Cold. Hot.set2 (the
+        // bind group) is filled in later by Engine::initRenderPipeline
+        // since it needs rhi_.frames/resources to build the descriptor.
+        const cairns::Handle<LoadedMaterial> mat_id = materials.Acquire();
+        LoadedMaterial::Cold* cold = materials.GetCold(mat_id);
+        cold->color = t;
+        cold->sampler = s;
         scene.materialIds.push_back(mat_id);
     }
 }

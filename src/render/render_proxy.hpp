@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/handle.hpp"  // #220 Step 1: cairns::Handle template
 #include "rhi/resource_manager.hpp"
 
 #include <glm/glm.hpp>
@@ -7,6 +8,10 @@
 #include <cstdint>
 
 namespace cairns {
+
+// #220 Step 1: forward-decl so PrimitiveProxy::material_id can be a
+// Handle<LoadedMaterial> without dragging in gltf_loader.hpp.
+struct LoadedMaterial;
 
 static constexpr uint32_t kInvalidSkin = 0xFFFFFFFFu;
 
@@ -37,7 +42,7 @@ struct PrimitiveProxy {
     uint32_t first_index = 0;
     uint32_t index_count = 0;
     int32_t vertex_offset = 0;
-    uint32_t material_id = 0;
+    cairns::Handle<LoadedMaterial> material_id;  // #220 Step 1 (was uint32_t)
 };
 
 struct LineProxy {

@@ -99,3 +99,53 @@ map, or I do not write it.
 > ❯ wait, did you do any verification of the thing you just completed?
 >
 > You're right, I didn't. Verifying right now.
+
+## Suggested a `std::pmr` allocator inside an engine
+
+During the #219 allocator sweep I hit the std::vector-with-custom-
+allocator type-propagation problem in `gltf_loader.hpp::PrepareSceneResources`
+and reached for `std::pmr::vector<LoadedMaterial>` + a
+`ChunkMemoryResource : std::pmr::memory_resource` as "the cheap fix."
+
+**Why this was wrong:**
+
+PMR was added to the standard library to solve a real problem in
+*generic library code that doesn't own its allocation strategy*. NOT
+engines. The audience for PMR is the author of a vendored container
+library who has to accept allocators provided by N downstream callers
+whose strategies they cannot know at compile time. They erase the
+allocator type behind a `memory_resource*` because they have no
+choice.
+
+In an engine — code you write, you measure, you tune — every
+allocation site has a *known* allocator. Engines don't have the
+cross-organization-library problem PMR solves. Reaching for PMR
+inside an engine is solving a problem you don't have, with a
+technique optimized for a different problem. You pay a virtual
+dispatch on every `allocate`/`deallocate` and you encode the
+admission "I don't know which allocator I'm using" into your types
+forever — when the real answer was "I should know exactly which
+allocator I'm using, and the right abstraction was probably never a
+vector in the first place."
+
+The user stopped and rejected the PMR suggestion because they have
+seen PMR ports fail 2-3 times over their career and have learned to
+distrust the STL in engine code. The heuristic is well-calibrated:
+
+> "I see a PMR, I halt and ask why this DSA needs runtime indirection
+> for memory behavior" is the right question because the answer is
+> almost always "it doesn't."
+
+In the #219 case the actual right answer was `ResourceManager<Material>`
++ `Handle<Material>` — the codebase's own handle-pool pattern, already
+used for `worlds_` and `assets_`. The vector was the wrong abstraction;
+PMR would have papered over the wrong abstraction with type erasure.
+
+**Rule:** if I find myself typing `std::pmr` inside cairns-gfx (or any
+engine codebase), HALT. Ask: "what's the underlying abstraction that
+needs runtime allocator indirection here?" The answer is almost always
+"there isn't one — I picked the wrong container." Default move is to
+look for an existing handle pool / typed pool / parallel arrays
+pattern in the codebase. Reach for PMR only with explicit per-instance
+user approval, and only after explaining why the engine's existing
+allocator discipline can't cover the case.
