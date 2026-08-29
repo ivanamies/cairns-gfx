@@ -8,6 +8,7 @@
 #include "engine/pick_selection.hpp"  // PickSelection + PickResult (C2 S6)
 #include "engine/scene_manager.hpp"  // SceneManager state (C2 S4)
 #include "engine/anim_skin_system.hpp"  // AnimSkinSystem state (C2 S2)
+#include "engine/viewport_manager.hpp"  // ViewportManager + kNumViewports (C2 S5)
 
 #include <array>
 #include <cmath>
@@ -1464,11 +1465,11 @@ public:
     // move_input.x = right(+) / left(-), .y = up(+) / down(-),
     // .z = forward(+) / back(-). Caller multiplies by dt + speed.
     void ApplyFlyMovement(const glm::vec3& move_input) {
-        if (cam_pose_override_) {
+        if (viewport_mgr_.cam_pose_override) {
             return;
         }
         cairns::FlyController& fc =
-            viewports_.GetCold(active_viewport_)->fly;
+            viewport_mgr_.pool.GetCold(viewport_mgr_.active)->fly;
         const float cy = std::cos(fc.yaw);
         const float sy = std::sin(fc.yaw);
         const float cp = std::cos(fc.pitch);
@@ -1486,18 +1487,18 @@ public:
     }
 
     void ApplyMouseLook(float dyaw, float dpitch) {
-        if (cam_pose_override_) {
+        if (viewport_mgr_.cam_pose_override) {
             return;
         }
         cairns::FlyController& fc =
-            viewports_.GetCold(active_viewport_)->fly;
+            viewport_mgr_.pool.GetCold(viewport_mgr_.active)->fly;
         fc.yaw += dyaw;
         // Clamp pitch just inside +/-pi/2 so forward never becomes degenerate.
         constexpr float kPitchLimit = 1.55334f;
         fc.pitch = std::clamp(fc.pitch + dpitch, -kPitchLimit, kPitchLimit);
     }
 
-    bool CamPoseOverridden() const { return cam_pose_override_; }
+    bool CamPoseOverridden() const { return viewport_mgr_.cam_pose_override; }
 
     // HUD stat injection seam (Tier G scenario 6: imgui stability). When set,
     // the imgui HUD draws from this value instead of live Timer accumulators
@@ -1606,10 +1607,10 @@ public:
     // Retarget where subsequent InstantiatePrefab* spawn (0 primary, 1 secondary).
     void UseScene(uint32_t index) { scene_mgr_.active = SceneByIndex(index); }
     bool SetViewportScene(int vp, uint32_t index) {
-        if (vp < 0 || vp >= active_viewport_count_) {
+        if (vp < 0 || vp >= viewport_mgr_.active_count) {
             return false;
         }
-        if (cairns::Viewport::Hot* vh = viewports_.GetHot(viewport_ids_[vp])) {
+        if (cairns::Viewport::Hot* vh = viewport_mgr_.pool.GetHot(viewport_mgr_.ids[vp])) {
             vh->scene = SceneByIndex(index);
             vh->camera_dirty = true;
             return true;
@@ -1617,10 +1618,10 @@ public:
         return false;
     }
     bool SetViewportParticles(int vp, bool on) {
-        if (vp < 0 || vp >= active_viewport_count_) {
+        if (vp < 0 || vp >= viewport_mgr_.active_count) {
             return false;
         }
-        if (cairns::Viewport::Cold* vc = viewports_.GetCold(viewport_ids_[vp])) {
+        if (cairns::Viewport::Cold* vc = viewport_mgr_.pool.GetCold(viewport_mgr_.ids[vp])) {
             vc->particles_enabled = on;
             return true;
         }
@@ -1628,15 +1629,15 @@ public:
     }
     bool SetViewportCamera(int vp, const glm::vec3& pos, float yaw,
                            float pitch) {
-        if (vp < 0 || vp >= active_viewport_count_) {
+        if (vp < 0 || vp >= viewport_mgr_.active_count) {
             return false;
         }
-        if (cairns::Viewport::Cold* vc = viewports_.GetCold(viewport_ids_[vp])) {
+        if (cairns::Viewport::Cold* vc = viewport_mgr_.pool.GetCold(viewport_mgr_.ids[vp])) {
             vc->fly.position = pos;
             vc->fly.yaw = yaw;
             vc->fly.pitch = pitch;
         }
-        if (cairns::Viewport::Hot* vh = viewports_.GetHot(viewport_ids_[vp])) {
+        if (cairns::Viewport::Hot* vh = viewport_mgr_.pool.GetHot(viewport_mgr_.ids[vp])) {
             vh->camera_dirty = true;
         }
         return true;
@@ -1693,7 +1694,7 @@ public:
 
     // #194 runtime viewport management. #220 Step 4: handle-pilled +
     // vpN wire-name layer.
-    int ActiveViewportCount() const { return active_viewport_count_; }
+    int ActiveViewportCount() const { return viewport_mgr_.active_count; }
 
     // Returns the engine-assigned monotonic name counter ("vp{N}" without
     // the prefix) or UINT32_MAX if at kNumViewports cap. Names are never
@@ -1701,32 +1702,32 @@ public:
     // in plan #220 Step 4). The RPC layer formats the result as "vp{N}"
     // on the wire.
     uint32_t OpenViewport() {
-        if (active_viewport_count_ >= kNumViewports) {
+        if (viewport_mgr_.active_count >= kNumViewports) {
             return UINT32_MAX;
         }
-        cairns::ViewportId id = viewports_.Acquire();
+        cairns::ViewportId id = viewport_mgr_.pool.Acquire();
         // Reused-slot trap: re-init both halves so a previously-released
         // slot doesn't carry over.
-        if (auto* h = viewports_.GetHot(id)) {
+        if (auto* h = viewport_mgr_.pool.GetHot(id)) {
             *h = cairns::Viewport::Hot{};
             h->scene = scene_mgr_.active;
         }
-        if (auto* c = viewports_.GetCold(id)) {
+        if (auto* c = viewport_mgr_.pool.GetCold(id)) {
             *c = cairns::Viewport::Cold{};
         }
-        const int idx = active_viewport_count_++;
-        viewport_ids_[idx] = id;
+        const int idx = viewport_mgr_.active_count++;
+        viewport_mgr_.ids[idx] = id;
         // Default rect: uniform tile across the swap pane until the agent
         // calls setLayout. Tiles add up to the full pane.
-        const float w = 1.0f / static_cast<float>(active_viewport_count_);
-        for (int v = 0; v < active_viewport_count_; ++v) {
-            viewports_.GetHot(viewport_ids_[v])->layout_rect =
+        const float w = 1.0f / static_cast<float>(viewport_mgr_.active_count);
+        for (int v = 0; v < viewport_mgr_.active_count; ++v) {
+            viewport_mgr_.pool.GetHot(viewport_mgr_.ids[v])->layout_rect =
                 glm::vec4(w * static_cast<float>(v), 0.0f, w, 1.0f);
         }
-        const uint32_t name = next_viewport_name_++;
-        // Append-sorted: next_viewport_name_ is monotonic so the new
+        const uint32_t name = viewport_mgr_.next_name++;
+        // Append-sorted: viewport_mgr_.next_name is monotonic so the new
         // counter is always the largest seen.
-        viewport_names_[viewport_names_count_++] = ViewportName{name, id};
+        viewport_mgr_.names[viewport_mgr_.names_count++] = ViewportName{name, id};
         return name;
     }
 
@@ -1734,30 +1735,30 @@ public:
     // below 1). Existing RPC takes no argument; this targets the last
     // opened viewport for backward compat with the protocol.
     bool CloseViewport() {
-        if (active_viewport_count_ <= 1) {
+        if (viewport_mgr_.active_count <= 1) {
             return false;
         }
-        const int last_idx = active_viewport_count_ - 1;
-        cairns::ViewportId id = viewport_ids_[last_idx];
-        viewports_.GetHot(id)->layout_rect = glm::vec4(0.0f);
-        viewport_ids_[last_idx] = cairns::ViewportId::Null;
-        --active_viewport_count_;
+        const int last_idx = viewport_mgr_.active_count - 1;
+        cairns::ViewportId id = viewport_mgr_.ids[last_idx];
+        viewport_mgr_.pool.GetHot(id)->layout_rect = glm::vec4(0.0f);
+        viewport_mgr_.ids[last_idx] = cairns::ViewportId::Null;
+        --viewport_mgr_.active_count;
         // Drop the name table entry for this id. The counter itself
         // remains burned (never reused) per the locked sub-decision.
-        for (uint8_t i = 0; i < viewport_names_count_; ++i) {
-            if (viewport_names_[i].id.index == id.index &&
-                viewport_names_[i].id.generation == id.generation) {
-                for (uint8_t j = i; j + 1 < viewport_names_count_; ++j) {
-                    viewport_names_[j] = viewport_names_[j + 1];
+        for (uint8_t i = 0; i < viewport_mgr_.names_count; ++i) {
+            if (viewport_mgr_.names[i].id.index == id.index &&
+                viewport_mgr_.names[i].id.generation == id.generation) {
+                for (uint8_t j = i; j + 1 < viewport_mgr_.names_count; ++j) {
+                    viewport_mgr_.names[j] = viewport_mgr_.names[j + 1];
                 }
-                --viewport_names_count_;
+                --viewport_mgr_.names_count;
                 break;
             }
         }
-        viewports_.Release(id);
-        const float w = 1.0f / static_cast<float>(active_viewport_count_);
-        for (int v = 0; v < active_viewport_count_; ++v) {
-            viewports_.GetHot(viewport_ids_[v])->layout_rect =
+        viewport_mgr_.pool.Release(id);
+        const float w = 1.0f / static_cast<float>(viewport_mgr_.active_count);
+        for (int v = 0; v < viewport_mgr_.active_count; ++v) {
+            viewport_mgr_.pool.GetHot(viewport_mgr_.ids[v])->layout_rect =
                 glm::vec4(w * static_cast<float>(v), 0.0f, w, 1.0f);
         }
         return true;
@@ -1766,10 +1767,10 @@ public:
     // Old int-indexed setLayout kept as a slot-position API for in-engine
     // callers; the wire layer uses SetViewportLayoutByName.
     bool SetViewportLayout(int viewport, glm::vec4 rect) {
-        if (viewport < 0 || viewport >= active_viewport_count_) {
+        if (viewport < 0 || viewport >= viewport_mgr_.active_count) {
             return false;
         }
-        viewports_.GetHot(viewport_ids_[viewport])->layout_rect = rect;
+        viewport_mgr_.pool.GetHot(viewport_mgr_.ids[viewport])->layout_rect = rect;
         return true;
     }
 
@@ -1777,12 +1778,12 @@ public:
     // search the sorted name table -> ViewportId. Returns Null on miss.
     cairns::ViewportId ResolveViewportName(uint32_t counter) const {
         int lo = 0;
-        int hi = static_cast<int>(viewport_names_count_);
+        int hi = static_cast<int>(viewport_mgr_.names_count);
         while (lo < hi) {
             const int mid = (lo + hi) / 2;
-            const uint32_t k = viewport_names_[mid].counter;
+            const uint32_t k = viewport_mgr_.names[mid].counter;
             if (k == counter) {
-                return viewport_names_[mid].id;
+                return viewport_mgr_.names[mid].id;
             }
             if (k < counter) {
                 lo = mid + 1;
@@ -1794,9 +1795,9 @@ public:
     }
 
     int FindViewportSlot(cairns::ViewportId id) const {
-        for (int i = 0; i < active_viewport_count_; ++i) {
-            if (viewport_ids_[i].index == id.index &&
-                viewport_ids_[i].generation == id.generation) {
+        for (int i = 0; i < viewport_mgr_.active_count; ++i) {
+            if (viewport_mgr_.ids[i].index == id.index &&
+                viewport_mgr_.ids[i].generation == id.generation) {
                 return i;
             }
         }
@@ -1808,16 +1809,16 @@ public:
         if (id.IsNull()) {
             return false;
         }
-        viewports_.GetHot(id)->layout_rect = rect;
+        viewport_mgr_.pool.GetHot(id)->layout_rect = rect;
         return true;
     }
 
     void SetActiveViewportSlot(int idx) {
-        if (idx < 0 || idx >= active_viewport_count_) {
+        if (idx < 0 || idx >= viewport_mgr_.active_count) {
             return;
         }
-        active_viewport_index_ = idx;
-        active_viewport_ = viewport_ids_[idx];
+        viewport_mgr_.active_index = idx;
+        viewport_mgr_.active = viewport_mgr_.ids[idx];
     }
 
     // ===== P4 selection / highlight / pick. Document-side state -- the
@@ -1974,10 +1975,10 @@ public:
     // input is then routed to that viewport on subsequent iterates.
     void SetActiveViewportFromClickX(float window_x) {
         const float half = static_cast<float>(FrameWidth()) /
-                            static_cast<float>(std::max(1, active_viewport_count_));
+                            static_cast<float>(std::max(1, viewport_mgr_.active_count));
         SetActiveViewportSlot((window_x < half) ? 0 : 1);
     }
-    int ActiveViewport() const { return active_viewport_index_; }
+    int ActiveViewport() const { return viewport_mgr_.active_index; }
 
     // Override the deterministic-particles seed (default kept at 42 to match
     // the existing CAIRNS_DUMP byte-gate). Must be called before
@@ -2187,24 +2188,24 @@ public:
     // cam_pose override walks the viewport pool. Idempotent: bails if
     // viewport 0 is already live.
     void InitInitialViewport() {
-        if (active_viewport_count_ > 0 && !viewport_ids_[0].IsNull()) {
+        if (viewport_mgr_.active_count > 0 && !viewport_mgr_.ids[0].IsNull()) {
             return;
         }
-        cairns::ViewportId id = viewports_.Acquire();
-        if (auto* h = viewports_.GetHot(id)) {
+        cairns::ViewportId id = viewport_mgr_.pool.Acquire();
+        if (auto* h = viewport_mgr_.pool.GetHot(id)) {
             *h = cairns::Viewport::Hot{};
             h->layout_rect = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
             h->scene = scene_mgr_.active;
         }
-        if (auto* c = viewports_.GetCold(id)) {
+        if (auto* c = viewport_mgr_.pool.GetCold(id)) {
             *c = cairns::Viewport::Cold{};
         }
-        viewport_ids_[0] = id;
-        active_viewport_count_ = 1;
-        active_viewport_ = id;
-        active_viewport_index_ = 0;
-        const uint32_t name = next_viewport_name_++;
-        viewport_names_[viewport_names_count_++] = ViewportName{name, id};
+        viewport_mgr_.ids[0] = id;
+        viewport_mgr_.active_count = 1;
+        viewport_mgr_.active = id;
+        viewport_mgr_.active_index = 0;
+        const uint32_t name = viewport_mgr_.next_name++;
+        viewport_mgr_.names[viewport_mgr_.names_count++] = ViewportName{name, id};
     }
     
     // #229 M0b: re-seat a default-constructed (malloc-fallback) block-backed
@@ -2236,13 +2237,13 @@ public:
         // (size==capacity -> span-hashable; counted in the budget). Caps are
         // upper bounds for the 600-GLB residency ceiling; exceeding one aborts
         // in Acquire (chunk-backed, never grows). InitInitialViewport now runs
-        // AFTER this (GreaterInit order) so viewports_ is chunk-backed too.
+        // AFTER this (GreaterInit order) so viewport_mgr_.pool is chunk-backed too.
         prefabs_.Reserve(cpu_block_, static_cast<uint16_t>(kPrefabResidencyCap));
         meshes_.Reserve(cpu_block_, 8192);
         materials_.Reserve(cpu_block_, 8192);
         skinning_.skins.Reserve(cpu_block_, 4096);
         scene_mgr_.pool.Reserve(cpu_block_, static_cast<uint16_t>(kMaxScenes));
-        viewports_.Reserve(cpu_block_, 16);
+        viewport_mgr_.pool.Reserve(cpu_block_, 16);
         scene_mgr_.assets.Pool().Reserve(cpu_block_, 1024);
         return true;
     }
@@ -2291,8 +2292,8 @@ public:
 
         // #220 Step 4: viewport pool must be set up BEFORE the cam_pose
         // override walks it. InitInitialViewport acquires vp0 and primes its
-        // layout / active_viewport_ / name table. Runs AFTER initResourceManagers
-        // so viewports_ is already Reserve'd onto cpu_block_ (chunk-backed).
+        // layout / viewport_mgr_.active / name table. Runs AFTER initResourceManagers
+        // so viewport_mgr_.pool is already Reserve'd onto cpu_block_ (chunk-backed).
         InitInitialViewport();
 
         // Pin every viewport's fly controller to the override pose so byte-
@@ -2301,14 +2302,14 @@ public:
         // P3 follow-up.
         if (engine_cfg_.cam_pose.has_value()) {
             const EngineConfig::CamPose& p = *engine_cfg_.cam_pose;
-            for (int vi = 0; vi < active_viewport_count_; ++vi) {
+            for (int vi = 0; vi < viewport_mgr_.active_count; ++vi) {
                 cairns::FlyController& fc =
-                    viewports_.GetCold(viewport_ids_[vi])->fly;
+                    viewport_mgr_.pool.GetCold(viewport_mgr_.ids[vi])->fly;
                 fc.position = glm::vec3(p.x, p.y, p.z);
                 fc.yaw = p.yaw;
                 fc.pitch = p.pitch;
             }
-            cam_pose_override_ = true;
+            viewport_mgr_.cam_pose_override = true;
         }
 
         if (!rhi_.device.Init(cfg)) {
@@ -2574,9 +2575,9 @@ public:
         // its scene handle is stale-null. Bind it now that scene_mgr_.active is
         // real -- the per-viewport draw fan-out (#195) extracts each viewport's
         // bound scene, so a stale bind renders nothing.
-        for (int v = 0; v < active_viewport_count_; ++v) {
+        for (int v = 0; v < viewport_mgr_.active_count; ++v) {
             if (cairns::Viewport::Hot* vh =
-                    viewports_.GetHot(viewport_ids_[v])) {
+                    viewport_mgr_.pool.GetHot(viewport_mgr_.ids[v])) {
                 vh->scene = scene_mgr_.active;
             }
         }
@@ -2750,7 +2751,7 @@ public:
         // bound against the matching offset. Aspect is (vp_w / vp_h) where
         // vp_w = FrameWidth() / kNumViewportsPerSlot (side-by-side split).
         const float vp_w = static_cast<float>(FrameWidth()) /
-                            static_cast<float>(std::max(1, active_viewport_count_));
+                            static_cast<float>(std::max(1, viewport_mgr_.active_count));
         const float vp_h = static_cast<float>(FrameHeight());
         const float aspect_ratio = vp_w / vp_h;
         const float fov = 90 * (std::numbers::pi / 180.0f);
@@ -2765,9 +2766,9 @@ public:
         // the active scene's registry. WorldTransform.world is the camera-
         // to-world matrix; the view matrix is its inverse.
         cairns::Scene::Cold* wc_cam = scene_mgr_.pool.GetCold(scene_mgr_.active);
-        for (int v = 0; v < active_viewport_count_; ++v) {
+        for (int v = 0; v < viewport_mgr_.active_count; ++v) {
             cairns::Viewport::Cold* vpc =
-                viewports_.GetCold(viewport_ids_[v]);
+                viewport_mgr_.pool.GetCold(viewport_mgr_.ids[v]);
             const entt::entity vp_cam_entity = vpc->camera_entity;
             const bool entity_cam =
                 vp_cam_entity != entt::null && wc_cam &&
@@ -2824,7 +2825,7 @@ public:
         // extract. Extract composes node.globalTransform * (world *
         // root_transform).
         // Fan-out: extract from EVERY world that any viewport binds to (set
-        // built from viewports_[].world; deduped via the scene_mgr_.pool pool's
+        // built from viewport_mgr_.pool[].world; deduped via the scene_mgr_.pool pool's
         // contiguous slot indices). The scene_mgr_.active's extract result lives
         // in s.proxies (the per-slot single draw list); secondary scenes'
         // proxies land in scene_mgr_.proxies[wh->proxy_slot] for downstream
@@ -2843,7 +2844,7 @@ public:
         // these, so two viewports on two scenes render different content.
         s.proxies.Reset(s.arena);
         s.scene_ranges_count = 0;
-        for (int v = 0; v < active_viewport_count_; ++v) {
+        for (int v = 0; v < viewport_mgr_.active_count; ++v) {
             s.viewport_scene_idx[v] = -1;
         }
         auto extract_scene_once = [&](cairns::SceneId sid) -> int {
@@ -2879,9 +2880,9 @@ public:
             r.draw_hi = 0;
             return static_cast<int>(k);
         };
-        for (int v = 0; v < active_viewport_count_; ++v) {
+        for (int v = 0; v < viewport_mgr_.active_count; ++v) {
             const cairns::SceneId wid =
-                viewports_.GetHot(viewport_ids_[v])->scene;
+                viewport_mgr_.pool.GetHot(viewport_mgr_.ids[v])->scene;
             s.viewport_scene_idx[v] = extract_scene_once(wid);
         }
 
@@ -3101,7 +3102,7 @@ public:
         PerSlot& s = slots_[pkt.slot];
         // 1. globals UBO -- one per viewport, distinct bump offsets. The
         // forward pass for viewport v binds s.globals_offset[v].
-        for (int v = 0; v < active_viewport_count_; ++v) {
+        for (int v = 0; v < viewport_mgr_.active_count; ++v) {
             void* gptr = rhi_.alloc.BumpAllocate(
                 sizeof(cairns::rhi::RenderPassGlobals), rhi_.alloc.UboAlign(),
                 rhi::Memory::kDynamic, &s.globals_offset[v]);
@@ -3109,9 +3110,9 @@ public:
             memcpy(gptr, &s.pending_globals[v], sizeof(cairns::rhi::RenderPassGlobals));
         }
         if (frame_ <= 6) {
-            const glm::mat4& vp = s.pending_globals[active_viewport_index_].view_proj;
+            const glm::mat4& vp = s.pending_globals[viewport_mgr_.active_index].view_proj;
             const float vp_w = static_cast<float>(FrameWidth()) /
-                                static_cast<float>(std::max(1, active_viewport_count_));
+                                static_cast<float>(std::max(1, viewport_mgr_.active_count));
             const float aspect_ratio = vp_w / static_cast<float>(FrameHeight());
             size_t entity_count = 0;
             if (auto* wc = scene_mgr_.pool.GetCold(scene_mgr_.active)) {
@@ -3170,7 +3171,7 @@ public:
         // flake the divergence is pure GPU execution (the next-phase target).
         if (golden_) {
             cairns::Fnv1a render;
-            for (int v = 0; v < active_viewport_count_; ++v) {
+            for (int v = 0; v < viewport_mgr_.active_count; ++v) {
                 render.Write(&s.pending_globals[v],
                              sizeof(cairns::rhi::RenderPassGlobals));
                 render.WritePod(s.globals_offset[v]);
@@ -3380,10 +3381,10 @@ public:
         // Fill packet header (the view into per-slot storage).
         s.pkt.frame_idx = frame_;
         s.pkt.slot = slot;
-        s.pkt.view = s.pending_view_matrix[active_viewport_index_];
+        s.pkt.view = s.pending_view_matrix[viewport_mgr_.active_index];
         s.pkt.proj = glm::mat4(1.0f);  // not used downstream; view_proj baked into pending_globals
-        s.pkt.near_z = s.pending_near_z[active_viewport_index_];
-        s.pkt.far_z = s.pending_far_z[active_viewport_index_];
+        s.pkt.near_z = s.pending_near_z[viewport_mgr_.active_index];
+        s.pkt.far_z = s.pending_far_z[viewport_mgr_.active_index];
         s.pkt.sim_steps_this_frame = sim_steps_this_frame_;
         s.pkt.fixed_dt = static_cast<float>(cairns::kFixedDt);
         // Wait for the previous frame's render-thread-published parity. In
@@ -3844,7 +3845,7 @@ public:
         const rhi::Handle<rhi::Shader> forward_pso =
             id_path ? unlit_offscreen_ : unlit_offscreen_noid_;
         std::array<rhi::MeshDrawList, kNumViewports> mls{};
-        for (int v = 0; v < active_viewport_count_; ++v) {
+        for (int v = 0; v < viewport_mgr_.active_count; ++v) {
             // #195 per-viewport scene: draws stays the FULL list (sorted_draws
             // holds global indices into it); sorted_draws is the sub-span for
             // this viewport's bound scene, so each viewport renders only its
@@ -3883,11 +3884,11 @@ public:
         const uint32_t fb_w = swap_target.width;
         const uint32_t fb_h = swap_target.height;
         // #194 vp_w/vp_h were sized off kNumViewports (uniform horizontal
-        // tiling cap). Now active_viewport_count_ at runtime; layout_rect
+        // tiling cap). Now viewport_mgr_.active_count at runtime; layout_rect
         // owns the per-viewport region. Today's default keeps vp_w = full
         // when active=1 -- byte-identical to the pre-#194 single-viewport
         // path.
-        const int n_live = std::max(1, active_viewport_count_);
+        const int n_live = std::max(1, viewport_mgr_.active_count);
         const uint32_t vp_w = fb_w / static_cast<uint32_t>(n_live);
         const uint32_t vp_h = fb_h;
         // #222 Phase A.1: id targets only allocated when this frame writes
@@ -4099,7 +4100,7 @@ public:
         std::array<rhi::GraphTexture, kNumViewports> color_off{};
         std::array<rhi::GraphTexture, kNumViewports> depth_off{};
         std::array<rhi::GraphTexture, kNumViewports> id_off{};
-        for (int v = 0; v < active_viewport_count_; ++v) {
+        for (int v = 0; v < viewport_mgr_.active_count; ++v) {
             const int vp_idx = v;
             const char* pass_name = (vp_idx == 0) ? "forward_vp0" : "forward_vp1";
             graph_->AddPass(
@@ -4146,7 +4147,7 @@ public:
                     // Viewport::Cold::particles_enabled gates each
                     // viewport's particle draw. G3 drives the per-vp split.
                     bool vp_particles = true;
-                    if (auto* vc = viewports_.GetCold(viewport_ids_[vp_idx])) {
+                    if (auto* vc = viewport_mgr_.pool.GetCold(viewport_mgr_.ids[vp_idx])) {
                         vp_particles = vc->particles_enabled;
                     }
                     if (particles_.enabled && vp_particles) {
@@ -4187,7 +4188,7 @@ public:
         const bool outline_on =
             editor_chrome_enabled_ && !picking_.highlights.empty();
         if (outline_on) {
-            for (int v = 0; v < active_viewport_count_; ++v) {
+            for (int v = 0; v < viewport_mgr_.active_count; ++v) {
                 const int vp_idx = v;
                 const char* pass_name =
                     (vp_idx == 0) ? "outline_vp0" : "outline_vp1";
@@ -4262,7 +4263,7 @@ public:
                                             : final_target_;
                 swap_tex = b.ImportTexture(swap_handle, td);
                 b.AddColorOutput("swapchain", swap_tex, rhi::LoadOp::kClear, clear);
-                for (int v = 0; v < active_viewport_count_; ++v) {
+                for (int v = 0; v < viewport_mgr_.active_count; ++v) {
                     // #207 swap reads outline_off when the outline pass ran
                     // this frame, else color_off. Both are sampled-readonly.
                     b.AddAttachmentInput(outline_on ? outline_off[v]
@@ -4273,7 +4274,7 @@ public:
             [&](rhi::CommandRecorder& cmd, const rhi::PassResources& res) {
                 std::array<rhi::Handle<rhi::Texture>, kNumViewports> vp_color{};
                 std::array<rhi::Handle<rhi::Texture>, kNumViewports> vp_depth{};
-                for (int v = 0; v < active_viewport_count_; ++v) {
+                for (int v = 0; v < viewport_mgr_.active_count; ++v) {
                     vp_color[v] = res.Resolve(outline_on ? outline_off[v]
                                                           : color_off[v]);
                     vp_depth[v] = res.Resolve(depth_off[v]);
@@ -4282,7 +4283,7 @@ public:
                 const float fb_fh = static_cast<float>(fb_h);
                 if (nested_graph_mode_) {
                   // depthviz panel: bottom-right, window aspect (scaled, not squished).
-                  const int vi = active_viewport_index_;
+                  const int vi = viewport_mgr_.active_index;
                   cmd.SetViewport(0.0f, 0.0f, fb_fw, fb_fh);
                   cmd.SetScissor(0, 0, fb_w, fb_h);
                   cmd.DrawFullscreen(
@@ -4312,9 +4313,9 @@ public:
                 // [0..1]. Default for vp 0 is full pane (1,1); follow-up
                 // viewports set their own rects via cairns.viewport.setLayout.
                 // Skip zero-area rects (uninitialised / disabled).
-                for (int v = 0; v < active_viewport_count_; ++v) {
+                for (int v = 0; v < viewport_mgr_.active_count; ++v) {
                     const glm::vec4& rect =
-                        viewports_.GetHot(viewport_ids_[v])->layout_rect;
+                        viewport_mgr_.pool.GetHot(viewport_mgr_.ids[v])->layout_rect;
                     if (rect.z <= 0.0f || rect.w <= 0.0f) {
                         continue;
                     }
@@ -4362,7 +4363,7 @@ public:
             fprintf(stderr, "[FLAKE-R] frame=%u slot=%u img=%u steps=%u",
                     frame_, pkt.slot, fc.swapchain_image_index,
                     pkt.sim_steps_this_frame);
-            for (int v = 0; v < active_viewport_count_; ++v) {
+            for (int v = 0; v < viewport_mgr_.active_count; ++v) {
                 const rhi::Handle<rhi::Texture> coff =
                     graph_->ResolveTexture(color_off[v]);
                 const rhi::Handle<rhi::Texture> doff =
@@ -4712,7 +4713,7 @@ public:
         // animation motion, test each plane. Skip the actor's anim_eval
         // record AND skinning_compute batch when fully outside.
         const glm::mat4& vp_for_cull =
-            s.pending_globals[active_viewport_index_].view_proj;
+            s.pending_globals[viewport_mgr_.active_index].view_proj;
         glm::vec4 cull_planes[6];
         {
             const glm::mat4 m = glm::transpose(vp_for_cull);
@@ -5827,44 +5828,28 @@ private:
     // scene-id trio grouped in SceneManager (C2 S4).
     cairns::SceneManager scene_mgr_;
 
-    // #220 Step 4: handle-pilled Viewport pool. viewports_ owns Hot+Cold;
-    // viewport_ids_[0..active_viewport_count_) carry the slot ordering
+    // #220 Step 4: handle-pilled Viewport pool. viewport_mgr_.pool owns Hot+Cold;
+    // viewport_mgr_.ids[0..viewport_mgr_.active_count) carry the slot ordering
     // (preserves the [0..N) layout/indexing semantics the rest of the
     // engine uses to address PerSlot::pending_globals[], id_target_[],
     // etc.). FlyController moved into Viewport::Cold (was fly_ parallel
     // array; reason "fly is parallel so Viewport struct can grow" is moot
     // once Viewport is in a generational pool).
     //
-    // active_viewport_ is now the ViewportId of the focused viewport.
-    // active_viewport_index_ caches its position in viewport_ids_ so the
+    // viewport_mgr_.active is now the ViewportId of the focused viewport.
+    // viewport_mgr_.active_index caches its position in viewport_mgr_.ids so the
     // PerSlot per-viewport arrays can still be indexed by int. Both fields
     // are updated together via setActiveViewport().
     //
-    // #194: compile-time cap on simultaneous viewports. active_viewport_count_
+    // #194: compile-time cap on simultaneous viewports. viewport_mgr_.active_count
     // (runtime) tells the engine how many slots are LIVE. Default = 1 (full-
     // frame viewport 0). Grow via cairns.viewport.open / shrink via
     // cairns.viewport.close. Layout rects on Viewport::Hot::layout_rect
     // (NDC 0..1 over the swap pane) describe where each live viewport tiles.
-    static constexpr int kNumViewports = 4;
-    cairns::ResourceManager<cairns::Viewport> viewports_;
-    std::array<cairns::ViewportId, kNumViewports> viewport_ids_{};
-    cairns::ViewportId active_viewport_;
-    int active_viewport_index_ = 0;
-    int active_viewport_count_ = 1;  // #194 runtime-live count, default 1
-    bool cam_pose_override_ = false;
-
-    // #220 Step 4 vpN wire-name layer. Engine-assigned monotonic counter
-    // ("vp0", "vp1", ...); names never reused for the lifetime of the
-    // engine process. Sorted-vector mapping (small N, binary search). The
-    // RPC layer (scene_ops.cpp) is the only consumer; everywhere internal
-    // uses ViewportId.
-    struct ViewportName {
-        uint32_t counter = 0;
-        cairns::ViewportId id;
-    };
-    std::array<ViewportName, kNumViewports> viewport_names_{};
-    uint8_t viewport_names_count_ = 0;
-    uint32_t next_viewport_name_ = 0;
+    // Viewport pool + id/name tables + active index/count + vpN counter
+    // grouped in ViewportManager (C2 S5); kNumViewports + ViewportName now
+    // live in the shared header engine/viewport_manager.hpp.
+    cairns::ViewportManager viewport_mgr_;
 
     // #210 per-slot CPU arena capacity. #221 Phase 3 raise to 16 MiB to
     // cover the per-frame palette/InstanceMeta/SkinMeshBatch arrays the
