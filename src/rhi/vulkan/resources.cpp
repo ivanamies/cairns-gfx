@@ -749,6 +749,24 @@ Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
             ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC
             : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     };
+    // #222 Phase D.3 fix: vk descriptor-set / pipeline-layout compatibility
+    // requires stage flags to match exactly (VUID-00358). Translate the
+    // ShaderStage bitset so callers' explicit stages (kStageCompute for
+    // skin/anim_eval/particle; Vertex|Fragment for unlit globals/drawtmp)
+    // land on the layout binding.
+    auto pick_stages = [](const DynamicBinding& b) -> VkShaderStageFlags {
+        VkShaderStageFlags f = 0;
+        if (b.stages & kStageVertex) {
+            f |= VK_SHADER_STAGE_VERTEX_BIT;
+        }
+        if (b.stages & kStageFragment) {
+            f |= VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+        if (b.stages & kStageCompute) {
+            f |= VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        return f;
+    };
     std::vector<VkDescriptorSetLayoutBinding> vk_bindings;
     vk_bindings.reserve(desc.bindings.size());
     for (const DynamicBinding& b : desc.bindings) {
@@ -756,7 +774,7 @@ Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
         vb.binding = b.slot;
         vb.descriptorType = pick_type(b);
         vb.descriptorCount = 1;
-        vb.stageFlags = VK_SHADER_STAGE_ALL;
+        vb.stageFlags = pick_stages(b);
         vk_bindings.push_back(vb);
     }
     VkDescriptorSetLayoutCreateInfo lci{};

@@ -49,6 +49,9 @@ EngineConfig LoadEngineConfigFromEnv() {
     if (const char* p = std::getenv("CAIRNS_SCALE")) {
         cfg.entity_scale = static_cast<float>(std::atof(p));
     }
+    if (const char* p = std::getenv("CAIRNS_HERO_SLICES")) {
+        cfg.hero_slices = std::atoi(p);
+    }
     if (const char* p = std::getenv("CAIRNS_SKIN_MODE")) {
         cfg.skin_probe_mode = static_cast<uint32_t>(std::atoi(p));
     }

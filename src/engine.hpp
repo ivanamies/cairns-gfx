@@ -110,6 +110,11 @@ struct EngineConfig {
     // CAIRNS_SCALE: per-entity scale override. 0 = engine default.
     float entity_scale = 0.0f;
 
+    // CAIRNS_HERO_SLICES: how many entity instances to spawn per loaded
+    // GLB when entity_count is not explicitly set. 0 falls back to the
+    // engine default (1: one hero per GLB).
+    int hero_slices = 0;
+
     uint32_t skin_probe_mode = 0;
 };
 
@@ -793,6 +798,8 @@ public:
             gb.slot = 0;
             gb.kind = cairns::rhi::BufferKind::kUniform;
             gb.max_range = sizeof(cairns::rhi::RenderPassGlobals);
+            gb.stages = static_cast<cairns::rhi::ShaderStage>(
+                cairns::rhi::kStageVertex | cairns::rhi::kStageFragment);
             cairns::rhi::DynamicBuffersDesc gd{};
             gd.debug_name = "dyn_globals";
             gd.bindings =
@@ -803,6 +810,8 @@ public:
             db.slot = 0;
             db.kind = cairns::rhi::BufferKind::kUniform;
             db.max_range = sizeof(cairns::rhi::DrawTmp);
+            db.stages = static_cast<cairns::rhi::ShaderStage>(
+                cairns::rhi::kStageVertex | cairns::rhi::kStageFragment);
             cairns::rhi::DynamicBuffersDesc dd{};
             dd.debug_name = "dyn_drawtmp";
             dd.bindings =
@@ -843,10 +852,17 @@ public:
                     }
                 }
             } else {
-                // Range invariant is enforced at compile time by a
-                // static_assert in debug_asset.hpp. Hit the exact count or die.
+                // CAIRNS_N caps the GLB load count too (matches the entity
+                // count cap below): N entities should mean N GLBs loaded,
+                // not 100 GLBs and N entities. Clamped to the static
+                // kDebugGlbs window.
+                const size_t want = engine_cfg_.entity_count > 0
+                    ? std::min<size_t>(
+                          static_cast<size_t>(engine_cfg_.entity_count),
+                          cairns::kDebugGlbsToParse)
+                    : cairns::kDebugGlbsToParse;
                 for (size_t glb_idx = cairns::kDebugGlbsToParseStart;
-                     glb_idx < cairns::kDebugGlbsToParseStart + cairns::kDebugGlbsToParse;
+                     glb_idx < cairns::kDebugGlbsToParseStart + want;
                      ++glb_idx) {
                     std::filesystem::path filepath;
                     if (!cairns::GetStaticResourceFilepath(cairns::kDebugGlbs[glb_idx],
@@ -858,11 +874,16 @@ public:
                 }
             }
 
-            const int kHeroSlices = 33;
+            // CAIRNS_HERO_SLICES picks the per-GLB instance fan-out for
+            // the default-count path. Default is 1 (one entity per loaded
+            // GLB) so "load N GLBs" matches "see N heroes" without
+            // surprise multiplication.
+            const int hero_slices =
+                engine_cfg_.hero_slices > 0 ? engine_cfg_.hero_slices : 1;
             const int loaded_heroes = static_cast<int>(glb_paths.size());
             const int instance_count = engine_cfg_.entity_count > 0
                                             ? engine_cfg_.entity_count
-                                            : loaded_heroes * kHeroSlices;
+                                            : loaded_heroes * hero_slices;
             const int grid_n = std::max(
                 1, static_cast<int>(std::ceil(std::sqrt(
                        static_cast<float>(instance_count)))));
@@ -1192,6 +1213,9 @@ public:
         // master fallback.
         if (!skin_kernel_.IsNull() && !skin_output_pool_buffer_.IsNull()) {
             cairns::rhi::DynamicBinding gb[4]{};
+            for (uint32_t i = 0; i < 4; ++i) {
+                gb[i].stages = cairns::rhi::kStageCompute;
+            }
             gb[0].slot = 0;
             gb[0].kind = cairns::rhi::BufferKind::kUniform;
             gb[0].max_range = 64u;
@@ -1231,6 +1255,9 @@ public:
                 ae_inverse_binds_buf_, world_scratch_buf_, palette_out_buf_,
             };
             cairns::rhi::DynamicBinding ae_b[13]{};
+            for (uint32_t i = 0; i < 13; ++i) {
+                ae_b[i].stages = cairns::rhi::kStageCompute;
+            }
             ae_b[0].slot = 0;
             ae_b[0].kind = cairns::rhi::BufferKind::kUniform;
             ae_b[0].max_range = 16384u;
@@ -2966,7 +2993,7 @@ public:
                     sizeof(uint32_t) * kBucketCap);
 
         uint32_t total_actors = 0;
-        bool capped_this_frame = false;
+        uint32_t dropped_actors = 0;
         for (auto e : view) {
             const cairns::SkinRef& sr = view.get<const cairns::SkinRef>(e);
             auto* sh = skins_.GetHot(sr.id);
@@ -2987,18 +3014,25 @@ public:
                     continue;
                 }
             }
+            // Cap-hit: don't break -- keep counting drops so the report
+            // shows the real shortfall, not just "we stopped here."
             if (total_actors >= kAnimActorsCap) {
-                capped_this_frame = true;
-                break;
+                ++dropped_actors;
+                continue;
             }
             ++mesh_actor_count[sh->mesh.index];
             ++total_actors;
         }
-        if (capped_this_frame && !anim_actors_cap_warned_) {
+        if (dropped_actors > 0) {
+            // Loud every-frame report via CAIRNS_PRINT_ERR so Android
+            // logcat surfaces it at ERROR level (the silent latch-once
+            // hid that a large fraction of actors were dropping to bind
+            // pose). Animated + dropped quoted so the shortfall is obvious.
+            CAIRNS_PRINT_ERR(
+                "[ANIM-CAP] BuildSkinFrame slot=%u: hit kAnimActorsCap=%u; "
+                "animated=%u dropped=%u (raise cap or lower hero count)\n",
+                slot, kAnimActorsCap, total_actors, dropped_actors);
             anim_actors_cap_warned_ = true;
-            CAIRNS_PRINT("BuildSkinFrame: skinned actors exceeded "
-                         "kAnimActorsCap=%u; clamping (latched once).\n",
-                         kAnimActorsCap);
         }
         if (total_actors == 0) {
             return;
@@ -3335,6 +3369,9 @@ public:
            // Bindings 1+2 = SSBO over particle_ssbo_[A]/[B] no-dyn.
             for (uint32_t p = 0; p < 2; ++p) {
                 cairns::rhi::DynamicBinding pb[3]{};
+                for (uint32_t i = 0; i < 3; ++i) {
+                    pb[i].stages = cairns::rhi::kStageCompute;
+                }
                 pb[0].slot = 0;
                 pb[0].kind = cairns::rhi::BufferKind::kUniform;
                 pb[0].max_range = sizeof(float);
