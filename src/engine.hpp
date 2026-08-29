@@ -28,6 +28,7 @@
 #include "util/material_gpu.hpp"
 #include "util/scene_gpu.hpp"
 #include "util/timer.hpp"
+#include "util/imgui_snapshot.hpp"
 #include "util/log.hpp"
 #include "scene/scene_world.hpp"
 #include "render/frame_packet.hpp"
@@ -84,6 +85,7 @@ public:
         float pending_far_z = 100.0f;
         uint32_t globals_offset = 0;
         uint32_t dt_off = 0;
+        cairns::ImDrawDataSnapshot imgui_snapshot;
         cairns::FramePacket pkt{};
 
         explicit PerSlot(cairns::Arena& a)
@@ -565,11 +567,10 @@ public:
             ImGui::End();
             ImGui::PopStyleColor(4);
             ImGui::Render();
-            // For now, packet carries ImGui's live draw data pointer. The
-            // deep-copy snapshot lands in commit 5 -- until then the render
-            // path runs synchronously so the pointer is still valid.
-            s.pkt.imgui_snapshot = ImGui::GetDrawData();
+            cairns::SnapshotImDrawData(ImGui::GetDrawData(), s.imgui_snapshot);
+            s.pkt.imgui_snapshot = &s.imgui_snapshot.data;
         } else {
+            s.imgui_snapshot.Clear();
             s.pkt.imgui_snapshot = nullptr;
         }
 
