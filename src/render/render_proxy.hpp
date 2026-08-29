@@ -16,9 +16,9 @@ namespace cairns {
 struct LoadedMaterial;
 // #221 Phase 3: forward-decl for SkinnedAttachment::Hot::mesh handle.
 struct Mesh;
-// #221 Phase 3: SceneId forward-pass (real def in asset_registry.hpp).
-struct Scene;
-using SceneId = Handle<Scene>;
+// #221 Phase 3: PrefabId forward-pass (real def in asset_registry.hpp).
+struct Prefab;
+using PrefabId = Handle<Prefab>;
 
 static constexpr uint32_t kInvalidSkin = 0xFFFFFFFFu;
 
@@ -94,9 +94,9 @@ struct SkinnedAttachment {
         // Mesh the slice was sized for; kernel uses mesh.vert_count.
         cairns::Handle<Mesh> mesh;
         // #222 Phase H.5: cached at skin-create so BuildSkinFrame avoids
-        // skins_.GetCold + scenes_.GetHot + scenes_.GetCold per actor
+        // skins_.GetCold + prefabs_.GetHot + prefabs_.GetCold per actor
         // per frame. UINT32_MAX means scene not registered with anim_eval.
-        uint32_t gpu_scene_header_idx = UINT32_MAX;
+        uint32_t gpu_prefab_header_idx = UINT32_MAX;
         float gpu_clip_duration = 1.0f;
         // #222 Phase E.6: per-actor stream-0 alias of skin_output_pool_
         // pre-offset by (pool_base + slice.offset * 16). Skinned draws
@@ -105,7 +105,7 @@ struct SkinnedAttachment {
         rhi::Handle<rhi::Buffer> pos_stream = rhi::Handle<rhi::Buffer>::Null;
     };
     struct Cold {
-        cairns::SceneId scene;
+        cairns::PrefabId scene;
         uint32_t skin_index = 0;
         // #222 Phase H.5: clip_index demoted; not read on the per-frame
         // GPU eval path (the scene header carries the channel/sampler

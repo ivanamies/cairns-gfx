@@ -20,11 +20,11 @@ namespace cairns {
 // (matches old extract; skinning lands at P8).
 // #220 Steps 2+3: meshes and scenes are engine-owned pools. Pool
 // references threaded through so the inner walk can resolve each
-// Asset::cpu_graph (now SceneId) to Scene::Hot+Cold and each Scene
+// Asset::cpu_graph (now PrefabId) to Prefab::Hot+Cold and each Scene
 // mesh entry (MeshId) to Mesh::Hot.
 inline void ExtractFromWorld(World::Cold& wc, const glm::mat4& root,
                              AssetRegistry& assets,
-                             cairns::ResourceManager<Scene>& scenes_pool,
+                             cairns::ResourceManager<Prefab>& prefabs_pool,
                              cairns::ResourceManager<Mesh>& meshes_pool,
                              RenderProxyArrays& out) {
     out.Clear();
@@ -65,9 +65,9 @@ inline void ExtractFromWorld(World::Cold& wc, const glm::mat4& root,
         if (!ac || ac->cpu_graph.IsNull()) {
             continue;
         }
-        // #220 Step 3: cpu_graph is a SceneId; resolve to Hot+Cold.
-        Scene::Hot* shot = scenes_pool.GetHot(ac->cpu_graph);
-        Scene::Cold* scold = scenes_pool.GetCold(ac->cpu_graph);
+        // #220 Step 3: cpu_graph is a PrefabId; resolve to Hot+Cold.
+        Prefab::Hot* shot = prefabs_pool.GetHot(ac->cpu_graph);
+        Prefab::Cold* scold = prefabs_pool.GetCold(ac->cpu_graph);
         if (!shot || !scold) {
             continue;
         }

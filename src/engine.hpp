@@ -213,14 +213,14 @@ public:
 
     // #269: spawn one hero entity in active_world_ from a pre-loaded
     // scene. Returns the new entt entity id (0 on failure: bad
-    // scene_idx, no active world, scene_ids_ not populated, etc.).
+    // scene_idx, no active world, prefab_ids_ not populated, etc.).
     // Caller supplies the full world transform; rendered immediately
     // next frame. SkinRef is opportunistically attached via
     // TryCreateSkinForScene (so [SKIN-FAIL] logs cover the failure modes).
     uint32_t SpawnHero(uint32_t scene_idx, const glm::mat4& world,
                         float time_phase) {
-        if (scene_idx >= scene_ids_.size() ||
-            scene_idx >= per_scene_asset_.size()) {
+        if (scene_idx >= prefab_ids_.size() ||
+            scene_idx >= per_prefab_asset_.size()) {
             return 0;
         }
         cairns::World::Cold* wc = worlds_.GetCold(active_world_);
@@ -233,14 +233,14 @@ public:
         wt.world = world;
         reg.emplace<cairns::WorldTransform>(e, wt);
         cairns::AssetRef ar;
-        ar.asset = per_scene_asset_[scene_idx];
+        ar.asset = per_prefab_asset_[scene_idx];
         reg.emplace<cairns::AssetRef>(e, ar);
         cairns::Renderable rdr;
         rdr.layer_mask = 0xFFFFFFFFu;
         rdr.flags = cairns::kProxyVisible;
         reg.emplace<cairns::Renderable>(e, rdr);
         cairns::SkinId sid =
-            TryCreateSkinForScene(scene_ids_[scene_idx], time_phase);
+            TryCreateSkinForScene(prefab_ids_[scene_idx], time_phase);
         if (!sid.IsNull()) {
             reg.emplace<cairns::SkinRef>(e, cairns::SkinRef{sid});
         }
@@ -254,7 +254,7 @@ public:
     // #269: how many scenes (GLBs) loaded; clients call SpawnHero with
     // scene_idx in [0, NumScenes()). Lets the NDJSON op validate args.
     uint32_t NumScenes() const {
-        return static_cast<uint32_t>(scene_ids_.size());
+        return static_cast<uint32_t>(prefab_ids_.size());
     }
 
     // #269: bind-pose extent (max axis component of aabb_max - aabb_min)
@@ -262,11 +262,11 @@ public:
     // to when picking per-actor scale so heroes occupy a uniform cell
     // on screen. Returns 0 if scene_idx is out of range, no mesh has a
     // bind-pose AABB, or the AABB is degenerate.
-    float SceneMeshExtentMax(uint32_t scene_idx) {
-        if (scene_idx >= scene_ids_.size()) {
+    float PrefabExtentMax(uint32_t scene_idx) {
+        if (scene_idx >= prefab_ids_.size()) {
             return 0.0f;
         }
-        cairns::Scene::Hot* shot = scenes_.GetHot(scene_ids_[scene_idx]);
+        cairns::Prefab::Hot* shot = prefabs_.GetHot(prefab_ids_[scene_idx]);
         if (!shot) {
             return 0.0f;
         }
@@ -1002,27 +1002,27 @@ public:
             }
 
             for (const std::filesystem::path& filepath : glb_paths) {
-                // #220 Step 3: Acquire SceneId, write Hot+Cold via pool.
-                cairns::SceneId sid = scenes_.Acquire();
-                scene_ids_.push_back(sid);
-                cairns::Scene::Hot* shot = scenes_.GetHot(sid);
-                cairns::Scene::Cold* scold = scenes_.GetCold(sid);
-                if (!cairns::LoadSceneFromGltf(filepath, *shot, *scold, meshes_)) {
+                // #220 Step 3: Acquire PrefabId, write Hot+Cold via pool.
+                cairns::PrefabId sid = prefabs_.Acquire();
+                prefab_ids_.push_back(sid);
+                cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
+                cairns::Prefab::Cold* scold = prefabs_.GetCold(sid);
+                if (!cairns::LoadPrefabFromGltf(filepath, *shot, *scold, meshes_)) {
                     return false;
                 }
-                cairns::PrepareSceneResources(*shot, *scold, rhi_.resources,
+                cairns::PreparePrefabResources(*shot, *scold, rhi_.resources,
                                               rhi_.alloc, materials_);
             }
 
-            if (!cairns::rhi::LoadScenesGpu(
-                    std::span<const cairns::SceneId>(scene_ids_.data(),
-                                                       scene_ids_.size()),
-                    scenes_, meshes_, rhi_.resources, rhi_.alloc,
+            if (!cairns::rhi::LoadPrefabsGpu(
+                    std::span<const cairns::PrefabId>(prefab_ids_.data(),
+                                                       prefab_ids_.size()),
+                    prefabs_, meshes_, rhi_.resources, rhi_.alloc,
                     &shared_skin_attrs_buf_)) {
                 return false;
             }
             // #222 Phase H.4: skin_attrs_buffer no longer rides on
-            // Mesh::Hot -- LoadScenesGpu returns it via out param.
+            // Mesh::Hot -- LoadPrefabsGpu returns it via out param.
 
             // #221 Phase 9 (vk): per-skinned-mesh Group A descriptor set.
             // Allocates one set + writes 2 SSBO descriptors per skinned
@@ -1078,8 +1078,8 @@ public:
                 uint32_t max_joints = 0;
                 uint32_t max_nodes = 0;
                 uint32_t scene_count = 0;
-                scenes_.ForEachLive(
-                    [&](cairns::Scene::Hot&, cairns::Scene::Cold& c) {
+                prefabs_.ForEachLive(
+                    [&](cairns::Prefab::Hot&, cairns::Prefab::Cold& c) {
                         ++scene_count;
                         if (c.nodes.size() > max_nodes) {
                             max_nodes = static_cast<uint32_t>(c.nodes.size());
@@ -1100,8 +1100,8 @@ public:
             }
 
             // #220 Step 3: per-Scene Cold CleanupTmps via the pool sweep.
-            scenes_.ForEachLive(
-                [](cairns::Scene::Hot&, cairns::Scene::Cold& c) {
+            prefabs_.ForEachLive(
+                [](cairns::Prefab::Hot&, cairns::Prefab::Cold& c) {
                     c.CleanupTmps();
                 });
             // #220 Step 2: clear every Mesh's CPU temporaries in the pool
@@ -1114,11 +1114,11 @@ public:
                     c.cpuIndices.clear();
                 });
         }
-        if (!scene_ids_.empty()) {
-            cairns::Scene::Hot* s0_hot =
-                scenes_.GetHot(scene_ids_[0]);
+        if (!prefab_ids_.empty()) {
+            cairns::Prefab::Hot* s0_hot =
+                prefabs_.GetHot(prefab_ids_[0]);
             if (s0_hot && !s0_hot->meshes.empty()) {
-                // #220 Step 2: lookup via pool. scene_ids_[0]'s meshes[0]
+                // #220 Step 2: lookup via pool. prefab_ids_[0]'s meshes[0]
                 // is a MeshId; the actual posHandle is in the pool's Hot.
                 mesh_master_handle_ =
                     meshes_.GetHot(s0_hot->meshes[0])->posHandle;
@@ -1129,7 +1129,7 @@ public:
         // AssetRegistry, then create one entity per debug-grid xform in
         // the active world's registry. SceneEntity / SceneWorld are
         // gone -- the entt::registry IS the source of truth.
-        if (!scene_ids_.empty()) {
+        if (!prefab_ids_.empty()) {
             // Pre-allocate hot/cold cells up to kMaxWorlds so Acquire
             // doesn't trigger a vector growth that would move
             // World::Cold and invalidate any cached pointers. The
@@ -1142,25 +1142,25 @@ public:
 
             // Shared GPU buffer handles -- all GLBs alias the same
             // packed buffer-set (see scene_gpu.hpp).
-            // #220 Step 3: resolve through scene_ids_[0] -> Scene::Hot.
-            cairns::Scene::Hot* s0_hot_b =
-                scenes_.GetHot(scene_ids_[0]);
+            // #220 Step 3: resolve through prefab_ids_[0] -> Prefab::Hot.
+            cairns::Prefab::Hot* s0_hot_b =
+                prefabs_.GetHot(prefab_ids_[0]);
             const cairns::Mesh::Hot* m0_hot =
                 meshes_.GetHot(s0_hot_b->meshes[0]);
             const auto pos_handle = m0_hot->posHandle;
             const auto attr_handle = m0_hot->attrHandle;
             const auto idx_handle = m0_hot->indexHandle;
 
-            // #269: per_scene_asset_ promoted to engine member so
+            // #269: per_prefab_asset_ promoted to engine member so
             // SpawnHero can resolve AssetRef post-init without
             // reconstructing.
-            per_scene_asset_.clear();
-            per_scene_asset_.reserve(scene_ids_.size());
-            for (size_t s_idx = 0; s_idx < scene_ids_.size(); ++s_idx) {
-                // #220 Step 3: AssetRegistry registers by SceneId.
-                per_scene_asset_.push_back(
+            per_prefab_asset_.clear();
+            per_prefab_asset_.reserve(prefab_ids_.size());
+            for (size_t s_idx = 0; s_idx < prefab_ids_.size(); ++s_idx) {
+                // #220 Step 3: AssetRegistry registers by PrefabId.
+                per_prefab_asset_.push_back(
                     assets_.RegisterExistingScene(
-                        static_cast<uint32_t>(s_idx), scene_ids_[s_idx],
+                        static_cast<uint32_t>(s_idx), prefab_ids_[s_idx],
                         pos_handle, attr_handle, idx_handle));
             }
 
@@ -1229,14 +1229,14 @@ public:
         initAnimEvalKernel();  // best-effort; failure -> GPU palette eval off.
         uploadAnimTablesGpu();  // flattens + uploads all scene tables.
         // #222 Phase H.5: skins were Acquired BEFORE this call, so their
-        // cached gpu_scene_header_idx (UINT32_MAX) is stale. Backfill from
+        // cached gpu_prefab_header_idx (UINT32_MAX) is stale. Backfill from
         // each skin's scene now that the headers exist.
         skins_.ForEachLive(
             [&](cairns::SkinnedAttachment::Hot& h,
                 cairns::SkinnedAttachment::Cold& c) {
-                cairns::Scene::Hot* sht = scenes_.GetHot(c.scene);
+                cairns::Prefab::Hot* sht = prefabs_.GetHot(c.scene);
                 if (sht) {
-                    h.gpu_scene_header_idx = sht->gpu_scene_header_idx;
+                    h.gpu_prefab_header_idx = sht->gpu_prefab_header_idx;
                 }
             });
         // #222 Phase H.6: textureHandles never change after scene load;
@@ -1244,8 +1244,8 @@ public:
         // draw() drops its arena alloc + copy and just points the packet
         // span at this vector. Same content, just hoisted.
         resident_textures_.clear();
-        for (cairns::SceneId sid : scene_ids_) {
-            cairns::Scene::Cold* scold = scenes_.GetCold(sid);
+        for (cairns::PrefabId sid : prefab_ids_) {
+            cairns::Prefab::Cold* scold = prefabs_.GetCold(sid);
             if (!scold) {
                 continue;
             }
@@ -1463,7 +1463,7 @@ public:
             cairns::PropagateTransforms(*wc, glm::mat4(1.0f));
             if (wid.index == active_world_.index) {
                 cairns::ExtractFromWorld(*wc, wh->root_transform, assets_,
-                                         scenes_, meshes_, s.proxies);
+                                         prefabs_, meshes_, s.proxies);
             } else {
                 if (wh->proxy_slot < world_proxies_.size()) {
                     // #219 Chunk B: secondary-world proxies share this CPU
@@ -1472,7 +1472,7 @@ public:
                     // world_proxies_[i] exists yet (#194/#190 path stub).
                     world_proxies_[wh->proxy_slot].Reset(s.arena, 2048, 8192);
                     cairns::ExtractFromWorld(*wc, wh->root_transform, assets_,
-                                             scenes_, meshes_,
+                                             prefabs_, meshes_,
                                              world_proxies_[wh->proxy_slot]);
                 }
             }
@@ -1493,7 +1493,7 @@ public:
                     wh_a->root_transform = rot_matrix;
                     cairns::PropagateTransforms(*wc_a, glm::mat4(1.0f));
                     cairns::ExtractFromWorld(*wc_a, wh_a->root_transform,
-                                             assets_, scenes_, meshes_,
+                                             assets_, prefabs_, meshes_,
                                              s.proxies);
                 }
             }
@@ -1876,7 +1876,7 @@ public:
         std::sort(s.drawListSorted.begin(), s.drawListSorted.end());
 
         // #219 Chunk A: count-then-allocate the resident-textures gather on
-        // the per-slot BumpArena. scenes_ + textureHandles are persistent
+        // the per-slot BumpArena. prefabs_ + textureHandles are persistent
         // engine state, so two-pass costs nothing.
         // #222 Phase H.6: resident_textures hoisted to the engine-owned
         // resident_textures_ vector built once at scene-load (uploadAnim
@@ -2090,10 +2090,10 @@ public:
             glm::vec3 hero_max(0.0f);
             bool hero_has_aabb = false;
             bool hero_animated = false;
-            if (ok && entity_plus_one != 0u && !scene_ids_.empty()) {
+            if (ok && entity_plus_one != 0u && !prefab_ids_.empty()) {
                 const uint32_t eid = entity_plus_one - 1u;
                 hero_scene_idx =
-                    eid % static_cast<uint32_t>(scene_ids_.size());
+                    eid % static_cast<uint32_t>(prefab_ids_.size());
                 if (hero_scene_idx < glb_paths_.size()) {
                     hero_name =
                         glb_paths_[hero_scene_idx].filename().string().c_str();
@@ -2112,8 +2112,8 @@ public:
                             wcc->registry.all_of<cairns::SkinRef>(ent);
                         const auto* wt =
                             wcc->registry.try_get<cairns::WorldTransform>(ent);
-                        cairns::Scene::Hot* sh =
-                            scenes_.GetHot(scene_ids_[hero_scene_idx]);
+                        cairns::Prefab::Hot* sh =
+                            prefabs_.GetHot(prefab_ids_[hero_scene_idx]);
                         if (wt && sh && !sh->meshes.empty()) {
                             cairns::Mesh::Hot* mh =
                                 meshes_.GetHot(sh->meshes[0]);
@@ -2175,7 +2175,7 @@ public:
 
         t_frame.End();
         if (frame_ % 120 == 0) {
-            const size_t loaded = scene_ids_.size();
+            const size_t loaded = prefab_ids_.size();
             size_t entities = 0;
             if (auto* wc = worlds_.GetCold(active_world_)) {
                 entities = wc->registry.storage<entt::entity>().size();
@@ -2925,11 +2925,11 @@ public:
     // Null on any miss (no skins, no skinned mesh, no clips, no pool
     // capacity left). The actor's per-frame palette uses the stored
     // clip_index + time_offset and writes deformed verts at slice.offset.
-    cairns::SkinId TryCreateSkinForScene(cairns::SceneId scene_id,
+    cairns::SkinId TryCreateSkinForScene(cairns::PrefabId scene_id,
                                           float time_offset) {
         // #222: loud reason for every Null return so we don't silently
         // drop heroes to bind pose. Names the scene so the user can map
-        // back to a GLB filename via scene_ids_[scene_idx].
+        // back to a GLB filename via prefab_ids_[scene_idx].
         auto fail = [&](const char* why) -> cairns::SkinId {
             CAIRNS_PRINT_ERR(
                 "[SKIN-FAIL] scene_id=(idx=%u,gen=%u) reason=%s\n",
@@ -2937,8 +2937,8 @@ public:
                 static_cast<unsigned>(scene_id.generation), why);
             return cairns::SkinId::Null;
         };
-        cairns::Scene::Hot* shot = scenes_.GetHot(scene_id);
-        cairns::Scene::Cold* scold = scenes_.GetCold(scene_id);
+        cairns::Prefab::Hot* shot = prefabs_.GetHot(scene_id);
+        cairns::Prefab::Cold* scold = prefabs_.GetCold(scene_id);
         if (!shot || !scold) {
             return fail("scene handle dead");
         }
@@ -2972,7 +2972,7 @@ public:
             return fail("skin_output_pool_.Alloc exhausted");
         }
         cairns::SkinId sid = skins_.Acquire();
-        cairns::Scene::Hot* scene_hot = scenes_.GetHot(scene_id);
+        cairns::Prefab::Hot* scene_hot = prefabs_.GetHot(scene_id);
         // #222 Phase E.6: build the per-actor pos_stream alias of
         // skin_output_pool_buffer_, pre-offset to slice.offset * 16 B.
         // Skinned draws point Draw::vertex_buffers[0] at this handle;
@@ -3013,8 +3013,8 @@ public:
             h->time_scale = 1.0f;
             h->mesh = skinned_mesh;
             // #222 Phase H.5: cache the per-frame double-resolve.
-            h->gpu_scene_header_idx =
-                scene_hot ? scene_hot->gpu_scene_header_idx : UINT32_MAX;
+            h->gpu_prefab_header_idx =
+                scene_hot ? scene_hot->gpu_prefab_header_idx : UINT32_MAX;
             h->gpu_clip_duration =
                 (scold->gpu_clip_duration > 0.0f) ? scold->gpu_clip_duration
                                                    : 1.0f;
@@ -3252,7 +3252,7 @@ public:
             if (sh->mesh.index >= kBucketCap) {
                 continue;
             }
-            if (sh->gpu_scene_header_idx == UINT32_MAX) {
+            if (sh->gpu_prefab_header_idx == UINT32_MAX) {
                 continue;
             }
             // #222 Phase S.3: frustum cull (must match count-pass test).
@@ -3286,7 +3286,7 @@ public:
                 glm::uvec2(cursor * b.joint_count, sh->slice_offset);
 
             // #222 Phase H.5: duration cached on Hot at skin-create; no
-            // per-actor scenes_.GetCold this frame.
+            // per-actor prefabs_.GetCold this frame.
             const double dur = static_cast<double>(sh->gpu_clip_duration);
             const double scaled =
                 anim_t_d * static_cast<double>(sh->time_scale) +
@@ -3294,7 +3294,7 @@ public:
             const double wrapped = scaled - dur * std::floor(scaled / dur);
 
             cairns::GpuActorRecord& rec = actor_records[actor_idx];
-            rec.scene_idx = sh->gpu_scene_header_idx;
+            rec.scene_idx = sh->gpu_prefab_header_idx;
             rec.world_scratch_base = actor_idx * kAnimMaxNodes;
             rec.palette_out_base = palette_slot_base;
             rec.time = static_cast<float>(wrapped);
@@ -3333,12 +3333,12 @@ public:
         if (anim_eval_kernel_.IsNull()) {
             return;
         }
-        const auto& scene_ids = scene_ids_;
-        if (scene_ids.empty()) {
+        const auto& prefab_ids = prefab_ids_;
+        if (prefab_ids.empty()) {
             return;
         }
         std::vector<cairns::GpuSceneHeader> headers;
-        headers.reserve(scene_ids.size());
+        headers.reserve(prefab_ids.size());
         std::vector<int32_t> parent_flat;
         std::vector<int32_t> topo_flat;
         std::vector<cairns::GpuTRS> bind_pose_flat;
@@ -3348,15 +3348,15 @@ public:
         std::vector<glm::vec4> values_flat;
         std::vector<int32_t> joint_nodes_flat;
         std::vector<glm::mat4> inverse_binds_flat;
-        for (cairns::SceneId sid : scene_ids) {
-            cairns::Scene::Hot* hot = scenes_.GetHot(sid);
-            cairns::Scene::Cold* cold = scenes_.GetCold(sid);
+        for (cairns::PrefabId sid : prefab_ids) {
+            cairns::Prefab::Hot* hot = prefabs_.GetHot(sid);
+            cairns::Prefab::Cold* cold = prefabs_.GetCold(sid);
             if (!hot || !cold) {
                 continue;
             }
             if (cold->skins.empty() || cold->clips.empty() ||
                 cold->nodes.empty()) {
-                hot->gpu_scene_header_idx = UINT32_MAX;
+                hot->gpu_prefab_header_idx = UINT32_MAX;
                 continue;
             }
             cairns::GpuSceneHeader sh{};
@@ -3402,7 +3402,7 @@ public:
             inverse_binds_flat.insert(inverse_binds_flat.end(),
                                        cold->gpu_inverse_binds.begin(),
                                        cold->gpu_inverse_binds.end());
-            hot->gpu_scene_header_idx = static_cast<uint32_t>(headers.size());
+            hot->gpu_prefab_header_idx = static_cast<uint32_t>(headers.size());
             headers.push_back(sh);
         }
         if (headers.empty()) {
@@ -3769,25 +3769,25 @@ public:
 private:
     uint32_t frame_ = 0;
 
-    // #220 Step 3: scenes_ is now a generational pool. scene_ids_ is the
+    // #220 Step 3: prefabs_ is now a generational pool. prefab_ids_ is the
     // order-stable parallel list of SceneIds; consumers that want
-    // index-by-position semantics (LoadScenesGpu's span, entity
-    // assignment's `i % scene_ids_.size()`) iterate this. The Scene::Hot
-    // / Scene::Cold records live in the pool, not the vector.
-    cairns::ResourceManager<cairns::Scene> scenes_;
-    std::vector<cairns::SceneId> scene_ids_;
-    // #222 Phase #267: parallel to scene_ids_; index N maps to the GLB
-    // path that produced scene_ids_[N]. Read by the [PICK] log line.
+    // index-by-position semantics (LoadPrefabsGpu's span, entity
+    // assignment's `i % prefab_ids_.size()`) iterate this. The Prefab::Hot
+    // / Prefab::Cold records live in the pool, not the vector.
+    cairns::ResourceManager<cairns::Prefab> prefabs_;
+    std::vector<cairns::PrefabId> prefab_ids_;
+    // #222 Phase #267: parallel to prefab_ids_; index N maps to the GLB
+    // path that produced prefab_ids_[N]. Read by the [PICK] log line.
     std::vector<std::filesystem::path> glb_paths_;
-    // #269: parallel to scene_ids_; AssetId registered for each scene.
+    // #269: parallel to prefab_ids_; AssetId registered for each scene.
     // SpawnHero consumes this to stamp AssetRef on the new entity.
-    std::vector<cairns::AssetId> per_scene_asset_;
+    std::vector<cairns::AssetId> per_prefab_asset_;
     // #222 Phase H.6: built once at scene-load + uploadAnimTablesGpu;
     // every frame's resident_textures span points at this vector
     // instead of being arena-allocated + filled per frame.
     std::vector<rhi::Handle<rhi::Texture>> resident_textures_;
     // #222 Phase H.4 partial: the skin-attr SSBO is the SAME handle on every
-    // skinned mesh from one LoadScenesGpu call -- it does not belong on
+    // skinned mesh from one LoadPrefabsGpu call -- it does not belong on
     // Mesh::Hot. Engine reads from here; per-mesh field stays as a stop-gap
     // until the gltf_loader API takes a buffer-handle out-param.
     rhi::Handle<rhi::Buffer> shared_skin_attrs_buf_ = rhi::Handle<rhi::Buffer>::Null;

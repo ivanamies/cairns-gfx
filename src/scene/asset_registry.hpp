@@ -30,10 +30,10 @@ namespace cairns {
 
 // Forward-declared to avoid pulling util/gltf_loader.hpp (which pulls
 // stb_image's impl) into every TU that just needs AssetId.
-struct Scene;
-// #220 Step 3: SceneId is Handle<Scene>; cpu_graph holds it instead of
+struct Prefab;
+// #220 Step 3: PrefabId is Handle<Prefab>; cpu_graph holds it instead of
 // a raw const Scene*.
-using SceneId = Handle<Scene>;
+using PrefabId = Handle<Prefab>;
 
 struct Asset {
     struct Hot {
@@ -46,14 +46,14 @@ struct Asset {
     };
 
     struct Cold {
-        // Non-owning pointer into Engine::scenes_ during the P4 parity
+        // Non-owning pointer into Engine::prefabs_ during the P4 parity
         // window; later commits move ownership into AssetRegistry as
         // unique_ptr<Scene> once AssetRegistry::Load is the real load
         // path. Forward-declared so this header doesn't pull stb_image.
-        // #220 Step 3: was const Scene*. Now SceneId into Engine::scenes_;
-        // ExtractFromWorld resolves via the threaded scenes_pool. Null
+        // #220 Step 3: was const Scene*. Now PrefabId into Engine::prefabs_;
+        // ExtractFromWorld resolves via the threaded prefabs_pool. Null
         // sentinel is Handle::Null (rather than nullptr).
-        SceneId cpu_graph;
+        PrefabId cpu_graph;
         // Suballoc slices into the shared packed buffers (deferred; the
         // existing scene_gpu.hpp packs all GLBs into one shared
         // buffer-set today, no per-asset suballoc).
@@ -81,11 +81,11 @@ public:
     inline void Release(AssetId id) { (void)id; }
 
     // P4-only seam: register an already-loaded Scene (still owned by
-    // Engine::scenes_) plus its shared GPU buffer handles. Dedup-keyed
+    // Engine::prefabs_) plus its shared GPU buffer handles. Dedup-keyed
     // by scene_index. Later commits replace this with a real Load(path)
     // that owns parsing + suballoc + dedup-by-content-hash.
     inline AssetId RegisterExistingScene(uint32_t scene_idx,
-                                         SceneId scene_id,
+                                         PrefabId scene_id,
                                          rhi::Handle<rhi::Buffer> pos,
                                          rhi::Handle<rhi::Buffer> attr,
                                          rhi::Handle<rhi::Buffer> index) {

@@ -183,8 +183,8 @@ uint32_t NumScenes(Engine* engine) {
     return engine ? engine->NumScenes() : 0;
 }
 
-float SceneMeshExtentMax(Engine* engine, uint32_t scene_idx) {
-    return engine ? engine->SceneMeshExtentMax(scene_idx) : 0.0f;
+float PrefabExtentMax(Engine* engine, uint32_t scene_idx) {
+    return engine ? engine->PrefabExtentMax(scene_idx) : 0.0f;
 }
 
 std::vector<uint32_t> ListActiveWorldEntities(Engine* engine) {

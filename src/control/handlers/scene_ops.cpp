@@ -255,7 +255,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         [&engine](const json& args) -> json {
             const uint32_t scene_idx = args.value("scene_idx", uint32_t{0});
             return {{"extent_max",
-                     cairns::headless::SceneMeshExtentMax(&engine,
+                     cairns::headless::PrefabExtentMax(&engine,
                                                            scene_idx)},
                     {"scene_idx", scene_idx}};
         });

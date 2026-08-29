@@ -224,7 +224,7 @@ private:
 // sanctioned pointer-returning path -- it is contained: the vector is the owner,
 // referenced by handle/index one layer up, never raw-pointered across systems.
 // deallocate() is a no-op (bulk reclaim via BumpArena::Reset). Reserve up front so
-// the container never grows (growth bump-leaks until Reset); LoadScenesGpu already
+// the container never grows (growth bump-leaks until Reset); LoadPrefabsGpu already
 // measures totals, so counts are known.
 template <typename T>
 class BumpStdAllocator {

@@ -143,7 +143,7 @@ struct Mesh {
         rhi::Handle<rhi::Buffer> attrHandle; // shared vertex-stream attrs
         rhi::Handle<rhi::Buffer> indexHandle;
         std::vector<Primitive> primitives;
-        // #221 Skinning F5: snapshot of LoadScenesGpu's running_vert at the
+        // #221 Skinning F5: snapshot of LoadPrefabsGpu's running_vert at the
         // patch site. Skinned draws subtract this to get the mesh-local
         // baseVertex (vkCmdDrawIndexed has ONE vertexOffset, which today
         // serves stream 0 + stream 1 globally; the skinned stream-0 binds
@@ -172,8 +172,8 @@ struct Mesh {
         // indexes correctly. Null for unskinned meshes (they use attrHandle).
         rhi::Handle<rhi::Buffer> attr_skinned_alias;
         // #222 Phase H.4: skin_attrs_buffer retired from Mesh::Hot
-        // (same handle on every skinned mesh from one LoadScenesGpu).
-        // Now returned via LoadScenesGpu's out_shared_skin and stashed on
+        // (same handle on every skinned mesh from one LoadPrefabsGpu).
+        // Now returned via LoadPrefabsGpu's out_shared_skin and stashed on
         // Engine::shared_skin_attrs_buf_; recorder reads from engine.
         // #221 Skinning Phase 9 (vk): Group A descriptor set for this
         // skinned mesh (positions slice + skin-attrs slice). Allocated at
@@ -202,12 +202,12 @@ struct Node {
 
     int32_t meshIndex = -1; // Index into Scene.meshes
     // #221 Skinning Phase 1: per-glTF node skin reference. -1 = no skin.
-    int32_t skinIndex = -1; // Index into Scene::Cold::skins.
+    int32_t skinIndex = -1; // Index into Prefab::Cold::skins.
     std::vector<int32_t> children;
 };
 
 // #221 Skinning Phase 1: per-glTF skin (joint set + inverse binds). Joints
-// reference Scene::Cold::nodes by index; inverseBinds is one mat4 per joint
+// reference Prefab::Cold::nodes by index; inverseBinds is one mat4 per joint
 // in the same order. skeletonRoot is the glTF "skeleton" hint (-1 if absent;
 // not used by the runtime — joint world matrices come from the node walk).
 struct Skin {
@@ -287,12 +287,12 @@ struct LoadedMaterial {
 };
 
 // #220 Step 3: Aaltonen Hot/Cold split. Pooled via
-// cairns::ResourceManager<Scene> on Engine; SceneId = Handle<Scene>.
+// cairns::ResourceManager<Prefab> on Engine; PrefabId = Handle<Prefab>.
 // Hot is what extract reads at draw-build (mesh ids, mat ids, root
 // nodes, per-scene texture/sampler registry); Cold is the node tree
 // (walked once per frame in BuildMeshOpaqueDraws but not per draw)
 // and the load-time temporaries cleared after upload.
-struct Scene {
+struct Prefab {
     struct Hot {
         // #220 Step 2: was std::vector<Mesh>. Mesh data is engine-owned
         // via cairns::ResourceManager<Mesh>; Scene only holds the handles.
@@ -304,19 +304,19 @@ struct Scene {
 
         // #221 Phase 5b: index into engine's flat scene_headers array.
         // UINT32_MAX = scene not registered with anim_eval (no skin/clip).
-        uint32_t gpu_scene_header_idx = UINT32_MAX;
+        uint32_t gpu_prefab_header_idx = UINT32_MAX;
     };
     struct Cold {
         std::vector<Node> nodes;
         std::vector<AnimatedTRS> bind_pose;
         // #222 Phase H.6 finish: per-scene texture/sampler registry. Only
-        // read at material setup (PrepareSceneResources) + resident_textures
+        // read at material setup (PreparePrefabResources) + resident_textures
         // population (Engine::resident_textures_ built once post-upload).
         // Demoted from Hot since no per-frame reader exists.
         std::vector<rhi::Handle<rhi::Texture>> textureHandles;
         std::vector<rhi::Handle<rhi::Sampler>> samplerHandles;
         // #221 Phase 5b: per-scene flat tables for GPU palette eval.
-        // Populated at load by LoadSceneFromGltf and consumed by
+        // Populated at load by LoadPrefabFromGltf and consumed by
         // engine's anim-table upload sweep.
         std::vector<int32_t> gpu_parent;
         std::vector<int32_t> gpu_topo;
@@ -354,10 +354,10 @@ struct Scene {
         }
     };
 };
-using SceneId = cairns::Handle<Scene>;
+using PrefabId = cairns::Handle<Prefab>;
 
 // #220 Step 2: writes split-out Hot + Cold sides instead of a combined
-// Mesh value. Caller (LoadSceneFromGltf) is responsible for Acquiring
+// Mesh value. Caller (LoadPrefabFromGltf) is responsible for Acquiring
 // the pool slot and handing in fresh refs to its Hot/Cold cells.
 inline bool LoadMeshFromGltf(const fastgltf::Asset& asset,
                              const fastgltf::Mesh& gltfMesh,
@@ -494,8 +494,8 @@ inline bool LoadMeshFromGltf(const fastgltf::Asset& asset,
 
 // #220 Step 3: writes split-out Scene Hot + Cold sides; meshes still
 // land in the engine's Mesh pool via the threaded reference.
-inline bool LoadSceneFromGltf(const std::filesystem::path& path,
-                               Scene::Hot& hot, Scene::Cold& cold,
+inline bool LoadPrefabFromGltf(const std::filesystem::path& path,
+                               Prefab::Hot& hot, Prefab::Cold& cold,
                                cairns::ResourceManager<Mesh>& meshes_pool) {
     size_t byte_count = 0;
     void* file_data = SDL_LoadFile(path.string().c_str(), &byte_count);
@@ -872,7 +872,7 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path,
 
 // #220 Step 3: takes split-out Scene Hot+Cold; reads CPU temporaries
 // from Cold and writes resolved handles into Hot.
-inline void PrepareSceneResources(Scene::Hot& hot, Scene::Cold& cold,
+inline void PreparePrefabResources(Prefab::Hot& hot, Prefab::Cold& cold,
                                    rhi::Resources& rm, rhi::Allocator& alloc,
                                    cairns::ResourceManager<LoadedMaterial>& materials) {
     // Textures

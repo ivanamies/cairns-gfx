@@ -16,15 +16,15 @@ namespace cairns::rhi {
 // gives the upload bump ring a chance to recycle. The final on-GPU layout is
 // unchanged: ONE shared vertex buffer [positions | attributes] + ONE shared
 // index buffer, with primitives' vertexOffset / firstIndex patched to global.
-// #220 Step 3: scenes are engine-owned via cairns::ResourceManager<Scene>;
+// #220 Step 3: scenes are engine-owned via cairns::ResourceManager<Prefab>;
 // caller passes a span of SceneIds + the pool. Mesh pool also threaded
 // (Step 2 invariant).
 // #222 Phase H.4: out_shared_skin returns the per-call shared skin-attrs
 // SSBO so the engine can stash it on shared_skin_attrs_buf_ without
-// stamping every Mesh::Hot. Null when no scene in scene_ids has any
+// stamping every Mesh::Hot. Null when no scene in prefab_ids has any
 // skinned mesh.
-inline bool LoadScenesGpu(std::span<const cairns::SceneId> scene_ids,
-                          cairns::ResourceManager<Scene>& scenes_pool,
+inline bool LoadPrefabsGpu(std::span<const cairns::PrefabId> prefab_ids,
+                          cairns::ResourceManager<Prefab>& prefabs_pool,
                           cairns::ResourceManager<Mesh>& meshes_pool,
                           Resources& rm, Allocator& alloc,
                           Handle<Buffer>* out_shared_skin) {
@@ -36,8 +36,8 @@ inline bool LoadScenesGpu(std::span<const cairns::SceneId> scene_ids,
     // (cpuSkinAttrs is empty for unskinned meshes). Drives the shared
     // skin-attr storage buffer below.
     size_t total_skin_verts = 0;
-    for (cairns::SceneId sid : scene_ids) {
-        Scene::Hot* shot = scenes_pool.GetHot(sid);
+    for (cairns::PrefabId sid : prefab_ids) {
+        Prefab::Hot* shot = prefabs_pool.GetHot(sid);
         for (cairns::Handle<Mesh> mid : shot->meshes) {
             Mesh::Cold* mcold = meshes_pool.GetCold(mid);
             total_verts += mcold->cpuPositions.size();
@@ -97,8 +97,8 @@ inline bool LoadScenesGpu(std::span<const cairns::SceneId> scene_ids,
     size_t running_vert = 0;
     size_t running_idx = 0;
     size_t running_skin_vert = 0;
-    for (cairns::SceneId sid : scene_ids) {
-        Scene::Hot* shot = scenes_pool.GetHot(sid);
+    for (cairns::PrefabId sid : prefab_ids) {
+        Prefab::Hot* shot = prefabs_pool.GetHot(sid);
         for (cairns::Handle<Mesh> mid : shot->meshes) {
             Mesh::Hot* mhot = meshes_pool.GetHot(mid);
             Mesh::Cold* mcold = meshes_pool.GetCold(mid);
@@ -127,10 +127,10 @@ inline bool LoadScenesGpu(std::span<const cairns::SceneId> scene_ids,
     size_t cur_attr_off_bytes = 0;
     size_t cur_idx_off_bytes = 0;
     size_t cur_skin_off_bytes = 0;
-    for (size_t batch_start = 0; batch_start < scene_ids.size();
+    for (size_t batch_start = 0; batch_start < prefab_ids.size();
          batch_start += kBatchSize) {
         const size_t batch_end =
-            std::min(batch_start + kBatchSize, scene_ids.size());
+            std::min(batch_start + kBatchSize, prefab_ids.size());
 
         std::vector<glm::vec4> pos_batch;
         std::vector<VertexAttribute> attr_batch;
@@ -138,7 +138,7 @@ inline bool LoadScenesGpu(std::span<const cairns::SceneId> scene_ids,
         std::vector<PackedSkinVertex> skin_batch;
         std::vector<SkinVertex> skin_raw;
         for (size_t s = batch_start; s < batch_end; ++s) {
-            Scene::Hot* shot = scenes_pool.GetHot(scene_ids[s]);
+            Prefab::Hot* shot = prefabs_pool.GetHot(prefab_ids[s]);
             for (cairns::Handle<Mesh> mid : shot->meshes) {
                 Mesh::Cold* mcold = meshes_pool.GetCold(mid);
                 pos_batch.insert(pos_batch.end(), mcold->cpuPositions.begin(),
@@ -198,8 +198,8 @@ inline bool LoadScenesGpu(std::span<const cairns::SceneId> scene_ids,
         ah->offset_in_heap = vh->offset_in_heap + static_cast<uint32_t>(pos_bytes);
     }
 
-    for (cairns::SceneId sid : scene_ids) {
-        Scene::Hot* shot = scenes_pool.GetHot(sid);
+    for (cairns::PrefabId sid : prefab_ids) {
+        Prefab::Hot* shot = prefabs_pool.GetHot(sid);
         for (cairns::Handle<Mesh> mid : shot->meshes) {
             Mesh::Hot* mhot = meshes_pool.GetHot(mid);
             Mesh::Cold* mcold = meshes_pool.GetCold(mid);
