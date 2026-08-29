@@ -236,13 +236,23 @@ static void transition(VkCommandBuffer cb, Resources& res, Handle<Texture> h,
 void CommandRecorder::DispatchSkinBatches(
     Resources& res, Allocator& alloc, Handle<Kernel> kernel,
     Handle<Buffer> output_pool_buffer, Handle<Buffer> /*palette_buf*/,
+    Handle<DynamicBuffers> dyn_set_0,
     std::span<const SkinDispatchBatch> batches) {
-    // Vulkan reads palette_buf via Frames::WriteSkinGroupBDescriptors once
-    // at init, so this parameter is informational here. D.3 follow-up will
-    // wire it through if/when DynamicBuffers replaces the Group B write.
+    // #222 Phase D.3: set 0 comes from dyn_set_0's DynamicBuffers Hot
+    // (per-FIF set). palette_buf wired in at DynamicBuffers create time as
+    // binding 1's backing. Legacy Frames::skin_group_b_set_ kept as a
+    // fallback during the conversion window; engine always passes a valid
+    // handle post-D.3 so the legacy branch never fires.
+    VkDescriptorSet group_b_set = plat.skin_group_b_set_;
+    if (!dyn_set_0.IsNull()) {
+        DynamicBuffers::Hot* dh = res.dynamic_buffers.GetHot(dyn_set_0);
+        if (dh && dh->plat.vk_sets[plat.frame_] != VK_NULL_HANDLE) {
+            group_b_set = dh->plat.vk_sets[plat.frame_];
+        }
+    }
     if (batches.empty() || kernel.IsNull() ||
         output_pool_buffer.IsNull() ||
-        plat.skin_group_b_set_ == VK_NULL_HANDLE) {
+        group_b_set == VK_NULL_HANDLE) {
         return;
     }
     // Route onto plat.comp_ (free vertex-fetch sync via the existing
@@ -280,7 +290,7 @@ void CommandRecorder::DispatchSkinBatches(
             continue;
         }
         VkDescriptorSet sets[2] = {
-            plat.skin_group_b_set_,
+            group_b_set,
             static_cast<VkDescriptorSet>(bg->api_descriptor_set),
         };
         const uint32_t dyn_offsets[3] = {
@@ -300,8 +310,19 @@ void CommandRecorder::DispatchAnimEval(
     const AnimEvalArgs& args) {
     const uint32_t actor_count = args.actor_count;
     const uint32_t records_byte_offset = args.records_byte_offset;
+    // #222 Phase D.3: anim_eval set 0 comes from args.dyn_set_0's
+    // DynamicBuffers Hot. Scene-table SSBOs (bindings 1..12) are
+    // backed via per-binding `backing` at create time; only binding 0
+    // (records UBO) takes a dynamic offset per dispatch.
+    VkDescriptorSet ae_set = plat.anim_eval_set_;
+    if (!args.dyn_set_0.IsNull()) {
+        DynamicBuffers::Hot* dh = res.dynamic_buffers.GetHot(args.dyn_set_0);
+        if (dh && dh->plat.vk_sets[plat.frame_] != VK_NULL_HANDLE) {
+            ae_set = dh->plat.vk_sets[plat.frame_];
+        }
+    }
     if (kernel.IsNull() || actor_count == 0 ||
-        plat.anim_eval_set_ == VK_NULL_HANDLE) {
+        ae_set == VK_NULL_HANDLE) {
         return;
     }
     if (plat.pending_pass_idx_ != UINT32_MAX &&
@@ -318,7 +339,7 @@ void CommandRecorder::DispatchAnimEval(
     }
     vkCmdBindPipeline(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE,
                        k->plat.vk_pipeline);
-    VkDescriptorSet set = plat.anim_eval_set_;
+    VkDescriptorSet set = ae_set;
     const uint32_t dyn = records_byte_offset;
     vkCmdBindDescriptorSets(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE,
                              k->plat.vk_layout, 0, 1, &set, 1, &dyn);

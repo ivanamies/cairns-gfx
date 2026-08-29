@@ -1179,36 +1179,79 @@ public:
                 resident_textures_.push_back(th);
             }
         }
-        // #221 Phase 9 (vk): write the per-frame skin_group_b descriptors
-        // ONCE here (kernel + pool both ready). Per-dispatch we just bind
-        // with 3 dynamic byte offsets, avoiding VUID-03047 (set in use by
-        // pending cmd) that fires when re-writing each frame. Metal: no-op.
-        // #221 Phase 5b: binding 1 (palettes) points at the persistent
-        // palette_out_buf_ written by anim_eval (instead of the kDynamic
-        // ring); the per-batch dynamic offset still selects the bucket's
-        // palette window. Skin kernel reads palette[off + j.x] unchanged.
+        // #222 Phase D.3: skin Group B + anim_eval routed through
+        // DynamicBuffers. Created post-scene-load (now: backing handles
+        // ready). Descriptor sets allocated here are layout-compatible
+        // with the pipeline's set 0 layout (built earlier from
+        // frames.plat.skin_group_b_layout_ / anim_eval_layout_) because
+        // the per-binding (type, count, stage) tuple matches exactly.
+        // #221 Phase 5b: binding 1 (palettes) backed by persistent
+        // palette_out_buf_ (anim_eval writes it); per-batch dynamic
+        // offset still selects the bucket's palette window. When
+        // anim_eval_tables_uploaded_ is false, no backing => kDynamic
+        // master fallback.
         if (!skin_kernel_.IsNull() && !skin_output_pool_buffer_.IsNull()) {
-            rhi_.frames.WriteSkinGroupBDescriptors(
-                rhi_.resources, rhi_.alloc, skin_output_pool_buffer_,
-                anim_eval_tables_uploaded_ ? palette_out_buf_
-                                            : rhi::Handle<rhi::Buffer>{});
+            cairns::rhi::DynamicBinding gb[4]{};
+            gb[0].slot = 0;
+            gb[0].kind = cairns::rhi::BufferKind::kUniform;
+            gb[0].max_range = 64u;
+            gb[0].has_dynamic_offset = true;
+            gb[1].slot = 1;
+            gb[1].kind = cairns::rhi::BufferKind::kStorage;
+            gb[1].max_range = 1u << 20;
+            gb[1].has_dynamic_offset = true;
+            if (anim_eval_tables_uploaded_) {
+                gb[1].backing = palette_out_buf_;
+            }
+            gb[2].slot = 2;
+            gb[2].kind = cairns::rhi::BufferKind::kStorage;
+            gb[2].max_range = 16384u;
+            gb[2].has_dynamic_offset = true;
+            gb[3].slot = 3;
+            gb[3].kind = cairns::rhi::BufferKind::kStorage;
+            gb[3].max_range = 0;  // VK_WHOLE_SIZE
+            gb[3].has_dynamic_offset = false;
+            gb[3].backing = skin_output_pool_buffer_;
+            cairns::rhi::DynamicBuffersDesc gd{};
+            gd.debug_name = "dyn_skin_group_b";
+            gd.bindings =
+                std::span<const cairns::rhi::DynamicBinding>(gb, 4);
+            dyn_skin_group_b_ =
+                rhi_.resources.CreateDynamicBuffers(rhi_.alloc, rhi_.frames, gd);
+            if (dyn_skin_group_b_.IsNull()) {
+                CAIRNS_PRINT("GreaterInit: dyn_skin_group_b create failed\n");
+                return false;
+            }
         }
         if (anim_eval_tables_uploaded_) {
-            rhi::CommandRecorder::AnimEvalArgs ae{};
-            ae.scene_headers = scene_headers_buf_;
-            ae.parent_buf = ae_parent_buf_;
-            ae.topo_buf = ae_topo_buf_;
-            ae.bind_pose_buf = ae_bind_pose_buf_;
-            ae.channels_buf = ae_channels_buf_;
-            ae.samplers_buf = ae_samplers_buf_;
-            ae.times_buf = ae_times_buf_;
-            ae.values_buf = ae_values_buf_;
-            ae.joint_nodes_buf = ae_joint_nodes_buf_;
-            ae.inverse_binds_buf = ae_inverse_binds_buf_;
-            ae.world_scratch = world_scratch_buf_;
-            ae.palette_out = palette_out_buf_;
-            rhi_.frames.WriteAnimEvalDescriptors(rhi_.resources, rhi_.alloc,
-                                                   ae);
+            const rhi::Handle<rhi::Buffer> ae_ssbo[12] = {
+                scene_headers_buf_, ae_parent_buf_, ae_topo_buf_,
+                ae_bind_pose_buf_, ae_channels_buf_, ae_samplers_buf_,
+                ae_times_buf_, ae_values_buf_, ae_joint_nodes_buf_,
+                ae_inverse_binds_buf_, world_scratch_buf_, palette_out_buf_,
+            };
+            cairns::rhi::DynamicBinding ae_b[13]{};
+            ae_b[0].slot = 0;
+            ae_b[0].kind = cairns::rhi::BufferKind::kUniform;
+            ae_b[0].max_range = 16384u;
+            ae_b[0].has_dynamic_offset = true;
+            for (uint32_t i = 0; i < 12; ++i) {
+                ae_b[1 + i].slot = 1 + i;
+                ae_b[1 + i].kind = cairns::rhi::BufferKind::kStorage;
+                ae_b[1 + i].max_range = 0;  // VK_WHOLE_SIZE
+                ae_b[1 + i].has_dynamic_offset = false;
+                ae_b[1 + i].backing = ae_ssbo[i];
+            }
+            cairns::rhi::DynamicBuffersDesc ae_d{};
+            ae_d.debug_name = "dyn_anim_eval";
+            ae_d.bindings =
+                std::span<const cairns::rhi::DynamicBinding>(ae_b, 13);
+            dyn_anim_eval_ =
+                rhi_.resources.CreateDynamicBuffers(rhi_.alloc, rhi_.frames, ae_d);
+            if (dyn_anim_eval_.IsNull()) {
+                CAIRNS_PRINT("GreaterInit: dyn_anim_eval create failed\n");
+                return false;
+            }
         }
         // #237 fix: globals + drawtmp DYNAMIC UBO descriptors point at
         // the master kDynamic buffer with sizeof(struct) range; per-pass
@@ -2183,6 +2226,10 @@ public:
                             ae.inverse_binds_buf = ae_inverse_binds_buf_;
                             ae.world_scratch = world_scratch_buf_;
                             ae.palette_out = palette_out_buf_;
+                            // #222 Phase D.3: dyn_set_0 = anim_eval per-FIF
+                            // DynamicBuffers set (binding 0 dyn UBO + 1..12
+                            // SSBO over backing). vk reads it; metal ignored.
+                            ae.dyn_set_0 = dyn_anim_eval_;
                             ae.records_byte_offset = records_off;
                             ae.actor_count = n_actors;
                             cmd.DispatchAnimEval(rhi_.resources, rhi_.alloc,
@@ -2265,9 +2312,12 @@ public:
                     }
                     // #222 Phase D.3: palette_out_buf_ threaded as param;
                     // SkinDispatchBatch::palette_buffer retired.
+                    // dyn_skin_group_b_ owns the per-FIF set (vk) +
+                    // is ignored on metal.
                     cmd.DispatchSkinBatches(
                         rhi_.resources, rhi_.alloc, skin_kernel_,
                         skin_output_pool_buffer_, palette_out_buf_,
+                        dyn_skin_group_b_,
                         std::span<const rhi::SkinDispatchBatch>(
                             dbatches, n_batches));
                 });
@@ -3650,6 +3700,14 @@ private:
     // Draw::dynamic_buffers; recorder reads the per-FIF set from Hot.
     rhi::Handle<rhi::DynamicBuffers> dyn_globals_;
     rhi::Handle<rhi::DynamicBuffers> dyn_drawtmp_;
+    // #222 Phase D.3: skin Group B (4 bindings) + anim_eval (13 bindings)
+    // through DynamicBuffers. Created post-scene-load when palette_out_buf_
+    // + ae_*_buf_ + skin_output_pool_buffer_ exist. Backing buffer is set
+    // per-binding (palette_out_buf_ for palettes; skin_output_pool for output
+    // pool; ae_*_buf_ for scene tables). kDynamic-master fallback covers
+    // the per-dispatch dynamic-offset bindings (params/inst_meta/records).
+    rhi::Handle<rhi::DynamicBuffers> dyn_skin_group_b_;
+    rhi::Handle<rhi::DynamicBuffers> dyn_anim_eval_;
     ShaderHandle composite_pip_ = ShaderHandle::Null;
     ShaderHandle depthviz_ = ShaderHandle::Null;
     ShaderHandle outline_pip_ = ShaderHandle::Null;

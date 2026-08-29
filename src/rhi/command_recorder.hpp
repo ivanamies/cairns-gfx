@@ -138,6 +138,7 @@ public:
                               Handle<Kernel> kernel,
                               Handle<Buffer> output_pool_buffer,
                               Handle<Buffer> palette_buf,
+                              Handle<DynamicBuffers> dyn_set_0,
                               std::span<const SkinDispatchBatch> batches);
     // #221 Phase 5b: dispatch anim_eval (one workgroup per actor; 64 threads
     // per workgroup). Persistent scene-table SSBOs + actor_records dynUBO are
@@ -160,6 +161,11 @@ public:
         Handle<Buffer> inverse_binds_buf;
         Handle<Buffer> world_scratch;
         Handle<Buffer> palette_out;
+        // #222 Phase D.3: dyn_set_0 carries the per-FIF anim_eval set
+        // (DynamicBuffers Hot owns the layout + 1 set per frame-in-flight).
+        // Non-null = recorder binds via DynamicBuffers; Null = legacy
+        // Frames::anim_eval_sets_ fallback.
+        Handle<DynamicBuffers> dyn_set_0;
         uint32_t records_byte_offset = 0;
         uint32_t actor_count = 0;
     };

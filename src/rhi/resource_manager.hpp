@@ -218,6 +218,15 @@ struct DynamicBinding {
     BufferKind kind = BufferKind::kUniform;
     uint32_t max_range = 0;  // bytes; needed for validation
     ShaderStage stages = kStageAll;
+    // #222 Phase D.3: backing buffer. Null = kDynamic bump master (Aaltonen
+    // slot 4 with per-draw dynamic offsets). Non-null = persistent SSBO
+    // (e.g. skin palettes / scene tables / particle parity buffer).
+    Handle<Buffer> backing;
+    // #222 Phase D.3: when false, binding is a regular UBO/SSBO descriptor
+    // (no dynamic offset) and writes the whole backing buffer (range =
+    // max_range or VK_WHOLE_SIZE). True = UBO_DYNAMIC/SSBO_DYNAMIC; caller
+    // supplies the per-dispatch byte offset at bind time.
+    bool has_dynamic_offset = true;
 };
 
 struct DynamicBuffersDesc {
@@ -412,6 +421,12 @@ struct ComputePipelineDesc {
     const char* shader_dir = nullptr;
     const char* debug_name = nullptr;
     ComputePipelineLayout layout = ComputePipelineLayout::kParticle;
+    // #222 Phase D.3/D.4: optional DynamicBuffers handle for set 0.
+    // When non-null, pipelines.cpp resolves the VkDescriptorSetLayout from
+    // GetHot(dyn_set_0)->plat.vk_layout instead of frames.plat.*_layout_.
+    // Required for kSkin (Group B), kAnimEval, and kParticle once D.4
+    // converts particle to prebuilt parity DynamicBuffers.
+    Handle<DynamicBuffers> dyn_set_0;
 };
 
 // --- Bindless registry -----------------------------------------------------

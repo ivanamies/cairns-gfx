@@ -736,15 +736,25 @@ Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
     cold->layout.assign(desc.bindings.begin(), desc.bindings.end());
     cold->debug_name = desc.debug_name;
 
-    // Build the VkDescriptorSetLayout.
+    // Build the VkDescriptorSetLayout. #222 Phase D.3: descriptor type is
+    // 4-way over (kind, has_dynamic_offset). False = regular UBO/SSBO
+    // (no dynamic offset; whole-buffer or max_range bind once at create).
+    auto pick_type = [](const DynamicBinding& b) {
+        if (b.kind == BufferKind::kUniform) {
+            return b.has_dynamic_offset
+                ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
+                : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        }
+        return b.has_dynamic_offset
+            ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC
+            : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    };
     std::vector<VkDescriptorSetLayoutBinding> vk_bindings;
     vk_bindings.reserve(desc.bindings.size());
     for (const DynamicBinding& b : desc.bindings) {
         VkDescriptorSetLayoutBinding vb{};
         vb.binding = b.slot;
-        vb.descriptorType = (b.kind == BufferKind::kUniform)
-            ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
-            : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+        vb.descriptorType = pick_type(b);
         vb.descriptorCount = 1;
         vb.stageFlags = VK_SHADER_STAGE_ALL;
         vk_bindings.push_back(vb);
@@ -779,16 +789,29 @@ Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
         std::vector<VkWriteDescriptorSet> w(desc.bindings.size());
         for (size_t i = 0; i < desc.bindings.size(); ++i) {
             const DynamicBinding& b = desc.bindings[i];
-            bi[i].buffer = dyn_master;
-            bi[i].offset = 0;
+            // #222 Phase D.3: per-binding backing. Null = kDynamic master;
+            // non-null resolves through plat.GetVkBuffer (heap master +
+            // sub-buffer offset). For dynamic-offset bindings we always
+            // bind at offset 0 + max_range so the per-draw dynamic offset
+            // shifts the window into the buffer.
+            VkBuffer buf = dyn_master;
+            uint32_t base_off = 0;
+            if (!b.backing.IsNull()) {
+                buf = plat.GetVkBuffer(alloc, b.backing, &base_off);
+            }
+            bi[i].buffer = buf;
+            // info.offset is the sub-buffer start within the heap master
+            // (0 when backing is the kDynamic master itself). Dyn offset
+            // at bind time is added on top, so the bucket-relative dyn
+            // offset works for both kDynamic-master bindings (base_off=0)
+            // and persistent sub-buffer bindings (base_off=X).
+            bi[i].offset = base_off;
             bi[i].range = (b.max_range == 0) ? VK_WHOLE_SIZE : b.max_range;
             w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[i].dstSet = sets[f];
             w[i].dstBinding = b.slot;
             w[i].descriptorCount = 1;
-            w[i].descriptorType = (b.kind == BufferKind::kUniform)
-                ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
-                : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+            w[i].descriptorType = pick_type(b);
             w[i].pBufferInfo = &bi[i];
         }
         vkUpdateDescriptorSets(plat.device_,

@@ -55,7 +55,11 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
 void CommandRecorder::DispatchSkinBatches(
     Resources& res, Allocator& alloc, Handle<Kernel> kernel,
     Handle<Buffer> output_pool_buffer, Handle<Buffer> palette_buf,
+    Handle<DynamicBuffers> /*dyn_set_0*/,
     std::span<const SkinDispatchBatch> batches) {
+    // #222 Phase D.3: dyn_set_0 unused on metal (no descriptor object;
+    // setBuffer:offset:atIndex: drives bindings directly). Kept in signature
+    // for parity with vk and a clean engine call site.
     if (batches.empty() || kernel.IsNull()) {
         return;
     }

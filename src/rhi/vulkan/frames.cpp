@@ -445,11 +445,15 @@ bool Frames::Init(Device& device) {
         };
         if (!alloc_sets(plat.point_layout_, plat.point_sets_) ||
             !alloc_sets(plat.globals_set_layout_, plat.globals_sets_) ||
-            !alloc_sets(plat.drawtmp_set_layout_, plat.drawtmp_sets_) ||
-            !alloc_sets(plat.skin_group_b_layout_, plat.skin_group_b_sets_) ||
-            !alloc_sets(plat.anim_eval_layout_, plat.anim_eval_sets_)) {
+            !alloc_sets(plat.drawtmp_set_layout_, plat.drawtmp_sets_)) {
             return false;
         }
+        // #222 Phase D.3: skin_group_b_sets_ + anim_eval_sets_ no longer
+        // allocated here -- engine creates dyn_skin_group_b_ + dyn_anim_eval_
+        // DynamicBuffers post-scene-load (matching layouts; layout-compatible
+        // with the pipeline built from frames.plat.*_layout_). Pool budget
+        // unchanged (same total set + descriptor consumption shifts to the
+        // DynamicBuffers create path).
         plat.compute_sets_.resize(n);
         {
             const uint32_t total = n * kMaxStepsPerFrame;
@@ -831,8 +835,10 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     fc.cmd.plat.globals_set_ = plat.globals_sets_[cf];
     fc.cmd.plat.drawtmp_set_ = plat.drawtmp_sets_[cf];
     fc.cmd.plat.compute_sets_ = plat.compute_sets_[cf];
-    fc.cmd.plat.skin_group_b_set_ = plat.skin_group_b_sets_[cf];
-    fc.cmd.plat.anim_eval_set_ = plat.anim_eval_sets_[cf];
+    // #222 Phase D.3: skin_group_b_set_ + anim_eval_set_ retired -- recorder
+    // resolves set 0 via the DynamicBuffers handle passed at dispatch time.
+    fc.cmd.plat.skin_group_b_set_ = VK_NULL_HANDLE;
+    fc.cmd.plat.anim_eval_set_ = VK_NULL_HANDLE;
     fc.cmd.plat.point_set_ = plat.point_sets_[cf];
     fc.cmd.plat.composite_sets_ = plat.composite_sets_[cf];
     fc.cmd.plat.composite_next_idx_ = 0;
