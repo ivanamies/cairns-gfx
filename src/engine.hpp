@@ -498,7 +498,7 @@ public:
         particle_parity_ ^= 1;
         t_frame.End();
         if (frame_ % 120 == 0) {
-            printf("draws: %zu\n", drawList_.size());
+            CAIRNS_PRINT("draws: %zu\n", drawList_.size());
             cairns::Timer::PrintReport();
             cairns::Timer::Reset();
         }
