@@ -166,3 +166,25 @@ XX. SIM-TIME != REAL-TIME BUG (fixed-clock accumulator).
   My read: (b) is the right fix -- the fixed-clock plan conflated "all sim" with "deterministic
   physics-style sim"; rotation/anim don't need the latter and shouldn't slow down. Defer until
   we revisit determinism after skinning lands.
+
+[2026-05-29] depth "post-pass" architecture (re-enable depth sampling without duplicating
+  geometry). Today's deleted "depth_prepass" rendered the whole scene a second time to a
+  separate depth target, which composite then sampled. The forward pass already produces
+  fwd_depth as a depth-target attachment; if it's marked kTexUsageSampled the composite can
+  read it directly and we skip the second geometry traversal entirely. Plan:
+    (1) forward pass: `pkt.fwd_depth` usage `kTexUsageDepthTarget | kTexUsageSampled`.
+    (2) composite: AddAttachmentInput(pkt.fwd_depth); read it in the composite shader's
+        depth slot.
+    (3) RHI side: confirm Metal/Vk allow sampling a still-bound depth attachment after the
+        forward pass completes (Vk needs an explicit barrier from depth-write to shader-read;
+        Metal renderpass-store-then-sample is fine).
+    (4) Delete or rename `depth_only_` pipeline if nothing else uses it.
+
+[2026-05-29] iOS Debug build OOM-kills (Release does not). Strongly suspect asset memory:
+  kDebugGlbsToParse=100 with 33 hero slices keeps all 100 GLB CPU+GPU meshes resident; Debug
+  has zero allocator dedup + bigger per-allocation bookkeeping. iOS app memory limit hits
+  somewhere around 2 GB and we're crossing it under Debug. Plan: log the engine arenas'
+  HighWater + total BumpAllocate bytes at frame 0 vs frame 60 under Debug and Release; if
+  the gap is from CPU mesh data, the fix is shrinking kDebugGlbsToParse on iOS or sharing
+  the static mesh data across hero slices. Not a real perf bug -- Release works -- but worth
+  understanding before turning more knobs.
