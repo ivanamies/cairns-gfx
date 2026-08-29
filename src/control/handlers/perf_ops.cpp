@@ -11,7 +11,7 @@ namespace cairns::control {
 
 void RegisterPerfOps(CommandRegistry& registry, cairns::Engine* engine) {
     registry.Register(
-        "perf.last",
+        "cairns.perf.last",
         /*schema=*/json::object(),
         /*doc=*/"Returns the static Timer accumulator state -- per-slot "
                 "{name, accum_us, avg_us, frames}. Same numbers as the "
@@ -43,7 +43,7 @@ void RegisterPerfOps(CommandRegistry& registry, cairns::Engine* engine) {
     // truly seeded boot, call rng.seed BEFORE the first render.frame and
     // expect the engine init flow to evolve to apply it.
     registry.Register(
-        "rng.seed",
+        "cairns.rng.seed",
         /*schema=*/json::object(),
         /*doc=*/"Seed the engine RNG. Takes effect at next initParticles; "
                 "today not yet retroactive on the live particle SSBO.",
@@ -58,7 +58,7 @@ void RegisterPerfOps(CommandRegistry& registry, cairns::Engine* engine) {
     // settable -- the headless render path will grow a `dt` arg on
     // render.frame instead. For now the op records the intent.
     registry.Register(
-        "time.set",
+        "cairns.time.set",
         /*schema=*/json::object(),
         /*doc=*/"Set the deterministic sim time (stub today; "
                 "render.frame({dt}) is the planned shape).",
@@ -66,6 +66,10 @@ void RegisterPerfOps(CommandRegistry& registry, cairns::Engine* engine) {
             const double t = args.value("t", 0.0);
             return {{"t", t}, {"note", "stub; render.frame({dt}) planned"}};
         });
+
+    registry.RegisterAlias("perf.last", "cairns.perf.last");
+    registry.RegisterAlias("rng.seed", "cairns.rng.seed");
+    registry.RegisterAlias("time.set", "cairns.time.set");
 }
 
 }  // namespace cairns::control

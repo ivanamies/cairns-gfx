@@ -26,7 +26,7 @@ std::atomic<uint64_t> g_viewport_counter{0};
 
 void RegisterSceneOps(CommandRegistry& registry, cairns::Engine* engine) {
     registry.Register(
-        "world.create",
+        "cairns.world.create",
         /*schema=*/json::object(),
         /*doc=*/"Allocate a new world. Returns a synthetic world id; the "
                 "engine-side EnTT registry pre-allocates kMaxWorlds slots "
@@ -36,7 +36,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine* engine) {
         });
 
     registry.Register(
-        "world.clear",
+        "cairns.world.clear",
         /*schema=*/json::object(),
         /*doc=*/"Reset a world's entity set. Stub.",
         [](const json& args) -> json {
@@ -44,7 +44,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine* engine) {
         });
 
     registry.Register(
-        "asset.load",
+        "cairns.asset.load",
         /*schema=*/json::object(),
         /*doc=*/"Load a GLB / texture / audio file. Today: returns a "
                 "synthetic asset id (no GPU upload); real load lands "
@@ -56,7 +56,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine* engine) {
         });
 
     registry.Register(
-        "world.instantiate",
+        "cairns.world.instantiate",
         /*schema=*/json::object(),
         /*doc=*/"Instantiate one asset into a world at a transform. Stub "
                 "id; engine doesn't yet honor the entity placement.",
@@ -67,7 +67,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine* engine) {
         });
 
     registry.Register(
-        "world.instantiateGrid",
+        "cairns.world.instantiateGrid",
         /*schema=*/json::object(),
         /*doc=*/"Instantiate N copies of asset(s) into a world in a grid. "
                 "Returns the id range; engine doesn't yet honor placement.",
@@ -80,7 +80,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine* engine) {
         });
 
     registry.Register(
-        "viewport.open",
+        "cairns.viewport.open",
         /*schema=*/json::object(),
         /*doc=*/"Open a viewport rendering a world. Today: returns id 0 + "
                 "binds the existing final_target_; future viewports get "
@@ -94,7 +94,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine* engine) {
         });
 
     registry.Register(
-        "viewport.setCamera",
+        "cairns.viewport.setCamera",
         /*schema=*/json::object(),
         /*doc=*/"Set a viewport's camera pose. Records intent today; "
                 "actual camera plumbing lands with the resizing-and-cameras "
@@ -104,7 +104,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine* engine) {
         });
 
     registry.Register(
-        "viewport.setWorld",
+        "cairns.viewport.setWorld",
         /*schema=*/json::object(),
         /*doc=*/"Bind a viewport to a different world. Stub.",
         [](const json& args) -> json {
@@ -113,7 +113,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine* engine) {
         });
 
     registry.Register(
-        "window.resize",
+        "cairns.window.resize",
         /*schema=*/json::object(),
         /*doc=*/"Reallocate final_target_ at the new dimensions. Real work "
                 "in headless mode; future windowed-mode wiring routes "
@@ -131,6 +131,18 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine* engine) {
             }
             return {{"w", w}, {"h", h}};
         });
+
+    // Legacy top-level names as deprecated aliases (one release).
+    registry.RegisterAlias("world.create", "cairns.world.create");
+    registry.RegisterAlias("world.clear", "cairns.world.clear");
+    registry.RegisterAlias("asset.load", "cairns.asset.load");
+    registry.RegisterAlias("world.instantiate", "cairns.world.instantiate");
+    registry.RegisterAlias("world.instantiateGrid",
+                           "cairns.world.instantiateGrid");
+    registry.RegisterAlias("viewport.open", "cairns.viewport.open");
+    registry.RegisterAlias("viewport.setCamera", "cairns.viewport.setCamera");
+    registry.RegisterAlias("viewport.setWorld", "cairns.viewport.setWorld");
+    registry.RegisterAlias("window.resize", "cairns.window.resize");
 }
 
 }  // namespace cairns::control

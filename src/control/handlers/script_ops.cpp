@@ -100,7 +100,7 @@ void RegisterScriptOps(CommandRegistry& registry) {
     JS_FreeValue(s.ctx, global);
 
     registry.Register(
-        "script.eval",
+        "cairns.script.eval",
         /*schema=*/json::object(),
         /*doc=*/"Eval a JS snippet inside the embedded QuickJS context. "
                 "Use cairns.dispatch(op, args) to call any registered op.",
@@ -148,6 +148,8 @@ void RegisterScriptOps(CommandRegistry& registry) {
             JS_FreeValue(s2.ctx, v);
             return out;
         });
+
+    registry.RegisterAlias("script.eval", "cairns.script.eval");
 }
 
 }  // namespace cairns::control

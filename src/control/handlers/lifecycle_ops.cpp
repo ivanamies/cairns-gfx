@@ -14,22 +14,24 @@ constexpr const char* kProtocolVersion = "1";
 
 void RegisterLifecycleOps(CommandRegistry& registry, bool* quit_flag) {
     registry.Register(
-        "app.ping",
+        "cairns.app.ping",
         /*schema=*/json::object(),
         /*doc=*/"Liveness probe. Returns {pong: true}.",
         [](const json&) -> json { return {{"pong", true}}; });
+    registry.RegisterAlias("app.ping", "cairns.app.ping");
 
     registry.Register(
-        "app.version",
+        "cairns.app.version",
         /*schema=*/json::object(),
         /*doc=*/"Returns engine and protocol versions.",
         [](const json&) -> json {
             return {{"engine", kEngineVersion},
                     {"protocol", kProtocolVersion}};
         });
+    registry.RegisterAlias("app.version", "cairns.app.version");
 
     registry.Register(
-        "app.quit",
+        "cairns.app.quit",
         /*schema=*/json::object(),
         /*doc=*/"Signals the transport loop to exit cleanly after the next "
                 "response is flushed.",
@@ -39,6 +41,7 @@ void RegisterLifecycleOps(CommandRegistry& registry, bool* quit_flag) {
             }
             return {{"quitting", true}};
         });
+    registry.RegisterAlias("app.quit", "cairns.app.quit");
 
     registry.Register(
         "tools.list",

@@ -12,7 +12,7 @@ namespace cairns::control {
 
 void RegisterRenderOps(CommandRegistry& registry, cairns::Engine* engine) {
     registry.Register(
-        "render.frame",
+        "cairns.render.frame",
         /*schema=*/json::object(),
         /*doc=*/"Render one frame to final_target_ (clear-only in P1C; scene "
                 "render once P2 wires it).",
@@ -27,7 +27,7 @@ void RegisterRenderOps(CommandRegistry& registry, cairns::Engine* engine) {
         });
 
     registry.Register(
-        "io.dumpTexture",
+        "cairns.io.dumpTexture",
         /*schema=*/json::object(),
         /*doc=*/"Read back the named target to PNG. target='final' for now; "
                 "viewport:N / shadow:N / depth:N to follow.",
@@ -62,6 +62,9 @@ void RegisterRenderOps(CommandRegistry& registry, cairns::Engine* engine) {
             }
             throw std::runtime_error("unsupported target -- use final or window");
         });
+
+    registry.RegisterAlias("render.frame", "cairns.render.frame");
+    registry.RegisterAlias("io.dumpTexture", "cairns.io.dumpTexture");
 }
 
 }  // namespace cairns::control
