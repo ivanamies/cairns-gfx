@@ -31,7 +31,6 @@ inline constexpr size_t mem_index(Memory mem) {
 struct HeapBlock {
     WGPUBuffer master_buffer = nullptr;  // null for image pools
     void* mapped_ptr = nullptr;          // null if device-only
-    OffsetAllocator::Allocator offset_alloc;
     uint32_t size_bytes = 0;
     Memory mem_type = Memory::kDefault;
     bool is_image_pool = false;
