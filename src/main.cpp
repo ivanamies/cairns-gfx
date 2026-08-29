@@ -83,7 +83,7 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     // env vars. Default to a small entity count so the S22's MoltenVK/
     // Adreno tile budget isn't blown by the 3300-hero benchmark; mirrors
     // the CAIRNS_N=9 setting the macOS user used to test pick + outline.
-    setenv("CAIRNS_N", "100", 0);
+    setenv("CAIRNS_N", "9", 0);
 #endif
 
     constexpr uint32_t kWindowStartWidth = 1280;

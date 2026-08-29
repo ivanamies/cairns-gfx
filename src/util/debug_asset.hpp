@@ -12,7 +12,7 @@
 namespace cairns {
 
 static constexpr uint32_t kDebugGlbsToParseStart = 3;
-static constexpr uint32_t kDebugGlbsToParse = 100;
+static constexpr uint32_t kDebugGlbsToParse = 9;
 
 // Fail-fast: the range MUST fit. If you delete entries and break this,
 // the build dies here -- not at strlen(nullptr) on the deployed device.

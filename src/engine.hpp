@@ -1710,6 +1710,18 @@ public:
         slot_lock.unlock();
         render_thread_->Submit(slot, &s.pkt);
 
+#if defined(__ANDROID__)
+        {
+            PerSlot& ps = slots_[slot];
+            std::unique_lock<std::mutex> lk(present_m_);
+            present_cv_.wait(lk, [&] { return ps.present_ready; });
+            rhi::FrameContext present_fc = ps.present_fc;
+            rhi::SwapResolveTarget present_target = ps.present_target;
+            ps.present_ready = false;
+            lk.unlock();
+            rhi_.frames.Present(present_target, present_fc);
+        }
+#else
         if (prev_present_slot_ >= 0) {
             PerSlot& ps = slots_[prev_present_slot_];
             std::unique_lock<std::mutex> lk(present_m_);
@@ -1721,6 +1733,7 @@ public:
             rhi_.frames.Present(present_target, present_fc);
         }
         prev_present_slot_ = static_cast<int32_t>(slot);
+#endif
 
         // Under CAIRNS_DUMP, collapse to depth-1 pipelining: wait for the
         // render thread to fully complete this frame before the next iteration
@@ -3035,7 +3048,7 @@ private:
     // backend.
     std::mutex present_m_;
     std::condition_variable present_cv_;
-    int32_t prev_present_slot_ = -1;
+    [[maybe_unused]] int32_t prev_present_slot_ = -1;
     bool dump_emitted_ = false;
     uint32_t dump_emit_frame_ = 0;
 

@@ -654,6 +654,7 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
 
     uint32_t image_index = 0;
     if (sc) {
+        std::lock_guard<std::mutex> lk(plat.swapchain_mutex_);
         VkResult acquire = vkAcquireNextImageKHR(dev, sc->plat.swapChain, UINT64_MAX,
                                                  plat.image_available_[cf], VK_NULL_HANDLE,
                                                  &image_index);
@@ -766,7 +767,11 @@ void Frames::Present(const SwapResolveTarget& target, FrameContext& fc) {
     pi.swapchainCount = 1;
     pi.pSwapchains = swapchains;
     pi.pImageIndices = &fc.swapchain_image_index;
-    const VkResult present = vkQueuePresentKHR(plat.present_queue_, &pi);
+    VkResult present;
+    {
+        std::lock_guard<std::mutex> lk(plat.swapchain_mutex_);
+        present = vkQueuePresentKHR(plat.present_queue_, &pi);
+    }
 
     if (!dump_path_.empty()) {
         vkQueueWaitIdle(plat.present_queue_);

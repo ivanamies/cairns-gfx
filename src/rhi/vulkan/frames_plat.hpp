@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <mutex>
 #include <vector>
 
 #include <vulkan/vulkan.h>
@@ -19,6 +20,7 @@ struct FramesPlat {
     VkQueue graphics_queue_ = VK_NULL_HANDLE;
     VkQueue compute_queue_ = VK_NULL_HANDLE;
     VkQueue present_queue_ = VK_NULL_HANDLE;
+    std::mutex swapchain_mutex_;
     uint32_t frames_in_flight_ = 0;
     uint32_t recorder_frame_ = 0;
     std::vector<VkCommandBuffer> graphics_cmds_;
