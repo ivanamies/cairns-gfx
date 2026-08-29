@@ -86,10 +86,6 @@ public:
     void Present(const SwapResolveTarget& target,
                   FrameCapture& frame_capture, FrameContext& fc);
 
-    void PresentFromFinalTarget(SwapChain& swapchain, Allocator& alloc,
-                                  Resources& resources,
-                                  Handle<Texture> src_target);
-
     // #222 Phase F.2: SetDumpPath retired -- call
     // Rhi::frame_capture.SetDumpPath() instead. The dump still fires
     // inside EndSubmit (needs the backend swap image), but the request

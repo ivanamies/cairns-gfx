@@ -21,6 +21,11 @@ struct FramesPlat {
     VkQueue graphics_queue_ = VK_NULL_HANDLE;
     VkQueue compute_queue_ = VK_NULL_HANDLE;
     VkQueue present_queue_ = VK_NULL_HANDLE;
+    // Mirrored from Device. Lock around every vkQueueSubmit /
+    // vkQueuePresentKHR / vkQueueWaitIdle on the queues above. Render
+    // thread submits + main thread presents on the same queue handle;
+    // VK spec requires external sync.
+    std::mutex* queue_mutex_ = nullptr;
     std::mutex swapchain_mutex_;
     std::atomic<bool> recreate_pending_{false};
     uint32_t frames_in_flight_ = 0;

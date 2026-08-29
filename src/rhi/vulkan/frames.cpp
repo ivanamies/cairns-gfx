@@ -486,12 +486,6 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     return fc;
 }
 
-void Frames::PresentFromFinalTarget(SwapChain& /*swapchain*/,
-                                      Allocator& /*alloc*/,
-                                      Resources& /*resources*/,
-                                      Handle<Texture> /*src_target*/) {
-}
-
 // Render-thread safe. End all open command buffers + vkQueueSubmit both
 // queues. Does NOT call vkQueuePresentKHR -- see Present below.
 void Frames::EndSubmit(const SwapResolveTarget& target,

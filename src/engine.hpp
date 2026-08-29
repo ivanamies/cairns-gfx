@@ -482,6 +482,15 @@ public:
     // Returns LoadPrefabBatchResult exactly like LoadPrefabBatch.
     LoadPrefabBatchResult RuntimeLoadBatch(
             std::span<const std::filesystem::path> glbs) {
+        // Unity 2-thread pattern: park the render thread before main
+        // thread touches the queue (LoadPrefabBatch does vkQueueSubmit
+        // for staging copies; device.WaitIdle below is itself a
+        // queue-touching call requiring external sync). Without this
+        // drain the validation layer fires
+        // UNASSIGNED-Threading-MultipleThreads-Write on VkQueue.
+        if (render_thread_) {
+            render_thread_->Drain();
+        }
         rhi_.device.WaitIdle();
         LoadPrefabBatchResult r = LoadPrefabBatch(glbs);
         if (r.count > 0) {
@@ -2106,16 +2115,13 @@ public:
         // surfaceless mode it builds a SwapResolveTarget pointing at
         // final_target_; in windowed mode it pulls one out of swapchain_.
         // SwapChain and Frames have no notion of "headless" mode.
-        has_window_ = !cfg.surfaceless;
-        {
-            const uint32_t ftw = cfg.surfaceless ? cfg.width : swapchain_.Width();
-            const uint32_t fth = cfg.surfaceless ? cfg.height : swapchain_.Height();
-            final_target_w_ = ftw;
-            final_target_h_ = fth;
+        if (cfg.surfaceless) {
+            final_target_w_ = cfg.width;
+            final_target_h_ = cfg.height;
             rhi::TextureDesc td{};
             td.debug_name = "final_target";
-            td.dimensions = {static_cast<int32_t>(ftw),
-                             static_cast<int32_t>(fth), 1};
+            td.dimensions = {static_cast<int32_t>(cfg.width),
+                             static_cast<int32_t>(cfg.height), 1};
             td.format = rhi::Format::kBgra8Unorm;
             td.usage = rhi::kTexUsageColorTarget | rhi::kTexUsageSampled |
                        rhi::kTexUsageTransferSrc | rhi::kTexUsageTransferDst;
@@ -2231,37 +2237,7 @@ public:
         }
         render_thread_ = std::make_unique<cairns::RenderThread>(
             [this](cairns::FramePacket& pkt) { this->RecordFrame(pkt); });
-        if (has_window_) {
-            present_thread_stop_ = false;
-            present_thread_ = std::make_unique<std::thread>([this] {
-                this->PresentThreadLoop();
-            });
-        }
         return true;
-    }
-
-    void PresentThreadLoop() {
-        while (true) {
-            int32_t slot = -1;
-            {
-                std::unique_lock<std::mutex> lk(present_thread_m_);
-                present_thread_cv_.wait(lk, [&] {
-                    return present_thread_stop_ ||
-                           !present_thread_queue_.empty();
-                });
-                if (present_thread_stop_) {
-                    return;
-                }
-                slot = present_thread_queue_.front();
-                present_thread_queue_.pop_front();
-            }
-            (void)slot;
-            if (final_target_.IsNull()) {
-                continue;
-            }
-            rhi_.frames.PresentFromFinalTarget(swapchain_, rhi_.alloc,
-                                                rhi_.resources, final_target_);
-        }
     }
 
     bool BuildMeshOpaqueDraws(uint32_t slot) {
@@ -2856,7 +2832,7 @@ public:
         // in the byte-gate) AND in surfaceless mode (cairns_serve has no
         // SDL3 platform backend init'd; ImGui_ImplSDL3_NewFrame would
         // assert. final_target_ being non-null is the surfaceless marker).
-        const bool draw_imgui = !golden_ && has_window_;
+        const bool draw_imgui = !golden_ && final_target_.IsNull();
         if (draw_imgui) {
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
@@ -2976,32 +2952,13 @@ public:
         slot_lock.unlock();
         render_thread_->Submit(slot, &s.pkt);
 
-        present_queue_.push_back(static_cast<int32_t>(slot));
-        {
-            cairns::Timer t_pw("present_wait", 9);
-            while (!present_queue_.empty()) {
-                const int32_t head = present_queue_.front();
-                PerSlot& ps = slots_[head];
-                rhi::FrameContext present_fc{};
-                rhi::SwapResolveTarget present_target{};
-                bool ready = false;
-                {
-                    std::unique_lock<std::mutex> lk(present_m_);
-                    if (ps.present_ready) {
-                        present_fc = ps.present_fc;
-                        present_target = ps.present_target;
-                        ps.present_ready = false;
-                        ready = true;
-                    }
-                }
-                if (!ready) {
-                    break;
-                }
-                present_queue_.pop_front();
-                rhi_.frames.Present(present_target, rhi_.frame_capture,
-                                    present_fc);
-            }
-        }
+        // Unity 2-thread pattern: render thread owns ALL VkQueue access
+        // including vkQueuePresentKHR. Main thread does NOT poll, wait,
+        // or call Frames::Present -- the entire present_queue_ + present_m_
+        // + present_ready machinery is vestigial and only kept for the
+        // PerSlot fields used by the surfaceless / golden / pick drain
+        // path. Back-pressure on main is via render_thread_->Submit
+        // (depth = kFramesInFlight).
         prev_present_slot_ = static_cast<int32_t>(slot);
 
         // Under CAIRNS_DUMP, collapse to depth-1 pipelining: wait for the
@@ -3142,7 +3099,7 @@ public:
     // Pick the per-frame swap target. SwapChain and Frames are
     // app-mode-agnostic -- the engine is the one place that knows which
     // texture the swap pass writes into this frame.
-    rhi::SwapResolveTarget AcquireFrameSwapTarget(uint32_t /*slot*/) {
+    rhi::SwapResolveTarget AcquireFrameSwapTarget() {
         if (final_target_.IsNull()) {
             return swapchain_.AcquireForFrame();
         }
@@ -3181,7 +3138,7 @@ public:
         // Engine -- not the RHI -- picks the per-frame swap target. Windowed:
         // pull the next drawable from the SwapChain. Surfaceless: hand Frames
         // the engine-owned offscreen, with no drawable so it doesn't present.
-        rhi::SwapResolveTarget swap_target = AcquireFrameSwapTarget(pkt.slot);
+        rhi::SwapResolveTarget swap_target = AcquireFrameSwapTarget();
         rhi::FrameContext fc = rhi_.frames.Begin(
             rhi_.resources, rhi_.alloc, rhi_.gpu_profiler,
             rhi_.offscreen_targets, swap_target);
@@ -3683,6 +3640,9 @@ public:
         if (!graph_->Bake(pkt.slot) || !graph_->Execute(fc, swap_target)) {
             t_record.End();
             rhi_.frames.EndSubmit(swap_target, rhi_.frame_capture, fc);
+            // Unity 2-thread pattern: render thread owns ALL VkQueue access
+            // (submit + present). Main thread never touches the queue.
+            rhi_.frames.Present(swap_target, rhi_.frame_capture, fc);
             {
                 std::lock_guard<std::mutex> lk(present_m_);
                 s.present_fc = fc;
@@ -3690,14 +3650,6 @@ public:
                 s.present_ready = true;
             }
             present_cv_.notify_all();
-            if (has_window_ && present_thread_) {
-                {
-                    std::lock_guard<std::mutex> lk(present_thread_m_);
-                    present_thread_queue_.push_back(
-                        static_cast<int32_t>(pkt.slot));
-                }
-                present_thread_cv_.notify_all();
-            }
             return;
         }
         if (frame_ <= 6) {
@@ -3717,6 +3669,9 @@ public:
         }
         t_record.End();
         rhi_.frames.EndSubmit(swap_target, rhi_.frame_capture, fc);
+        // Unity 2-thread pattern: render thread owns ALL VkQueue access
+        // (submit + present). Main thread never touches the queue.
+        rhi_.frames.Present(swap_target, rhi_.frame_capture, fc);
         {
             std::lock_guard<std::mutex> lk(present_m_);
             s.present_fc = fc;
@@ -3724,14 +3679,6 @@ public:
             s.present_ready = true;
         }
         present_cv_.notify_all();
-        if (has_window_ && present_thread_) {
-            {
-                std::lock_guard<std::mutex> lk(present_thread_m_);
-                present_thread_queue_.push_back(
-                    static_cast<int32_t>(pkt.slot));
-            }
-            present_thread_cv_.notify_all();
-        }
     }
 
     bool initRenderPipeline() {
@@ -4944,15 +4891,6 @@ public:
             render_thread_->Shutdown();
             render_thread_.reset();
         }
-        if (present_thread_) {
-            {
-                std::lock_guard<std::mutex> lk(present_thread_m_);
-                present_thread_stop_ = true;
-            }
-            present_thread_cv_.notify_all();
-            present_thread_->detach();
-            present_thread_.reset();
-        }
         swapchain_.Deinit();
         rhi_.pipelines.Deinit(rhi_.resources);
         rhi_.frames.Deinit();
@@ -5250,13 +5188,6 @@ private:
     std::condition_variable present_cv_;
     [[maybe_unused]] int32_t prev_present_slot_ = -1;
     std::deque<int32_t> present_queue_;
-
-    std::unique_ptr<std::thread> present_thread_;
-    std::mutex present_thread_m_;
-    std::condition_variable present_thread_cv_;
-    std::deque<int32_t> present_thread_queue_;
-    bool present_thread_stop_ = false;
-    bool has_window_ = false;
     bool dump_emitted_ = false;
     uint32_t dump_emit_frame_ = 0;
 
@@ -5265,7 +5196,6 @@ private:
     // cfg.surfaceless == true in GreaterInit; null otherwise. P1C uses a
     // minimal clear-only render path; P2+ wires the full scene path through it.
     rhi::Handle<rhi::Texture> final_target_ = rhi::Handle<rhi::Texture>::Null;
-    std::array<rhi::Handle<rhi::Texture>, kFramesInFlight> final_targets_{};
     uint32_t final_target_w_ = 0;
     uint32_t final_target_h_ = 0;
 

@@ -20,6 +20,9 @@
 # (scripts/_drive_spawn.js) -- this script just pipes NDJSON.
 
 set -e
+# Run under non-interactive zsh (assistant/CI). Ensure PATH has the
+# standard system bin dirs since /etc/zshenv may strip them.
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 cd "$(dirname "$0")/.."
 
 fifo=tmp/_dev_fifo
@@ -28,9 +31,10 @@ holder_pid_file=tmp/_dev_holder_pid
 log_file=tmp/_dev_log
 mkdir -p tmp
 
-# JSON-encode arbitrary text via python3 (stdlib, ships with macOS).
+# JSON-encode arbitrary text via Apple's system python3 (avoids
+# Homebrew/global rule).
 jsenc() {
-    python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'
+    /usr/bin/python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'
 }
 
 send_op() {
