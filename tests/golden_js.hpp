@@ -28,7 +28,55 @@
 #include "test_seams.hpp"
 #include "test_refs.hpp"
 
+#if defined(__APPLE__) && CAIRNS_METAL
+#include <Metal/Metal.hpp>
+#include <Foundation/Foundation.hpp>
+#include <cstdlib>
+#include <filesystem>
+#endif
+
 namespace cairns::golden {
+
+#if defined(__APPLE__) && CAIRNS_METAL
+// Headless GPU frame capture (throwaway, for tmp/). Env-gated: when
+// CAIRNS_CAPTURE_SUBJECT matches a subject name, RunJsSubject wraps that
+// subject's frame-9 GPU work in an MTL .gputrace under CAIRNS_CAPTURE_DIR.
+// Targets the default device -- the same one the engine's
+// CreateSystemDefaultDevice() returns -- so the engine's command buffers land
+// in the trace. Needs MTL_CAPTURE_ENABLED=1 in the environment. Used to inspect
+// the bistable three_champ_static GPU flake (FLAKY_TESTS.md #2).
+namespace capture_detail {
+inline MTL::CaptureManager* g_active = nullptr;
+inline bool BeginGpuCapture(const std::string& path) {
+    std::error_code ec;
+    std::filesystem::remove_all(path, ec);  // Metal refuses to overwrite
+    MTL::Device* dev = MTL::CreateSystemDefaultDevice();
+    if (dev == nullptr) {
+        return false;
+    }
+    MTL::CaptureManager* mgr = MTL::CaptureManager::sharedCaptureManager();
+    if (!mgr->supportsDestination(MTL::CaptureDestinationGPUTraceDocument)) {
+        return false;  // MTL_CAPTURE_ENABLED=1 not set
+    }
+    MTL::CaptureDescriptor* desc = MTL::CaptureDescriptor::alloc()->init();
+    desc->setCaptureObject(dev);
+    desc->setDestination(MTL::CaptureDestinationGPUTraceDocument);
+    NS::String* p = NS::String::string(path.c_str(), NS::UTF8StringEncoding);
+    desc->setOutputURL(NS::URL::fileURLWithPath(p));
+    NS::Error* err = nullptr;
+    const bool ok = mgr->startCapture(desc, &err);
+    desc->release();
+    g_active = ok ? mgr : nullptr;
+    return ok;
+}
+inline void EndGpuCapture() {
+    if (g_active != nullptr) {
+        g_active->stopCapture();
+        g_active = nullptr;
+    }
+}
+}  // namespace capture_detail
+#endif
 
 // Clear the shared registry, register every op group against THIS scenario's
 // engine, install a fresh JS context, then eval the composition `js`. (The
@@ -114,7 +162,37 @@ inline void RunJsSubject(const char* name, uint32_t w, uint32_t h,
         }
         REQUIRE(obs == ref);
     };
-    capture("09", 9);
+    {
+        uint32_t f9_advance = 9;
+#if defined(__APPLE__) && CAIRNS_METAL
+        const char* cap_subj = std::getenv("CAIRNS_CAPTURE_SUBJECT");
+        const bool do_cap =
+            (cap_subj != nullptr) && (std::string(cap_subj) == std::string(name));
+        // RAII so a REQUIRE(obs==ref) throw on the bad render still flushes the
+        // trace to disk before the exception unwinds out of RunJsSubject.
+        struct CapGuard {
+            bool active;
+            ~CapGuard() {
+                if (active) {
+                    capture_detail::EndGpuCapture();
+                }
+            }
+        };
+        if (do_cap) {
+            // Advance to frame 8 OUTSIDE the capture so the .gputrace holds only
+            // frame 9's GPU work (one frame, not nine -- far smaller on disk).
+            REQUIRE(seam::AdvanceFrames(e, 8));
+            f9_advance = 1;
+            const char* cap_dir = std::getenv("CAIRNS_CAPTURE_DIR");
+            const std::string dir =
+                (cap_dir != nullptr && cap_dir[0] != '\0') ? cap_dir : ".";
+            capture_detail::BeginGpuCapture(dir + "/" + std::string(name) +
+                                            ".f09.gputrace");
+        }
+        CapGuard cap_guard{do_cap};
+#endif
+        capture("09", f9_advance);
+    }
     capture("55", 46);
 }
 

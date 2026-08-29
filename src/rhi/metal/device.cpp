@@ -65,9 +65,20 @@ bool Device::InitSwapChain(SwapChain& sc, const InitConfig& cfg) {
     return sc.plat.Init(plat.device_, cfg.plat.metal_layer);
 }
 
-// Drawable resize is synchronous on Metal (handled at acquireNextDrawable
-// time inside frames.cpp), so no global wait is needed.
-void Device::WaitIdle() {}
+// Block until all GPU work on the device completes -- identical semantics to
+// the vk backend's vkDeviceWaitIdle (callers on unload/reset/shutdown rely on
+// the GPU being quiesced before they mutate or free resources; a no-op here was
+// a silent cross-backend divergence). Metal has no device-wide wait, so flush
+// the single shared queue: an empty command buffer committed last completes
+// only after every prior command buffer (FIFO completion), then wait on it.
+void Device::WaitIdle() {
+    if (plat.queue_ == nullptr) {
+        return;
+    }
+    MTL::CommandBuffer* cb = plat.queue_->commandBuffer();
+    cb->commit();
+    cb->waitUntilCompleted();
+}
 
 }  // namespace cairns::rhi
 

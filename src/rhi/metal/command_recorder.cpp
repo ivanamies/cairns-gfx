@@ -251,6 +251,9 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
             plat.enc_->waitForFence(plat.compute_fence_,
                                      MTL::RenderStageVertex);
         }
+        if (plat.gfx_fence_ != nullptr) {
+            plat.enc_->waitForFence(plat.gfx_fence_, MTL::RenderStageVertex);
+        }
         return;
     }
 
@@ -281,6 +284,9 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
     if (plat.compute_fence_ != nullptr) {
         plat.enc_->waitForFence(plat.compute_fence_,
                                  MTL::RenderStageVertex);
+    }
+    if (plat.gfx_fence_ != nullptr) {
+        plat.enc_->waitForFence(plat.gfx_fence_, MTL::RenderStageVertex);
     }
     rpd->release();
 }
@@ -516,6 +522,16 @@ void CommandRecorder::SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) {
 }
 
 void CommandRecorder::EndRenderPass() {
+    // Signal the graphics fence after this pass's fragment writes so the NEXT
+    // render pass that samples this pass's output (e.g. swap reading color_off)
+    // waits for it. Untracked render targets => the encoder boundary alone does
+    // NOT sync graphics->graphics. Metal mirror of the vk transition() barrier.
+    if (plat.gfx_fence_ == nullptr && plat.cmd_ != nullptr) {
+        plat.gfx_fence_ = plat.cmd_->device()->newFence();
+    }
+    if (plat.gfx_fence_ != nullptr) {
+        plat.enc_->updateFence(plat.gfx_fence_, MTL::RenderStageFragment);
+    }
     plat.enc_->endEncoding();
 }
 
