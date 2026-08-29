@@ -12,10 +12,10 @@
 #include <cstdint>
 
 #include "rhi/resource_manager.hpp"  // Handle<>, Memory, Buffer
-#if CAIRNS_VULKAN
-#include "rhi/vulkan/memory_allocator.hpp"
-#elif CAIRNS_METAL
-#include "rhi/metal/memory_allocator.hpp"
+#if CAIRNS_METAL
+#include "rhi/metal/allocator_plat.hpp"
+#elif CAIRNS_VULKAN
+#include "rhi/vulkan/allocator_plat.hpp"
 #endif
 
 namespace cairns::rhi {
@@ -46,14 +46,9 @@ public:
     // Advance the bump ring (retire + begin). CALLER: RESOURCES (AdvanceFrame).
     void AdvanceFrame(uint32_t frame_index);
 
-    // MemoryAllocator + alignments; Resources walks these during create/destroy.
-#if CAIRNS_VULKAN
-    vulkan::MemoryAllocator memory_;
-    uint32_t uniform_align_ = 256;
-    uint32_t storage_align_ = 256;
-#elif CAIRNS_METAL
-    metal::MemoryAllocator memory_;
-#endif
+    // MemoryAllocator + alignments; Resources walks plat.memory_ during
+    // create/destroy.
+    AllocatorPlat plat;
 
 private:
     bool inited_ = false;

@@ -117,7 +117,7 @@ void Resources::Destroy(Allocator& alloc, Handle<Buffer> h) {
     if (!hot || !cold) {
         return;
     }
-    alloc.memory_.FreeBuffer(
+    alloc.plat.memory_.FreeBuffer(
         hot->heap_buffer_index, cold->alloc,
         plat.frame_index_ + kFramesInFlight);
     buffers.Release(h);
@@ -129,7 +129,7 @@ void Resources::Destroy(Allocator& alloc, Handle<Texture> h) {
     if (!hot || !cold) {
         return;
     }
-    alloc.memory_.FreeImage(
+    alloc.plat.memory_.FreeImage(
         cold->heap_buffer_index, cold->alloc, hot->api_view,
         plat.frame_index_ + kFramesInFlight);
     textures.Release(h);
@@ -195,7 +195,7 @@ uint32_t Resources::GetBufferByteSize(Handle<Buffer> h) {
 
 Handle<Buffer> Resources::CreateBuffer(Allocator& alloc, const BufferDesc& d) {
     metal::AllocResult r =
-        alloc.memory_.AllocBuffer(d.byte_size, d.usage, d.memory, 16);
+        alloc.plat.memory_.AllocBuffer(d.byte_size, d.usage, d.memory, 16);
     assert(r.ok && "AllocBuffer failed");
     if (!r.ok) {
         return Handle<Buffer>::Null;
@@ -236,27 +236,27 @@ void Resources::UploadBuffer(Allocator& alloc, Handle<Buffer> h,
         }
         return;
     }
-    const uint32_t saved_cursor = alloc.memory_.BumpSaveCursor(Memory::kUpload);
-    const uint32_t ring_bytes = alloc.memory_.BumpRingBytes(Memory::kUpload);
+    const uint32_t saved_cursor = alloc.plat.memory_.BumpSaveCursor(Memory::kUpload);
+    const uint32_t ring_bytes = alloc.plat.memory_.BumpRingBytes(Memory::kUpload);
     const uint32_t cap = (ring_bytes > saved_cursor + 16u)
                              ? (ring_bytes - saved_cursor - 16u)
                              : 0u;
     const size_t total = data.size();
     MTL::Buffer* dst_buf =
-        alloc.memory_.HeapMasterBuffer(hot->heap_buffer_index);
+        alloc.plat.memory_.HeapMasterBuffer(hot->heap_buffer_index);
     size_t done = 0;
     while (done < total && cap > 0u) {
         const uint32_t chunk =
             static_cast<uint32_t>(std::min<size_t>(total - done, cap));
         uint32_t src_off = 0;
-        void* staging = alloc.memory_.BumpAllocate(chunk, 16, Memory::kUpload,
+        void* staging = alloc.plat.memory_.BumpAllocate(chunk, 16, Memory::kUpload,
                                                    &src_off);
         if (!staging) {
             break;
         }
         std::memcpy(staging, data.data() + done, chunk);
-        uint32_t src_hi = alloc.memory_.BumpMasterHeapIndex(Memory::kUpload);
-        MTL::Buffer* src = alloc.memory_.HeapMasterBuffer(src_hi);
+        uint32_t src_hi = alloc.plat.memory_.BumpMasterHeapIndex(Memory::kUpload);
+        MTL::Buffer* src = alloc.plat.memory_.HeapMasterBuffer(src_hi);
         MTL::CommandBuffer* cmd = plat.queue_->commandBuffer();
         MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
         blit->copyFromBuffer(src, src_off, dst_buf,
@@ -264,7 +264,7 @@ void Resources::UploadBuffer(Allocator& alloc, Handle<Buffer> h,
         blit->endEncoding();
         cmd->commit();
         cmd->waitUntilCompleted();
-        alloc.memory_.BumpRestoreCursor(Memory::kUpload, saved_cursor);
+        alloc.plat.memory_.BumpRestoreCursor(Memory::kUpload, saved_cursor);
         done += chunk;
     }
 }
@@ -288,7 +288,7 @@ Handle<Texture> Resources::CreateTexture(Allocator& alloc, const TextureDesc& d)
 
     MTL::SizeAndAlign sa = plat.device_->heapTextureSizeAndAlign(td);
 
-    metal::AllocResult r = alloc.memory_.AllocImage(
+    metal::AllocResult r = alloc.plat.memory_.AllocImage(
         static_cast<uint32_t>(sa.size),
         static_cast<uint32_t>(sa.align),
         d.memory);
@@ -298,13 +298,13 @@ Handle<Texture> Resources::CreateTexture(Allocator& alloc, const TextureDesc& d)
         return Handle<Texture>::Null;
     }
 
-    MTL::Heap* heap = alloc.memory_.HeapHandle(r.heap_index);
+    MTL::Heap* heap = alloc.plat.memory_.HeapHandle(r.heap_index);
     assert(heap && "null heap for image");
     MTL::Texture* tex = heap->newTexture(td, r.offset);
     td->release();
     assert(tex && "heap newTexture failed");
     if (!tex) {
-        alloc.memory_.FreeImage(r.heap_index, r.alloc, nullptr,
+        alloc.plat.memory_.FreeImage(r.heap_index, r.alloc, nullptr,
                                 plat.frame_index_ + kFramesInFlight);
         return Handle<Texture>::Null;
     }
@@ -438,7 +438,7 @@ MTL::Buffer* Resources::GetMtlBuffer(Allocator& alloc, Handle<Buffer> h, uint32_
         if (out_offset) {
             *out_offset = 0;
         }
-        return alloc.memory_.HeapMasterBuffer(h.index);
+        return alloc.plat.memory_.HeapMasterBuffer(h.index);
     }
     Buffer::Hot* hot = buffers.GetHot(h);
     assert(hot && "GetMtlBuffer: invalid buffer handle");
@@ -451,7 +451,7 @@ MTL::Buffer* Resources::GetMtlBuffer(Allocator& alloc, Handle<Buffer> h, uint32_
     if (out_offset) {
         *out_offset = hot->offset_in_heap;
     }
-    return alloc.memory_.HeapMasterBuffer(hot->heap_buffer_index);
+    return alloc.plat.memory_.HeapMasterBuffer(hot->heap_buffer_index);
 }
 
 uint8_t* Resources::MappedPtr(Allocator& alloc, Handle<Buffer> h) {
@@ -460,7 +460,7 @@ uint8_t* Resources::MappedPtr(Allocator& alloc, Handle<Buffer> h) {
         return nullptr;
     }
     uint8_t* base = static_cast<uint8_t*>(
-        alloc.memory_.HeapMappedPtr(hot->heap_buffer_index));
+        alloc.plat.memory_.HeapMappedPtr(hot->heap_buffer_index));
     if (!base) {
         return nullptr;
     }
@@ -468,11 +468,11 @@ uint8_t* Resources::MappedPtr(Allocator& alloc, Handle<Buffer> h) {
 }
 
 MTL::Buffer* Resources::GetBumpMasterBuffer(Allocator& alloc, Memory mem) const {
-    uint32_t hi = alloc.memory_.BumpMasterHeapIndex(mem);
+    uint32_t hi = alloc.plat.memory_.BumpMasterHeapIndex(mem);
     if (hi == metal::kInvalidBlock) {
         return nullptr;
     }
-    return alloc.memory_.HeapMasterBuffer(hi);
+    return alloc.plat.memory_.HeapMasterBuffer(hi);
 }
 
 }  // namespace cairns::rhi
