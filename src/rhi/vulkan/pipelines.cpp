@@ -353,6 +353,15 @@ VkShaderFiles resolve_vk_shader(const char* logical) {
         // Outline post-process fullscreen tri.
         return {"outline.vert.spv", "outline.frag.spv", nullptr};
     }
+    if (std::strcmp(logical, "kuwahara_tensor") == 0) {
+        return {"composite_pip.vert.spv", "kuwahara_tensor.frag.spv", nullptr};
+    }
+    if (std::strcmp(logical, "kuwahara_tfm") == 0) {
+        return {"composite_pip.vert.spv", "kuwahara_tfm.frag.spv", nullptr};
+    }
+    if (std::strcmp(logical, "kuwahara_filter") == 0) {
+        return {"composite_pip.vert.spv", "kuwahara_filter.frag.spv", nullptr};
+    }
     if (std::strcmp(logical, "skin") == 0) {
         // Skin compute kernel (no vert/frag).
         return {nullptr, nullptr, "skin.comp.spv"};
@@ -586,6 +595,12 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
         // 1 = id; only outline statically accesses binding 1). Composite and
         // outline share this layout.
         set_layouts = {plat.composite_set_layout_};
+    } else if (ls == "kuwahara_tensor" || ls == "kuwahara_tfm" ||
+               ls == "kuwahara_filter") {
+        // Post-effect family: composite textures at set 0 + the dyn-UBO
+        // params block at set 1 (same shape as globals, so the layout is
+        // reusable; DrawFullscreenParams binds it with the frame's offset).
+        set_layouts = {plat.composite_set_layout_, plat.globals_set_layout_};
     } else if (ls == "imgui") {
         VkDescriptorSetLayoutBinding b{};
         b.binding = 0;

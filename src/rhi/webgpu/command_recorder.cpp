@@ -328,6 +328,46 @@ void CommandRecorder::DrawFullscreen(Resources& res, Handle<Shader> pipeline,
     }
     wgpuRenderPassEncoderDraw(plat.enc_, 3, 1, 0, 0);
 }
+void CommandRecorder::DrawFullscreenParams(
+    Resources& res, Allocator& alloc, Handle<Shader> pipeline,
+    std::span<const Handle<Texture>> textures, Handle<Sampler> sampler,
+    Handle<DynamicBuffers> params_set, uint32_t params_offset) {
+    // params_set carries no webgpu state: the layout already declared the
+    // dynamic-offset uniform at binding N+1, and the buffer is the kDynamic
+    // master directly.
+    (void)params_set;
+    if (!plat.enc_) { return; }
+    Shader::Hot* sh = res.GetHot(pipeline);
+    if (!sh || !sh->api_pso) { return; }
+    WGPUBuffer master = res.plat.GetBumpMasterBuffer(alloc, Memory::kDynamic);
+    if (!master || !sh->plat.bind_group_layouts[0]) { return; }
+    wgpuRenderPassEncoderSetPipeline(plat.enc_,
+                                     static_cast<WGPURenderPipeline>(sh->api_pso));
+    // Textures at 0..N-1, sampler at N, params dyn-UBO at N+1.
+    WGPUBindGroupEntry entries[8] = {};
+    uint32_t n = 0;
+    for (; n < textures.size() && n < 6; ++n) {
+        Texture::Hot* th = res.GetHot(textures[n]);
+        entries[n].binding = n;
+        entries[n].textureView =
+            th ? static_cast<WGPUTextureView>(th->api_view) : nullptr;
+    }
+    Sampler::Hot* smp = res.GetHot(sampler);
+    entries[n].binding = n;
+    entries[n].sampler = smp ? static_cast<WGPUSampler>(smp->api_sampler)
+                             : nullptr;
+    entries[n + 1].binding = n + 1;
+    entries[n + 1].buffer = master;
+    entries[n + 1].size = 64;
+    WGPUBindGroupDescriptor bgd = {};
+    bgd.layout = sh->plat.bind_group_layouts[0];
+    bgd.entryCount = n + 2;
+    bgd.entries = entries;
+    WGPUBindGroup bg = wgpuDeviceCreateBindGroup(plat.device_, &bgd);
+    wgpuRenderPassEncoderSetBindGroup(plat.enc_, 0, bg, 1, &params_offset);
+    plat.transient_bind_groups_.push_back(bg);
+    wgpuRenderPassEncoderDraw(plat.enc_, 3, 1, 0, 0);
+}
 void CommandRecorder::SetViewport(float x, float y, float w, float h) {
     if (!plat.enc_ || w <= 0.0f || h <= 0.0f) { return; }
     wgpuRenderPassEncoderSetViewport(plat.enc_, x, y, w, h, 0.0f, 1.0f);

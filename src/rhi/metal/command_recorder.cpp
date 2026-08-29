@@ -573,6 +573,37 @@ void CommandRecorder::DrawFullscreen(Resources& res, Handle<Shader> pipeline,
     enc->drawPrimitives(MTL::PrimitiveTypeTriangle, NS::UInteger(0), NS::UInteger(3));
 }
 
+void CommandRecorder::DrawFullscreenParams(
+    Resources& res, Allocator& alloc, Handle<Shader> pipeline,
+    std::span<const Handle<Texture>> textures, Handle<Sampler> sampler,
+    Handle<DynamicBuffers> params_set, uint32_t params_offset) {
+    (void)params_set;  // metal binds the master buffer directly
+    MTL::RenderCommandEncoder* enc = plat.enc_;
+    Shader::Hot* sh = res.GetHot(pipeline);
+    if (!sh || !sh->api_pso) {
+        return;
+    }
+    enc->setRenderPipelineState(sh->api_pso);
+    enc->setCullMode(MTL::CullModeNone);
+    MTL::SamplerState* samp = res.GetHot(sampler)->api_sampler;
+    for (uint32_t i = 0; i < textures.size(); ++i) {
+        MTL::Texture* tex = res.GetHot(textures[i])->api_view;
+        if (tex) {
+            enc->useResource(tex, MTL::ResourceUsageRead,
+                             MTL::RenderStageFragment);
+            enc->setFragmentTexture(tex, i);
+        }
+        enc->setFragmentSamplerState(samp, i);
+    }
+    // Params UBO: fragment buffer index space is disjoint from fragment
+    // textures, so index 0 is free.
+    MTL::Buffer* dyn_master =
+        res.plat.GetBumpMasterBuffer(alloc, Memory::kDynamic);
+    enc->setFragmentBuffer(dyn_master, params_offset, 0);
+    enc->drawPrimitives(MTL::PrimitiveTypeTriangle, NS::UInteger(0),
+                        NS::UInteger(3));
+}
+
 void CommandRecorder::SetViewport(float x, float y, float w, float h) {
     MTL::Viewport vp{};
     vp.originX = x;

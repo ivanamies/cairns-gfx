@@ -84,11 +84,24 @@ struct ShaderInfo {
     int tex_count = 0;
     bool depth_sample = false;  // depthviz samples a Depth32Float target
     bool id_textures = false;   // outline: binding 0 = color (float), 1+ = R32U
+    // Post-effect passes: the fullscreen group gains a dynamic-offset 64-byte
+    // uniform at binding tex_count+1 (DrawFullscreenParams supplies it).
+    bool has_params = false;
 };
 ShaderInfo Classify(const char* logical) {
     if (!logical) { return {}; }
     if (std::strcmp(logical, "composite_pip") == 0) {
         return {Kind::kFullscreen, "composite_pip", 1};
+    }
+    if (std::strcmp(logical, "kuwahara_tensor") == 0) {
+        return {Kind::kFullscreen, "kuwahara_tensor", 1, false, false, true};
+    }
+    if (std::strcmp(logical, "kuwahara_tfm") == 0) {
+        return {Kind::kFullscreen, "kuwahara_tfm", 1, false, false, true};
+    }
+    if (std::strcmp(logical, "kuwahara_filter") == 0) {
+        // binding 0 = scene color, 1 = the tensor-flow-map, sampler @2.
+        return {Kind::kFullscreen, "kuwahara_filter", 2, false, false, true};
     }
     if (std::strcmp(logical, "depthviz") == 0) {
         return {Kind::kFullscreen, "depthviz", 1, true};
@@ -213,8 +226,18 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(Resources& resources, Frames& f
             (info.depth_sample || info.id_textures)
                 ? WGPUSamplerBindingType_NonFiltering
                 : WGPUSamplerBindingType_Filtering;
+        size_t entry_count = static_cast<size_t>(info.tex_count) + 1;
+        if (info.has_params) {
+            WGPUBindGroupLayoutEntry& pe = entries[info.tex_count + 1];
+            pe.binding = static_cast<uint32_t>(info.tex_count) + 1;
+            pe.visibility = WGPUShaderStage_Fragment;
+            pe.buffer.type = WGPUBufferBindingType_Uniform;
+            pe.buffer.hasDynamicOffset = true;
+            pe.buffer.minBindingSize = 64;
+            ++entry_count;
+        }
         WGPUBindGroupLayoutDescriptor bgld = {};
-        bgld.entryCount = static_cast<size_t>(info.tex_count) + 1;
+        bgld.entryCount = entry_count;
         bgld.entries = entries;
         bgl0 = wgpuDeviceCreateBindGroupLayout(plat.device_, &bgld);
         WGPUPipelineLayoutDescriptor pld = {};

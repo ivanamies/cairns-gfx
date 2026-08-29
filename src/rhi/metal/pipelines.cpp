@@ -164,6 +164,18 @@ MetalShaderInfo resolve_metal_shader(const char* logical) {
         return {"outline.metal", "cube::vertexShader", "cube::fragmentShader",
                 nullptr};
     }
+    if (std::strcmp(logical, "kuwahara_tensor") == 0) {
+        return {"kuwahara.metal", "kuwahara::fullscreen_vertex",
+                "kuwahara::tensor_fragment", nullptr};
+    }
+    if (std::strcmp(logical, "kuwahara_tfm") == 0) {
+        return {"kuwahara.metal", "kuwahara::fullscreen_vertex",
+                "kuwahara::tfm_fragment", nullptr};
+    }
+    if (std::strcmp(logical, "kuwahara_filter") == 0) {
+        return {"kuwahara.metal", "kuwahara::fullscreen_vertex",
+                "kuwahara::filter_fragment", nullptr};
+    }
     if (std::strcmp(logical, "skin") == 0) {
         // Skin compute kernel (no vert/frag).
         return {"skin.metal", nullptr, nullptr, "skin_compute"};

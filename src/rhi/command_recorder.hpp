@@ -187,6 +187,19 @@ public:
     void DrawFullscreen(Resources& res, Handle<Shader> pipeline,
                         std::span<const Handle<Texture>> textures,
                         Handle<Sampler> sampler);
+    // Fullscreen pass with a 64-byte params UBO (the post-effect chain).
+    // params_offset = a kDynamic bump offset the caller filled this frame.
+    // params_set = a DynamicBuffers whose binding 0 is a dyn UBO over the
+    // kDynamic master (the dyn_globals_ shape): vk binds its per-FIF set at
+    // set 1 with the dynamic offset; webgpu appends a dynamic-offset uniform
+    // entry to the fullscreen group; metal binds the master buffer directly
+    // (fragment buffer 0) and ignores the set.
+    void DrawFullscreenParams(Resources& res, Allocator& alloc,
+                              Handle<Shader> pipeline,
+                              std::span<const Handle<Texture>> textures,
+                              Handle<Sampler> sampler,
+                              Handle<DynamicBuffers> params_set,
+                              uint32_t params_offset);
     void SetViewport(float x, float y, float w, float h);
     void SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h);
     void DrawImGui(Resources& res, Allocator& alloc, Handle<Shader> pipeline,

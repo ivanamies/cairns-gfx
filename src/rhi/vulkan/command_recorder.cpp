@@ -862,6 +862,46 @@ void CommandRecorder::DrawFullscreen(Resources& res, Handle<Shader> pipeline,
     vkCmdDraw(plat.gfx_, 3, 1, 0, 0);
 }
 
+void CommandRecorder::DrawFullscreenParams(
+    Resources& res, Allocator& alloc, Handle<Shader> pipeline,
+    std::span<const Handle<Texture>> textures, Handle<Sampler> sampler,
+    Handle<DynamicBuffers> params_set, uint32_t params_offset) {
+    (void)alloc;  // vk reaches the master through params_set's dyn UBO
+    Shader::Hot* sh = res.GetHot(pipeline);
+    DynamicBuffers::Hot* dh = res.GetHot(params_set);
+    if (!sh || !dh || dh->plat.vk_sets[plat.frame_] == VK_NULL_HANDLE) {
+        return;
+    }
+    VkSampler samp = reinterpret_cast<VkSampler>(
+        res.GetHot(sampler)->api_sampler);
+    VkDescriptorSet set = plat.composite_sets_[plat.composite_next_idx_];
+    plat.composite_next_idx_ = (plat.composite_next_idx_ + 1) % kCompositeRingSize;
+    const uint32_t n = static_cast<uint32_t>(textures.size());
+    std::array<VkDescriptorImageInfo, 4> infos{};
+    std::array<VkWriteDescriptorSet, 4> writes{};
+    for (uint32_t i = 0; i < n; ++i) {
+        infos[i].sampler = samp;
+        infos[i].imageView = reinterpret_cast<VkImageView>(
+            res.GetHot(textures[i])->api_view);
+        infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = set;
+        writes[i].dstBinding = i;
+        writes[i].dstArrayElement = 0;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].pImageInfo = &infos[i];
+    }
+    vkUpdateDescriptorSets(plat.device_, n, writes.data(), 0, nullptr);
+    vkCmdBindPipeline(plat.gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->plat.vk_pipeline);
+    vkCmdBindDescriptorSets(plat.gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->plat.vk_layout,
+                            0, 1, &set, 0, nullptr);
+    VkDescriptorSet params_vk_set = dh->plat.vk_sets[plat.frame_];
+    vkCmdBindDescriptorSets(plat.gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->plat.vk_layout,
+                            1, 1, &params_vk_set, 1, &params_offset);
+    vkCmdDraw(plat.gfx_, 3, 1, 0, 0);
+}
+
 void CommandRecorder::SetViewport(float x, float y, float w, float h) {
     // Negative height matches BeginRenderPass: keep the Metal-convention Y-flip.
     VkViewport vp{};
