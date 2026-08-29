@@ -16,15 +16,22 @@ namespace cairns::rhi {
 // gives the upload bump ring a chance to recycle. The final on-GPU layout is
 // unchanged: ONE shared vertex buffer [positions | attributes] + ONE shared
 // index buffer, with primitives' vertexOffset / firstIndex patched to global.
-inline bool LoadScenesGpu(std::span<Scene> scenes, Resources& rm, Allocator& alloc) {
+// #220 Step 2: meshes are engine-owned via cairns::ResourceManager<Mesh>;
+// Scene only holds MeshIds. Pool reference threaded through so this
+// function can resolve each mesh's Hot (primitives, GPU handles to write)
+// and Cold (CPU temporaries to read).
+inline bool LoadScenesGpu(std::span<Scene> scenes,
+                          cairns::ResourceManager<Mesh>& meshes_pool,
+                          Resources& rm, Allocator& alloc) {
     static constexpr size_t kBatchSize = 10;
 
     size_t total_verts = 0;
     size_t total_indices = 0;
     for (const Scene& scene : scenes) {
-        for (const Mesh& mesh : scene.meshes) {
-            total_verts += mesh.cpuPositions.size();
-            total_indices += mesh.cpuIndices.size();
+        for (cairns::Handle<Mesh> mid : scene.meshes) {
+            Mesh::Cold* mcold = meshes_pool.GetCold(mid);
+            total_verts += mcold->cpuPositions.size();
+            total_indices += mcold->cpuIndices.size();
         }
     }
     if (total_verts == 0) {
@@ -58,15 +65,17 @@ inline bool LoadScenesGpu(std::span<Scene> scenes, Resources& rm, Allocator& all
     size_t running_vert = 0;
     size_t running_idx = 0;
     for (Scene& scene : scenes) {
-        for (Mesh& mesh : scene.meshes) {
+        for (cairns::Handle<Mesh> mid : scene.meshes) {
+            Mesh::Hot* mhot = meshes_pool.GetHot(mid);
+            Mesh::Cold* mcold = meshes_pool.GetCold(mid);
             const int32_t base_vertex = static_cast<int32_t>(running_vert);
             const uint32_t base_index = static_cast<uint32_t>(running_idx);
-            for (Primitive& prim : mesh.primitives) {
+            for (Primitive& prim : mhot->primitives) {
                 prim.vertexOffset += base_vertex;
                 prim.firstIndex += base_index;
             }
-            running_vert += mesh.cpuPositions.size();
-            running_idx += mesh.cpuIndices.size();
+            running_vert += mcold->cpuPositions.size();
+            running_idx += mcold->cpuIndices.size();
         }
     }
 
@@ -84,13 +93,14 @@ inline bool LoadScenesGpu(std::span<Scene> scenes, Resources& rm, Allocator& all
         std::vector<VertexAttribute> attr_batch;
         std::vector<uint32_t> idx_batch;
         for (size_t s = batch_start; s < batch_end; ++s) {
-            for (const Mesh& mesh : scenes[s].meshes) {
-                pos_batch.insert(pos_batch.end(), mesh.cpuPositions.begin(),
-                                 mesh.cpuPositions.end());
-                attr_batch.insert(attr_batch.end(), mesh.cpuAttrs.begin(),
-                                  mesh.cpuAttrs.end());
-                idx_batch.insert(idx_batch.end(), mesh.cpuIndices.begin(),
-                                 mesh.cpuIndices.end());
+            for (cairns::Handle<Mesh> mid : scenes[s].meshes) {
+                Mesh::Cold* mcold = meshes_pool.GetCold(mid);
+                pos_batch.insert(pos_batch.end(), mcold->cpuPositions.begin(),
+                                 mcold->cpuPositions.end());
+                attr_batch.insert(attr_batch.end(), mcold->cpuAttrs.begin(),
+                                  mcold->cpuAttrs.end());
+                idx_batch.insert(idx_batch.end(), mcold->cpuIndices.begin(),
+                                 mcold->cpuIndices.end());
             }
         }
 
@@ -129,10 +139,11 @@ inline bool LoadScenesGpu(std::span<Scene> scenes, Resources& rm, Allocator& all
     }
 
     for (Scene& scene : scenes) {
-        for (Mesh& mesh : scene.meshes) {
-            mesh.posHandle = shared_vtx;
-            mesh.attrHandle = attr_alias;
-            mesh.indexHandle = shared_idx;
+        for (cairns::Handle<Mesh> mid : scene.meshes) {
+            Mesh::Hot* mhot = meshes_pool.GetHot(mid);
+            mhot->posHandle = shared_vtx;
+            mhot->attrHandle = attr_alias;
+            mhot->indexHandle = shared_idx;
         }
     }
     return true;

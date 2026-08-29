@@ -49,23 +49,29 @@ struct Primitive {
     uint32_t materialIndex = 0;
 };
 
+// #220 Step 2: Aaltonen Hot/Cold split. Pooled via
+// cairns::ResourceManager<Mesh> on Engine; MeshId is Handle<Mesh>.
+// Scene::meshes is now std::vector<MeshId> -- mesh data is engine-owned,
+// not nested in Scene, so multiple scenes can later reference the same
+// loaded GLB through AssetRegistry. Primitive stays a std::vector inside
+// Hot for now (Tier-3 flat array, recorder iterates per draw); becomes
+// a Span<Primitive> candidate in the allocator sweep round, separate axis.
 struct Mesh {
-    std::string name;
-    
-    // GPU Handles
-    rhi::Handle<rhi::Buffer> posHandle;
-    rhi::Handle<rhi::Buffer> attrHandle; // Bindless attributes (UV, Norm, etc)
-    rhi::Handle<rhi::Buffer> indexHandle;
-    
-    // Sub-sections of this mesh
-    std::vector<Primitive> primitives;
-    
-    /////////////////
-    // temporaries //
-    std::vector<glm::vec4> cpuPositions;
-    std::vector<VertexAttribute> cpuAttrs;
-    std::vector<uint32_t> cpuIndices;
-    /////////////////
+    struct Hot {
+        // Read on every draw of this mesh.
+        rhi::Handle<rhi::Buffer> posHandle;
+        rhi::Handle<rhi::Buffer> attrHandle; // Bindless attributes (UV, Norm, etc)
+        rhi::Handle<rhi::Buffer> indexHandle;
+        std::vector<Primitive> primitives;
+    };
+    struct Cold {
+        std::string name;
+        // CPU load-time temporaries. Cleared post-upload by
+        // Engine's mesh-pool sweep (was scene.CleanupTmps's job).
+        std::vector<glm::vec4> cpuPositions;
+        std::vector<VertexAttribute> cpuAttrs;
+        std::vector<uint32_t> cpuIndices;
+    };
 };
 
 struct Node {
@@ -109,7 +115,9 @@ struct LoadedMaterial {
 };
 
 struct Scene {
-    std::vector<Mesh> meshes;
+    // #220 Step 2: was std::vector<Mesh>. Mesh data is now engine-owned
+    // via cairns::ResourceManager<Mesh>; Scene only holds the handles.
+    std::vector<cairns::Handle<Mesh>> meshes;
     std::vector<Node> nodes;
     std::vector<int32_t> rootNodes;
 
@@ -127,14 +135,12 @@ struct Scene {
     std::vector<cairns::Handle<LoadedMaterial>> materialIds;  // #220 Step 1
 
     void CleanupTmps() {
+        // #220 Step 2: mesh CPU temporaries used to be cleared here;
+        // they now live in Engine::meshes_ pool's Cold side, cleared by
+        // an engine-level pool sweep after LoadScenesGpu.
         for ( size_t i = 0; i < loaded_textures.size(); ++i ) {
             auto& tex_desc = loaded_textures[i];
             stbi_image_free(tex_desc.src_image);
-        }
-        for ( size_t i = 0; i < meshes.size(); ++i ) {
-            meshes[i].cpuPositions.clear();
-            meshes[i].cpuAttrs.clear();
-            meshes[i].cpuIndices.clear();
         }
         loaded_textures.clear();
         loaded_samplers.clear();
@@ -143,19 +149,24 @@ struct Scene {
     }
 };
 
-inline bool LoadMeshFromGltf(const fastgltf::Asset& asset, const fastgltf::Mesh& gltfMesh, Mesh& outMesh) {
-    outMesh.name = std::string(gltfMesh.name);
-    outMesh.cpuPositions.clear();
-    outMesh.cpuAttrs.clear();
-    outMesh.cpuIndices.clear();
+// #220 Step 2: writes split-out Hot + Cold sides instead of a combined
+// Mesh value. Caller (LoadSceneFromGltf) is responsible for Acquiring
+// the pool slot and handing in fresh refs to its Hot/Cold cells.
+inline bool LoadMeshFromGltf(const fastgltf::Asset& asset,
+                             const fastgltf::Mesh& gltfMesh,
+                             Mesh::Hot& outHot, Mesh::Cold& outCold) {
+    outCold.name = std::string(gltfMesh.name);
+    outCold.cpuPositions.clear();
+    outCold.cpuAttrs.clear();
+    outCold.cpuIndices.clear();
 
     for (const auto& primitive : gltfMesh.primitives) {
         Primitive outPrim;
         outPrim.materialIndex = static_cast<uint32_t>(primitive.materialIndex.value_or(0));
-        
+
         // Offset management: Where this primitive starts in the "Big Buffer"
-        outPrim.vertexOffset = static_cast<int32_t>(outMesh.cpuPositions.size());
-        outPrim.firstIndex = static_cast<uint32_t>(outMesh.cpuIndices.size());
+        outPrim.vertexOffset = static_cast<int32_t>(outCold.cpuPositions.size());
+        outPrim.firstIndex = static_cast<uint32_t>(outCold.cpuIndices.size());
 
         size_t vertexCount = 0;
 
@@ -165,20 +176,20 @@ inline bool LoadMeshFromGltf(const fastgltf::Asset& asset, const fastgltf::Mesh&
             auto& accessor = asset.accessors[posIt->accessorIndex];
             vertexCount = accessor.count;
             fastgltf::iterateAccessorWithIndex<glm::vec3>(asset, accessor, [&](glm::vec3 v, [[maybe_unused]] size_t i) {
-                outMesh.cpuPositions.push_back(glm::vec4(v, 1.0f));
+                outCold.cpuPositions.push_back(glm::vec4(v, 1.0f));
             });
         }
-        
+
         // Resize attributes
-        size_t currentAttrOffset = outMesh.cpuAttrs.size();
-        outMesh.cpuAttrs.resize(currentAttrOffset + vertexCount);
+        size_t currentAttrOffset = outCold.cpuAttrs.size();
+        outCold.cpuAttrs.resize(currentAttrOffset + vertexCount);
 
         // 2. NORMALS
         const auto* normIt = primitive.findAttribute("NORMAL");
         if (normIt != primitive.attributes.end()) {
             auto& accessor = asset.accessors[normIt->accessorIndex];
             fastgltf::iterateAccessorWithIndex<glm::vec3>(asset, accessor, [&](glm::vec3 v, size_t i) {
-                outMesh.cpuAttrs[currentAttrOffset + i].normal = glm::vec4(v, 0.0f);
+                outCold.cpuAttrs[currentAttrOffset + i].normal = glm::vec4(v, 0.0f);
             });
         }
 
@@ -187,16 +198,16 @@ inline bool LoadMeshFromGltf(const fastgltf::Asset& asset, const fastgltf::Mesh&
         if (uvIt != primitive.attributes.end()) {
             auto& accessor = asset.accessors[uvIt->accessorIndex];
             fastgltf::iterateAccessorWithIndex<glm::vec2>(asset, accessor, [&](glm::vec2 v, size_t i) {
-                outMesh.cpuAttrs[currentAttrOffset + i].uv = glm::vec2(v.x, v.y);
+                outCold.cpuAttrs[currentAttrOffset + i].uv = glm::vec2(v.x, v.y);
             });
         }
-        
+
         // 4. COLOR
         const auto* colIt = primitive.findAttribute("COLOR_0");
         if (colIt != primitive.attributes.end()) {
             auto& accessor = asset.accessors[colIt->accessorIndex];
             fastgltf::iterateAccessorWithIndex<glm::vec4>(asset, accessor, [&](glm::vec4 v, size_t i) {
-                outMesh.cpuAttrs[currentAttrOffset + i].color = v;
+                outCold.cpuAttrs[currentAttrOffset + i].color = v;
             });
         }
 
@@ -207,16 +218,19 @@ inline bool LoadMeshFromGltf(const fastgltf::Asset& asset, const fastgltf::Mesh&
             fastgltf::iterateAccessorWithIndex<uint32_t>(asset, accessor, [&](uint32_t idx, [[maybe_unused]] size_t i) {
                 // Keep indices 0-based relative to the primitive slice
                 // Draw command will add `vertexOffset` (baseVertex) to these
-                outMesh.cpuIndices.push_back(idx);
+                outCold.cpuIndices.push_back(idx);
             });
         }
-        
-        outMesh.primitives.push_back(outPrim);
+
+        outHot.primitives.push_back(outPrim);
     }
     return true;
 }
 
-inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene) {
+// #220 Step 2: takes the engine-owned Mesh pool so loaded meshes go
+// into it; Scene only collects their MeshIds.
+inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene,
+                               cairns::ResourceManager<Mesh>& meshes_pool) {
     size_t byte_count = 0;
     void* file_data = SDL_LoadFile(path.string().c_str(), &byte_count);
     if (!file_data) return false;
@@ -332,10 +346,14 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene) {
         }
     }
 
-    // 4. Meshes
+    // 4. Meshes -- #220 Step 2: acquire pool slot per gltf mesh, write
+    // Hot+Cold, push the MeshId into the Scene's mesh list.
     for (size_t i = 0; i < asset.meshes.size(); ++i) {
-        scene.meshes.push_back(Mesh());
-        LoadMeshFromGltf(asset, asset.meshes[i], scene.meshes[i]);
+        cairns::Handle<Mesh> mid = meshes_pool.Acquire();
+        Mesh::Hot* mhot = meshes_pool.GetHot(mid);
+        Mesh::Cold* mcold = meshes_pool.GetCold(mid);
+        LoadMeshFromGltf(asset, asset.meshes[i], *mhot, *mcold);
+        scene.meshes.push_back(mid);
     }
     
     // 5. Nodes

@@ -18,8 +18,13 @@ namespace cairns {
 // for the DFS; emits the same MeshProxy/PrimitiveProxy shape as the old
 // Extract above. Sets proxy.skin = kInvalidSkin unconditionally
 // (matches old extract; skinning lands at P8).
+// #220 Step 2: meshes are engine-owned (cairns::ResourceManager<Mesh>);
+// Scene only holds MeshIds. Pool reference threaded through so the
+// inner walk can resolve each MeshId to its Hot record.
 inline void ExtractFromWorld(World::Cold& wc, const glm::mat4& root,
-                             AssetRegistry& assets, RenderProxyArrays& out) {
+                             AssetRegistry& assets,
+                             cairns::ResourceManager<Mesh>& meshes_pool,
+                             RenderProxyArrays& out) {
     out.Clear();
     constexpr uint32_t kStackCap = 256;
     int32_t stack[kStackCap];
@@ -67,14 +72,17 @@ inline void ExtractFromWorld(World::Cold& wc, const glm::mat4& root,
                 continue;
             }
 
-            const Mesh& mesh = scene.meshes[node.meshIndex];
+            // #220 Step 2: scene.meshes is std::vector<MeshId>; resolve
+            // to the engine's pool Hot record for the GPU handles.
+            const cairns::Handle<Mesh> mid = scene.meshes[node.meshIndex];
+            const Mesh::Hot* mhot = meshes_pool.GetHot(mid);
             MeshProxy proxy;
             proxy.world_matrix = node.globalTransform * model;
-            proxy.pos = mesh.posHandle;
-            proxy.attr = mesh.attrHandle;
-            proxy.index = mesh.indexHandle;
+            proxy.pos = mhot->posHandle;
+            proxy.attr = mhot->attrHandle;
+            proxy.index = mhot->indexHandle;
             proxy.first_primitive = static_cast<uint32_t>(out.primitives.size());
-            proxy.primitive_count = static_cast<uint32_t>(mesh.primitives.size());
+            proxy.primitive_count = static_cast<uint32_t>(mhot->primitives.size());
             proxy.skin = kInvalidSkin;
             proxy.layer_mask = rdr.layer_mask;
             proxy.flags = rdr.flags;
@@ -82,7 +90,7 @@ inline void ExtractFromWorld(World::Cold& wc, const glm::mat4& root,
             // "background" rather than entity index 0.
             proxy.entity_id =
                 static_cast<uint32_t>(entt::to_integral(entity)) + 1u;
-            for (const Primitive& prim : mesh.primitives) {
+            for (const Primitive& prim : mhot->primitives) {
                 PrimitiveProxy pp;
                 pp.first_index = prim.firstIndex;
                 pp.index_count = prim.indexCount;

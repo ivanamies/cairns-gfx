@@ -663,7 +663,9 @@ public:
             for (const std::filesystem::path& filepath : glb_paths) {
                 scenes_.emplace_back();
                 cairns::Scene& scene = scenes_.back();
-                if (!cairns::LoadSceneFromGltf(filepath, scene)) {
+                // #220 Step 2: pool threaded through so Acquired Mesh
+                // slots land in the engine-owned meshes_ pool.
+                if (!cairns::LoadSceneFromGltf(filepath, scene, meshes_)) {
                     return false;
                 }
                 cairns::PrepareSceneResources(scene, rhi_.resources, rhi_.alloc, materials_);
@@ -671,16 +673,28 @@ public:
 
             if (!cairns::rhi::LoadScenesGpu(
                     std::span<cairns::Scene>(scenes_.data(), scenes_.size()),
-                    rhi_.resources, rhi_.alloc)) {
+                    meshes_, rhi_.resources, rhi_.alloc)) {
                 return false;
             }
 
             for (cairns::Scene& scene : scenes_) {
                 scene.CleanupTmps();
             }
+            // #220 Step 2: clear every Mesh's CPU temporaries in the pool
+            // after upload. Used to live inside Scene::CleanupTmps, but
+            // mesh data now lives in the engine-owned pool, not Scene.
+            meshes_.ForEachLive(
+                [](cairns::Mesh::Hot&, cairns::Mesh::Cold& c) {
+                    c.cpuPositions.clear();
+                    c.cpuAttrs.clear();
+                    c.cpuIndices.clear();
+                });
         }
         if (!scenes_.empty() && !scenes_[0].meshes.empty()) {
-            mesh_master_handle_ = scenes_[0].meshes[0].posHandle;
+            // #220 Step 2: lookup via pool. scenes_[0].meshes[0] is now a
+            // MeshId; the actual posHandle is in the pool's Hot record.
+            mesh_master_handle_ =
+                meshes_.GetHot(scenes_[0].meshes[0])->posHandle;
         }
 
         // EnTT scene-layer path. Register each loaded Scene with the
@@ -700,9 +714,12 @@ public:
 
             // Shared GPU buffer handles -- all GLBs alias the same
             // packed buffer-set (see scene_gpu.hpp).
-            const auto pos_handle = scenes_[0].meshes[0].posHandle;
-            const auto attr_handle = scenes_[0].meshes[0].attrHandle;
-            const auto idx_handle = scenes_[0].meshes[0].indexHandle;
+            // #220 Step 2: scenes_[0].meshes[0] is a MeshId; resolve.
+            const cairns::Mesh::Hot* m0_hot =
+                meshes_.GetHot(scenes_[0].meshes[0]);
+            const auto pos_handle = m0_hot->posHandle;
+            const auto attr_handle = m0_hot->attrHandle;
+            const auto idx_handle = m0_hot->indexHandle;
 
             std::vector<cairns::AssetId> per_scene_asset;
             per_scene_asset.reserve(scenes_.size());
@@ -934,7 +951,7 @@ public:
             cairns::PropagateTransforms(*wc, glm::mat4(1.0f));
             if (wid.index == active_world_.index) {
                 cairns::ExtractFromWorld(*wc, wh->root_transform, assets_,
-                                         s.proxies);
+                                         meshes_, s.proxies);
             } else {
                 if (wh->proxy_slot < world_proxies_.size()) {
                     // #219 Chunk B: secondary-world proxies share this CPU
@@ -943,6 +960,7 @@ public:
                     // world_proxies_[i] exists yet (#194/#190 path stub).
                     world_proxies_[wh->proxy_slot].Reset(s.arena, 2048, 8192);
                     cairns::ExtractFromWorld(*wc, wh->root_transform, assets_,
+                                             meshes_,
                                              world_proxies_[wh->proxy_slot]);
                 }
             }
@@ -962,7 +980,7 @@ public:
                     wh_a->root_transform = rot_matrix;
                     cairns::PropagateTransforms(*wc_a, glm::mat4(1.0f));
                     cairns::ExtractFromWorld(*wc_a, wh_a->root_transform,
-                                             assets_, s.proxies);
+                                             assets_, meshes_, s.proxies);
                 }
             }
         }
@@ -2179,6 +2197,12 @@ private:
     // prior parallel material_bind_groups_ vector could not detect.
     cairns::ResourceManager<cairns::LoadedMaterial> materials_;
     // material_bind_groups_ DELETED -- set2 now lives in Hot.
+
+    // #220 Step 2: handle-pilled mesh pool. Was nested inside each
+    // Scene as std::vector<Mesh>; lifted out so multiple scenes can
+    // reference the same loaded GLB through AssetRegistry. Scene now
+    // holds std::vector<MeshId>.
+    cairns::ResourceManager<cairns::Mesh> meshes_;
 
     // Per-slot frame buffers (drawList / drawListSorted / proxies /
     // resident_textures / draw_world_matrices / pending_globals / globals_offset
