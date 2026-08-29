@@ -251,6 +251,11 @@ bool InjectHudStats(cairns::Engine& engine, const cairns::HudStats& s) {
     return true;
 }
 
+bool EnableParticles(cairns::Engine& engine, bool on) {
+    engine.EnableParticles(on);
+    return true;
+}
+
 bool ReadFinalTargetRgba(cairns::Engine& engine,
                          std::vector<uint8_t>& rgba, uint32_t& w,
                          uint32_t& h) {

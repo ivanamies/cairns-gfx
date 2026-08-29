@@ -94,6 +94,11 @@ bool EnableImguiOverlay(cairns::Engine& engine, bool on);
 // G6: pump fixed HUD numbers into the overlay so the screen is byte-stable.
 bool InjectHudStats(cairns::Engine& engine, const cairns::HudStats& s);
 
+// G1: enable / disable particle compute + draw at the engine level. Tests
+// that need particles (G1, G3 right viewport) flip this true; everything
+// else lives with the default-off Phase A.2 gate.
+bool EnableParticles(cairns::Engine& engine, bool on);
+
 // Ladder & scenario screen readback. Same surface as
 // Engine::ReadFinalTargetRgba; mirrored here so tests don't include
 // engine.hpp twice.

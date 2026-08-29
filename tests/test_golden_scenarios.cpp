@@ -29,16 +29,11 @@ SCENARIO("particles render deterministically across platforms",
     REQUIRE(seam::BootHeadless(e, 512, 512));
     REQUIRE(seam::AdvanceToGoldenFrame(e));
 
+    // G1 image SECTION: A.1 switched initParticles to ParticleRng, so
+    // particles are now byte-stable across runs. Re-enabled.
+    seam::EnableParticles(e, true);  // override the default-off Phase A.2 gate
+    REQUIRE(seam::AdvanceFrames(e, 9));
     SECTION("golden image (per-platform)") {
-        // Production initParticles seeds via std::srand + std::rand (see
-        // src/engine.hpp:5002). std::rand is implementation-defined and not
-        // even byte-stable between back-to-back program runs on the same
-        // platform here -- so the rendered particles vary run-to-run and the
-        // image hash isn't a meaningful regression check until the engine
-        // switches to ParticleRng (see [spec][particles][determinism]).
-        SKIP("production particle init uses std::rand -- non-deterministic. "
-             "Switch initParticles to ParticleRng/SeedParticles "
-             "(src/render/particle_emitter.hpp) to enable this section.");
         std::vector<uint8_t> rgba;
         uint32_t w = 0;
         uint32_t h = 0;
@@ -69,8 +64,11 @@ SCENARIO("particles render deterministically across platforms",
 //    Building block: [spec][core][handle] (#228 reuse-not-reset) + asset dedup.
 SCENARIO("hot reload: spawn, replace, and clear stay correct",
          "[golden][scenarios][hot_reload]") {
-    const std::vector<std::string> first  = {"lol_a.glb","lol_b.glb","lol_c.glb","lol_d.glb"};
-    const std::vector<std::string> second = {"lol_e.glb","lol_f.glb","lol_g.glb","lol_h.glb","lol_i.glb"};
+    // Real assets from the project tree (the amalgam's lol_a..i.glb didn't
+    // exist). 4 + 5 distinct heroes; the 5-after-4 path exercises the
+    // ResourceManager generation-bump recycle (#228 regression).
+    const std::vector<std::string> first  = {"aatrox.glb","ahri.glb","akali.glb","alistar.glb"};
+    const std::vector<std::string> second = {"amumu.glb","anivia.glb","aatrox_blood_moon.glb","ahri_academy.glb","akali_2022_prestige_k_da.glb"};
     if (!seam::AssetsPresent(first) || !seam::AssetsPresent(second)) {
         SKIP("hot-reload assets absent");
     }
@@ -136,12 +134,12 @@ SCENARIO("two viewports: left plain, right with particles",
 //    + [spec][frustum].
 SCENARIO("nested graph: color + resolved depth + third camera",
          "[golden][scenarios][render_graph][nested]") {
-    if (!seam::AssetsPresent({"lol_a.glb","lol_b.glb","lol_c.glb"})) {
+    if (!seam::AssetsPresent({"ahri.glb","akali.glb","alistar.glb"})) {
         SKIP("assets absent");
     }
     cairns::Engine e;
     REQUIRE(seam::BootHeadless(e, 512, 512));
-    REQUIRE(seam::SpawnGlbs(e, {"lol_a.glb","lol_b.glb","lol_c.glb"}, true));
+    REQUIRE(seam::SpawnGlbs(e, {"ahri.glb","akali.glb","alistar.glb"}, true));
     REQUIRE(seam::ConfigureNestedGraph(e));
     REQUIRE(seam::AdvanceToGoldenFrame(e));
 
@@ -175,14 +173,14 @@ SCENARIO("nested graph: color + resolved depth + third camera",
 //    Building block: [spec][frustum].
 SCENARIO("actors outside the frustum are culled from the counters",
          "[golden][scenarios][frustum]") {
-    if (!seam::AssetsPresent({"lol_a.glb"})) {
+    if (!seam::AssetsPresent({"aatrox.glb"})) {
         SKIP("assets absent");
     }
     cairns::Engine e;
     REQUIRE(seam::BootHeadless(e, 512, 512));
     constexpr uint32_t kInside = 3;
     constexpr uint32_t kOutside = 5;
-    REQUIRE(seam::SpawnInsideOutsideSplit(e, "lol_a.glb", kInside, kOutside));
+    REQUIRE(seam::SpawnInsideOutsideSplit(e, "aatrox.glb", kInside, kOutside));
     REQUIRE(seam::AdvanceToGoldenFrame(e));
 
     seam::FrameStats s{};
@@ -207,12 +205,9 @@ SCENARIO("imgui overlay is stable when fed mocked numbers",
     REQUIRE(seam::AdvanceToGoldenFrame(e));
 
     SECTION("captured screen matches the per-platform overlay reference") {
-        // Same particle-init non-determinism as G1 image SECTION: the engine's
-        // particle compute runs every frame and uses std::rand-seeded state
-        // that varies run-to-run. Switch initParticles to ParticleRng to
-        // enable this section.
-        SKIP("imgui overlay image SECTION shares the G1 particle non-determinism "
-             "gate -- see SCENARIO \"particles render deterministically...\"");
+        // A.1 + A.9: particle non-determinism is gone (ParticleRng), and the
+        // imgui-in-golden guard is dropped via SetImguiInGolden. The overlay
+        // image is now a real regression check.
         std::vector<uint8_t> rgba;
         uint32_t w = 0;
         uint32_t h = 0;
