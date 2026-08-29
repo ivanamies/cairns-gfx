@@ -2726,17 +2726,29 @@ public:
         rhi::Handle<rhi::Buffer> pos_stream_h =
             rhi::Handle<rhi::Buffer>::Null;
         if (!skin_output_pool_buffer_.IsNull()) {
-            rhi::Buffer::Hot* pool_hot =
-                rhi_.resources.GetHot(skin_output_pool_buffer_);
-            if (pool_hot) {
-                pos_stream_h = rhi_.resources.buffers.Acquire();
-                rhi::Buffer::Hot* alias_hot =
-                    rhi_.resources.buffers.GetHot(pos_stream_h);
-                alias_hot->heap_buffer_index = pool_hot->heap_buffer_index;
-                alias_hot->offset_in_heap =
-                    pool_hot->offset_in_heap +
-                    slice.offset * static_cast<uint32_t>(sizeof(glm::vec4));
+            // CRITICAL: snapshot pool fields BEFORE the next Acquire.
+            // ResourceManager::Acquire does hot_.emplace_back() which may
+            // reallocate the underlying std::vector -- any Hot* fetched
+            // earlier becomes dangling. The skinned-rendering "exploded
+            // triangles" regression was exactly this UB read.
+            uint16_t pool_heap_idx = 0;
+            uint32_t pool_off = 0;
+            {
+                rhi::Buffer::Hot* pool_hot =
+                    rhi_.resources.GetHot(skin_output_pool_buffer_);
+                if (!pool_hot) {
+                    return cairns::SkinId::Null;
+                }
+                pool_heap_idx = pool_hot->heap_buffer_index;
+                pool_off = pool_hot->offset_in_heap;
             }
+            pos_stream_h = rhi_.resources.buffers.Acquire();
+            rhi::Buffer::Hot* alias_hot =
+                rhi_.resources.buffers.GetHot(pos_stream_h);
+            alias_hot->heap_buffer_index = pool_heap_idx;
+            alias_hot->offset_in_heap =
+                pool_off +
+                slice.offset * static_cast<uint32_t>(sizeof(glm::vec4));
         }
         if (auto* h = skins_.GetHot(sid)) {
             *h = cairns::SkinnedAttachment::Hot{};
