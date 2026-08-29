@@ -30,6 +30,7 @@
 #include "util/timer.hpp"
 #include "util/log.hpp"
 #include "scene/scene_world.hpp"
+#include "render/frame_packet.hpp"
 #include "render/render_extract.hpp"
 #include "render/render_scene.hpp"
 #include "rhi/rhi.hpp"
@@ -53,7 +54,7 @@ inline static constexpr uint32_t kMockFullscreenLayer = 0;
 
 class Engine {
 public:
-    
+
     using TexHandle = rhi::Handle<rhi::Texture>;
     using BufHandle = rhi::Handle<rhi::Buffer>;
     using DynBufId = uint32_t;
@@ -61,16 +62,46 @@ public:
     using MatId = uint32_t;
     using SamplerHandle = rhi::Handle<rhi::Sampler>;
     using BindGroupId = uint32_t;
-    
+
+    static constexpr uint32_t kFramesInFlight = 2;
+
+    // Per-slot storage. drawList / drawListSorted / proxies / resident_textures
+    // / draw_world_matrices live here so the game thread can fill slot S while
+    // the render thread reads slot ~S. Capacity grows on demand; .clear()/
+    // .resize() preserve buffers across frame reuse. pending_globals etc. are
+    // staged by Build and consumed by EncodeDraws.
+    struct PerSlot {
+        cairns::RenderProxyArrays proxies;
+        std::vector<cairns::Draw, cairns::Allocator<cairns::Draw>> drawList;
+        std::vector<std::pair<cairns::DrawKey, uint32_t>,
+                    cairns::Allocator<std::pair<cairns::DrawKey, uint32_t>>>
+            drawListSorted;
+        std::vector<rhi::Handle<rhi::Texture>> resident_textures;
+        std::vector<glm::mat4> draw_world_matrices;
+        cairns::rhi::RenderPassGlobals pending_globals{};
+        glm::mat4 pending_view_matrix{1.0f};
+        float pending_near_z = 0.1f;
+        float pending_far_z = 100.0f;
+        uint32_t globals_offset = 0;
+        uint32_t dt_off = 0;
+        cairns::FramePacket pkt{};
+
+        explicit PerSlot(cairns::Arena& a)
+            : drawList(cairns::Allocator<cairns::Draw>(a)),
+              drawListSorted(
+                  cairns::Allocator<std::pair<cairns::DrawKey, uint32_t>>(a)) {}
+    };
+
     Engine() :
     hot_arena_mem_(malloc(kHotArenaMemorySize)),
     hot_arena_(hot_arena_mem_, kHotArenaMemorySize),
     scenes_(cairns::Allocator<cairns::Scene>(hot_arena_)),
-    root_nodes_stack_cache_(cairns::Allocator<int32_t>(hot_arena_)),
-    drawListSorted_(cairns::Allocator<std::pair<cairns::DrawKey,uint32_t>>(hot_arena_)),
-    drawList_(cairns::Allocator<cairns::Draw>(hot_arena_))
+    root_nodes_stack_cache_(cairns::Allocator<int32_t>(hot_arena_))
     {
-        
+        slots_.reserve(kFramesInFlight);
+        for (uint32_t i = 0; i < kFramesInFlight; ++i) {
+            slots_.emplace_back(hot_arena_);
+        }
     }
     
     bool initSwapChain(SDL_Window* window) {
@@ -254,7 +285,8 @@ public:
         return true;
     }
 
-    bool BuildMeshOpaqueDraws() {
+    bool BuildMeshOpaqueDraws(uint32_t slot) {
+        PerSlot& s = slots_[slot];
         // CPU-side scene build only. NO bump allocations -- those happen in
         // EncodeDraws() on the render-thread side post-split. Stable-index
         // writes (resize + index assignment) so the output is independent of
@@ -283,41 +315,41 @@ public:
 
         const float screen_width = swapchain_.Width();
         const float screen_height = swapchain_.Height();
-        pending_globals_ = cairns::rhi::RenderPassGlobals {
+        s.pending_globals = cairns::rhi::RenderPassGlobals {
             .view_proj = view_proj,
             .inv_view_proj = glm::inverse(view_proj),
             .camera_pos = glm::vec4(camera_pos, 1.0f /*exposure */),
             .camera_dir = glm::vec4(camera_dir, near_z),
             .screen_params = glm::vec4(screen_width, screen_height, 1.0f / screen_width, 1.0f / screen_height)
         };
-        pending_view_matrix_ = view_matrix;
-        pending_near_z_ = near_z;
-        pending_far_z_ = far_z;
+        s.pending_view_matrix = view_matrix;
+        s.pending_near_z = near_z;
+        s.pending_far_z = far_z;
 
         world_.root_transform = rot_matrix;
-        cairns::Extract(world_, proxies_);
+        cairns::Extract(world_, s.proxies);
 
         // Counting pass -> total_draws.
         uint32_t total_draws = 0;
-        for (const cairns::MeshProxy& mp : proxies_.meshes.data) {
+        for (const cairns::MeshProxy& mp : s.proxies.meshes.data) {
             total_draws += mp.primitive_count;
         }
-        drawList_.resize(total_draws);
-        drawListSorted_.resize(total_draws);
-        draw_world_matrices_.resize(total_draws);
+        s.drawList.resize(total_draws);
+        s.drawListSorted.resize(total_draws);
+        s.draw_world_matrices.resize(total_draws);
 
         // Fill pass -- stable_idx assigned by prefix sum over the proxy walk
         // (deterministic of input order, independent of execution order so a
         // future parallel_for is a drop-in).
         uint32_t stable_idx = 0;
-        for (const cairns::MeshProxy& mp : proxies_.meshes.data) {
+        for (const cairns::MeshProxy& mp : s.proxies.meshes.data) {
             const BufHandle pos = mp.pos;
             [[maybe_unused]] const BufHandle attr = mp.attr;
             const BufHandle index = mp.index;
             const glm::mat4& world_mat = mp.world_matrix;
             const uint32_t index_base_off = rhi_.resources.BufferBaseOffset(rhi_.alloc, index);
             for (uint32_t p = 0; p < mp.primitive_count; ++p) {
-                const cairns::PrimitiveProxy& prim = proxies_.primitives[mp.first_primitive + p];
+                const cairns::PrimitiveProxy& prim = s.proxies.primitives[mp.first_primitive + p];
                 const MatId mat_id = prim.material_id;
 
                 cairns::Draw draw{};
@@ -340,13 +372,13 @@ public:
                     (view_depth - near_z) / (far_z - near_z), 0.0f, 1.0f);
                 const uint32_t depth_q =
                     static_cast<uint32_t>(d01 * float((1u << 24) - 1));
-                drawListSorted_[stable_idx] = std::make_pair(
+                s.drawListSorted[stable_idx] = std::make_pair(
                     cairns::BuildDrawKey(mat_id & 0x3FFFFFFFu, depth_q,
                                          kMockTranslucency, kMockViewport,
                                          kMockViewportLayer, kMockFullscreenLayer),
                     stable_idx);
-                drawList_[stable_idx] = draw;
-                draw_world_matrices_[stable_idx] = world_mat;
+                s.drawList[stable_idx] = draw;
+                s.draw_world_matrices[stable_idx] = world_mat;
                 ++stable_idx;
             }
         }
@@ -359,29 +391,30 @@ public:
     // BuildMeshOpaqueDraws+draw() bump sequence -- globals first, per-draw
     // (material, draw_tmp) in stable_idx order, delta_time last -- so UBO
     // byte layout in the kDynamic ring is byte-equivalent to pre-refactor.
-    // Writes globals_offset_, drawList_[*].dynamic_buffer_offsets[0..1],
-    // dt_off_. delta_time pulled in by parameter.
-    void EncodeDraws(float delta_time) {
+    // Writes s.globals_offset, s.drawList[*].dynamic_buffer_offsets[0..1],
+    // s.dt_off. delta_time pulled in by parameter (carried in pkt).
+    void EncodeDraws(uint32_t slot, float delta_time) {
+        PerSlot& s = slots_[slot];
         // 1. globals UBO.
         void* gptr = rhi_.alloc.BumpAllocate(
             sizeof(cairns::rhi::RenderPassGlobals), rhi_.alloc.UboAlign(),
-            rhi::Memory::kDynamic, &globals_offset_);
+            rhi::Memory::kDynamic, &s.globals_offset);
         assert(gptr && "bump alloc failed: render pass globals");
-        memcpy(gptr, &pending_globals_, sizeof(pending_globals_));
+        memcpy(gptr, &s.pending_globals, sizeof(s.pending_globals));
         if (frame_ <= 6) {
-            const glm::mat4& vp = pending_globals_.view_proj;
+            const glm::mat4& vp = s.pending_globals.view_proj;
             const float aspect_ratio = (1.0f * swapchain_.Width()) / swapchain_.Height();
             fprintf(stderr,
                     "[FLAKE] frame=%u w=%u h=%u aspect=%.9f vp00=%.9f vp11=%.9f "
                     "vp22=%.9f vp32=%.9f goff=%u parity=%u\n",
                     frame_, swapchain_.Width(), swapchain_.Height(), aspect_ratio,
                     vp[0][0], vp[1][1], vp[2][2], vp[3][2],
-                    globals_offset_, particle_parity_);
+                    s.globals_offset, particle_parity_);
         }
 
         // 2. Per-draw material + draw_tmp UBOs in stable_idx order.
         const cairns::rhi::MaterialGpu material_gpu {};
-        for (size_t i = 0; i < drawList_.size(); ++i) {
+        for (size_t i = 0; i < s.drawList.size(); ++i) {
             uint32_t material_offset = 0;
             void* mptr = rhi_.alloc.BumpAllocate(
                 sizeof(cairns::rhi::MaterialGpu), rhi_.alloc.UboAlign(),
@@ -389,7 +422,7 @@ public:
             assert(mptr && "bump alloc failed: material");
             memcpy(mptr, &material_gpu, sizeof(material_gpu));
 
-            const cairns::rhi::DrawTmp draw_tmp { .model_matrix = draw_world_matrices_[i] };
+            const cairns::rhi::DrawTmp draw_tmp { .model_matrix = s.draw_world_matrices[i] };
             uint32_t drawtmp_offset = 0;
             void* tptr = rhi_.alloc.BumpAllocate(
                 sizeof(cairns::rhi::DrawTmp), rhi_.alloc.UboAlign(),
@@ -397,20 +430,23 @@ public:
             assert(tptr && "bump alloc failed: draw tmp");
             memcpy(tptr, &draw_tmp, sizeof(draw_tmp));
 
-            drawList_[i].dynamic_buffer_offsets[0] = material_offset;
-            drawList_[i].dynamic_buffer_offsets[1] = drawtmp_offset;
+            s.drawList[i].dynamic_buffer_offsets[0] = material_offset;
+            s.drawList[i].dynamic_buffer_offsets[1] = drawtmp_offset;
         }
 
         // 3. delta_time UBO.
         float* dt_ptr = static_cast<float*>(
             rhi_.alloc.BumpAllocate(sizeof(float), rhi_.alloc.UboAlign(),
-                                    rhi::Memory::kDynamic, &dt_off_));
+                                    rhi::Memory::kDynamic, &s.dt_off));
         assert(dt_ptr && "bump alloc failed: delta time");
         *dt_ptr = delta_time;
     }
 
     bool draw() {
         frame_++;
+        const uint32_t slot = (frame_ - 1) % kFramesInFlight;
+        PerSlot& s = slots_[slot];
+
         const uint64_t cpu_now_ns = cairns::timestamp_ns();
         if (cpu_last_frame_ns_ != 0) {
             cpu_ms_last_ = static_cast<float>(cpu_now_ns - cpu_last_frame_ns_) / 1.0e6f;
@@ -420,15 +456,17 @@ public:
         cpu_last_frame_ns_ = cpu_now_ns;
         if (frame_ == 5) {
             const char* dump = std::getenv("CAIRNS_DUMP");
-            rhi_.frames.SetDumpPath(dump ? dump : "/tmp/cairns_dump.png");
+            s.pkt.request_dump = true;
+            s.pkt.dump_path = dump ? dump : "/tmp/cairns_dump.png";
+        } else {
+            s.pkt.request_dump = false;
+            s.pkt.dump_path.clear();
         }
         if (frame_ >= 7 && std::getenv("CAIRNS_DUMP")) {
             std::exit(0);  // headless byte-gate: frame 5 dumped, now quit
         }
 
         cairns::Timer t_frame("frame", 0);
-
-        rhi::FrameContext fc = rhi_.frames.Begin(rhi_.resources, rhi_.alloc, swapchain_);
 
         const uint64_t now_ticks = SDL_GetTicks();
         float delta_time = 0.016f;
@@ -440,52 +478,32 @@ public:
         last_ticks_ = now_ticks;
 
         cairns::Timer t_build("build_draws", 1);
-        if ( !BuildMeshOpaqueDraws()) {
+        if (!BuildMeshOpaqueDraws(slot)) {
             return false;
         }
         t_build.End();
-        {
-            std::sort(drawListSorted_.begin(), drawListSorted_.end());
-        }
-        resident_textures_.clear();
-        for (auto& s : scenes_) {
-            for (const auto th : s.textureHandles) {
-                resident_textures_.push_back(th);
+        std::sort(s.drawListSorted.begin(), s.drawListSorted.end());
+        s.resident_textures.clear();
+        for (auto& scene : scenes_) {
+            for (const auto th : scene.textureHandles) {
+                s.resident_textures.push_back(th);
             }
         }
 
-        cairns::Timer t_record("record", 2);
-        EncodeDraws(delta_time);
-
-        rhi::BoundBuffer cbufs[3] = {
-            {0, rhi_.alloc.BumpMasterBuffer(rhi::Memory::kDynamic), dt_off_},
-            {1, particle_ssbo_[particle_parity_], 0},
-            {2, particle_ssbo_[1 - particle_parity_], 0},
-        };
-        rhi::ComputeDispatch cd{};
-        cd.kernel = particle_kernel_;
-        cd.buffers = std::span<const rhi::BoundBuffer>(cbufs, 3);
-        cd.groups_x = kParticleCount / 256;
-        cd.local_x = 256;
-
-        rhi::MeshDrawList ml{};
-        ml.draws = std::span<const cairns::Draw>(drawList_.data(), drawList_.size());
-        ml.sorted_draws = std::span<const std::pair<cairns::DrawKey, uint32_t>>(
-            drawListSorted_.data(), drawListSorted_.size());
-        ml.pipeline = unlit_;
-        ml.globals_offset = globals_offset_;
-        ml.resident_textures = std::span<const rhi::Handle<rhi::Texture>>(
-            resident_textures_.data(), resident_textures_.size());
-        ml.resident_buffers =
-            std::span<const rhi::Handle<rhi::Buffer>>(&mesh_master_handle_, 1);
-
-        rhi::PointDraw pd{};
-        pd.pipeline = particle_render_shader_;
-        pd.vertex_buffer = particle_ssbo_[1 - particle_parity_];
-        pd.vertex_offset = 0;
-        pd.vertex_count = kParticleCount;
-
-        const float clear[4] = {41.0f / 255.0f, 42.0f / 255.0f, 48.0f / 255.0f, 1.0f};
+        // Fill packet header (the view into per-slot storage).
+        s.pkt.frame_idx = frame_;
+        s.pkt.slot = slot;
+        s.pkt.view = s.pending_view_matrix;
+        s.pkt.proj = glm::mat4(1.0f);  // not used downstream; view_proj baked into pending_globals
+        s.pkt.near_z = s.pending_near_z;
+        s.pkt.far_z = s.pending_far_z;
+        s.pkt.delta_time = delta_time;
+        s.pkt.particle_parity_in = particle_parity_;
+        s.pkt.draws = std::span<const cairns::Draw>(s.drawList.data(), s.drawList.size());
+        s.pkt.sorted = std::span<const std::pair<cairns::DrawKey, uint32_t>>(
+            s.drawListSorted.data(), s.drawListSorted.size());
+        s.pkt.resident_textures = std::span<const rhi::Handle<rhi::Texture>>(
+            s.resident_textures.data(), s.resident_textures.size());
 
         const bool draw_imgui = std::getenv("CAIRNS_FREEZE_ROT") == nullptr;
         if (draw_imgui) {
@@ -547,14 +565,79 @@ public:
             ImGui::End();
             ImGui::PopStyleColor(4);
             ImGui::Render();
+            // For now, packet carries ImGui's live draw data pointer. The
+            // deep-copy snapshot lands in commit 5 -- until then the render
+            // path runs synchronously so the pointer is still valid.
+            s.pkt.imgui_snapshot = ImGui::GetDrawData();
+        } else {
+            s.pkt.imgui_snapshot = nullptr;
         }
 
-        // particle_sim (compute)
+        RecordFrame(s.pkt);
+
+        particle_parity_ ^= 1;
+        t_frame.End();
+        if (frame_ % 120 == 0) {
+            const size_t loaded = scenes_.size();
+            const size_t entities = world_.entities.size();
+            const size_t slices = loaded > 0 ? entities / loaded : 0;
+            CAIRNS_PRINT("============\n");
+            CAIRNS_PRINT("draws %zu | %zu GLBs x %zu slices = %zu entities | resolution %u x %u\n",
+                         s.drawList.size(), loaded, slices, entities,
+                         swapchain_.Width(), swapchain_.Height());
+            cairns::Timer::PrintReport();
+            cairns::Timer::Reset();
+        }
+        return true;
+    }
+
+    // Render-thread entry point (post commit 6). Today called synchronously
+    // from draw(). Owns: rhi_.frames.Begin/End, the bump-ring EncodeDraws,
+    // the compute + render-pass encode. Reads pkt + slots_[pkt.slot].
+    void RecordFrame(FramePacket& pkt) {
+        PerSlot& s = slots_[pkt.slot];
+
+        if (pkt.request_dump) {
+            rhi_.frames.SetDumpPath(pkt.dump_path);
+        }
+
+        rhi::FrameContext fc = rhi_.frames.Begin(rhi_.resources, rhi_.alloc, swapchain_);
+
+        cairns::Timer t_record("record", 2);
+        EncodeDraws(pkt.slot, pkt.delta_time);
+
+        rhi::BoundBuffer cbufs[3] = {
+            {0, rhi_.alloc.BumpMasterBuffer(rhi::Memory::kDynamic), s.dt_off},
+            {1, particle_ssbo_[pkt.particle_parity_in], 0},
+            {2, particle_ssbo_[1 - pkt.particle_parity_in], 0},
+        };
+        rhi::ComputeDispatch cd{};
+        cd.kernel = particle_kernel_;
+        cd.buffers = std::span<const rhi::BoundBuffer>(cbufs, 3);
+        cd.groups_x = kParticleCount / 256;
+        cd.local_x = 256;
+
+        rhi::MeshDrawList ml{};
+        ml.draws = pkt.draws;
+        ml.sorted_draws = pkt.sorted;
+        ml.pipeline = unlit_;
+        ml.globals_offset = s.globals_offset;
+        ml.resident_textures = pkt.resident_textures;
+        ml.resident_buffers =
+            std::span<const rhi::Handle<rhi::Buffer>>(&mesh_master_handle_, 1);
+
+        rhi::PointDraw pd{};
+        pd.pipeline = particle_render_shader_;
+        pd.vertex_buffer = particle_ssbo_[1 - pkt.particle_parity_in];
+        pd.vertex_offset = 0;
+        pd.vertex_count = kParticleCount;
+
+        const float clear[4] = {41.0f / 255.0f, 42.0f / 255.0f, 48.0f / 255.0f, 1.0f};
+
         fc.cmd.PassTimerBegin("particle_sim");
         fc.cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
         fc.cmd.PassTimerEnd();
 
-        // forward (graphics, MSAA -> swapchain resolve)
         rhi::ColorAttachment ca{};
         ca.clear[0] = clear[0];
         ca.clear[1] = clear[1];
@@ -570,28 +653,16 @@ public:
         fc.cmd.BeginRenderPass(swapchain_, rp);
         fc.cmd.DrawMeshes(rhi_.resources, rhi_.alloc, ml);
         fc.cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
-        if (draw_imgui) {
+        if (pkt.imgui_snapshot) {
             fc.cmd.DrawImGui(rhi_.resources, rhi_.alloc, imgui_, imgui_font_,
-                             imgui_sampler_, ImGui::GetDrawData());
+                             imgui_sampler_, pkt.imgui_snapshot);
         }
         fc.cmd.EndRenderPass();
         fc.cmd.PassTimerEnd();
         t_record.End();
         rhi_.frames.End(swapchain_, fc);
-        particle_parity_ ^= 1;
-        t_frame.End();
-        if (frame_ % 120 == 0) {
-            const size_t loaded = scenes_.size();
-            const size_t entities = world_.entities.size();
-            const size_t slices = loaded > 0 ? entities / loaded : 0;
-            CAIRNS_PRINT("============\n");
-            CAIRNS_PRINT("draws %zu | %zu GLBs x %zu slices = %zu entities | resolution %u x %u\n",
-                         drawList_.size(), loaded, slices, entities,
-                         swapchain_.Width(), swapchain_.Height());
-            cairns::Timer::PrintReport();
-            cairns::Timer::Reset();
-        }
-        return true;
+
+        pkt.particle_parity_out = pkt.particle_parity_in ^ 1;
     }
     
     bool initRenderPipeline() {
@@ -850,12 +921,12 @@ private:
     // set-2 per-material bind groups, dense by MatId (NO hash). Built once at load.
     std::vector<rhi::Handle<rhi::BindGroup>> material_bind_groups_;
 
-    std::vector<std::pair<cairns::DrawKey,uint32_t>,cairns::Allocator<std::pair<cairns::DrawKey,uint32_t>>> drawListSorted_;
-    std::vector<cairns::Draw,cairns::Allocator<cairns::Draw>> drawList_;
-    std::vector<rhi::Handle<rhi::Texture>> resident_textures_;
+    // Per-slot frame buffers (drawList / drawListSorted / proxies /
+    // resident_textures / draw_world_matrices / pending_globals / globals_offset
+    // / dt_off / FramePacket). See PerSlot above.
+    std::vector<PerSlot> slots_;
 
     cairns::SceneWorld world_;
-    cairns::RenderProxyArrays proxies_;
 
     rhi::Rhi rhi_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
@@ -873,14 +944,6 @@ private:
     rhi::Handle<rhi::Shader> particle_render_shader_;
     rhi::Handle<rhi::Buffer> particle_ssbo_[2];
     uint32_t particle_parity_ = 0;
-    uint32_t globals_offset_ = 0;
-    uint32_t dt_off_ = 0;
-    // staged by BuildMeshOpaqueDraws, bumped by EncodeDraws.
-    cairns::rhi::RenderPassGlobals pending_globals_{};
-    glm::mat4 pending_view_matrix_{1.0f};
-    float pending_near_z_ = 0.1f;
-    float pending_far_z_ = 100.0f;
-    std::vector<glm::mat4> draw_world_matrices_;
     uint64_t last_ticks_ = 0;
     // cpu frame-time history (wall-clock between draw() calls) for the imgui graph
     static constexpr int kCpuMsHistory = 128;
