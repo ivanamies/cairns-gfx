@@ -282,7 +282,7 @@ private:
         VkMemoryAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocInfo.allocationSize = memRequirements.size;
-        if (!findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        if (!findMemoryType(memRequirements.memoryTypeBits, properties,
                             allocInfo.memoryTypeIndex)) {
             return false;
         }

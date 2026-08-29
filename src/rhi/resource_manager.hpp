@@ -65,6 +65,8 @@ struct BindGroup;
 struct DynamicBuffers;
 struct Shader;
 struct Kernel;
+struct SwapChain;
+struct FrameContext;
 
 template <typename T>
 struct Handle {
@@ -540,6 +542,24 @@ struct BackendInitParams {
     VkCommandPool command_pool = VK_NULL_HANDLE;
     bool enable_bda = false;
 };
+// App-owned per-frame Vulkan resources, registered once so BeginFrame/EndFrame +
+// CommandRecorder can drive them. Pointers are to MAX_FRAMES_IN_FLIGHT arrays.
+struct VkFrameResources {
+    VkQueue graphics_queue = VK_NULL_HANDLE;
+    VkQueue compute_queue = VK_NULL_HANDLE;
+    VkQueue present_queue = VK_NULL_HANDLE;
+    uint32_t frames_in_flight = 0;
+    const VkCommandBuffer* graphics_cmds = nullptr;
+    const VkCommandBuffer* compute_cmds = nullptr;
+    const VkSemaphore* image_available = nullptr;
+    const VkSemaphore* render_finished = nullptr;
+    const VkSemaphore* compute_finished = nullptr;
+    const VkFence* in_flight = nullptr;
+    const VkFence* compute_in_flight = nullptr;
+    const VkDescriptorSet* dyn_ubo_sets = nullptr;
+    const VkDescriptorSet* compute_sets = nullptr;
+    const VkDescriptorSet* point_sets = nullptr;
+};
 #elif CAIRNS_METAL
 struct BackendInitParams {
     MTL::Device* device = nullptr;
@@ -605,6 +625,10 @@ public:
     void BeginFrame();
     void EndFrame();
 
+    // Fork C frame lifecycle: owns sync + command-buffer recording for one frame.
+    FrameContext BeginFrame(SwapChain& sc);
+    void EndFrame(FrameContext& fc);
+
     uint32_t GetBufferByteSize(Handle<Buffer> h) const;
 
 #if CAIRNS_VULKAN
@@ -621,6 +645,8 @@ public:
     // The VkDescriptorSetLayout backing a bindless registry, for pipeline layout
     // creation. Valid after CreateBindlessRegistry.
     VkDescriptorSetLayout GetBindlessLayout(Handle<BindGroup> reg);
+    // Register app-owned per-frame resources for BeginFrame/EndFrame to drive.
+    void VkRegisterFrame(const VkFrameResources& res);
 #endif  // CAIRNS_VULKAN
 
 #if CAIRNS_METAL

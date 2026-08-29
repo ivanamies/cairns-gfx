@@ -17,12 +17,18 @@
 #include <vector>
 
 #include "rhi/vulkan/memory_allocator.hpp"
+#include "rhi/command_recorder.hpp"
+#include "rhi/swap_chain.hpp"
+#include "util/render_pass_globals.hpp"
+#include "util/material_gpu.hpp"
 
 namespace cairns::rhi {
 
 struct ResourceManager::Impl {
     BackendInitParams params;
     vulkan::MemoryAllocator memory;
+    VkFrameResources frame_res;
+    uint32_t recorder_frame = 0;
 
     Pool<Buffer> buffers;
     Pool<Texture> textures;
@@ -1209,6 +1215,210 @@ uint8_t* ResourceManager::MappedPtr(Handle<Buffer> h) {
         return nullptr;
     }
     return base + hot->offset_in_heap;
+}
+
+void ResourceManager::VkRegisterFrame(const VkFrameResources& res) {
+    impl_->frame_res = res;
+}
+
+struct CommandRecorder::Impl {
+    ResourceManager* rm = nullptr;
+    SwapChain* sc = nullptr;
+    VkFrameResources fr;
+    uint32_t frame = 0;
+    uint32_t image_index = 0;
+    VkCommandBuffer gfx = VK_NULL_HANDLE;
+    VkCommandBuffer comp = VK_NULL_HANDLE;
+    VkDevice device = VK_NULL_HANDLE;
+};
+
+void CommandRecorder::Dispatch(const ComputeDispatch& d) {
+    Kernel::Hot* k = impl_->rm->GetHot(d.kernel);
+    VkDescriptorSet set = impl_->fr.compute_sets[impl_->frame];
+    vkCmdBindPipeline(impl_->comp, VK_PIPELINE_BIND_POINT_COMPUTE, k->vk_pipeline);
+    vkCmdBindDescriptorSets(impl_->comp, VK_PIPELINE_BIND_POINT_COMPUTE, k->vk_layout,
+                            0, 1, &set, 0, nullptr);
+    vkCmdDispatch(impl_->comp, d.groups_x, d.groups_y, d.groups_z);
+}
+
+void CommandRecorder::BeginRenderPass(const RenderPassDesc& desc) {
+    VkRenderPassBeginInfo rpi{};
+    rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rpi.renderPass = impl_->sc->renderPass;
+    rpi.framebuffer = impl_->sc->swapChainFramebuffers[impl_->image_index];
+    rpi.renderArea.offset = {0, 0};
+    rpi.renderArea.extent = impl_->sc->swapChainExtent;
+    VkClearValue clears[2]{};
+    if (!desc.color.empty()) {
+        clears[0].color = {{desc.color[0].clear[0], desc.color[0].clear[1],
+                            desc.color[0].clear[2], desc.color[0].clear[3]}};
+    }
+    clears[1].depthStencil = {desc.depth.clear_depth, 0};
+    rpi.clearValueCount = 2;
+    rpi.pClearValues = clears;
+    vkCmdBeginRenderPass(impl_->gfx, &rpi, VK_SUBPASS_CONTENTS_INLINE);
+
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(impl_->sc->swapChainExtent.width);
+    viewport.height = static_cast<float>(impl_->sc->swapChainExtent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(impl_->gfx, 0, 1, &viewport);
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = impl_->sc->swapChainExtent;
+    vkCmdSetScissor(impl_->gfx, 0, 1, &scissor);
+}
+
+void CommandRecorder::DrawMeshes(const MeshDrawList& list) {
+    VkCommandBuffer cb = impl_->gfx;
+    VkDescriptorSet dyn_set = impl_->fr.dyn_ubo_sets[impl_->frame];
+
+    VkBuffer bump_buf = impl_->rm->GetVkBumpMasterBuffer(Memory::kDynamic);
+    std::array<VkWriteDescriptorSet, 3> writes{};
+    std::array<VkDescriptorBufferInfo, 3> buf_infos{};
+    const uint32_t ranges[3] = {static_cast<uint32_t>(sizeof(RenderPassGlobals)),
+                                static_cast<uint32_t>(sizeof(MaterialGpu)),
+                                static_cast<uint32_t>(sizeof(DrawTmp))};
+    for (uint32_t i = 0; i < 3; ++i) {
+        buf_infos[i].buffer = bump_buf;
+        buf_infos[i].offset = 0;
+        buf_infos[i].range = ranges[i];
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = dyn_set;
+        writes[i].dstBinding = i;
+        writes[i].dstArrayElement = 0;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        writes[i].descriptorCount = 1;
+        writes[i].pBufferInfo = &buf_infos[i];
+    }
+    vkUpdateDescriptorSets(impl_->device, 3, writes.data(), 0, nullptr);
+
+    Shader::Hot* unlit = impl_->rm->GetHot(list.pipeline);
+    VkDescriptorSet bindless =
+        static_cast<VkDescriptorSet>(impl_->rm->GetHot(list.bindless)->api_descriptor_set);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_pipeline);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_layout, 0, 1,
+                            &bindless, 0, nullptr);
+
+    for (size_t i = 0; i < list.sorted_indices.size(); ++i) {
+        const cairns::Draw& draw = list.draws[list.sorted_indices[i]];
+        uint32_t pos_off = 0;
+        VkBuffer pos_buf =
+            impl_->rm->GetVkBuffer(draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
+        VkDeviceSize pos_off_dev =
+            pos_off + static_cast<VkDeviceSize>(draw.vertex_offset) * 16u;
+        vkCmdBindVertexBuffers(cb, 0, 1, &pos_buf, &pos_off_dev);
+        uint32_t idx_base = 0;
+        VkBuffer idx_buf = impl_->rm->GetVkBuffer(draw.index_buffer, &idx_base);
+        vkCmdBindIndexBuffer(cb, idx_buf, idx_base, VK_INDEX_TYPE_UINT32);
+        const uint32_t first_index = (draw.index_offset - idx_base) / sizeof(uint32_t);
+        std::array<uint32_t, 3> dyn_offsets = {list.globals_offset,
+                                               draw.dynamic_buffer_offsets[0],
+                                               draw.dynamic_buffer_offsets[1]};
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_layout, 1, 1,
+                                &dyn_set, 3, dyn_offsets.data());
+        const uint32_t base_vertex = draw.vertex_offset;
+        vkCmdPushConstants(cb, unlit->vk_layout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                           sizeof(uint32_t), &base_vertex);
+        vkCmdDrawIndexed(cb, draw.triangle_count * 3, draw.instance_count, first_index, 0,
+                         draw.instance_offset);
+    }
+}
+
+void CommandRecorder::DrawPoints(const PointDraw& pd) {
+    VkCommandBuffer cb = impl_->gfx;
+    Shader::Hot* p = impl_->rm->GetHot(pd.pipeline);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p->vk_pipeline);
+    uint32_t ssbo_off = 0;
+    VkBuffer ssbo = impl_->rm->GetVkBuffer(pd.vertex_buffer, &ssbo_off);
+    VkDeviceSize off = ssbo_off;
+    vkCmdBindVertexBuffers(cb, 0, 1, &ssbo, &off);
+    VkDescriptorSet point_set = impl_->fr.point_sets[impl_->frame];
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p->vk_layout, 0, 1,
+                            &point_set, 0, nullptr);
+    vkCmdDraw(cb, pd.vertex_count, 1, 0, 0);
+}
+
+void CommandRecorder::EndRenderPass() {
+    vkCmdEndRenderPass(impl_->gfx);
+}
+
+FrameContext ResourceManager::BeginFrame(SwapChain& sc) {
+    VkFrameResources& fr = impl_->frame_res;
+    const uint32_t cf = impl_->recorder_frame;
+    VkDevice dev = impl_->params.device;
+
+    vkWaitForFences(dev, 1, &fr.compute_in_flight[cf], VK_TRUE, UINT64_MAX);
+    vkResetFences(dev, 1, &fr.compute_in_flight[cf]);
+    vkResetCommandBuffer(fr.compute_cmds[cf], 0);
+
+    vkWaitForFences(dev, 1, &fr.in_flight[cf], VK_TRUE, UINT64_MAX);
+    BeginFrame();  // bump ring reset
+
+    uint32_t image_index = 0;
+    vkAcquireNextImageKHR(dev, sc.swapChain, UINT64_MAX, fr.image_available[cf],
+                          VK_NULL_HANDLE, &image_index);
+    vkResetFences(dev, 1, &fr.in_flight[cf]);
+    vkResetCommandBuffer(fr.graphics_cmds[cf], 0);
+
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    vkBeginCommandBuffer(fr.compute_cmds[cf], &bi);
+    vkBeginCommandBuffer(fr.graphics_cmds[cf], &bi);
+
+    FrameContext fc;
+    fc.frame_index = cf;
+    fc.swapchain_image_index = image_index;
+    fc.cmd.impl_ = new CommandRecorder::Impl{this, &sc, fr, cf, image_index,
+                                             fr.graphics_cmds[cf], fr.compute_cmds[cf], dev};
+    return fc;
+}
+
+void ResourceManager::EndFrame(FrameContext& fc) {
+    CommandRecorder::Impl* ri = fc.cmd.impl_;
+    VkFrameResources& fr = impl_->frame_res;
+    const uint32_t cf = fc.frame_index;
+
+    vkEndCommandBuffer(ri->comp);
+    VkSubmitInfo csi{};
+    csi.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    csi.commandBufferCount = 1;
+    csi.pCommandBuffers = &fr.compute_cmds[cf];
+    csi.signalSemaphoreCount = 1;
+    csi.pSignalSemaphores = &fr.compute_finished[cf];
+    vkQueueSubmit(fr.compute_queue, 1, &csi, fr.compute_in_flight[cf]);
+
+    vkEndCommandBuffer(ri->gfx);
+    VkSubmitInfo gsi{};
+    gsi.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    VkSemaphore wait_sems[2] = {fr.compute_finished[cf], fr.image_available[cf]};
+    VkPipelineStageFlags wait_stages[2] = {VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+                                           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+    gsi.waitSemaphoreCount = 2;
+    gsi.pWaitSemaphores = wait_sems;
+    gsi.pWaitDstStageMask = wait_stages;
+    gsi.commandBufferCount = 1;
+    gsi.pCommandBuffers = &fr.graphics_cmds[cf];
+    gsi.signalSemaphoreCount = 1;
+    gsi.pSignalSemaphores = &fr.render_finished[cf];
+    vkQueueSubmit(fr.graphics_queue, 1, &gsi, fr.in_flight[cf]);
+
+    VkPresentInfoKHR pi{};
+    pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    pi.waitSemaphoreCount = 1;
+    pi.pWaitSemaphores = &fr.render_finished[cf];
+    VkSwapchainKHR swapchains[1] = {ri->sc->swapChain};
+    pi.swapchainCount = 1;
+    pi.pSwapchains = swapchains;
+    pi.pImageIndices = &fc.swapchain_image_index;
+    vkQueuePresentKHR(fr.present_queue, &pi);
+
+    impl_->recorder_frame = (cf + 1) % fr.frames_in_flight;
+    delete ri;
+    fc.cmd.impl_ = nullptr;
 }
 
 }  // namespace cairns::rhi

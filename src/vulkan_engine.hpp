@@ -474,6 +474,24 @@ private:
         if (!createCommandBuffers()) return false;
         if (!createComputeCommandBuffers()) return false;
         if (!createSyncObjects()) return false;
+        {
+            rhi::VkFrameResources fr{};
+            fr.graphics_queue = graphicsQueue;
+            fr.compute_queue = computeQueue;
+            fr.present_queue = presentQueue;
+            fr.frames_in_flight = MAX_FRAMES_IN_FLIGHT;
+            fr.graphics_cmds = commandBuffers.data();
+            fr.compute_cmds = computeCommandBuffers.data();
+            fr.image_available = imageAvailableSemaphores.data();
+            fr.render_finished = renderFinishedSemaphores.data();
+            fr.compute_finished = computeFinishedSemaphores.data();
+            fr.in_flight = inFlightFences.data();
+            fr.compute_in_flight = computeInFlightFences.data();
+            fr.dyn_ubo_sets = dynUboSets_.data();
+            fr.compute_sets = computeDescriptorSets.data();
+            fr.point_sets = descriptorSets2.data();
+            rm_.VkRegisterFrame(fr);
+        }
         return true;
     }
 
@@ -2023,152 +2041,64 @@ private:
     }
 
     bool drawFrame() {
-        {
-            vkWaitForFences(device, 1, &computeInFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
-            updateComputeUniformBuffer(currentFrame);
-            vkResetFences(device, 1, &computeInFlightFences[currentFrame]);
-            vkResetCommandBuffer(computeCommandBuffers[currentFrame], /* VkCommandBufferResetFlagBits */ 0);
-            recordComputeCommandBuffer(computeCommandBuffers[currentFrame]);
+        rhi::FrameContext fc = rm_.BeginFrame(sc_);
+        updateComputeUniformBuffer(fc.frame_index);
+        updateUniformBuffer(fc.frame_index);
 
-            VkSubmitInfo submitInfo{};
-            submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            submitInfo.commandBufferCount = 1;
-            submitInfo.pCommandBuffers = &computeCommandBuffers[currentFrame];
-            submitInfo.signalSemaphoreCount = 1;
-            submitInfo.pSignalSemaphores = &computeFinishedSemaphores[currentFrame];
-
-            if ( vkQueueSubmit(computeQueue, 1, &submitInfo, computeInFlightFences[currentFrame]) != VK_SUCCESS ) {
-                return false;
-            }
-
+        if (!BuildMeshOpaqueDraws()) {
+            return false;
         }
-        {
-            vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
-
-            rm_.BeginFrame();
-
-            {
-                VkBuffer bump_buf = rm_.GetVkBumpMasterBuffer(rhi::Memory::kDynamic);
-                std::array<VkWriteDescriptorSet, 3> writes{};
-                std::array<VkDescriptorBufferInfo, 3> buf_infos{};
-
-                buf_infos[0].buffer = bump_buf;
-                buf_infos[0].offset = 0;
-                buf_infos[0].range = sizeof(cairns::rhi::RenderPassGlobals);
-                writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[0].dstSet = dynUboSets_[currentFrame];
-                writes[0].dstBinding = 0;
-                writes[0].dstArrayElement = 0;
-                writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-                writes[0].descriptorCount = 1;
-                writes[0].pBufferInfo = &buf_infos[0];
-
-                buf_infos[1].buffer = bump_buf;
-                buf_infos[1].offset = 0;
-                buf_infos[1].range = sizeof(cairns::rhi::MaterialGpu);
-                writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[1].dstSet = dynUboSets_[currentFrame];
-                writes[1].dstBinding = 1;
-                writes[1].dstArrayElement = 0;
-                writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-                writes[1].descriptorCount = 1;
-                writes[1].pBufferInfo = &buf_infos[1];
-
-                buf_infos[2].buffer = bump_buf;
-                buf_infos[2].offset = 0;
-                buf_infos[2].range = sizeof(cairns::rhi::DrawTmp);
-                writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[2].dstSet = dynUboSets_[currentFrame];
-                writes[2].dstBinding = 2;
-                writes[2].dstArrayElement = 0;
-                writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-                writes[2].descriptorCount = 1;
-                writes[2].pBufferInfo = &buf_infos[2];
-
-                vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
-            }
-
-            if (!BuildMeshOpaqueDraws()) {
-                return false;
-            }
-            std::sort(drawListSorted_.begin(), drawListSorted_.end());
-
-            uint32_t imageIndex;
-            VkResult result = vkAcquireNextImageKHR(device, sc_.swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
-
-            if ( result == VK_ERROR_OUT_OF_DATE_KHR ) {
-                sc_.RecreateSwapChain();
-                return true;
-            }
-            else if ( result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR ) {
-                return false;
-            }
-
-            updateUniformBuffer(currentFrame);
-
-            vkResetFences(device, 1, &inFlightFences[currentFrame]);
-
-            {
-                vkResetCommandBuffer(commandBuffers[currentFrame], 0);
-                recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
-            }
-
-            VkSubmitInfo submitInfo{};
-            submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-
-            std::array<VkSemaphore,2> waitSemaphores = {computeFinishedSemaphores[currentFrame], imageAvailableSemaphores[currentFrame]};
-            VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-            submitInfo.waitSemaphoreCount = static_cast<uint32_t>(waitSemaphores.size());
-            submitInfo.pWaitSemaphores = waitSemaphores.data();
-            submitInfo.pWaitDstStageMask = waitStages;
-
-            std::vector<VkCommandBuffer> drawCommandBuffers;
-            {
-                drawCommandBuffers.push_back(commandBuffers[currentFrame]);
-            }
-            submitInfo.commandBufferCount = static_cast<uint32_t>(drawCommandBuffers.size());
-            submitInfo.pCommandBuffers = drawCommandBuffers.data();
-
-            std::array<VkSemaphore,1> signalSemaphores = {renderFinishedSemaphores[currentFrame]};
-            submitInfo.signalSemaphoreCount = static_cast<uint32_t>(signalSemaphores.size());
-            submitInfo.pSignalSemaphores = signalSemaphores.data();
-
-            if ( vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS ) {
-                return false;
-            }
-
-            VkPresentInfoKHR presentInfo{};
-            presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-            presentInfo.waitSemaphoreCount = static_cast<uint32_t>(signalSemaphores.size());
-            presentInfo.pWaitSemaphores = signalSemaphores.data();
-
-            VkSwapchainKHR swapChains[] = {sc_.swapChain};
-            presentInfo.swapchainCount = 1;
-            presentInfo.pSwapchains = swapChains;
-
-            presentInfo.pImageIndices = &imageIndex;
-            presentInfo.pResults = nullptr;
-
-            result = vkQueuePresentKHR(presentQueue, &presentInfo);
-
-            if ( result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
-                framebufferResized = false;
-                sc_.RecreateSwapChain();
-            }
-            else if ( result != VK_SUCCESS ) {
-                return false;
-            }
-
-            if constexpr (vk_debug_has(vk_debug::kDumpSwapchain)) {
-                if ( dumpFrameCounter == 60 ) {
-                    vkQueueWaitIdle(presentQueue);
-                    dumpSwapchainToPng(imageIndex, "/tmp/tut_dump.png");
-                }
-                ++dumpFrameCounter;
-            }
+        std::sort(drawListSorted_.begin(), drawListSorted_.end());
+        sorted_draw_indices_.clear();
+        for (const auto& [key, idx] : drawListSorted_) {
+            sorted_draw_indices_.push_back(idx);
         }
 
-        currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+        rhi::ComputeDispatch cd{};
+        cd.kernel = particle_kernel_;
+        cd.groups_x = PARTICLE_COUNT / 256;
+        cd.groups_y = 1;
+        cd.groups_z = 1;
+        fc.cmd.Dispatch(cd);
+
+        rhi::ColorAttachment col[1]{};
+        col[0].clear[0] = 0.0f;
+        col[0].clear[1] = 0.0f;
+        col[0].clear[2] = 0.0f;
+        col[0].clear[3] = 1.0f;
+        rhi::RenderPassDesc rp{};
+        rp.color = rhi::Span<const rhi::ColorAttachment>(col, 1);
+        rp.depth.clear_depth = 1.0f;
+        rp.width = sc_.swapChainExtent.width;
+        rp.height = sc_.swapChainExtent.height;
+        fc.cmd.BeginRenderPass(rp);
+
+        rhi::MeshDrawList ml{};
+        ml.draws = rhi::Span<const cairns::Draw>(drawList_.data(), drawList_.size());
+        ml.sorted_indices =
+            rhi::Span<const uint32_t>(sorted_draw_indices_.data(), sorted_draw_indices_.size());
+        ml.pipeline = unlit_shader_;
+        ml.bindless = bindless_bg_;
+        ml.globals_offset = globals_offset_;
+        fc.cmd.DrawMeshes(ml);
+
+        rhi::PointDraw pd{};
+        pd.pipeline = particle_render_shader_;
+        pd.vertex_buffer = ssbo_[fc.frame_index];
+        pd.vertex_offset = 0;
+        pd.vertex_count = PARTICLE_COUNT;
+        fc.cmd.DrawPoints(pd);
+
+        fc.cmd.EndRenderPass();
+        rm_.EndFrame(fc);
+
+        if constexpr (vk_debug_has(vk_debug::kDumpSwapchain)) {
+            if ( dumpFrameCounter == 60 ) {
+                vkQueueWaitIdle(presentQueue);
+                dumpSwapchainToPng(fc.swapchain_image_index, "/tmp/tut_dump.png");
+            }
+            ++dumpFrameCounter;
+        }
         return true;
     }
 
@@ -2442,6 +2372,7 @@ private:
     uint32_t globals_offset_ = 0;
     std::vector<cairns::Draw> drawList_;
     std::vector<std::pair<cairns::DrawKey, uint32_t>> drawListSorted_;
+    std::vector<uint32_t> sorted_draw_indices_;
 
     VkDescriptorPool descriptorPool;
     std::vector<VkDescriptorSet> descriptorSets;
