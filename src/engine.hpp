@@ -7,6 +7,7 @@
 #include "engine/particle_system.hpp"  // ParticleSystem state (C2 S3)
 #include "engine/pick_selection.hpp"  // PickSelection + PickResult (C2 S6)
 #include "engine/scene_manager.hpp"  // SceneManager state (C2 S4)
+#include "engine/anim_skin_system.hpp"  // AnimSkinSystem state (C2 S2)
 
 #include <array>
 #include <cmath>
@@ -30,7 +31,7 @@
 
 #include "render/worker_context.hpp"
 #include "util/cpu_arena.hpp"
-#include "util/cpu_pool.hpp"  // #221 Phase 3: RangePool for skin_output_pool_.
+#include "util/cpu_pool.hpp"  // #221 Phase 3: RangePool for skinning_.output_pool.
 #include "util/chunk_allocator.hpp"  // #229 M0b: the one owning CPU block.
 #include "util/fnv1a.hpp"  // #229 M0b: per-frame determinism hash.
 #include "util/device_caps.hpp"  // boot-invariant + HUD/skin fit predicates
@@ -535,7 +536,7 @@ public:
             // prefabs (not batch); cheap relative to parse.
             uploadAnimTablesGpu();
             // Backfill any SkinId records that pre-dated the new headers.
-            skins_.ForEachLive(
+            skinning_.skins.ForEachLive(
                 [&](cairns::SkinnedAttachment::Hot& h,
                     cairns::SkinnedAttachment::Cold& c) {
                     if (cairns::Prefab::Hot* sht = prefabs_.GetHot(c.scene)) {
@@ -1318,10 +1319,10 @@ public:
                                  "last-good\n");
                 return false;
             }
-            if (!anim_eval_kernel_.IsNull()) {
-                rhi_.resources.DeferFree(anim_eval_kernel_);
+            if (!skinning_.eval_kernel.IsNull()) {
+                rhi_.resources.DeferFree(skinning_.eval_kernel);
             }
-            anim_eval_kernel_ = next;
+            skinning_.eval_kernel = next;
             return true;
         }
         if (name == "skin") {
@@ -1338,10 +1339,10 @@ public:
                                  "last-good\n");
                 return false;
             }
-            if (!skin_kernel_.IsNull()) {
-                rhi_.resources.DeferFree(skin_kernel_);
+            if (!skinning_.skin_kernel.IsNull()) {
+                rhi_.resources.DeferFree(skinning_.skin_kernel);
             }
-            skin_kernel_ = next;
+            skinning_.skin_kernel = next;
             return true;
         }
         if (name == "particle") {
@@ -1449,10 +1450,10 @@ public:
         // Anim: reset cursors so the next upload starts fresh against
         // unallocated capacity. The 4x growth pad still holds so the
         // first post-Unload load triggers FULL once, then DELTA after.
-        anim_uploaded_prefab_count_ = 0;
-        anim_cur_ = {};
-        anim_eval_tables_uploaded_ = false;
-        anim_dyn_dirty_ = true;
+        skinning_.uploaded_prefab_count = 0;
+        skinning_.cur = {};
+        skinning_.eval_tables_uploaded = false;
+        skinning_.dyn_dirty = true;
         prefab_arena_.Reset();  // monotonic; else repeated loads overflow it
         return n;
     }
@@ -2239,7 +2240,7 @@ public:
         prefabs_.Reserve(cpu_block_, static_cast<uint16_t>(kPrefabResidencyCap));
         meshes_.Reserve(cpu_block_, 8192);
         materials_.Reserve(cpu_block_, 8192);
-        skins_.Reserve(cpu_block_, 4096);
+        skinning_.skins.Reserve(cpu_block_, 4096);
         scene_mgr_.pool.Reserve(cpu_block_, static_cast<uint16_t>(kMaxScenes));
         viewports_.Reserve(cpu_block_, 16);
         scene_mgr_.assets.Pool().Reserve(cpu_block_, 1024);
@@ -2374,9 +2375,9 @@ public:
             bd.byte_size = kSkinOutputBytes;
             bd.usage = rhi::kUsageStorage | rhi::kUsageVertex;
             bd.memory = rhi::Memory::kDefault;
-            skin_output_pool_buffer_ = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
-            if (skin_output_pool_buffer_.IsNull()) {
-                CAIRNS_PRINT("GreaterInit: skin_output_pool_buffer_ alloc failed\n");
+            skinning_.output_pool_buffer = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
+            if (skinning_.output_pool_buffer.IsNull()) {
+                CAIRNS_PRINT("GreaterInit: skinning_.output_pool_buffer alloc failed\n");
                 return false;
             }
             // Slices in vec4 units (16 B). Capacity = total / 16.
@@ -2384,7 +2385,7 @@ public:
                           "skin vertex stride must equal sizeof(glm::vec4); "
                           "RangePool offsets are scaled by kSkinVertexStride "
                           "on bind.");
-            skin_output_pool_.Init(kSkinOutputBytes / 16u);
+            skinning_.output_pool.Init(kSkinOutputBytes / 16u);
         }
         // #221 Phase 5b: persistent palette out + world scratch for GPU
         // palette eval. 1024 actors * 256 mat4 = 16 MB each.
@@ -2394,10 +2395,10 @@ public:
             bd.usage = rhi::kUsageStorage;
             bd.memory = rhi::Memory::kDefault;
             bd.byte_size = kAnimActorsCap * kAnimMaxJoints * 64u;
-            palette_out_buf_ = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
+            skinning_.palette_out_buf = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
             bd.byte_size = kAnimActorsCap * kAnimMaxNodes * 64u;
-            world_scratch_buf_ = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
-            if (palette_out_buf_.IsNull() || world_scratch_buf_.IsNull()) {
+            skinning_.world_scratch_buf = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
+            if (skinning_.palette_out_buf.IsNull() || skinning_.world_scratch_buf.IsNull()) {
                 CAIRNS_PRINT("GreaterInit: anim_eval persistent buffers alloc failed\n");
                 return false;
             }
@@ -2634,7 +2635,7 @@ public:
         // #222 Phase H.5: skins were Acquired BEFORE this call, so their
         // cached gpu_prefab_header_idx (UINT32_MAX) is stale. Backfill from
         // each skin's scene now that the headers exist.
-        skins_.ForEachLive(
+        skinning_.skins.ForEachLive(
             [&](cairns::SkinnedAttachment::Hot& h,
                 cairns::SkinnedAttachment::Cold& c) {
                 cairns::Prefab::Hot* sht = prefabs_.GetHot(c.scene);
@@ -2663,11 +2664,11 @@ public:
         // frames.plat.skin_group_b_layout_ / anim_eval_layout_) because
         // the per-binding (type, count, stage) tuple matches exactly.
         // #221 Phase 5b: binding 1 (palettes) backed by persistent
-        // palette_out_buf_ (anim_eval writes it); per-batch dynamic
+        // skinning_.palette_out_buf (anim_eval writes it); per-batch dynamic
         // offset still selects the bucket's palette window. When
-        // anim_eval_tables_uploaded_ is false, no backing => kDynamic
+        // skinning_.eval_tables_uploaded is false, no backing => kDynamic
         // master fallback.
-        if (!skin_kernel_.IsNull() && !skin_output_pool_buffer_.IsNull()) {
+        if (!skinning_.skin_kernel.IsNull() && !skinning_.output_pool_buffer.IsNull()) {
             cairns::rhi::DynamicBinding gb[4]{};
             for (uint32_t i = 0; i < 4; ++i) {
                 gb[i].stages = cairns::rhi::kStageCompute;
@@ -2680,8 +2681,8 @@ public:
             gb[1].kind = cairns::rhi::BufferKind::kStorage;
             gb[1].max_range = 1u << 20;
             gb[1].has_dynamic_offset = true;
-            if (anim_eval_tables_uploaded_) {
-                gb[1].backing = palette_out_buf_;
+            if (skinning_.eval_tables_uploaded) {
+                gb[1].backing = skinning_.palette_out_buf;
             }
             gb[2].slot = 2;
             gb[2].kind = cairns::rhi::BufferKind::kStorage;
@@ -2691,23 +2692,23 @@ public:
             gb[3].kind = cairns::rhi::BufferKind::kStorage;
             gb[3].max_range = 0;  // VK_WHOLE_SIZE
             gb[3].has_dynamic_offset = false;
-            gb[3].backing = skin_output_pool_buffer_;
+            gb[3].backing = skinning_.output_pool_buffer;
             cairns::rhi::DynamicBuffersDesc gd{};
             gd.debug_name = "dyn_skin_group_b";
             gd.bindings =
                 std::span<const cairns::rhi::DynamicBinding>(gb, 4);
-            dyn_skin_group_b_ =
+            skinning_.dyn_skin_group_b =
                 rhi_.resources.CreateDynamicBuffers(rhi_.alloc, rhi_.frames, gd);
-            if (dyn_skin_group_b_.IsNull()) {
+            if (skinning_.dyn_skin_group_b.IsNull()) {
                 CAIRNS_PRINT("GreaterInit: dyn_skin_group_b create failed\n");
                 return false;
             }
         }
-        // #228 H4b: dyn_anim_eval_ creation moved into recreateAnimDynBindings()
+        // #228 H4b: skinning_.dyn_anim_eval creation moved into recreateAnimDynBindings()
         // so the same path runs at GreaterInit AND after the first runtime
-        // load (anim_eval_tables_uploaded_ flips false->true) AND after any
+        // load (skinning_.eval_tables_uploaded flips false->true) AND after any
         // anim buffer is destroyed+recreated on growth. Post-L9 / H1, this
-        // call at GreaterInit is a no-op (anim_eval_tables_uploaded_ is
+        // call at GreaterInit is a no-op (skinning_.eval_tables_uploaded is
         // false at boot); the helper is called from uploadAnimTablesGpu
         // once buffers exist.
         if (!recreateAnimDynBindings()) {
@@ -2955,8 +2956,8 @@ public:
                     rhi_.resources.BufferBaseOffset(rhi_.alloc, index);
                 // #221 Phase 9c: skinned-branch resolves once per proxy.
                 // mp.skin packs {generation, index} into uint32; resolve via
-                // skins_ pool. F5 fix: pos stream rebinds to the per-actor
-                // skin_output_pool_ slice (mesh-local), attr stream rebinds
+                // skinning_.skins pool. F5 fix: pos stream rebinds to the per-actor
+                // skinning_.output_pool slice (mesh-local), attr stream rebinds
                 // to mhot->attr_skinned_alias (pre-offset by
                 // global_base_vertex * sizeof(VertexAttribute)), and
                 // draw.vertex_offset becomes mesh-local
@@ -2970,7 +2971,7 @@ public:
                         static_cast<uint16_t>(mp.skin & 0xFFFFu),
                         static_cast<uint16_t>((mp.skin >> 16) & 0xFFFFu)};
                     const cairns::SkinnedAttachment::Hot* sh =
-                        skins_.GetHot(sid);
+                        skinning_.skins.GetHot(sid);
                     if (sh) {
                         const cairns::Mesh::Hot* mhot_s =
                             meshes_.GetHot(sh->mesh);
@@ -2979,7 +2980,7 @@ public:
                             !sh->pos_stream.IsNull()) {
                             skinned = true;
                             // #222 Phase E.6: pos_stream is the per-actor
-                            // pre-offset alias of skin_output_pool_buffer_.
+                            // pre-offset alias of skinning_.output_pool_buffer.
                             skin_pos_buf = sh->pos_stream;
                             skin_attr_buf = mhot_s->attr_skinned_alias;
                             skin_global_base_vertex =
@@ -3367,7 +3368,7 @@ public:
         // #221 Skinning P5/P8: BuildSkinFrame populates the per-frame skin
         // payload (palettes, InstanceMeta, SkinBatchGpu list) on the per-
         // slot arena and publishes spans on s.pkt. Today (no skinned content
-        // + skin_kernel_ Null) it writes empty spans -- the static path
+        // + skinning_.skin_kernel Null) it writes empty spans -- the static path
         // stays bit-for-bit; the call site is wired so a future content
         // commit (load CesiumMan + attach SkinRef) flips the switch
         // without touching draw().
@@ -3905,22 +3906,22 @@ public:
         // a valid skin kernel -- absent either, the pass is omitted and
         // the static path is bit-for-bit unchanged. The graph timer wraps
         // this pass with the "skinning_compute" Timer slot (README ratchet).
-        if (!pkt.skin_batches.empty() && !skin_kernel_.IsNull() &&
-            !skin_output_pool_buffer_.IsNull()) {
+        if (!pkt.skin_batches.empty() && !skinning_.skin_kernel.IsNull() &&
+            !skinning_.output_pool_buffer.IsNull()) {
             graph_->AddPass(
                 "skinning_compute", rhi::PassType::kCompute,
                 [&](rhi::PassBuilder& b) {
                     rhi::GraphBufferDesc bd{};
                     bd.usage = rhi::kUsageStorage;
                     rhi::GraphBuffer pool =
-                        b.ImportBuffer(skin_output_pool_buffer_, bd);
+                        b.ImportBuffer(skinning_.output_pool_buffer, bd);
                     b.WriteBuffer(pool);
                 },
                 [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
                     // #221 Phase 5b: dispatch anim_eval first to fill the
-                    // persistent palette_out_buf_ + world_scratch_buf_.
+                    // persistent skinning_.palette_out_buf + skinning_.world_scratch_buf.
                     // Then SkinDispatchBatch reads palettes from binding 1
-                    // pointing at palette_out_buf_, with per-batch dynamic
+                    // pointing at skinning_.palette_out_buf, with per-batch dynamic
                     // offset = batch.first_palette_mat4 * sizeof(mat4).
                     PerSlot& s2 = slots_[pkt.slot];
                     const uint32_t n_batches =
@@ -3933,8 +3934,8 @@ public:
                     // Upload ActorRecords into kDynamic; bind as DYNAMIC_UBO.
                     const uint32_t n_actors =
                         static_cast<uint32_t>(pkt.actor_records.size());
-                    if (n_actors > 0 && !anim_eval_kernel_.IsNull() &&
-                        anim_eval_tables_uploaded_) {
+                    if (n_actors > 0 && !skinning_.eval_kernel.IsNull() &&
+                        skinning_.eval_tables_uploaded) {
                         // #222 Phase 0.2: belt-and-braces. BuildSkinFrame
                         // clamps; this catches any future caller that skips
                         // the clamp.
@@ -3949,20 +3950,20 @@ public:
                             memcpy(records_ptr, pkt.actor_records.data(),
                                    records_bytes);
                             rhi::CommandRecorder::AnimEvalArgs ae{};
-                            ae.i32_buf = ae_i32_buf_;
-                            ae.vec4_buf = ae_vec4_buf_;
-                            ae.word16_buf = ae_word16_buf_;
-                            ae.scene_headers = scene_headers_buf_;
-                            ae.world_scratch = world_scratch_buf_;
-                            ae.palette_out = palette_out_buf_;
+                            ae.i32_buf = skinning_.ae_i32_buf;
+                            ae.vec4_buf = skinning_.ae_vec4_buf;
+                            ae.word16_buf = skinning_.ae_word16_buf;
+                            ae.scene_headers = skinning_.scene_headers_buf;
+                            ae.world_scratch = skinning_.world_scratch_buf;
+                            ae.palette_out = skinning_.palette_out_buf;
                             // #222 Phase D.3: dyn_set_0 = anim_eval per-FIF
                             // DynamicBuffers set (binding 0 dyn UBO + 1..6
                             // SSBO over backing). vk reads it; metal ignored.
-                            ae.dyn_set_0 = dyn_anim_eval_;
+                            ae.dyn_set_0 = skinning_.dyn_anim_eval;
                             ae.records_byte_offset = records_off;
                             ae.actor_count = n_actors;
                             cmd.DispatchAnimEval(rhi_.resources, rhi_.alloc,
-                                                  anim_eval_kernel_, ae);
+                                                  skinning_.eval_kernel, ae);
                         }
                     }
                     rhi::SkinDispatchBatch* dbatches =
@@ -4003,7 +4004,7 @@ public:
                         }
                         memcpy(params_ptr, &params, sizeof(SkinParamsCpu));
 
-                        // #221 Phase 5b: palettes live in palette_out_buf_;
+                        // #221 Phase 5b: palettes live in skinning_.palette_out_buf;
                         // per-batch dynamic offset selects the bucket window
                         // in mat4 stride. instance_meta.x stays
                         // bucket-relative (cursor * joint_count).
@@ -4042,14 +4043,14 @@ public:
                         db.workgroups = sbg.workgroups;
                         db.instance_count = sbg.instance_count;
                     }
-                    // #222 Phase D.3: palette_out_buf_ threaded as param;
+                    // #222 Phase D.3: skinning_.palette_out_buf threaded as param;
                     // SkinDispatchBatch::palette_buffer retired.
-                    // dyn_skin_group_b_ owns the per-FIF set (vk) +
+                    // skinning_.dyn_skin_group_b owns the per-FIF set (vk) +
                     // is ignored on metal.
                     cmd.DispatchSkinBatches(
-                        rhi_.resources, rhi_.alloc, skin_kernel_,
-                        skin_output_pool_buffer_, palette_out_buf_,
-                        dyn_skin_group_b_,
+                        rhi_.resources, rhi_.alloc, skinning_.skin_kernel,
+                        skinning_.output_pool_buffer, skinning_.palette_out_buf,
+                        skinning_.dyn_skin_group_b,
                         std::span<const rhi::SkinDispatchBatch>(
                             dbatches, n_batches));
                 });
@@ -4565,7 +4566,7 @@ public:
 
     // #221 Phase 9: opportunistic SkinnedAttachment factory. Resolves the
     // scene, picks the walking clip (`SelectWalkingClip`), finds the first
-    // skinned mesh (cpuSkinAttrs non-empty), allocates a skin_output_pool_
+    // skinned mesh (cpuSkinAttrs non-empty), allocates a skinning_.output_pool
     // slice sized to that mesh's vertex count, and returns the new SkinId.
     // Null on any miss (no skins, no skinned mesh, no clips, no pool
     // capacity left). The actor's per-frame palette uses the stored
@@ -4612,24 +4613,24 @@ public:
         if (skinned_mesh.IsNull() || vert_count == 0) {
             return fail("no mesh with attr_skinned_alias + vert_count");
         }
-        cairns::PoolSlice slice = skin_output_pool_.Alloc(vert_count);
+        cairns::PoolSlice slice = skinning_.output_pool.Alloc(vert_count);
         if (!slice.IsValid()) {
             CAIRNS_PRINT_ERR(
-                "[FATAL] skin_output_pool_ exhausted at 256 MB cap "
+                "[FATAL] skinning_.output_pool exhausted at 256 MB cap "
                 "(Adreno maxStorageBufferRange floor). vert_count=%u. "
                 "Reduce hero count or bake skin output offline.\n",
                 vert_count);
             std::abort();
         }
-        cairns::SkinId sid = skins_.Acquire();
+        cairns::SkinId sid = skinning_.skins.Acquire();
         cairns::Prefab::Hot* scene_hot = prefabs_.GetHot(scene_id);
         // #222 Phase E.6: build the per-actor pos_stream alias of
-        // skin_output_pool_buffer_, pre-offset to slice.offset * 16 B.
+        // skinning_.output_pool_buffer, pre-offset to slice.offset * 16 B.
         // Skinned draws point Draw::vertex_buffers[0] at this handle;
         // Draw::pos_buffer_byte_offset retires.
         rhi::Handle<rhi::Buffer> pos_stream_h =
             rhi::Handle<rhi::Buffer>::Null;
-        if (!skin_output_pool_buffer_.IsNull()) {
+        if (!skinning_.output_pool_buffer.IsNull()) {
             // CRITICAL: snapshot pool fields BEFORE the next Acquire.
             // ResourceManager::Acquire does hot_.emplace_back() which may
             // reallocate the underlying std::vector -- any Hot* fetched
@@ -4639,7 +4640,7 @@ public:
             uint32_t pool_off = 0;
             {
                 rhi::Buffer::Hot* pool_hot =
-                    rhi_.resources.GetHot(skin_output_pool_buffer_);
+                    rhi_.resources.GetHot(skinning_.output_pool_buffer);
                 if (!pool_hot) {
                     return cairns::SkinId::Null;
                 }
@@ -4654,7 +4655,7 @@ public:
                 pool_off +
                 slice.offset * static_cast<uint32_t>(sizeof(glm::vec4));
         }
-        if (auto* h = skins_.GetHot(sid)) {
+        if (auto* h = skinning_.skins.GetHot(sid)) {
             *h = cairns::SkinnedAttachment::Hot{};
             h->slice_offset = slice.offset;
             h->joint_count =
@@ -4670,7 +4671,7 @@ public:
                                                    : 1.0f;
             h->pos_stream = pos_stream_h;
         }
-        if (auto* c = skins_.GetCold(sid)) {
+        if (auto* c = skinning_.skins.GetCold(sid)) {
             *c = cairns::SkinnedAttachment::Cold{};
             c->scene = scene_id;
             c->skin_index = 0;
@@ -4694,10 +4695,10 @@ public:
         s.pkt.instance_meta = std::span<const glm::uvec2>{};
         s.pkt.actor_records = std::span<const cairns::GpuActorRecord>{};
 
-        if (skin_kernel_.IsNull() || skin_output_pool_buffer_.IsNull()) {
+        if (skinning_.skin_kernel.IsNull() || skinning_.output_pool_buffer.IsNull()) {
             return;
         }
-        if (anim_eval_kernel_.IsNull() || !anim_eval_tables_uploaded_) {
+        if (skinning_.eval_kernel.IsNull() || !skinning_.eval_tables_uploaded) {
             return;
         }
         cairns::Scene::Cold* wc = scene_mgr_.pool.GetCold(scene_mgr_.active);
@@ -4785,7 +4786,7 @@ public:
             s.arena.AllocateArray<entt::entity>(kAnimActorsCap);
         for (auto e : view) {
             const cairns::SkinRef& sr = view.get<const cairns::SkinRef>(e);
-            auto* sh = skins_.GetHot(sr.id);
+            auto* sh = skinning_.skins.GetHot(sr.id);
             if (!sh) {
                 continue;
             }
@@ -4819,7 +4820,7 @@ public:
                 "[ANIM-CAP] BuildSkinFrame slot=%u: hit kAnimActorsCap=%u; "
                 "animated=%u dropped=%u (raise cap or lower hero count)\n",
                 slot, kAnimActorsCap, total_actors, dropped_actors);
-            anim_actors_cap_warned_ = true;
+            skinning_.actors_cap_warned = true;
         }
         if (total_actors == 0) {
             return;
@@ -4843,7 +4844,7 @@ public:
         for (uint32_t k = 0; k < total_actors; ++k) {
             const entt::entity e = kept_entities[k];
             const cairns::SkinRef& sr = view.get<const cairns::SkinRef>(e);
-            auto* sh = skins_.GetHot(sr.id);
+            auto* sh = skinning_.skins.GetHot(sr.id);
             if (!sh) {
                 continue;
             }
@@ -4919,7 +4920,7 @@ public:
         for (uint32_t k = 0; k < total_actors; ++k) {
             const entt::entity e = kept_entities[k];
             const cairns::SkinRef& sr = view.get<const cairns::SkinRef>(e);
-            auto* sh = skins_.GetHot(sr.id);
+            auto* sh = skinning_.skins.GetHot(sr.id);
             if (!sh) {
                 continue;
             }
@@ -4974,9 +4975,9 @@ public:
         desc.shader_dir = shader_dir.c_str();
         desc.debug_name = "anim_eval";
         desc.layout = rhi::ComputePipelineLayout::kAnimEval;
-        anim_eval_kernel_ = rhi_.pipelines.CreateComputePipeline(
+        skinning_.eval_kernel = rhi_.pipelines.CreateComputePipeline(
             rhi_.resources, rhi_.frames, desc);
-        if (anim_eval_kernel_.IsNull()) {
+        if (skinning_.eval_kernel.IsNull()) {
             CAIRNS_PRINT("initAnimEvalKernel: load failed -- gpu palette eval disabled\n");
         }
     }
@@ -4984,21 +4985,21 @@ public:
     // #221 Phase 5b: flatten every loaded scene's animation tables into
     // shared kDefault SSBOs and stamp per-scene base offsets into the
     // scene_headers SSBO. Called ONCE after all scenes are loaded. Bumps
-    // anim_eval_tables_uploaded_ = true on success.
-    // #228 H4b vk fix: (re)create dyn_anim_eval_ DynamicBuffers set using
+    // skinning_.eval_tables_uploaded = true on success.
+    // #228 H4b vk fix: (re)create skinning_.dyn_anim_eval DynamicBuffers set using
     // the current anim buffer handles. Idempotent and safe to call before
-    // anim_eval_tables_uploaded_ flips true (early-returns when buffers
+    // skinning_.eval_tables_uploaded flips true (early-returns when buffers
     // don't exist yet). vk needs this set; metal ignores dyn_set_0 in
     // DispatchAnimEval.
     bool recreateAnimDynBindings() {
-        if (!anim_eval_tables_uploaded_) {
+        if (!skinning_.eval_tables_uploaded) {
             return true;
         }
         // #231 SSBO pack: bindings 1-6 = i32 / vec4 / word16 / headers /
         // world_scratch / palette_out (matching the kernel binding numbers).
         const rhi::Handle<rhi::Buffer> ae_ssbo[6] = {
-            ae_i32_buf_, ae_vec4_buf_, ae_word16_buf_,
-            scene_headers_buf_, world_scratch_buf_, palette_out_buf_,
+            skinning_.ae_i32_buf, skinning_.ae_vec4_buf, skinning_.ae_word16_buf,
+            skinning_.scene_headers_buf, skinning_.world_scratch_buf, skinning_.palette_out_buf,
         };
         cairns::rhi::DynamicBinding ae_b[7]{};
         for (uint32_t i = 0; i < 7; ++i) {
@@ -5023,29 +5024,29 @@ public:
         // instead of WaitIdle+Destroy. The new set is created+used
         // immediately; the old one persists in-flight one more frame and
         // then gets Released when the slot's bucket drains. No GPU drain.
-        if (!dyn_anim_eval_.IsNull()) {
-            rhi_.resources.DeferFree(dyn_anim_eval_);
+        if (!skinning_.dyn_anim_eval.IsNull()) {
+            rhi_.resources.DeferFree(skinning_.dyn_anim_eval);
         }
-        dyn_anim_eval_ =
+        skinning_.dyn_anim_eval =
             rhi_.resources.CreateDynamicBuffers(rhi_.alloc, rhi_.frames, ae_d);
-        if (dyn_anim_eval_.IsNull()) {
+        if (skinning_.dyn_anim_eval.IsNull()) {
             CAIRNS_PRINT("recreateAnimDynBindings: dyn_anim_eval create failed\n");
             return false;
         }
         return true;
     }
 
-    // #224 L9 wedge-at-scale fix: dyn_skin_group_b_ binding 1 (palettes)
-    // is gated on anim_eval_tables_uploaded_ at GreaterInit. L9's empty
+    // #224 L9 wedge-at-scale fix: skinning_.dyn_skin_group_b binding 1 (palettes)
+    // is gated on skinning_.eval_tables_uploaded at GreaterInit. L9's empty
     // boot leaves it false, so binding 1 falls back to the kDynamic master
-    // (a per-frame 64 KB ring) instead of palette_out_buf_ (16 MB). The
+    // (a per-frame 64 KB ring) instead of skinning_.palette_out_buf (16 MB). The
     // skin compute then reads palette transforms out of the wrong buffer
     // -- at ~9 actors the dyn master happens to contain enough zeros to
     // pass, but at 100+ actors every joint read is garbage and the mesh
     // wedges into giant tendrils. Recreate the set after first upload so
-    // binding 1 captures palette_out_buf_. Mirrors GreaterInit's gb[] tab.
+    // binding 1 captures skinning_.palette_out_buf. Mirrors GreaterInit's gb[] tab.
     bool recreateSkinGroupB() {
-        if (skin_kernel_.IsNull() || skin_output_pool_buffer_.IsNull()) {
+        if (skinning_.skin_kernel.IsNull() || skinning_.output_pool_buffer.IsNull()) {
             return true;
         }
         cairns::rhi::DynamicBinding gb[4]{};
@@ -5060,8 +5061,8 @@ public:
         gb[1].kind = cairns::rhi::BufferKind::kStorage;
         gb[1].max_range = 1u << 20;
         gb[1].has_dynamic_offset = true;
-        if (anim_eval_tables_uploaded_) {
-            gb[1].backing = palette_out_buf_;
+        if (skinning_.eval_tables_uploaded) {
+            gb[1].backing = skinning_.palette_out_buf;
         }
         gb[2].slot = 2;
         gb[2].kind = cairns::rhi::BufferKind::kStorage;
@@ -5071,16 +5072,16 @@ public:
         gb[3].kind = cairns::rhi::BufferKind::kStorage;
         gb[3].max_range = 0;  // VK_WHOLE_SIZE
         gb[3].has_dynamic_offset = false;
-        gb[3].backing = skin_output_pool_buffer_;
+        gb[3].backing = skinning_.output_pool_buffer;
         cairns::rhi::DynamicBuffersDesc gd{};
         gd.debug_name = "dyn_skin_group_b";
         gd.bindings = std::span<const cairns::rhi::DynamicBinding>(gb, 4);
-        if (!dyn_skin_group_b_.IsNull()) {
-            rhi_.resources.DeferFree(dyn_skin_group_b_);
+        if (!skinning_.dyn_skin_group_b.IsNull()) {
+            rhi_.resources.DeferFree(skinning_.dyn_skin_group_b);
         }
-        dyn_skin_group_b_ =
+        skinning_.dyn_skin_group_b =
             rhi_.resources.CreateDynamicBuffers(rhi_.alloc, rhi_.frames, gd);
-        if (dyn_skin_group_b_.IsNull()) {
+        if (skinning_.dyn_skin_group_b.IsNull()) {
             CAIRNS_PRINT("recreateSkinGroupB: dyn_skin_group_b create failed\n");
             return false;
         }
@@ -5123,7 +5124,7 @@ public:
     //        inverse_bind, one mat4 per joint per actor. The skin kernel consumes
     //        it. (binding 0 is the per-frame ActorRecord UBO, not packed here.)
     void uploadAnimTablesGpu() {
-        if (anim_eval_kernel_.IsNull()) {
+        if (skinning_.eval_kernel.IsNull()) {
             return;
         }
         const auto& prefab_ids = prefab_ids_;
@@ -5131,14 +5132,14 @@ public:
             return;
         }
         // #228 H4b: Aaltonen delta path. Walk only the trailing window
-        // [anim_uploaded_prefab_count_..end) and upload the new data at
+        // [skinning_.uploaded_prefab_count..end) and upload the new data at
         // an OFFSET into each buffer past what was uploaded previously.
         // The steady-state cost is O(batch). Buffer growth is rare (only
         // when a new batch's totals exceed the existing buffer capacity);
         // when it happens, fall back to a full rebuild that re-uploads
         // every prefab from scratch.
-        bool full_rebuild = (anim_uploaded_prefab_count_ == 0) ||
-                            (anim_uploaded_prefab_count_ > prefab_ids.size());
+        bool full_rebuild = (skinning_.uploaded_prefab_count == 0) ||
+                            (skinning_.uploaded_prefab_count > prefab_ids.size());
         // #231 SSBO pack: 3 packed flat vectors by element type + headers.
         // i32_flat: parent | topo | joint_nodes | times(int bits).
         // vec4_flat: bind_pose(T,R,S per joint) | values | inverse_binds(cols).
@@ -5152,15 +5153,15 @@ public:
         AnimCursors target{};
         for (int attempt = 0; attempt < 2; ++attempt) {
             if (full_rebuild) {
-                anim_uploaded_prefab_count_ = 0;
-                anim_cur_ = {};
+                skinning_.uploaded_prefab_count = 0;
+                skinning_.cur = {};
             }
-            base = anim_cur_;
+            base = skinning_.cur;
             headers.clear();
             i32_flat.clear();
             vec4_flat.clear();
             word16_flat.clear();
-            const uint32_t start = anim_uploaded_prefab_count_;
+            const uint32_t start = skinning_.uploaded_prefab_count;
             headers.reserve(prefab_ids.size() - start);
             for (uint32_t i = start; i < prefab_ids.size(); ++i) {
                 cairns::PrefabId sid = prefab_ids[i];
@@ -5255,7 +5256,7 @@ public:
                 // No new prefabs had anim data. Cursors unchanged; bump
                 // uploaded count so we don't re-walk these on the next
                 // call.
-                anim_uploaded_prefab_count_ =
+                skinning_.uploaded_prefab_count =
                     static_cast<uint32_t>(prefab_ids.size());
                 return;
             }
@@ -5280,11 +5281,11 @@ public:
                 return have >= target_entries * entry_size;
             };
             if (!full_rebuild && (
-                    !fits(scene_headers_buf_, target.headers,
+                    !fits(skinning_.scene_headers_buf, target.headers,
                           sizeof(cairns::GpuSceneHeader)) ||
-                    !fits(ae_i32_buf_, target.i32, sizeof(int32_t)) ||
-                    !fits(ae_vec4_buf_, target.vec4, sizeof(glm::vec4)) ||
-                    !fits(ae_word16_buf_, target.word16,
+                    !fits(skinning_.ae_i32_buf, target.i32, sizeof(int32_t)) ||
+                    !fits(skinning_.ae_vec4_buf, target.vec4, sizeof(glm::vec4)) ||
+                    !fits(skinning_.ae_word16_buf, target.word16,
                           sizeof(glm::uvec4)))) {
                 full_rebuild = true;
                 continue;
@@ -5328,10 +5329,10 @@ public:
                 if (out.IsNull()) {
                     return false;
                 }
-                // Handle changed -- vk's dyn_anim_eval_ descriptor set
+                // Handle changed -- vk's skinning_.dyn_anim_eval descriptor set
                 // captures buffer handles at creation time, so it now
                 // points at a freed handle. Mark for recreation.
-                anim_dyn_dirty_ = true;
+                skinning_.dyn_dirty = true;
             }
             if (data && bytes > 0) {
                 rhi_.resources.UploadBuffer(
@@ -5346,36 +5347,36 @@ public:
                        headers.size() * sizeof(cairns::GpuSceneHeader),
                        base.headers * sizeof(cairns::GpuSceneHeader),
                        target.headers * sizeof(cairns::GpuSceneHeader),
-                       scene_headers_buf_) ||
+                       skinning_.scene_headers_buf) ||
             !upload_at(i32_flat.empty() ? nullptr : i32_flat.data(),
                        i32_flat.size() * sizeof(int32_t),
                        base.i32 * sizeof(int32_t),
                        target.i32 * sizeof(int32_t),
-                       ae_i32_buf_) ||
+                       skinning_.ae_i32_buf) ||
             !upload_at(vec4_flat.empty() ? nullptr : vec4_flat.data(),
                        vec4_flat.size() * sizeof(glm::vec4),
                        base.vec4 * sizeof(glm::vec4),
                        target.vec4 * sizeof(glm::vec4),
-                       ae_vec4_buf_) ||
+                       skinning_.ae_vec4_buf) ||
             !upload_at(word16_flat.empty() ? nullptr : word16_flat.data(),
                        word16_flat.size() * sizeof(glm::uvec4),
                        base.word16 * sizeof(glm::uvec4),
                        target.word16 * sizeof(glm::uvec4),
-                       ae_word16_buf_)) {
+                       skinning_.ae_word16_buf)) {
             return;
         }
-        anim_cur_ = target;
-        anim_uploaded_prefab_count_ =
+        skinning_.cur = target;
+        skinning_.uploaded_prefab_count =
             static_cast<uint32_t>(prefab_ids.size());
-        anim_eval_tables_uploaded_ = true;
+        skinning_.eval_tables_uploaded = true;
         // #228 H4b vk fix: if any buffer was destroyed-and-recreated this
-        // call, the dyn_anim_eval_ descriptor set holds stale handles --
+        // call, the skinning_.dyn_anim_eval descriptor set holds stale handles --
         // recreate it. Also recreates on first-ever upload because the
         // GreaterInit gate left it Null post-L9.
-        if (anim_dyn_dirty_) {
+        if (skinning_.dyn_dirty) {
             recreateAnimDynBindings();
             recreateSkinGroupB();
-            anim_dyn_dirty_ = false;
+            skinning_.dyn_dirty = false;
         }
         CAIRNS_PRINT("uploadAnimTablesGpu: %s | +%zu scenes -> %u total | "
                      "i32 +%zu/%u vec4 +%zu/%u word16 +%zu/%u\n",
@@ -5391,9 +5392,9 @@ public:
         // bug). Report the allocated sizes vs the device range and abort if any
         // overflows -- packing must not push a buffer past what the unpacked set
         // would have.
-        const uint32_t i32_sz = rhi_.resources.GetBufferByteSize(ae_i32_buf_);
-        const uint32_t vec4_sz = rhi_.resources.GetBufferByteSize(ae_vec4_buf_);
-        const uint32_t w16_sz = rhi_.resources.GetBufferByteSize(ae_word16_buf_);
+        const uint32_t i32_sz = rhi_.resources.GetBufferByteSize(skinning_.ae_i32_buf);
+        const uint32_t vec4_sz = rhi_.resources.GetBufferByteSize(skinning_.ae_vec4_buf);
+        const uint32_t w16_sz = rhi_.resources.GetBufferByteSize(skinning_.ae_word16_buf);
         const uint32_t range = rhi_.device.caps.max_storage_buffer_range;
         const double mb = 1024.0 * 1024.0;
         if (std::getenv("CAIRNS_DUMP_CAPS")) {
@@ -5414,7 +5415,7 @@ public:
     }
 
     // #221 Phase 4: best-effort load of skin compute kernel. Failing the
-    // load (missing skin.comp.spv / skin.metal) leaves skin_kernel_ Null;
+    // load (missing skin.comp.spv / skin.metal) leaves skinning_.skin_kernel Null;
     // Phase 5's dispatch checks IsNull() and degenerates to "no skinning
     // this frame", preserving the static path bit-for-bit.
     void initSkinKernel() {
@@ -5424,9 +5425,9 @@ public:
         desc.shader_dir = shader_dir.c_str();
         desc.debug_name = "skin_compute";
         desc.layout = rhi::ComputePipelineLayout::kSkin;
-        skin_kernel_ = rhi_.pipelines.CreateComputePipeline(rhi_.resources,
+        skinning_.skin_kernel = rhi_.pipelines.CreateComputePipeline(rhi_.resources,
                                                               rhi_.frames, desc);
-        if (skin_kernel_.IsNull()) {
+        if (skinning_.skin_kernel.IsNull()) {
             CAIRNS_PRINT("initSkinKernel: skin kernel load failed (skin.comp.spv / skin.metal missing?) -- skinning disabled\n");
         }
     }
@@ -5797,60 +5798,10 @@ private:
     // holds std::vector<MeshId>.
     cairns::ResourceManager<cairns::Mesh> meshes_;
 
-    // #221 Skinning Phase 3: handle-pilled SkinnedAttachment pool +
-    // persistent GPU output pool. skin_output_pool_ is a RangePool over
-    // skin_output_pool_buffer_ (256 MB private heap) measured in vec4
-    // vertex units (Alloc(n) -> slice for n verts; bind offset =
-    // slice.offset * sizeof(vec4)). skins_ wraps generation counters
-    // around the per-actor SkinnedAttachment::Hot/Cold records.
-    cairns::ResourceManager<cairns::SkinnedAttachment> skins_;
-    rhi::Handle<rhi::Buffer> skin_output_pool_buffer_;
-    cairns::RangePool skin_output_pool_;
-
-    // #221 Phase 5b: GPU palette evaluation buffers + kernel. Scene-table
-    // SSBOs are shared across all scenes with per-scene base offsets stored
-    // in SceneHeader entries. World scratch + palette output are
-    // actors_cap-sized (1024 * 256 mat4 = 16 MB each).
-    rhi::Handle<rhi::Kernel> anim_eval_kernel_;
-    rhi::Handle<rhi::Buffer> scene_headers_buf_;
-    // #231 SSBO pack: 9 per-type table buffers folded into 3 by element type.
-    // ae_i32_buf_ packs parent/topo/joint_nodes/times(as int bits);
-    // ae_vec4_buf_ packs bind_pose(3 vec4/joint)/values(1/key)/inverse_binds
-    // (4 vec4/joint = mat4 cols); ae_word16_buf_ packs channels/samplers
-    // (16B = 1 uvec4 each). Drops anim_eval from 12 SSBOs to 6.
-    rhi::Handle<rhi::Buffer> ae_i32_buf_;
-    rhi::Handle<rhi::Buffer> ae_vec4_buf_;
-    rhi::Handle<rhi::Buffer> ae_word16_buf_;
-    rhi::Handle<rhi::Buffer> world_scratch_buf_;
-    rhi::Handle<rhi::Buffer> palette_out_buf_;
-    bool anim_eval_tables_uploaded_ = false;
-    // #228 H4b: anim-table cursor state for the Aaltonen delta path.
-    // count == number of entries currently uploaded into each buffer.
-    // uploadAnimTablesGpu compares prefab_ids_.size() against
-    // anim_uploaded_prefab_count_ and uploads ONLY the trailing delta
-    // (new prefabs) when each buffer has spare capacity. Buffer growth
-    // forces a full rebuild for ALL buffers in one retry pass.
-    struct AnimCursors {
-        uint32_t headers = 0;
-        // #231 packed-buffer element cursors (i32/vec4/uvec4 elements).
-        uint32_t i32 = 0;
-        uint32_t vec4 = 0;
-        uint32_t word16 = 0;
-    };
-    AnimCursors anim_cur_{};
-    uint32_t anim_uploaded_prefab_count_ = 0;
-    // #228 H4b vk fix: when uploadAnimTablesGpu Destroys+CreateBuffer's
-    // any anim buffer (first allocation or growth), the existing
-    // dyn_anim_eval_ descriptor set still references the freed handle.
-    // anim_dyn_dirty_ tells the next uploadAnimTablesGpu tail to
-    // recreate the descriptor set with the current handles. Also true
-    // before the first upload so we create the set on first use (post-L9
-    // GreaterInit no longer creates it because anim_eval_tables_uploaded_
-    // is false at boot).
-    bool anim_dyn_dirty_ = true;
-    // #222 Phase 0.2: latched once-per-process warning when skinned-actor
-    // count exceeded kAnimActorsCap in any frame.
-    bool anim_actors_cap_warned_ = false;
+    // Skinning + animation GPU state (pool, output RangePool, kernels, folded
+    // anim-table SSBOs, delta-upload cursors, dyn descriptor sets) grouped in
+    // AnimSkinSystem (C2 S2).
+    cairns::AnimSkinSystem skinning_;
 
     // Per-slot frame buffers (drawList / drawListSorted / proxies /
     // resident_textures / draw_world_matrices / pending_globals / globals_offset
@@ -5955,13 +5906,11 @@ private:
     rhi::Handle<rhi::DynamicBuffers> dyn_globals_;
     rhi::Handle<rhi::DynamicBuffers> dyn_drawtmp_;
     // #222 Phase D.3: skin Group B (4 bindings) + anim_eval (13 bindings)
-    // through DynamicBuffers. Created post-scene-load when palette_out_buf_
-    // + ae_*_buf_ + skin_output_pool_buffer_ exist. Backing buffer is set
-    // per-binding (palette_out_buf_ for palettes; skin_output_pool for output
+    // through DynamicBuffers. Created post-scene-load when skinning_.palette_out_buf
+    // + ae_*_buf_ + skinning_.output_pool_buffer exist. Backing buffer is set
+    // per-binding (skinning_.palette_out_buf for palettes; skin_output_pool for output
     // pool; ae_*_buf_ for scene tables). kDynamic-master fallback covers
     // the per-dispatch dynamic-offset bindings (params/inst_meta/records).
-    rhi::Handle<rhi::DynamicBuffers> dyn_skin_group_b_;
-    rhi::Handle<rhi::DynamicBuffers> dyn_anim_eval_;
     // #222 Phase D.4: particle parity DynamicBuffers. Index 0 binds
     // particles_.ssbo[0] -> binding 1 and particles_.ssbo[1] -> binding 2
     // (step_src=0). Index 1 swaps them (step_src=1). Binding 0 (UBO_DYN
@@ -5990,10 +5939,6 @@ private:
     // SSBOs + the cross-thread parity handshake (mutex/cv/counters) travel as
     // one unit. Engine's init/draw systems operate on it.
     cairns::ParticleSystem particles_;
-    // #221 Phase 4: skin pre-skin compute kernel. Best-effort load -- if
-    // shader assets aren't present (skin.comp.spv / skin.metal) the handle
-    // stays Null and Phase 5's BuildSkinFrame / DispatchSkinBatches skip.
-    rhi::Handle<rhi::Kernel> skin_kernel_;
     std::unique_ptr<cairns::RenderThread> render_thread_;
 
     // Present handoff. Render thread runs Frames::EndSubmit and stores
