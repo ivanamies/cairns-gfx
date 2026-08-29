@@ -223,6 +223,30 @@ static void transition(VkCommandBuffer cb, Resources& res, Handle<Texture> h,
     cold->plat.vk_layout = new_layout;
 }
 
+void CommandRecorder::DispatchSkinBatches(
+    Resources& res, Allocator& /*alloc*/, Handle<Kernel> kernel,
+    Handle<Buffer> output_pool_buffer,
+    std::span<const SkinDispatchBatch> batches) {
+    if (batches.empty() || kernel.IsNull() || output_pool_buffer.IsNull()) {
+        return;
+    }
+    // #221 Skinning Phase 5: Vulkan dispatch path. Plumbing TODO -- needs
+    // (i) Frames to publish skin_group_b_sets_[frame_] onto
+    // CommandRecorderPlat alongside compute_sets_; (ii) Allocator to
+    // expose the kDynamic master buffer (a small helper around the
+    // existing MemoryAllocator::HeapMasterBuffer). Bind pipeline + write
+    // Group B (master kDynamic ranges + output_pool whole), loop:
+    //   vkCmdBindDescriptorSets(sets={B,A}, 3 dyn offsets) + vkCmdDispatch.
+    // Routes into plat.comp_ (free vertex-fetch sync via the existing
+    // compute -> graphics semaphore @ VERTEX_INPUT). For now: kernel +
+    // batches are both Null/empty across the static-only paths, so we
+    // never reach the body. Guarded so a non-empty call doesn't crash.
+    (void)res;
+    (void)kernel;
+    (void)output_pool_buffer;
+    (void)batches;
+}
+
 void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDispatch& d) {
     if (plat.pending_pass_idx_ != UINT32_MAX && plat.pass_cb_ == VK_NULL_HANDLE) {
         plat.pass_cb_ = plat.comp_;
@@ -461,10 +485,15 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
         uint32_t pos_off = 0;
         VkBuffer pos_buf =
             res.plat.GetVkBuffer(alloc,draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
-        if (pos_buf != last_pos_buf || pos_off != last_pos_off) {
+        // #221 Skinning F5: skinned draws carry a per-actor byte offset
+        // into the shared pos buffer (skin_output_pool_'s actor slice).
+        // Static draws keep pos_buffer_byte_offset = 0 -- net stream-0
+        // bind for them is unchanged.
+        const uint32_t pos_off_total = pos_off + draw.pos_buffer_byte_offset;
+        if (pos_buf != last_pos_buf || pos_off_total != last_pos_off) {
             last_pos_buf = pos_buf;
-            last_pos_off = pos_off;
-            VkDeviceSize off = pos_off;
+            last_pos_off = pos_off_total;
+            VkDeviceSize off = pos_off_total;
             vkCmdBindVertexBuffers(cb, 0, 1, &pos_buf, &off);
         }
         uint32_t attr_off = 0;

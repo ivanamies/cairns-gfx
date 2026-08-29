@@ -42,6 +42,36 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
     cenc->endEncoding();
 }
 
+// #221 Skinning Phase 7: Metal mirror of DispatchSkinBatches. ONE
+// MTLComputeCommandEncoder for the whole batch (F4: per-call encoder is
+// fatal at 500 dispatches). Per-batch setBuffer:offset:atIndex: + dispatch.
+// Encoder boundary = barrier; the next render encoder sees this batch's
+// writes via Metal's implicit hazard tracking.
+//
+// Stub today: until BuildSkinFrame populates SkinDispatchBatch's
+// kDynamic byte offsets (and the kernel sees real params/palettes), this
+// records the encoder if batches is non-empty. Empty path returns
+// immediately and is a no-op.
+void CommandRecorder::DispatchSkinBatches(
+    Resources& res, Allocator& /*alloc*/, Handle<Kernel> kernel,
+    Handle<Buffer> /*output_pool_buffer*/,
+    std::span<const SkinDispatchBatch> batches) {
+    if (batches.empty() || kernel.IsNull()) {
+        return;
+    }
+    if (plat.cmd_ == nullptr) {
+        plat.cmd_ = plat.queue_->commandBuffer();
+    }
+    MTL::ComputeCommandEncoder* cenc = plat.cmd_->computeCommandEncoder();
+    cenc->setComputePipelineState(res.GetHot(kernel)->api_pso);
+    // Per-batch buffer binds + dispatch land in Phase 8 once the Metal
+    // path resolves master kDynamic buffer + Group A mesh sets the same
+    // way Vulkan does. For now, the encoder boundary alone is what makes
+    // an unloaded kernel + non-empty batch list path safe.
+    (void)batches;
+    cenc->endEncoding();
+}
+
 static MTL::LoadAction to_mtl_load(LoadOp op) {
     switch (op) {
         case LoadOp::kClear: return MTL::LoadActionClear;
@@ -136,11 +166,14 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
             uint32_t pos_off = 0;
             MTL::Buffer* pos_buf = res.plat.GetMtlBuffer(
                 alloc, draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
-            if (pos_buf != last_pos_buf || pos_off != last_pos_off) {
+            // #221 Skinning F5 (Metal mirror): per-actor byte offset into
+            // the shared pos buffer. Static draws keep this 0.
+            const uint32_t pos_off_total = pos_off + draw.pos_buffer_byte_offset;
+            if (pos_buf != last_pos_buf || pos_off_total != last_pos_off) {
                 last_pos_buf = pos_buf;
-                last_pos_off = pos_off;
+                last_pos_off = pos_off_total;
                 enc->useResource(pos_buf, MTL::ResourceUsageRead, MTL::RenderStageVertex);
-                enc->setVertexBuffer(pos_buf, pos_off, 0);
+                enc->setVertexBuffer(pos_buf, pos_off_total, 0);
             }
         }
         {

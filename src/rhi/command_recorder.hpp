@@ -93,9 +93,34 @@ struct PointDraw {
     uint32_t vertex_count = 0;
 };
 
+// #221 Skinning Phase 5: render-side batch (resolves arena-relative
+// element offsets to kDynamic byte offsets at EncodeDraws time). One per
+// (mesh, instance-list) pair. The recorder iterates these, binds the
+// mesh's Group A set, sets 3 dynamic offsets on the persistent Group B
+// set, and issues one vkCmdDispatch.
+struct SkinDispatchBatch {
+    Handle<BindGroup> mesh_set;            // Group A
+    uint32_t params_byte_offset = 0;       // dynamic offset for Group B binding 0
+    uint32_t palettes_byte_offset = 0;     // dynamic offset for Group B binding 1
+    uint32_t instance_meta_byte_offset = 0; // dynamic offset for Group B binding 2
+    uint32_t workgroups = 0;                // total workgroups for this batch
+};
+
 class CommandRecorder {
 public:
     void Dispatch(Resources& res, Allocator& alloc, const ComputeDispatch& d);
+    // #221 Skinning Phase 5: dedicated skin path. Binds pipeline + Group B
+    // descriptors ONCE (whole-buffer writes to palettes/InstanceMeta/Params
+    // via the kDynamic master buffer + output pool whole), then loops
+    // per-batch: vkCmdBindDescriptorSets(set 0 + set 1, 3 dyn offsets) +
+    // vkCmdDispatch. Routes into plat.comp_ on Vulkan (free vertex-fetch
+    // sync via the existing compute->graphics semaphore @ VERTEX_INPUT).
+    // batches.size() == 0 is a no-op; the engine guards on this AND on
+    // skin_kernel_.IsNull() to keep the static path bit-for-bit.
+    void DispatchSkinBatches(Resources& res, Allocator& alloc,
+                              Handle<Kernel> kernel,
+                              Handle<Buffer> output_pool_buffer,
+                              std::span<const SkinDispatchBatch> batches);
     void BeginRenderPass(Resources& res, const SwapResolveTarget& target,
                           const RenderPassDesc& desc);
     void DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list);

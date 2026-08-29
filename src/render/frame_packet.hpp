@@ -22,6 +22,22 @@ struct ImDrawData;
 
 namespace cairns {
 
+// #221 Skinning Phase 5: per-mesh skin dispatch unit. The game thread
+// buckets visible skinned actors by MeshId (flat array via prefix sum,
+// no map) and emits one SkinBatchGpu per mesh. Render thread feeds the
+// 3 dynamic offsets (palettes, InstanceMeta, Params) + binds the
+// mesh's Group A set + dispatches one workgroup grid. Element offsets
+// are arena-relative (palettes/InstanceMeta), converted to kDynamic
+// byte offsets render-side before binding.
+struct SkinBatchGpu {
+    rhi::Handle<rhi::BindGroup> mesh_set;  // Group A (positions + skin-attrs slices)
+    uint32_t first_palette_mat4 = 0;        // element index into palettes span
+    uint32_t first_meta = 0;                 // element index into instance_meta span
+    uint32_t instance_count = 0;
+    uint32_t vertex_count = 0;               // mesh vertex count
+    uint32_t workgroups = 0;                 // ceil(instance_count * vertex_count / 64)
+};
+
 struct FramePacket {
     uint32_t frame_idx = 0;
     uint32_t slot = 0;
@@ -36,6 +52,14 @@ struct FramePacket {
     std::span<const Draw> draws;
     std::span<const std::pair<DrawKey, uint32_t>> sorted;
     std::span<const rhi::Handle<rhi::Texture>> resident_textures;
+
+    // #221 Skinning Phase 5: pre-skin compute payload. All spans live on
+    // the producer slot's BumpArena and are immutable for the render
+    // thread. Empty when no skinned actors are visible OR skin_kernel_
+    // failed to load (preserves the static path bit-for-bit).
+    std::span<const SkinBatchGpu> skin_batches;
+    std::span<const glm::mat4> palettes;       // flat array; per-actor slabs
+    std::span<const glm::uvec2> instance_meta;  // {palette_off_mat4s, output_off_vec4s}
 
     uint32_t sim_steps_this_frame = 0;
     float fixed_dt = 1.0f / 60.0f;
