@@ -60,6 +60,9 @@ struct AppContext {
 
     cairns::Engine* engine = nullptr;
 
+    // QuickJS host, declared BEFORE the registry so it outlives it (the
+    // registry's script ops capture &script_host).
+    cairns::control::ScriptHost script_host;
     // Op registry owned by the app (no process singleton). Register*Ops bind
     // against it; the agent drain + scenario launcher dispatch through it.
     cairns::control::CommandRegistry registry;
@@ -168,7 +171,7 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     cairns::control::RegisterSelectionOps(registry, *engine);
     // Script ops LAST so tools.list inside script.eval reflects every
     // other op already registered. Mirrors serve_main's ordering.
-    cairns::control::RegisterScriptOps(registry);
+    cairns::control::RegisterScriptOps(registry, app_ctx->script_host);
     // #229: boot BLANK -- no run.js auto-load. Everything starts empty except
     // the perf HUD + the scenario picker; the user clicks to run a scripts/*.js
     // (perf_smoke.js is the old 500-actor benchmark). Enumerate the scripts and

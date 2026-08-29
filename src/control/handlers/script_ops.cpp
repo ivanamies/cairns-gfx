@@ -61,54 +61,21 @@ const JSMallocFunctions kJsMallocFuncs = {
     JsHeapCalloc, JsHeapMalloc, JsHeapFree, JsHeapRealloc, JsHeapUsableSize,
 };
 
-// Per-context state: a pointer to the registry + the JSRuntime/JSContext
-// owned by RegisterScriptOps's lambda capture (lives for the registry's
-// lifetime via a unique_ptr stored as a static here).
-struct JsState {
-    // #229 M7: declared FIRST so it destructs LAST -- after the dtor body's
-    // JS_FreeRuntime has returned every JS allocation to it (outstanding == 0).
-    cairns::ChunkAllocator js_heap_;
-    JSRuntime* rt = nullptr;
-    JSContext* ctx = nullptr;
-    CommandRegistry* registry = nullptr;
-    ~JsState() {
-        if (rt) {
-            // Drain any pending microtasks before tearing down. Without
-            // this, an async eval that left state in the job queue trips
-            // a clean-shutdown assert inside JS_FreeRuntime (process exits
-            // with SIGABRT after the last response is flushed).
-            for (int i = 0; i < 10000; ++i) {
-                JSContext* job_ctx = nullptr;
-                const int r = JS_ExecutePendingJob(rt, &job_ctx);
-                if (r <= 0) break;
-            }
-        }
-        if (ctx) {
-            JS_FreeContext(ctx);
-        }
-        if (rt) {
-            JS_FreeRuntime(rt);
-        }
+// Lazily create the QuickJS runtime + its heap reservation on |s| (once per
+// ScriptHost). The context is created separately in ResetJsContext.
+void EnsureRuntime(ScriptHost& s) {
+    if (s.rt) {
+        return;
     }
-};
-
-JsState& EnsureJs(CommandRegistry* reg) {
-    static JsState s;
-    if (!s.rt) {
-        // #229 M7: bound the QuickJS heap to a fixed ChunkAllocator reservation.
-        const uint64_t js_bytes = cairns::MemoryBudget::Default().js_heap_bytes;
-        s.js_heap_.InitReserved(js_bytes);
-        s.rt = JS_NewRuntime2(&kJsMallocFuncs, &s.js_heap_);
-        if (s.rt) {
-            // Belt-and-braces: QuickJS self-limits (graceful JS OOM) before the
-            // ChunkAllocator's hard cap returns null.
-            JS_SetMemoryLimit(s.rt, static_cast<size_t>(js_bytes));
-        }
+    // #229 M7: bound the QuickJS heap to a fixed ChunkAllocator reservation.
+    const uint64_t js_bytes = cairns::MemoryBudget::Default().js_heap_bytes;
+    s.js_heap.InitReserved(js_bytes);
+    s.rt = JS_NewRuntime2(&kJsMallocFuncs, &s.js_heap);
+    if (s.rt) {
+        // Belt-and-braces: QuickJS self-limits (graceful JS OOM) before the
+        // ChunkAllocator's hard cap returns null.
+        JS_SetMemoryLimit(s.rt, static_cast<size_t>(js_bytes));
     }
-    if (reg) {
-        s.registry = reg;
-    }
-    return s;
 }
 
 // Drain pending jobs, drop the current JSContext, and create a fresh one in
@@ -117,7 +84,7 @@ JsState& EnsureJs(CommandRegistry* reg) {
 // this so studio_js always evals into a CLEAN global scope -- re-evaling it on
 // a context that already declared its globals throws "redeclaration of <X>"
 // (const/class bindings are not idempotent).
-void ResetJsContext(JsState& s) {
+void ResetJsContext(ScriptHost& s) {
     if (!s.rt) {
         return;
     }
@@ -132,6 +99,11 @@ void ResetJsContext(JsState& s) {
         s.ctx = nullptr;
     }
     s.ctx = JS_NewContext(s.rt);
+    // Bind the host onto the context so JsDispatch reaches it via
+    // JS_GetContextOpaque -- no static state.
+    if (s.ctx) {
+        JS_SetContextOpaque(s.ctx, &s);
+    }
 }
 
 // Forward-decl: JsDispatch is defined below.
@@ -182,8 +154,7 @@ void BindAndAutoloadStudio(JSContext* ctx) {
 // per-context scope is reset. All state in the active script is
 // host-side (cairns.dispatch is a thin command surface), so "state
 // survives the swap" needs no serialization.
-bool ReloadJsContext() {
-    JsState& s = EnsureJs(nullptr);
+bool ReloadJsContext(ScriptHost& s) {
     if (!s.rt) {
         return false;
     }
@@ -200,8 +171,8 @@ bool ReloadJsContext() {
 // reuse the existing json::parse path; result is parsed back.
 JSValue JsDispatch(JSContext* ctx, JSValueConst /*this_val*/, int argc,
                    JSValueConst* argv) {
-    JsState& s = EnsureJs(nullptr);  // already initialized.
-    if (!s.registry) {
+    ScriptHost* s = static_cast<ScriptHost*>(JS_GetContextOpaque(ctx));
+    if (!s || !s->registry) {
         return JS_ThrowInternalError(ctx, "registry not bound");
     }
     if (argc < 1) {
@@ -241,20 +212,43 @@ JSValue JsDispatch(JSContext* ctx, JSValueConst /*this_val*/, int argc,
         }
         JS_FreeValue(ctx, js_str);
     }
-    const json resp = s.registry->Dispatch(req);
+    const json resp = s->registry->Dispatch(req);
     const std::string resp_str = resp.dump();
     return JS_ParseJSON(ctx, resp_str.c_str(), resp_str.size(), "<resp>");
 }
 
 }  // namespace
 
-void RegisterScriptOps(CommandRegistry& registry) {
-    JsState& s = EnsureJs(&registry);
+// ScriptHost dtor: drain pending jobs, then free context + runtime. Out-of-line
+// so callers that only OWN a ScriptHost don't need quickjs.h.
+ScriptHost::~ScriptHost() {
+    if (rt) {
+        // Drain any pending microtasks before tearing down. Without this, an
+        // async eval that left state in the job queue trips a clean-shutdown
+        // assert inside JS_FreeRuntime (SIGABRT after the last response flush).
+        for (int i = 0; i < 10000; ++i) {
+            JSContext* job_ctx = nullptr;
+            if (JS_ExecutePendingJob(rt, &job_ctx) <= 0) {
+                break;
+            }
+        }
+    }
+    if (ctx) {
+        JS_FreeContext(ctx);
+    }
+    if (rt) {
+        JS_FreeRuntime(rt);
+    }
+}
+
+void RegisterScriptOps(CommandRegistry& registry, ScriptHost& host) {
+    EnsureRuntime(host);
+    host.registry = &registry;
     // Fresh context each registration so the studio autoload never redeclares
     // its globals (tests re-register per scenario against the persistent JS
     // runtime).
-    ResetJsContext(s);
-    BindAndAutoloadStudio(s.ctx);
+    ResetJsContext(host);
+    BindAndAutoloadStudio(host.ctx);
 
     registry.Register(
         "cairns.script.reload",
@@ -264,8 +258,8 @@ void RegisterScriptOps(CommandRegistry& registry) {
         "re-evaluates studio_js. State survives because everything "
         "addressable is host-side (resident prefabs, entities, "
         "viewports). Returns {ok}.",
-        [](const json&) -> json {
-            return {{"ok", ReloadJsContext()}};
+        [&host](const json&) -> json {
+            return {{"ok", ReloadJsContext(host)}};
         });
 
     registry.Register(
@@ -273,8 +267,8 @@ void RegisterScriptOps(CommandRegistry& registry) {
         /*schema=*/json::object(),
         /*doc=*/"Eval a JS snippet inside the embedded QuickJS context. "
                 "Use cairns.dispatch(op, args) to call any registered op.",
-        [](const json& args) -> json {
-            JsState& s2 = EnsureJs(nullptr);
+        [&host](const json& args) -> json {
+            ScriptHost& s2 = host;
             const std::string code = args.value("code", std::string{});
             if (code.empty()) {
                 throw std::runtime_error("missing 'code' arg");

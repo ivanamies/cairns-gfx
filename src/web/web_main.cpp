@@ -54,6 +54,9 @@ struct WebApp {
     uint32_t height = 720;
     cairns::Engine* engine = nullptr;
     cairns::ScenarioLauncher launcher;
+    // QuickJS host, declared BEFORE the registry so it outlives it (the
+    // registry's script ops capture &script_host).
+    cairns::control::ScriptHost script_host;
     // Op registry owned by the app (no process singleton). The window.cairns
     // dispatch bridge + the scenario launcher route through it.
     cairns::control::CommandRegistry registry;
@@ -218,7 +221,7 @@ void StartEngine(WebApp* app) {
     cairns::control::RegisterSceneOps(reg, *app->engine);
     cairns::control::RegisterPerfOps(reg, *app->engine);
     cairns::control::RegisterSelectionOps(reg, *app->engine);
-    cairns::control::RegisterScriptOps(reg);
+    cairns::control::RegisterScriptOps(reg, app->script_host);
     // No RunBootScript: run.js is the native 500-actor perf workload (loadBatch
     // 100 + instantiateGrid x5). The browser boots empty; scenarios spawn on a
     // button click via the imgui launcher (or window.cairns.dispatch).

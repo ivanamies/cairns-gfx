@@ -44,6 +44,9 @@
 #include "shell/env_config.hpp"
 
 int main() {
+    // Declared before the registry so it outlives it (the registry's script
+    // ops capture &script_host; teardown runs registry dtor first).
+    cairns::control::ScriptHost script_host;
     cairns::control::CommandRegistry registry;
     bool quit = false;
     cairns::control::RegisterLifecycleOps(registry, quit);
@@ -80,7 +83,7 @@ int main() {
     }
     // Script ops must come LAST so tools.list inside script.eval reflects
     // every other op already registered.
-    cairns::control::RegisterScriptOps(registry);
+    cairns::control::RegisterScriptOps(registry, script_host);
     // Bundled boot script. Aborts if assets/run.js isn't in the bundle.
     if (engine_ok) {
         cairns::control::RunBootScript(registry);

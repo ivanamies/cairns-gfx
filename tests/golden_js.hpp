@@ -91,6 +91,7 @@ inline cairns::control::CommandRegistry& SetupJs(cairns::Engine& engine) {
     // production singleton -- that's gone; the QuickJS runtime (still process-
     // static in script_ops) holds a pointer to this, so the address must be
     // stable, hence a function-local static rather than a per-scenario local.
+    static cairns::control::ScriptHost script_host;
     static cairns::control::CommandRegistry reg;
     reg.Clear();
     static bool quit = false;
@@ -99,7 +100,7 @@ inline cairns::control::CommandRegistry& SetupJs(cairns::Engine& engine) {
     cairns::control::RegisterSceneOps(reg, engine);
     cairns::control::RegisterPerfOps(reg, engine);
     cairns::control::RegisterSelectionOps(reg, engine);
-    cairns::control::RegisterScriptOps(reg);  // last; binds cairns.dispatch
+    cairns::control::RegisterScriptOps(reg, script_host);  // binds cairns.dispatch
     reg.Dispatch({{"op", "cairns.script.reload"}});  // fresh JS globals
     return reg;
 }

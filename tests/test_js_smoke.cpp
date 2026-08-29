@@ -6,10 +6,11 @@
 #include "control/handlers/script_ops.hpp"
 
 SCENARIO("control links + JS dispatch + eval", "[jsmoke]") {
+    cairns::control::ScriptHost script_host;
     cairns::control::CommandRegistry reg;
     bool quit = false;
     cairns::control::RegisterLifecycleOps(reg, quit);
-    cairns::control::RegisterScriptOps(reg);
+    cairns::control::RegisterScriptOps(reg, script_host);
 
     const auto ev = reg.Dispatch(
         {{"op", "cairns.script.eval"}, {"args", {{"code", "1 + 2"}}}});
