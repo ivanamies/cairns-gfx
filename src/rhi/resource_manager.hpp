@@ -246,7 +246,6 @@ struct Buffer {
 struct Texture {
     struct Hot {
         ApiTextureHandle api_view = nullptr;  // VkImageView / MTLTexture / WGPUTextureView
-        uint32_t descriptor_index = 0;    // bindless index if used, else 0
     };
     struct Cold {
         OffsetAllocator::Allocation alloc;

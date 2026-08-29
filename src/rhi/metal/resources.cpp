@@ -313,7 +313,6 @@ Handle<Texture> Resources::CreateTexture(Allocator& alloc, const TextureDesc& d)
     Handle<Texture> h = textures.Acquire();
     Texture::Hot* hot = textures.GetHot(h);
     hot->api_view = tex;
-    hot->descriptor_index = 0;
 
     Texture::Cold* cold = textures.GetCold(h);
     cold->alloc = r.alloc;
