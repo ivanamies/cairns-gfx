@@ -78,6 +78,14 @@ SDL_AppResult SDL_Fail(){
 
 SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
 
+#ifdef __ANDROID__
+    // Android app launches via SDLActivity wrapper -- no shell to pass
+    // env vars. Default to a small entity count so the S22's MoltenVK/
+    // Adreno tile budget isn't blown by the 3300-hero benchmark; mirrors
+    // the CAIRNS_N=9 setting the macOS user used to test pick + outline.
+    setenv("CAIRNS_N", "9", 0);
+#endif
+
     constexpr uint32_t kWindowStartWidth = 1280;
     constexpr uint32_t kWindowStartHeight = 720;
 
@@ -178,43 +186,54 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event) {
             app->rmb_look = true;
         } else if (event->button.button == SDL_BUTTON_LEFT &&
                     !ImGui::GetIO().WantCaptureMouse && app->engine) {
-            // P2 click-to-focus + P4 click-to-pick. Plain LMB picks the
-            // viewport for input routing; LMB+Shift ALSO records a pick
-            // intent at the click coord in viewport-local pixels (engine
-            // resolves it once the GPU ID buffer + readback path lands).
-            // SDL3 mouse events are in window units (points). With
-            // SDL_WINDOW_HIGH_PIXEL_DENSITY the framebuffer / id_target_ is
-            // in pixels (2x on Retina). Scale to pixel space before
-            // passing to the engine.
+            // P2 click-to-focus + P4 click-to-pick. Plain LMB picks both
+            // the viewport for input routing AND records the pick intent;
+            // the Shift modifier requirement was dropped after #207 went
+            // green so every click immediately highlights a glb.
+            // SDL3 mouse events are in window units (points); with
+            // SDL_WINDOW_HIGH_PIXEL_DENSITY the framebuffer / id_target_
+            // is in pixels (2x on Retina). Scale to pixel space.
             const float density = SDL_GetWindowPixelDensity(app->window);
             const float pix_x = event->button.x * density;
             const float pix_y = event->button.y * density;
             app->engine->SetActiveViewportFromClickX(pix_x);
-            const SDL_Keymod mods = SDL_GetModState();
-            if (mods & SDL_KMOD_SHIFT) {
-                const int vp = app->engine->ActiveViewport();
-                const uint32_t fb_w = app->engine->FrameWidth();
-                const uint32_t fb_h = app->engine->FrameHeight();
-                // Side-by-side split assumed by the existing viewport
-                // pane logic (#190 / #194). vp_w = fb_w / 2 for 2-up;
-                // single-viewport mode picks vp_w = fb_w.
-                const int n_live =
-                    app->engine->ActiveViewportCount() <= 0
-                        ? 1
-                        : app->engine->ActiveViewportCount();
-                const uint32_t vp_w = fb_w / static_cast<uint32_t>(n_live);
-                const uint32_t local_x = static_cast<uint32_t>(
-                    pix_x - static_cast<float>(vp) *
-                            static_cast<float>(vp_w));
-                // No Y-flip: the forward pass's negative-height viewport
-                // maps NDC y=+1 (logical screen top) -> fragcoord_y=0
-                // (texture top-left), so screen-space y already matches
-                // id_target_ texel-space y directly.
-                const uint32_t local_y = static_cast<uint32_t>(pix_y);
-                (void)fb_h;
-                app->engine->RequestPick(vp, local_x, local_y);
-            }
+            const int vp = app->engine->ActiveViewport();
+            const uint32_t fb_w = app->engine->FrameWidth();
+            const int n_live =
+                app->engine->ActiveViewportCount() <= 0
+                    ? 1
+                    : app->engine->ActiveViewportCount();
+            const uint32_t vp_w = fb_w / static_cast<uint32_t>(n_live);
+            const uint32_t local_x = static_cast<uint32_t>(
+                pix_x - static_cast<float>(vp) *
+                        static_cast<float>(vp_w));
+            // No Y-flip: forward pass's negative-height viewport maps
+            // NDC y=+1 (screen top) -> fragcoord_y=0, so screen y =
+            // texel y directly.
+            const uint32_t local_y = static_cast<uint32_t>(pix_y);
+            app->engine->RequestPick(vp, local_x, local_y);
         }
+    }
+    // Android touch -> pick. SDL_EVENT_FINGER_DOWN.x/y are normalized
+    // [0..1] of the window; convert to pixel space against the engine's
+    // current framebuffer dims (same target as the mouse path above).
+    else if (event->type == SDL_EVENT_FINGER_DOWN && app->engine) {
+        const uint32_t fb_w = app->engine->FrameWidth();
+        const uint32_t fb_h = app->engine->FrameHeight();
+        const float pix_x = event->tfinger.x * static_cast<float>(fb_w);
+        const float pix_y = event->tfinger.y * static_cast<float>(fb_h);
+        app->engine->SetActiveViewportFromClickX(pix_x);
+        const int vp = app->engine->ActiveViewport();
+        const int n_live =
+            app->engine->ActiveViewportCount() <= 0
+                ? 1
+                : app->engine->ActiveViewportCount();
+        const uint32_t vp_w = fb_w / static_cast<uint32_t>(n_live);
+        const uint32_t local_x = static_cast<uint32_t>(
+            pix_x - static_cast<float>(vp) *
+                    static_cast<float>(vp_w));
+        const uint32_t local_y = static_cast<uint32_t>(pix_y);
+        app->engine->RequestPick(vp, local_x, local_y);
     }
     else if (event->type == SDL_EVENT_MOUSE_BUTTON_UP) {
         if (event->button.button == SDL_BUTTON_RIGHT && app->rmb_look) {
