@@ -23,6 +23,46 @@ cmake -B build/metal -G Xcode -DCAIRNS_GFX_BACKEND=metal    # Metal
 cmake -B build/vk    -G Xcode -DCAIRNS_GFX_BACKEND=vulkan   # Vulkan (MoltenVK; run via ./run_vk.sh)
 ```
 
+### Architecture (game + render thread)
+
+Pipeline depth 2: the main (game) thread builds frame N+1 while the render
+thread does Frames::Begin / Execute / End for frame N. Steady-state wall-clock
+collapses to `max(game_build, render_cycle) ≈ vsync_interval` so we land at
+60 fps so long as the GPU itself fits in vsync.
+
+```
+ main (game) thread                          render thread
+ ────────────────────                        ──────────────────
+ loop:                                       loop:
+   SDL_PollEvents                              pkt = queue.Pop()    // blocks if empty
+   ImGui NewFrame + UI + Render                Frames::Begin(res, alloc)
+   FrameClock::Tick → sim step                   ↳ semaphore_wait + AdvanceFrame
+   Extract → proxies (FrameArena)              Build per-draw UBOs from pkt
+   BuildMeshOpaqueDraws → drawList             (rhi_.alloc.BumpAllocate ×N)
+   Build RenderGraph (AddPass + Bake)          graph_.Execute(fc, swapchain_)
+   FramePacket pkt{...}                          ↳ AcquireSwapchain inside composite
+   queue.Push(pkt)                             Frames::End → submit + present
+   queue.WaitIfFull(kFramesInFlight)           if pkt.dump_frame: do dump + signal
+```
+
+Ownership rules:
+- Game thread: SDL, ImGui, sim, Extract, BuildMeshOpaqueDraws, render-graph
+  build. No GPU bump-alloc, no `Frames::*`.
+- Render thread: per-draw UBO bumps (one allocator on one thread), graph Execute,
+  Frames::Begin/End. No sim, no ImGui, no resource Acquire/Release.
+- Shared: `Resources::GetHot()` is read-only and safe. `Resources::Acquire` /
+  `Release` are game-thread-only (load-time today; runtime spawns deferred).
+
+Hand-off:
+- Forward SPSC queue (game → render) of depth `kFramesInFlight = 2` carries
+  `FramePacket*` allocated from the per-frame `FrameArena` slot.
+- Parity-return SPSC queue (render → game) carries the post-pass particle
+  parity for the next sim step.
+
+Determinism: under `CAIRNS_DUMP`, the dump frame collapses to a lock-step
+handshake so `scripts/verify_metal.sh` stays byte-identical to the existing
+golden.
+
 ## Supported Platforms
 I have tested the following:
 | Platform | Architecture | Generator |

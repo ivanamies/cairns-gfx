@@ -71,7 +71,8 @@ public:
     scenes_(cairns::Allocator<cairns::Scene>(hot_arena_)),
     root_nodes_stack_cache_(cairns::Allocator<int32_t>(hot_arena_)),
     drawListSorted_(cairns::Allocator<std::pair<cairns::DrawKey,uint32_t>>(hot_arena_)),
-    drawList_(cairns::Allocator<cairns::Draw>(hot_arena_))
+    drawList_(cairns::Allocator<cairns::Draw>(hot_arena_)),
+    drawListModels_(cairns::Allocator<glm::mat4>(hot_arena_))
     {
         
     }
@@ -287,6 +288,7 @@ public:
     bool BuildMeshOpaqueDraws() {
         drawList_.clear();
         drawListSorted_.clear();
+        drawListModels_.clear();
         
         const glm::mat4 rot_matrix = glm::rotate(
             glm::mat4(1.0f), glm::radians(render_angle_deg_), glm::vec3(0, 1.0, 0));
@@ -348,23 +350,6 @@ public:
             for (uint32_t p = 0; p < mp.primitive_count; ++p) {
                 const cairns::PrimitiveProxy& prim = proxies_.primitives[mp.first_primitive + p];
                 const MatId mat_id = prim.material_id;
-                const cairns::rhi::MaterialGpu material_gpu {};
-                uint32_t material_offset = 0;
-                void* mptr = rhi_.alloc.BumpAllocate(
-                    sizeof(cairns::rhi::MaterialGpu), rhi_.alloc.UboAlign(),
-                    rhi::Memory::kDynamic, &material_offset);
-                assert(mptr && "bump alloc failed: material");
-                memcpy(mptr, &material_gpu, sizeof(material_gpu));
-
-                const cairns::rhi::DrawTmp draw_tmp {
-                    .model_matrix = world_mat,
-                };
-                uint32_t drawtmp_offset = 0;
-                void* tptr = rhi_.alloc.BumpAllocate(
-                    sizeof(cairns::rhi::DrawTmp), rhi_.alloc.UboAlign(),
-                    rhi::Memory::kDynamic, &drawtmp_offset);
-                assert(tptr && "bump alloc failed: draw tmp");
-                memcpy(tptr, &draw_tmp, sizeof(draw_tmp));
 
                 cairns::Draw draw{};
                 draw.bind_groups[1] = material_bind_groups_[mat_id];
@@ -375,8 +360,8 @@ public:
                 draw.vertex_buffers[cairns::Draw::kVertexBufferAttrSlot] = attr;
                 draw.instance_offset = 0;
                 draw.instance_count = 1;
-                draw.dynamic_buffer_offsets[0] = material_offset;
-                draw.dynamic_buffer_offsets[1] = drawtmp_offset;
+                draw.dynamic_buffer_offsets[0] = UINT32_MAX;  // patched by EncodeDrawsCpu
+                draw.dynamic_buffer_offsets[1] = UINT32_MAX;
                 assert(prim.index_count % 3 == 0);
                 draw.triangle_count = prim.index_count / 3;
 
@@ -392,10 +377,41 @@ public:
                                          kMockViewportLayer, kMockFullscreenLayer),
                     drawList_.size());
                 drawList_.push_back(draw);
+                drawListModels_.push_back(world_mat);
             }
         }
 
         return true;
+    }
+
+    // Deferred per-draw UBO bump pass (post-build). Walks drawList_ in
+    // insertion order and bumps MaterialGpu + DrawTmp UBOs into the dynamic
+    // ring, patching dynamic_buffer_offsets. Bump order is identical to the
+    // old in-build version so byte-output is preserved.
+    void EncodeDrawsCpu() {
+        const cairns::rhi::MaterialGpu material_gpu{};
+        for (size_t i = 0; i < drawList_.size(); ++i) {
+            cairns::Draw& draw = drawList_[i];
+            uint32_t material_offset = 0;
+            void* mptr = rhi_.alloc.BumpAllocate(
+                sizeof(cairns::rhi::MaterialGpu), rhi_.alloc.UboAlign(),
+                rhi::Memory::kDynamic, &material_offset);
+            assert(mptr && "bump alloc failed: material");
+            memcpy(mptr, &material_gpu, sizeof(material_gpu));
+
+            const cairns::rhi::DrawTmp draw_tmp{
+                .model_matrix = drawListModels_[i],
+            };
+            uint32_t drawtmp_offset = 0;
+            void* tptr = rhi_.alloc.BumpAllocate(
+                sizeof(cairns::rhi::DrawTmp), rhi_.alloc.UboAlign(),
+                rhi::Memory::kDynamic, &drawtmp_offset);
+            assert(tptr && "bump alloc failed: draw tmp");
+            memcpy(tptr, &draw_tmp, sizeof(draw_tmp));
+
+            draw.dynamic_buffer_offsets[0] = material_offset;
+            draw.dynamic_buffer_offsets[1] = drawtmp_offset;
+        }
     }
 
     // Bump a RenderPassGlobals for one camera; return its dynamic offset.
@@ -719,6 +735,7 @@ public:
         if ( !BuildMeshOpaqueDraws()) {
             return false;
         }
+        EncodeDrawsCpu();
         t_build.End();
         {
             std::sort(drawListSorted_.begin(), drawListSorted_.end());
@@ -1247,6 +1264,9 @@ private:
 
     std::vector<std::pair<cairns::DrawKey,uint32_t>,cairns::Allocator<std::pair<cairns::DrawKey,uint32_t>>> drawListSorted_;
     std::vector<cairns::Draw,cairns::Allocator<cairns::Draw>> drawList_;
+    // Parallel to drawList_: model matrix per draw, consumed by EncodeDrawsCpu
+    // to bump-allocate DrawTmp UBOs after the build loop (deferred bump pass).
+    std::vector<glm::mat4,cairns::Allocator<glm::mat4>> drawListModels_;
     std::vector<rhi::Handle<rhi::Texture>> resident_textures_;
 
     cairns::SceneWorld world_;
