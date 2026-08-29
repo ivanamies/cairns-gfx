@@ -1,10 +1,11 @@
 #include "control/transport_stdio.hpp"
 
 #include <chrono>
-#include <iostream>
+#include <cstdio>
 #include <string>
 
 #include "control/command_registry.hpp"
+#include "control/stdio_lines.hpp"
 #include "util/json.hpp"
 
 namespace cairns::control {
@@ -19,11 +20,11 @@ int64_t SteadyNs() {
 
 }  // namespace
 
-void StdioTransport::Run(CommandRegistry& registry, std::istream& in,
-                         std::ostream& out, bool& quit_flag,
+void StdioTransport::Run(CommandRegistry& registry, std::FILE* in,
+                         std::FILE* out, bool& quit_flag,
                          std::atomic<int64_t>* heartbeat_ns) {
     std::string line;
-    while (std::getline(in, line)) {
+    while (ReadLine(in, line)) {
         if (line.empty()) {
             continue;
         }
@@ -34,19 +35,19 @@ void StdioTransport::Run(CommandRegistry& registry, std::istream& in,
             json resp;
             resp["ok"] = false;
             resp["error"] = {{"code", "bad_json"}, {"message", e.what()}};
-            out << resp.dump() << "\n";
-            out.flush();
+            WriteLine(out, resp.dump());
+            std::fflush(out);
             continue;
         }
         if (heartbeat_ns) {
             heartbeat_ns->store(SteadyNs(), std::memory_order_release);
         }
         const json resp = registry.Dispatch(req);
-        out << resp.dump() << "\n";
+        WriteLine(out, resp.dump());
         for (const json& ev : registry.DrainEvents()) {
-            out << ev.dump() << "\n";
+            WriteLine(out, ev.dump());
         }
-        out.flush();
+        std::fflush(out);
         if (heartbeat_ns) {
             heartbeat_ns->store(SteadyNs(), std::memory_order_release);
         }

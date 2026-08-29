@@ -9,8 +9,8 @@
 
 #if CAIRNS_VULKAN
 
+#include <cstdio>
 #include <cstring>
-#include <iostream>
 #include <optional>
 #include <set>
 #include <string>
@@ -38,7 +38,7 @@ const std::vector<const char*> kDeviceExtensions = {
 VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
     VkDebugUtilsMessageSeverityFlagBitsEXT, VkDebugUtilsMessageTypeFlagsEXT,
     const VkDebugUtilsMessengerCallbackDataEXT* data, void*) {
-    std::cerr << "validation layer: " << data->pMessage << std::endl;
+    std::fprintf(stderr, "validation layer: %s\n", data->pMessage);
     return VK_FALSE;
 }
 

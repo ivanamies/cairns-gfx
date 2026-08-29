@@ -15,8 +15,8 @@
 #pragma once
 
 #include <atomic>
+#include <cstdio>
 #include <deque>
-#include <iosfwd>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -45,7 +45,7 @@ public:
     // Pulls all queued lines + dispatches each. Responses go to `out`.
     // Call once per frame from the main thread. Bounded: drains everything
     // available at the call moment, never blocks for more.
-    void Drain(CommandRegistry& registry, std::ostream& out);
+    void Drain(CommandRegistry& registry, std::FILE* out);
 
 private:
     void ReaderLoop();

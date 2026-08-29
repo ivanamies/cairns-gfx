@@ -25,7 +25,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
-#include <iostream>
+#include <cstdio>
 #include <thread>
 
 #include "imgui.h"
@@ -126,7 +126,7 @@ int main() {
         });
     }
 
-    cairns::control::StdioTransport::Run(registry, std::cin, std::cout, quit,
+    cairns::control::StdioTransport::Run(registry, stdin, stdout, quit,
                                           &heartbeat_ns);
 
     watchdog_stop.store(true, std::memory_order_release);

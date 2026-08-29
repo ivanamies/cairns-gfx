@@ -26,7 +26,7 @@
 #include "shell/sdl_rhi_glue.hpp"
 #include "util/task_guard.hpp"
 
-#include <iostream>
+#include <cstdio>
 #include "control/agent_stdin_drain.hpp"
 #include "control/command_registry.hpp"
 #include "control/handlers/lifecycle_ops.hpp"
@@ -280,7 +280,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     // mutations land on this frame's render. Responses go to stdout; logs
     // / [Timer] / [FLAKE] stay on stderr per the protocol contract.
     app->agent_drain.Drain(cairns::control::CommandRegistry::Instance(),
-                           std::cout);
+                           stdout);
     if (app->agent_quit) {
         app->app_quit = SDL_APP_SUCCESS;
     }

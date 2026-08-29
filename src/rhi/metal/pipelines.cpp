@@ -10,8 +10,8 @@
 
 #include <cstring>
 #include <filesystem>
+#include <cstdio>
 #include <fstream>
-#include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -78,7 +78,7 @@ std::string read_text_file(const std::string& path) {
 MTL::Library* compile_metal_library(MTL::Device* device, const std::string& path) {
     std::string src = read_text_file(path);
     if (src.empty()) {
-        std::cerr << "rhi/metal: failed to load shader source: " << path << std::endl;
+        std::fprintf(stderr, "rhi/metal: failed to load shader source: %s\n", path.c_str());
         return nullptr;
     }
     NS::String* ns_src =
@@ -88,8 +88,8 @@ MTL::Library* compile_metal_library(MTL::Device* device, const std::string& path
     NS::Error* err = nullptr;
     MTL::Library* lib = device->newLibrary(ns_src, opts, &err);
     if (err) {
-        std::cerr << "rhi/metal: shader compile error: "
-                  << err->localizedDescription()->utf8String() << std::endl;
+        std::fprintf(stderr, "rhi/metal: shader compile error: %s\n",
+                     err->localizedDescription()->utf8String());
     }
     opts->release();
     return lib;
@@ -247,7 +247,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     ffn->release();
     lib->release();
     if (!pso) {
-        std::cerr << "rhi/metal: newRenderPipelineState failed" << std::endl;
+        std::fprintf(stderr, "rhi/metal: newRenderPipelineState failed\n");
         return Handle<Shader>::Null;
     }
 
@@ -277,7 +277,7 @@ Handle<Kernel> Pipelines::CreateComputePipeline(
     fn->release();
     lib->release();
     if (!cps) {
-        std::cerr << "rhi/metal: newComputePipelineState failed" << std::endl;
+        std::fprintf(stderr, "rhi/metal: newComputePipelineState failed\n");
         return Handle<Kernel>::Null;
     }
     Handle<Kernel> h = resources.kernels.Acquire();

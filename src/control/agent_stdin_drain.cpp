@@ -1,9 +1,10 @@
 #include "control/agent_stdin_drain.hpp"
 
-#include <iostream>
+#include <cstdio>
 #include <utility>
 
 #include "control/command_registry.hpp"
+#include "control/stdio_lines.hpp"
 #include "util/json.hpp"
 
 namespace cairns::control {
@@ -37,7 +38,7 @@ void AgentStdinDrain::Stop() {
 
 void AgentStdinDrain::ReaderLoop() {
     std::string line;
-    while (!quit_.load() && std::getline(std::cin, line)) {
+    while (!quit_.load() && ReadLine(stdin, line)) {
         if (line.empty()) {
             continue;
         }
@@ -47,7 +48,7 @@ void AgentStdinDrain::ReaderLoop() {
     }
 }
 
-void AgentStdinDrain::Drain(CommandRegistry& registry, std::ostream& out) {
+void AgentStdinDrain::Drain(CommandRegistry& registry, std::FILE* out) {
     if (!enabled_) {
         return;
     }
@@ -64,13 +65,13 @@ void AgentStdinDrain::Drain(CommandRegistry& registry, std::ostream& out) {
             json resp;
             resp["ok"] = false;
             resp["error"] = {{"code", "bad_json"}, {"message", e.what()}};
-            out << resp.dump() << "\n";
-            out.flush();
+            WriteLine(out, resp.dump());
+            std::fflush(out);
             continue;
         }
         const json resp = registry.Dispatch(req);
-        out << resp.dump() << "\n";
-        out.flush();
+        WriteLine(out, resp.dump());
+        std::fflush(out);
     }
 }
 
