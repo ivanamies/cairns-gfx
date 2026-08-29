@@ -63,7 +63,17 @@ WGPUCullMode ToWgpuCull(CullMode c) {
     }
 }
 
-enum class Kind { kStub, kFullscreen, kUnlit };
+WGPUBlendFactor ToWgpuBlend(BlendFactor b) {
+    switch (b) {
+        case BlendFactor::kZero: return WGPUBlendFactor_Zero;
+        case BlendFactor::kOne: return WGPUBlendFactor_One;
+        case BlendFactor::kSrcAlpha: return WGPUBlendFactor_SrcAlpha;
+        case BlendFactor::kOneMinusSrcAlpha: return WGPUBlendFactor_OneMinusSrcAlpha;
+        default: return WGPUBlendFactor_One;
+    }
+}
+
+enum class Kind { kStub, kFullscreen, kUnlit, kImgui };
 
 // Maps a logical_shader to (kind, wgsl file stem, sampled-texture count for the
 // fullscreen bind group). The id MRT variants (unlit / unlit_offscreen) need a
@@ -83,6 +93,9 @@ ShaderInfo Classify(const char* logical) {
     }
     if (std::strcmp(logical, "unlit_offscreen_noid") == 0) {
         return {Kind::kUnlit, "unlit", 0};
+    }
+    if (std::strcmp(logical, "imgui") == 0) {
+        return {Kind::kImgui, "imgui", 0};
     }
     return {};
 }
@@ -144,6 +157,14 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(Resources& resources, Frames& f
         pld.bindGroupLayoutCount = 3;
         pld.bindGroupLayouts = bgls;
         pl = wgpuDeviceCreatePipelineLayout(plat.device_, &pld);
+    } else if (info.kind == Kind::kImgui) {
+        bgl0 = webgpu::MakeDynUboLayout(plat.device_);    // group 0: pc uniform
+        bgl1 = webgpu::MakeMaterialLayout(plat.device_);  // group 1: font+sampler
+        WGPUBindGroupLayout bgls[2] = {bgl0, bgl1};
+        WGPUPipelineLayoutDescriptor pld = {};
+        pld.bindGroupLayoutCount = 2;
+        pld.bindGroupLayouts = bgls;
+        pl = wgpuDeviceCreatePipelineLayout(plat.device_, &pld);
     } else if (info.tex_count > 0) {
         WGPUBindGroupLayoutEntry entries[8] = {};
         for (int i = 0; i < info.tex_count; ++i) {
@@ -197,7 +218,16 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(Resources& resources, Frames& f
         desc.color_count > 0 ? desc.color_formats[0] : desc.color_format;
     WGPUColorTargetState color = {};
     color.format = PipeFormat(color_fmt);
-    color.blend = nullptr;  // opaque; alpha-blending passes (imgui) land later
+    WGPUBlendState blend = {};
+    if (desc.blend.enable) {
+        blend.color.operation = WGPUBlendOperation_Add;
+        blend.color.srcFactor = ToWgpuBlend(desc.blend.src_color);
+        blend.color.dstFactor = ToWgpuBlend(desc.blend.dst_color);
+        blend.alpha.operation = WGPUBlendOperation_Add;
+        blend.alpha.srcFactor = ToWgpuBlend(desc.blend.src_alpha);
+        blend.alpha.dstFactor = ToWgpuBlend(desc.blend.dst_alpha);
+        color.blend = &blend;
+    }
     color.writeMask = WGPUColorWriteMask_All;
 
     WGPUFragmentState frag = {};
@@ -223,7 +253,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(Resources& resources, Frames& f
     rpd.layout = pl;
     rpd.vertex.module = module;
     rpd.vertex.entryPoint = Sv("vs_main");
-    if (info.kind == Kind::kUnlit) {
+    if (info.kind == Kind::kUnlit || info.kind == Kind::kImgui) {
         rpd.vertex.bufferCount = desc.vertex_buffers.size();
         rpd.vertex.buffers = vbl;
     }

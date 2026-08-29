@@ -8,6 +8,9 @@
 #include "rhi/allocator.hpp"
 
 #include <cstdio>
+#include <cstring>
+
+#include "imgui.h"
 
 #include <webgpu/webgpu.h>
 
@@ -193,8 +196,105 @@ void CommandRecorder::SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) {
     wgpuRenderPassEncoderSetScissorRect(plat.enc_, ux, uy, w, h);
 }
 void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader> pipeline,
-                                Handle<Texture> font, Handle<Sampler> sampler, const ImDrawData* draw_data) {
-    (void)res; (void)alloc; (void)pipeline; (void)font; (void)sampler; (void)draw_data;
+                                Handle<Texture> font, Handle<Sampler> sampler,
+                                const ImDrawData* dd) {
+    if (!plat.enc_ || !dd || dd->CmdListsCount == 0 || dd->DisplaySize.x <= 0.0f) {
+        return;
+    }
+    Shader::Hot* sh = res.GetHot(pipeline);
+    if (!sh || !sh->api_pso) { return; }
+    wgpuRenderPassEncoderSetPipeline(plat.enc_,
+                                     static_cast<WGPURenderPipeline>(sh->api_pso));
+
+    const float fsx = dd->FramebufferScale.x;
+    const float fsy = dd->FramebufferScale.y;
+    const float disp_w = dd->DisplaySize.x;
+    const float disp_h = dd->DisplaySize.y;
+    const float fb_w = disp_w * fsx;
+    const float fb_h = disp_h * fsy;
+
+    // imgui.metal push constant: ortho {scale, translate} -> dynamic UBO @group0.
+    float pc[4];
+    pc[0] = 2.0f / disp_w;
+    pc[1] = -2.0f / disp_h;
+    pc[2] = -1.0f - dd->DisplayPos.x * pc[0];
+    pc[3] = 1.0f - dd->DisplayPos.y * pc[1];
+    uint32_t pc_off = 0;
+    void* pcptr = alloc.BumpAllocate(sizeof(pc), 256, Memory::kDynamic, &pc_off);
+    if (!pcptr) { return; }
+    std::memcpy(pcptr, pc, sizeof(pc));
+
+    WGPUBuffer master = res.plat.GetBumpMasterBuffer(alloc, Memory::kDynamic);
+    if (!master) { return; }
+
+    WGPUBindGroupEntry ge0 = {};
+    ge0.binding = 0;
+    ge0.buffer = master;
+    ge0.size = sizeof(pc);
+    WGPUBindGroupDescriptor bgd0 = {};
+    bgd0.layout = sh->plat.bind_group_layouts[0];
+    bgd0.entryCount = 1;
+    bgd0.entries = &ge0;
+    WGPUBindGroup bg0 = wgpuDeviceCreateBindGroup(plat.device_, &bgd0);
+    wgpuRenderPassEncoderSetBindGroup(plat.enc_, 0, bg0, 1, &pc_off);
+    plat.transient_bind_groups_.push_back(bg0);
+
+    Texture::Hot* fh = res.GetHot(font);
+    Sampler::Hot* smp = res.GetHot(sampler);
+    WGPUBindGroupEntry ge1[2] = {};
+    ge1[0].binding = 0;
+    ge1[0].textureView = fh ? static_cast<WGPUTextureView>(fh->api_view) : nullptr;
+    ge1[1].binding = 1;
+    ge1[1].sampler = smp ? static_cast<WGPUSampler>(smp->api_sampler) : nullptr;
+    WGPUBindGroupDescriptor bgd1 = {};
+    bgd1.layout = sh->plat.bind_group_layouts[1];
+    bgd1.entryCount = 2;
+    bgd1.entries = ge1;
+    WGPUBindGroup bg1 = wgpuDeviceCreateBindGroup(plat.device_, &bgd1);
+    wgpuRenderPassEncoderSetBindGroup(plat.enc_, 1, bg1, 0, nullptr);
+    plat.transient_bind_groups_.push_back(bg1);
+
+    wgpuRenderPassEncoderSetViewport(plat.enc_, 0.0f, 0.0f, fb_w, fb_h, 0.0f, 1.0f);
+
+    const ImVec2 clip_off = dd->DisplayPos;
+    for (int n = 0; n < dd->CmdListsCount; ++n) {
+        const ImDrawList* cl = dd->CmdLists[n];
+        const uint32_t vbytes =
+            static_cast<uint32_t>(cl->VtxBuffer.Size) * sizeof(ImDrawVert);
+        const uint32_t ibytes =
+            static_cast<uint32_t>(cl->IdxBuffer.Size) * sizeof(ImDrawIdx);
+        if (vbytes == 0 || ibytes == 0) { continue; }
+        uint32_t voff = 0;
+        uint32_t ioff = 0;
+        void* vptr = alloc.BumpAllocate(vbytes, 16, Memory::kDynamic, &voff);
+        void* iptr = alloc.BumpAllocate(ibytes, 4, Memory::kDynamic, &ioff);
+        if (!vptr || !iptr) { continue; }
+        std::memcpy(vptr, cl->VtxBuffer.Data, vbytes);
+        std::memcpy(iptr, cl->IdxBuffer.Data, ibytes);
+        wgpuRenderPassEncoderSetVertexBuffer(plat.enc_, 0, master, voff, vbytes);
+        wgpuRenderPassEncoderSetIndexBuffer(
+            plat.enc_, master,
+            sizeof(ImDrawIdx) == 2 ? WGPUIndexFormat_Uint16 : WGPUIndexFormat_Uint32,
+            ioff, ibytes);
+        for (int c = 0; c < cl->CmdBuffer.Size; ++c) {
+            const ImDrawCmd* cmd = &cl->CmdBuffer[c];
+            float cx = (cmd->ClipRect.x - clip_off.x) * fsx;
+            float cy = (cmd->ClipRect.y - clip_off.y) * fsy;
+            float cz = (cmd->ClipRect.z - clip_off.x) * fsx;
+            float cw = (cmd->ClipRect.w - clip_off.y) * fsy;
+            cx = cx < 0.0f ? 0.0f : cx;
+            cy = cy < 0.0f ? 0.0f : cy;
+            cz = cz > fb_w ? fb_w : cz;
+            cw = cw > fb_h ? fb_h : cw;
+            if (cz <= cx || cw <= cy) { continue; }
+            wgpuRenderPassEncoderSetScissorRect(
+                plat.enc_, static_cast<uint32_t>(cx), static_cast<uint32_t>(cy),
+                static_cast<uint32_t>(cz - cx), static_cast<uint32_t>(cw - cy));
+            wgpuRenderPassEncoderDrawIndexed(plat.enc_, cmd->ElemCount, 1,
+                                             cmd->IdxOffset,
+                                             static_cast<int32_t>(cmd->VtxOffset), 0);
+        }
+    }
 }
 void CommandRecorder::PassTimerBegin(const char* name, bool is_compute) { (void)name; (void)is_compute; }
 void CommandRecorder::PassTimerEnd() {}
