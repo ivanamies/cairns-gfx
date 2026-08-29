@@ -2122,6 +2122,15 @@ public:
         viewport_names_[viewport_names_count_++] = ViewportName{name, id};
     }
     
+    // #229 M0b: re-seat a default-constructed (malloc-fallback) block-backed
+    // vector onto cpu_block_ + reserve. POCMA makes the empty move-assign adopt
+    // the block allocator. Call once at init, before first use.
+    template <typename Vec>
+    void ReseatOnBlock(Vec& v, size_t cap) {
+        v = Vec(typename Vec::allocator_type(cpu_block_));
+        v.reserve(cap);
+    }
+
     bool initResourceManagers() {
         using namespace cairns;
         using namespace cairns::rhi;
@@ -2131,10 +2140,11 @@ public:
         // M0b.) The ResourceManager hot/cold pools are Aaltonen-canon and have
         // no Reserve() -- not pre-sized here (would need permission to add one).
         constexpr size_t kPrefabResidencyCap = 600;
-        prefab_ids_.reserve(kPrefabResidencyCap);
-        glb_paths_.reserve(kPrefabResidencyCap);
-        per_prefab_asset_.reserve(kPrefabResidencyCap);
-        resident_textures_.reserve(kPrefabResidencyCap * 4);
+        // #229 M0b: POD loose vectors -> cpu_block_ (re-seat + reserve).
+        ReseatOnBlock(prefab_ids_, kPrefabResidencyCap);
+        ReseatOnBlock(per_prefab_asset_, kPrefabResidencyCap);
+        ReseatOnBlock(resident_textures_, kPrefabResidencyCap * 4);
+        glb_paths_.reserve(kPrefabResidencyCap);  // path strings stay heap (interning is a follow-on)
         per_batch_shared_skin_.reserve(64);
 
         // #229 M0b: Reserve the persistent ResourceManager pools onto cpu_block_
@@ -5525,17 +5535,17 @@ private:
     // assignment's `i % prefab_ids_.size()`) iterate this. The Prefab::Hot
     // / Prefab::Cold records live in the pool, not the vector.
     cairns::ResourceManager<cairns::Prefab> prefabs_;
-    std::vector<cairns::PrefabId> prefab_ids_;
+    std::vector<cairns::PrefabId, cairns::ChunkStdAllocator<cairns::PrefabId>> prefab_ids_;
     // #222 Phase #267: parallel to prefab_ids_; index N maps to the GLB
     // path that produced prefab_ids_[N]. Read by the [PICK] log line.
     std::vector<std::filesystem::path> glb_paths_;
     // #269: parallel to prefab_ids_; AssetId registered for each scene.
     // InstantiatePrefab consumes this to stamp AssetRef on the new entity.
-    std::vector<cairns::AssetId> per_prefab_asset_;
+    std::vector<cairns::AssetId, cairns::ChunkStdAllocator<cairns::AssetId>> per_prefab_asset_;
     // #222 Phase H.6: built once at scene-load + uploadAnimTablesGpu;
     // every frame's resident_textures span points at this vector
     // instead of being arena-allocated + filled per frame.
-    std::vector<rhi::Handle<rhi::Texture>> resident_textures_;
+    std::vector<rhi::Handle<rhi::Texture>, cairns::ChunkStdAllocator<rhi::Handle<rhi::Texture>>> resident_textures_;
     // #222 Phase H.4 partial: the skin-attr SSBO is the SAME handle on every
     // skinned mesh from one LoadPrefabsGpu call -- it does not belong on
     // Mesh::Hot.
