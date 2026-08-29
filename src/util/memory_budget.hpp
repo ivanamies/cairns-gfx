@@ -29,8 +29,13 @@ struct MemoryBudget {
     // from the persistent region; reset each frame. Matches today's BumpArena.
     uint64_t cpu_frame_slab_bytes = 0;
     // GPU resident pool (mesh/idx/attr, textures, anim tables, skin output).
-    // M5 reserves MemoryAllocator blocks up front to this. Device-cap checked.
+    // The MemoryAllocator-block pre-reservation up to this cap is the M5
+    // structural follow-on. Device-cap checked.
     uint64_t gpu_resident_bytes = 0;
+    // The persistent skin-output pool: a single fixed GPU buffer reserved once
+    // at GreaterInit (already up-front today). Bound to a compute kernel, so it
+    // must fit the device's max_storage_buffer_range (Adreno 730 floor 128 MB).
+    uint64_t gpu_skin_pool_bytes = 0;
     // GPU host-visible staging ring, PER SLOT (uploads).
     uint64_t gpu_staging_ring_bytes = 0;
     // QuickJS heap reservation (M7).
@@ -45,10 +50,12 @@ struct MemoryBudget {
         MemoryBudget b;
 #if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
         b.cpu_persistent_bytes = 256ull * 1024 * 1024;   // 256 MB
-        b.gpu_resident_bytes = 128ull * 1024 * 1024;     // matches kSkinOutput floor
+        b.gpu_resident_bytes = 128ull * 1024 * 1024;
+        b.gpu_skin_pool_bytes = 128ull * 1024 * 1024;    // Adreno 730 floor
 #else
         b.cpu_persistent_bytes = 1024ull * 1024 * 1024;  // 1 GB
         b.gpu_resident_bytes = 1024ull * 1024 * 1024;    // 1 GB
+        b.gpu_skin_pool_bytes = 1024ull * 1024 * 1024;   // 1 GB
 #endif
         b.cpu_frame_slab_bytes = 16ull * 1024 * 1024;    // 16 MB / slot (existing)
         b.gpu_staging_ring_bytes = 64ull * 1024 * 1024;  // 64 MB / slot (existing)

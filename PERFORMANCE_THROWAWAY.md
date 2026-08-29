@@ -218,3 +218,23 @@ load vectors (`Mesh::Cold`/`Prefab::Cold` cpu+gpu, anim spans) onto a
 `ChunkStdAllocator` over this reservation (per-prefab arena, freed wholesale at
 unload) — that's where the boot ~497k load allocs collapse. The mechanism +
 sizing are now in place and tested; activation is the next structural pass.
+
+---
+
+## M5 — GPU reservation sizing via MemoryBudget (commit pending)
+
+`MemoryBudget` is now the **live** single source for the GPU reservation: the
+engine's persistent skin-output pool (the biggest up-front GPU reservation — 1 GB
+desktop / 128 MB Android, already reserved once at `GreaterInit`) and its
+device-cap fail-loud check (`SkinPoolFitsDevice`, the Adreno-730 lesson) both
+read `MemoryBudget::Default().gpu_skin_pool_bytes` instead of scattered
+`#if`-platform `constexpr`s. Same values, one place to tune. Added
+`gpu_skin_pool_bytes`. Byte-identical: spec 108/108, stress 8/8, subject 6/6;
+metal + vk compile.
+
+**Deferred (structural follow-on):** pre-reserving the `MemoryAllocator` mesh/
+texture blocks up front to `gpu_resident_bytes` (the headline "~5 GB reserved")
+is a real metal+vulkan change with the same waste/Android-OOM concern unless
+paired with streaming residency. Not rushed at the tail of this session (GPU
+memory management = exactly the "small disaster" risk). The skin pool — the
+dominant fixed GPU reservation — is already up-front and now budget-sourced.

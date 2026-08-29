@@ -2,6 +2,7 @@
 
 #include "util/define.hpp"
 #include "util/alloc_count.hpp"  // #229 per-phase allocation receipts
+#include "util/memory_budget.hpp"  // #229 single source of reservation sizes
 
 #include <array>
 #include <cmath>
@@ -2196,14 +2197,13 @@ public:
         // sizes kSkinOutputBytes at 256 MB (the landed fix); this is the
         // belt-and-braces check that survives a desktop-pool slip onto a
         // mobile device.
+        // #229 M5: the skin-pool size is now sourced from MemoryBudget (the
+        // single per-platform reservation table) -- 128 MB mobile / 1 GB
+        // desktop, same values, one place to tune.
+        const uint32_t kSkinOutputBytes = static_cast<uint32_t>(
+            cairns::MemoryBudget::Default().gpu_skin_pool_bytes);
         {
-// Mobile + iOS (incl. sim) report a 256 MB MTLDevice maxBufferLength /
-// Adreno 730 reports 256 MB maxStorageBufferRange. Desktop reports >= 2 GB.
-#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
-            constexpr uint32_t kSkinOutputBytesCheck = 128u * 1024u * 1024u;
-#else
-            constexpr uint32_t kSkinOutputBytesCheck = 1024u * 1024u * 1024u;
-#endif
+            const uint32_t kSkinOutputBytesCheck = kSkinOutputBytes;
             if (!cairns::SkinPoolFitsDevice(kSkinOutputBytesCheck,
                                             rhi_.device.caps)) {
                 CAIRNS_PRINT_ERR(
@@ -2232,18 +2232,8 @@ public:
         // MB) drops into the dedicated-block path in
         // MemoryAllocator::AllocBuffer, so we land in our own VkDeviceMemory.
         {
-#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
-            // 128 MB: Adreno 730 (Samsung S22) actually reports
-            // maxStorageBufferRange = 128 MB at runtime (the vk spec
-            // floor), not the 256 MB earlier docs implied. iOS sim
-            // MTLDevice maxBufferLength is 256 MB, but 128 fits all of
-            // them.
-            static constexpr uint32_t kSkinOutputBytes =
-                128u * 1024u * 1024u;
-#else
-            static constexpr uint32_t kSkinOutputBytes =
-                1024u * 1024u * 1024u;
-#endif
+            // kSkinOutputBytes from MemoryBudget (above). 128 MB mobile (Adreno
+            // 730 maxStorageBufferRange floor) / 1 GB desktop.
             rhi::BufferDesc bd{};
             bd.byte_size = kSkinOutputBytes;
             bd.usage = rhi::kUsageStorage | rhi::kUsageVertex;
