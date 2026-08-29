@@ -44,6 +44,15 @@ void OffscreenTargetCache::Deinit() {
     rps.clear();
 }
 
+void OffscreenTargetCache::FlushFramebuffers() {
+    for (FbEntry& f : fbs) {
+        if (f.fb != VK_NULL_HANDLE) {
+            vkDestroyFramebuffer(device, f.fb, nullptr);
+        }
+    }
+    fbs.clear();
+}
+
 static VkFormat to_vk_format(Format f) {
     switch (f) {
         case Format::kRgba8Unorm: return VK_FORMAT_R8G8B8A8_UNORM;

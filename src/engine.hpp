@@ -138,9 +138,16 @@ public:
         return true;
     }
     
+    // SDL fires SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED on the event thread.
+    // We don't synchronously touch any GPU state here -- ApplyPendingResize
+    // (top of draw()) drains the render thread first.
     bool requestResizeFrameBuffer(uint32_t width, uint32_t height) {
-        (void)width;
-        (void)height;
+        if (width == 0 || height == 0) {
+            return true;
+        }
+        resize_pending_w_ = width;
+        resize_pending_h_ = height;
+        resize_pending_ = true;
         return true;
     }
 
@@ -988,7 +995,63 @@ public:
         *dt_ptr = pkt.fixed_dt;
     }
 
+    // Drain in-flight work, settle GPU, invalidate any caches keyed on the
+    // old swap dims, then resize per-viewport / final_target state. Called
+    // at the top of draw(); a no-op when no SDL resize is pending and the
+    // observed swap dims haven't drifted (Vk's WSI may auto-recreate the
+    // swapchain on OUT_OF_DATE without ever calling this path).
+    void ApplyPendingResize() {
+        const uint32_t cur_w = final_target_.IsNull() ? swapchain_.Width()
+                                                       : final_target_w_;
+        const uint32_t cur_h = final_target_.IsNull() ? swapchain_.Height()
+                                                       : final_target_h_;
+        const bool dims_drifted = (cur_w != last_seen_swap_w_) ||
+                                   (cur_h != last_seen_swap_h_);
+        if (!resize_pending_ && !dims_drifted) {
+            return;
+        }
+        if (render_thread_) {
+            render_thread_->Drain();
+        }
+#if CAIRNS_VULKAN
+        if (rhi_.device.device_) {
+            vkDeviceWaitIdle(rhi_.device.device_);
+        }
+        // Framebuffers in the offscreen cache are sized at create-time
+        // against the prior swap dims; the (w, h) check inside
+        // get_offscreen_fb wouldn't match the new dims so they'd grow
+        // unboundedly. Wipe them on resize; render passes (keyed on format,
+        // not dims) survive.
+        rhi_.frames.offscreen_target_cache_.FlushFramebuffers();
+#endif
+        if (!final_target_.IsNull() &&
+            (resize_pending_w_ != final_target_w_ ||
+             resize_pending_h_ != final_target_h_) &&
+            resize_pending_w_ != 0 && resize_pending_h_ != 0) {
+            ResizeFinalTarget(resize_pending_w_, resize_pending_h_);
+        }
+        last_seen_swap_w_ = final_target_.IsNull() ? swapchain_.Width()
+                                                    : final_target_w_;
+        last_seen_swap_h_ = final_target_.IsNull() ? swapchain_.Height()
+                                                    : final_target_h_;
+        resize_pending_ = false;
+    }
+
     bool draw() {
+        // Settle any pending SDL resize BEFORE the next render thread acquire
+        // -- ApplyPendingResize drains the render thread and waits the device
+        // idle so destroyed targets aren't dereferenced by an in-flight frame.
+        // Minimized window: swap dims are 0 in windowed mode; bail with a
+        // drain so we don't try to render to a zero-extent target.
+        ApplyPendingResize();
+        if (final_target_.IsNull() &&
+            (swapchain_.Width() == 0 || swapchain_.Height() == 0)) {
+            if (render_thread_) {
+                render_thread_->Drain();
+            }
+            return false;
+        }
+
         frame_++;
         const uint32_t slot = (frame_ - 1) % kFramesInFlight;
 
@@ -1825,6 +1888,17 @@ private:
     rhi::Handle<rhi::Texture> final_target_ = rhi::Handle<rhi::Texture>::Null;
     uint32_t final_target_w_ = 0;
     uint32_t final_target_h_ = 0;
+
+    // P3 resize lifecycle. SDL fires WINDOW_PIXEL_SIZE_CHANGED on the event
+    // thread; we record intent + dims and settle on the next draw() call so
+    // GPU teardown happens with no in-flight frames. last_seen_swap_w_/h_
+    // also catches drift from Vulkan WSI auto-recreating the swapchain on
+    // OUT_OF_DATE without our resize intent path firing.
+    bool resize_pending_ = false;
+    uint32_t resize_pending_w_ = 0;
+    uint32_t resize_pending_h_ = 0;
+    uint32_t last_seen_swap_w_ = 0;
+    uint32_t last_seen_swap_h_ = 0;
 
     // Seed used by initParticles. Default 42 preserves the existing golden;
     // the rng.seed NDJSON op writes through SetRandomSeed before init.

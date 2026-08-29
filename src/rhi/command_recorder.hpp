@@ -129,6 +129,11 @@ struct OffscreenTargetCache {
     std::vector<FbEntry> fbs;
 
     void Deinit();
+    // Resize entry. Framebuffers are sized at create-time; on resize their
+    // (w, h) no longer match the post-resize attachment views. Render passes
+    // are keyed on attachment formats / load-ops only, so they can be kept.
+    // CALLER: Engine::ApplyPendingResize.
+    void FlushFramebuffers();
 };
 #endif
 
