@@ -9,6 +9,35 @@ here.
 
 ## Deferred — AFTER all #229 allocation-less milestones (M0b, M3–M7) land
 
+### M0b activation (load-vector arena migration) — LOW VALUE, do not pursue blind
+Attempted 2026-06-19 (increment 1: scene_gpu batch vectors → `ChunkAllocator`
+`load_alloc_`). Reverted. Findings:
+- **Reach is ~0.6% of boot allocs.** Boot is ~5k allocs/GLB (load ~1.9k +
+  instantiate + texture residency + scene setup). The engine *load vectors*
+  (`Mesh::Cold` cpu*, `Prefab::Cold` gpu_*) are only ~25–30/GLB. The bulk is
+  **fastgltf-internal** (its `Asset` std::vectors — would need fastgltf's custom
+  allocator, which is PMR = banned), **stb_image** texture loads (C `malloc`,
+  not even in the C++ `[ALLOC-RECEIPT]`), and entity instantiation. None are
+  "load vectors." M3's tiny 3.6k/100-GLB saving corroborates.
+- A 57-agent map (workflow `wf_1ad70248-8c2`) confirms all ~13 load vectors are
+  `load_temporary` + arena_span-SAFE, but the migration is INVASIVE per-vector
+  (writers + readers + the `ValidateAndCleanupTmps` `.empty()`/`.clear()`
+  invariants at engine.hpp:614-622,771-773 all re-home to span semantics).
+- **Verdict:** invasive per-vector restructure for ~0.6% reduction = not worth
+  it. The headline "boot 497k→low" is NOT reachable this way; it needs fastgltf's
+  allocator (PMR-blocked) + texture/instantiation arenas (broad cross-cutting).
+  The M0b reservation FOUNDATION + the M7 QuickJS activation stand; this is the
+  wrong lever.
+
+### ChunkAllocator unproven under large/oversize allocations (M7 latent risk)
+Increment-1 above SIGSEGV'd in `LoadPrefabsGpu` (main thread) the first time the
+(previously dormant) `ChunkAllocator` served LARGE batch vectors (multi-MB,
+oversize path). QuickJS/M7 only does tiny allocs so M7 works in practice, but a
+>4 MB JS allocation would hit the same unproven path. Before relying on
+`ChunkAllocator` for large allocations: add a stress test over the oversize +
+in-class-4MB-boundary paths, find the bug, fix it.
+
+
 ### Reload skinning-compute-binding crash (pre-existing, do AFTER #229)
 Hot-reloading a SKINNED/animated prefab while it is being rendered crashes the
 render thread ~`kFramesInFlight` frames after the reload. Pre-existing —
