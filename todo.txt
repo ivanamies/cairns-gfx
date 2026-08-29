@@ -84,25 +84,21 @@ HUMAN TODO — DECISION REQUIRED before/within Phase 0 (god-class split):
   Resolution = one of: "fixed, root cause was X"; or "can't fix, it's Y, gate
   mitigated by Z (e.g. always clean-build + double-run + cmp both)."
 
-- V-METAL (tmp/verify_metal.sh) intermittently produces a DIFFERENT Metal render on
-  the FIRST run right after a shared-header edit (e.g. resource_manager.hpp), then
-  byte-identical on every rerun. The bad image is NOT noise: heroes are repositioned
-  / re-projected (looks like a different camera/aspect or wrong per-frame data) — a
-  coherent-but-wrong render, not a half-written PNG. Observed twice during M6.7c
-  (GraphicsPipelineDesc change; SwapChain Width()/Height() change).
-  Hypotheses to rule out:
-    * incremental xcodebuild linking a stale .o (ABI skew between TUs) — but the
-      Metal-read GraphicsPipelineDesc fields were unchanged-offset, so this should
-      NOT visibly corrupt. Try: `xcodebuild clean` before the first build — does it
-      vanish?
-    * a real frame-5 determinism hole (uninitialized bump/ring/parity state on the
-      very first launch after a rebuild; the SDL_GetTicks/last_ticks_ dt path even
-      under CAIRNS_FREEZE_ROT?). Capture the bad dump and diff vs golden: is it a
-      rotation/projection delta or data-corruption?
-    * dump captured before frame 5 fully rendered (race in verify_metal.sh kill/wait).
-  Why it matters: if it's a determinism hole, the "byte-identical golden" gate has a
-  blind spot and could pass while real first-frame state is wrong. Reproduce it
-  deterministically before trusting the gate.
+DONE — V-METAL first-build flake fixed (commit cd7d670, 2026-06-05).
+  Root cause: MTL device->newBuffer / vkAllocateMemory do NOT zero-init.
+  CPU UploadBuffer filled what we uploaded; alignment padding inside
+  sub-allocations + unfilled bytes between adjacent sub-allocs in the
+  OffsetAllocator pool stayed at VRAM contents. First launch: random
+  first-launch garbage. Subsequent launches: GPU allocator reuses the same
+  VRAM region, prior process's frame-60 leftover -- consistent across reruns,
+  different from first-launch. Hence the coherent-but-mis-projected /
+  first-run-after-rebuild-only / deterministic-on-either-side signature.
+  Fix: memset Shared/HOST_VISIBLE heap memory at allocation; blit fillBuffer
+  on Metal Private heaps. CAIRNS_GARBAGE_BUMP=1 reproduces with 0xCC for
+  future investigations. Verified: full clean rebuild + 3 back-to-back regens
+  on both backends -> byte-identical to golden every time.
+  Remaining defense-in-depth: vk DEVICE_LOCAL per-resource fill (would need
+  vkCmdFillBuffer + one-shot pool). Lands if vk-side flake fires.
 
 (the very next slide is the CPU database and GPU virtual machine analogy)
 
