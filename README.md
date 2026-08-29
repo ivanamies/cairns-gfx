@@ -125,7 +125,7 @@ one small op still to add so "left" composes from the current pose.)
 | **iOS (sim/device, Metal)** | ✅ goldens on the simulator (xcodebuild) | ⚠ transport gap — no on-device stdin; needs a socket/USB NDJSON bridge | in-test PNG dump |
 | **Android (Vulkan)** | ✅ goldens via `adb` on AVD/device | ⚠ transport gap — `adb forward` socket NDJSON not yet wired | PNG pulled via `adb` |
 | **WebGPU native (macOS)** | ✅ surfaceless wgpu-native + NDJSON (`CAIRNS_GFX_BACKEND=webgpu`); golden gate renders triangle + die/two-die/viking, matches macos-metal | — no native window / no SDL; windowed WebGPU lives in the browser (next row) | offscreen readback → PNG |
-| **Web / Chrome (WASM)** | 🔭 planned — headless Chrome `--remote-debugging-port=9222` + CDP `Page.captureScreenshot` (+ `Runtime.evaluate`); no human | 🔭 planned — user clicks canvas; I `Runtime.evaluate("window.cairns.dispatch(...)")` → `selection.get` + `setTransform` | CDP `Page.captureScreenshot` → PNG |
+| **Web / Chrome (WASM)** | ✅ the SAME `src/main.cpp` SDL shell; boots + renders in headed AND headless Chrome (WebGPU via emdawnwebgpu); `[Timer]`/`[STEADY]` over the CDP console | ✅ headed Chrome: CDP `Input.dispatchMouseEvent` → SDL event → ImGui picker → scenario; `window.cairns.dispatch` bridge for sync ops (picker click needs headed) | CDP `Page.captureScreenshot` → PNG |
 
 ✅ wired · ⚠ partial (transport gap) · 🔭 planned (see `~/dev/plans/2026-06-21_gfx_webgpu-wgpu-native-standup.md`).
 
@@ -654,30 +654,39 @@ cd build/spec-mac-webgpu/Release
 # CAIRNS_GFX_BAKE_REFS=1 overwrites; a missing macos-webgpu ref auto-bakes once.
 ```
 
-### Driving the WASM build in a HEADED browser (perf / interactive)
+### Driving the WASM build in a browser (perf / interactive)
 
-WebGPU in the browser needs a **real GPU context** — it must run **headed**, in a
-visible Chrome window. `--headless` gives no/unreliable WebGPU. Serve the build,
-launch a **dedicated, throwaway-profile** Chrome, and drive it over CDP:
+The web build runs the **same `src/main.cpp` SDL shell as native** (SDL canvas
+window + `ImGui_ImplSDL3` + SDL main callbacks; WebGPU via emdawnwebgpu). It
+boots and renders in **both headed and headless** Chrome — WebGPU works headless
+(the HUD + picker + scene all draw). Prefer **headed** for *interactive* work:
+CDP-injected mouse events only reach the emscripten canvas in a headed window, so
+**loading a scenario via a picker click needs headed** (a pre-existing
+Chrome/emscripten input quirk, unchanged by the SDL migration). Headless still
+boots, renders, and streams `[Timer]`/`[STEADY]` over the CDP console.
+
+Serve the build, launch a **dedicated, throwaway-profile** Chrome, drive over CDP:
 
 ```sh
 # 1. Serve (single-threaded ASYNCIFY build -- no COOP/COEP headers needed):
 ( cd build/web-webgpu/Release && python3 -m http.server 8771 )
 
-# 2. Headed Chrome + remote debugging. --user-data-dir MUST be a throwaway
-#    (see the crash warning below); NEVER the user's default profile.
+# 2. Chrome + remote debugging. --user-data-dir MUST be a throwaway (see the
+#    crash warning below); NEVER the user's default profile. Add --headless=new
+#    for an unattended render (boots + draws; picker clicks need headed).
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
   --remote-debugging-port=9333 --enable-unsafe-webgpu --use-angle=metal \
   --user-data-dir=/tmp/cairns-chrome-profile \
   http://localhost:8771/cairns_web.html
 ```
 
-**Select a scenario by CLICKING its picker button** via CDP
+**Select a scenario by CLICKING its picker button** (headed) via CDP
 `Input.dispatchMouseEvent` (`mouseMoved` → `mousePressed` → `mouseReleased`,
-`button:"left"`). Read perf/logs by draining `Runtime.consoleAPICalled` — the
-engine's `[Timer]`/`[STEADY]` stderr surfaces there. `scripts/web_capture.mjs`
-is the CDP scaffold (drop its `--headless=new`; sequence: navigate → boot-wait →
-Input click → long wait for load+steady → drain console).
+`button:"left"`). The click flows DOM → SDL's emscripten video driver → SDL event
+→ `ImGui_ImplSDL3_ProcessEvent` → the picker → the launcher — the SAME path as
+native. Read perf/logs by draining `Runtime.consoleAPICalled`.
+`scripts/web_capture.mjs` is the CDP scaffold (add the Input click; sequence:
+navigate → boot-wait → Input click → long wait for load+steady → drain console).
 
 **What does NOT work (and why):**
 
