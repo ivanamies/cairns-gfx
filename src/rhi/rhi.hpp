@@ -11,6 +11,7 @@
 #include "rhi/resources.hpp"
 #include "rhi/gpu_profiler.hpp"
 #include "rhi/frame_capture.hpp"
+#include "rhi/offscreen_targets.hpp"
 #include "rhi/frames.hpp"
 #include "rhi/pipelines.hpp"
 
@@ -24,9 +25,13 @@ struct Rhi {
     // after device + before frames (frames stamps the query pool onto
     // CommandRecorderPlat::profiler_ during Begin).
     GpuProfiler gpu_profiler;
-    // #222 Phase F.2: one-shot swap-image dump request. Frames::EndSubmit
-    // reads dump_path; engine writes via Rhi::frame_capture.SetDumpPath.
+    // #222 Phase F.2: one-shot swap-image dump request. Frames reads
+    // via per-call param; engine writes via Rhi::frame_capture.
     FrameCapture frame_capture;
+    // #222 Phase F.3: offscreen render-pass + framebuffer cache. vk
+    // owns the cache; metal stub. Frames::Begin stamps cache pointer
+    // onto the recorder via per-call param.
+    OffscreenTargets offscreen_targets;
     Frames frames;
     Pipelines pipelines;
 };

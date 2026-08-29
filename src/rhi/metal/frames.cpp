@@ -14,6 +14,7 @@
 #include "rhi/device.hpp"
 #include "rhi/frame_capture.hpp"
 #include "rhi/gpu_profiler.hpp"
+#include "rhi/offscreen_targets.hpp"
 #include "rhi/resources.hpp"
 #include "rhi/resource_manager.hpp"  // kFramesInFlight
 #include "rhi/swap_chain.hpp"
@@ -123,10 +124,9 @@ void Frames::Deinit() {
     inited_ = false;
 }
 
-// Metal: drawable resize is implicit per-frame (see frames.cpp:101-120 -- the
-// MSAA + depth targets are reallocated when drawable size changes). Nothing
-// to flush.
-void Frames::OnSurfaceResize() {}
+// #222 Phase F.3: OnSurfaceResize retired -- engine calls
+// rhi.offscreen_targets.FlushFramebuffers() directly. Metal stub
+// would have been a no-op anyway.
 
 void Frames::WriteUnlitDescriptors(Resources& /*resources*/,
                                      Allocator& /*alloc*/) {
@@ -137,6 +137,7 @@ void Frames::WriteUnlitDescriptors(Resources& /*resources*/,
 
 FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
                             GpuProfiler& /*gpu_profiler*/,
+                            OffscreenTargets& /*offscreen_targets*/,
                             const SwapResolveTarget& target) {
     dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(plat.frame_semaphore_),
                             DISPATCH_TIME_FOREVER);

@@ -57,7 +57,6 @@ struct FramesPlat {
     // pass issue multiple fullscreen draws with distinct textures (the 997af20
     // last-bound-wins fix).
     std::vector<std::array<VkDescriptorSet, kCompositeRingSize>> composite_sets_;
-    OffscreenTargetCache offscreen_target_cache_;
 };
 
 }  // namespace cairns::rhi

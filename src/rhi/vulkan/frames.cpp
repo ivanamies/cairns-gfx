@@ -14,6 +14,7 @@
 #include "rhi/device.hpp"
 #include "rhi/frame_capture.hpp"
 #include "rhi/gpu_profiler.hpp"
+#include "rhi/offscreen_targets.hpp"
 #include "rhi/resources.hpp"
 #include "rhi/resource_manager.hpp"  // kFramesInFlight
 #include "rhi/swap_chain.hpp"
@@ -432,7 +433,6 @@ bool Frames::Init(Device& device) {
                 }
             }
         }
-        plat.offscreen_target_cache_.device = dev;
     }
     inited_ = true;
     return true;
@@ -479,17 +479,10 @@ void Frames::Deinit() {
     if (plat.composite_set_layout_) {
         vkDestroyDescriptorSetLayout(dev, plat.composite_set_layout_, nullptr);
     }
-    plat.offscreen_target_cache_.Deinit();
     // #222 Phase F.1: profiler teardown moved to GpuProfiler::Deinit.
+    // #222 Phase F.3: offscreen-target cache teardown moved to
+    // OffscreenTargets::Deinit.
     inited_ = false;
-}
-
-// Framebuffers in the offscreen cache are sized at create-time against the
-// prior swap dims; the (w, h) check inside get_offscreen_fb wouldn't match
-// the new dims so they'd grow unboundedly. Wipe them on resize; render passes
-// (keyed on format, not dims) survive.
-void Frames::OnSurfaceResize() {
-    plat.offscreen_target_cache_.FlushFramebuffers();
 }
 
 void Frames::WriteUnlitDescriptors(Resources& resources, Allocator& alloc) {
@@ -529,6 +522,7 @@ void Frames::WriteUnlitDescriptors(Resources& resources, Allocator& alloc) {
 
 FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
                             GpuProfiler& gpu_profiler,
+                            OffscreenTargets& offscreen_targets,
                             const SwapResolveTarget& target) {
     // Surfaceless mode (target.plat.swap_chain == nullptr): no swapchain
     // image to acquire, no image_available semaphore to signal, no present.
@@ -635,7 +629,7 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     fc.cmd.plat.point_set_ = plat.point_sets_[cf];
     fc.cmd.plat.composite_sets_ = plat.composite_sets_[cf];
     fc.cmd.plat.composite_next_idx_ = 0;
-    fc.cmd.plat.offscreen_ = &plat.offscreen_target_cache_;
+    fc.cmd.plat.offscreen_ = &offscreen_targets.plat.cache;
     fc.cmd.plat.profiler_.ts_pool_ = gp.ts_pool_;
     fc.cmd.plat.profiler_.pass_names_ = &gp.pass_names_[cf];
     fc.cmd.plat.profiler_.pass_count_ = &gp.pass_count_[cf];

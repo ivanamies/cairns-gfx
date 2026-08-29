@@ -29,6 +29,7 @@ class Resources;
 class Allocator;
 class GpuProfiler;
 class FrameCapture;
+class OffscreenTargets;
 struct SwapChain;
 
 class Frames {
@@ -50,10 +51,12 @@ public:
     [[nodiscard]] bool InitTargets(Resources& resources, Allocator& alloc,
                                     uint32_t width, uint32_t height);
 
-    // CALLER: ENGINE (per-frame draw loop). #222 Phase F.1: profiler
-    // passed per-call so Frames doesn't hold a sibling pointer.
+    // CALLER: ENGINE (per-frame draw loop). #222 Phase F.1/F.3:
+    // sibling subsystems (profiler, offscreen targets) passed per-call
+    // so Frames doesn't stash pointers between Init and Begin.
     FrameContext Begin(Resources& resources, Allocator& alloc,
                        GpuProfiler& gpu_profiler,
+                       OffscreenTargets& offscreen_targets,
                        const SwapResolveTarget& target);
 
     // Two-phase frame end. EndSubmit runs on the render thread: it commits
@@ -98,11 +101,8 @@ public:
     // buffers (VUID-vkUpdateDescriptorSets-None-03047). Metal: no-op.
     void WriteUnlitDescriptors(Resources& resources, Allocator& alloc);
 
-    // Called by the engine after a window-resize is applied. Metal no-op
-    // (drawable resize is handled implicitly per-frame). Vk wipes the
-    // offscreen-target-cache framebuffers (sized at create-time against
-    // prior dims; would never re-match the new size).
-    void OnSurfaceResize();
+    // #222 Phase F.3: framebuffer flush retired -- engine calls
+    // rhi.offscreen_targets.FlushFramebuffers() directly on resize.
 
     // Backend state. Pipelines reads plat.*_set_layout_ (vk pipeline layouts).
     FramesPlat plat;

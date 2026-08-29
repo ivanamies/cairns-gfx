@@ -785,11 +785,12 @@ public:
                 return false;
             }
         }
-        // #222 Phase F.1: profiler owned by Rhi; Frames stashes a pointer.
+        // #222 Phase F.1/F.3: sibling subsystems init before frames.
         if (!rhi_.gpu_profiler.Init(rhi_.device)) {
             CAIRNS_PRINT("GreaterInit: gpu_profiler.Init failed\n");
             return false;
         }
+        rhi_.offscreen_targets.Init(rhi_.device);
         if (!rhi_.frames.Init(rhi_.device)) {
             CAIRNS_PRINT("GreaterInit: frames.Init failed\n");
             return false;
@@ -1710,7 +1711,7 @@ public:
             render_thread_->Drain();
         }
         rhi_.device.WaitIdle();
-        rhi_.frames.OnSurfaceResize();
+        rhi_.offscreen_targets.FlushFramebuffers();
         if (!final_target_.IsNull() &&
             (resize_pending_w_ != final_target_w_ ||
              resize_pending_h_ != final_target_h_) &&
@@ -1733,7 +1734,7 @@ public:
             rhi_.device.WaitIdle();
             if (final_target_.IsNull()) {
                 swapchain_.plat.RecreateSwapChain();
-                rhi_.frames.OnSurfaceResize();
+                rhi_.offscreen_targets.FlushFramebuffers();
             }
             rhi_.frames.plat.recreate_pending_.store(false, std::memory_order_release);
             for (uint32_t i = 0; i < kFramesInFlight; ++i) {
@@ -2120,7 +2121,8 @@ public:
         // the engine-owned offscreen, with no drawable so it doesn't present.
         rhi::SwapResolveTarget swap_target = AcquireFrameSwapTarget();
         rhi::FrameContext fc = rhi_.frames.Begin(
-            rhi_.resources, rhi_.alloc, rhi_.gpu_profiler, swap_target);
+            rhi_.resources, rhi_.alloc, rhi_.gpu_profiler,
+            rhi_.offscreen_targets, swap_target);
         if (fc.skip_frame) {
             std::lock_guard<std::mutex> lk(present_m_);
             s.present_fc = fc;
@@ -3622,9 +3624,9 @@ public:
         swapchain_.Deinit();
         rhi_.pipelines.Deinit(rhi_.resources);
         rhi_.frames.Deinit();
-        // #222 Phase F.1: profiler teardown after frames (frames stops
-        // reading via plat.gpu_profiler_ once it's torn down).
+        // #222 Phase F.1/F.3: sibling subsystem teardown after frames.
         rhi_.gpu_profiler.Deinit();
+        rhi_.offscreen_targets.Deinit();
         rhi_.resources.Deinit();
         rhi_.alloc.Deinit();
         rhi_.device.Deinit();
