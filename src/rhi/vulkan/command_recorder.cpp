@@ -294,20 +294,9 @@ void CommandRecorder::DispatchSkinBatches(
 
 void CommandRecorder::DispatchAnimEval(
     Resources& res, Allocator& /*alloc*/, Handle<Kernel> kernel,
-    Handle<Buffer> /*scene_headers*/,
-    Handle<Buffer> /*parent_buf*/,
-    Handle<Buffer> /*topo_buf*/,
-    Handle<Buffer> /*bind_pose_buf*/,
-    Handle<Buffer> /*channels_buf*/,
-    Handle<Buffer> /*samplers_buf*/,
-    Handle<Buffer> /*times_buf*/,
-    Handle<Buffer> /*values_buf*/,
-    Handle<Buffer> /*joint_nodes_buf*/,
-    Handle<Buffer> /*inverse_binds_buf*/,
-    Handle<Buffer> /*world_scratch*/,
-    Handle<Buffer> /*palette_out*/,
-    uint32_t records_byte_offset,
-    uint32_t actor_count) {
+    const AnimEvalArgs& args) {
+    const uint32_t actor_count = args.actor_count;
+    const uint32_t records_byte_offset = args.records_byte_offset;
     if (kernel.IsNull() || actor_count == 0 ||
         plat.anim_eval_set_ == VK_NULL_HANDLE) {
         return;

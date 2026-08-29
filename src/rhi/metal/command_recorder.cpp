@@ -110,20 +110,9 @@ void CommandRecorder::DispatchSkinBatches(
 // implicit hazard tracking.
 void CommandRecorder::DispatchAnimEval(
     Resources& res, Allocator& alloc, Handle<Kernel> kernel,
-    Handle<Buffer> scene_headers,
-    Handle<Buffer> parent_buf,
-    Handle<Buffer> topo_buf,
-    Handle<Buffer> bind_pose_buf,
-    Handle<Buffer> channels_buf,
-    Handle<Buffer> samplers_buf,
-    Handle<Buffer> times_buf,
-    Handle<Buffer> values_buf,
-    Handle<Buffer> joint_nodes_buf,
-    Handle<Buffer> inverse_binds_buf,
-    Handle<Buffer> world_scratch,
-    Handle<Buffer> palette_out,
-    uint32_t records_byte_offset,
-    uint32_t actor_count) {
+    const AnimEvalArgs& args) {
+    const uint32_t actor_count = args.actor_count;
+    const uint32_t records_byte_offset = args.records_byte_offset;
     if (kernel.IsNull() || actor_count == 0) {
         return;
     }
@@ -137,9 +126,10 @@ void CommandRecorder::DispatchAnimEval(
     MTL::ComputeCommandEncoder* cenc = plat.cmd_->computeCommandEncoder();
     cenc->setComputePipelineState(khot->api_pso);
     Handle<Buffer> hs[12] = {
-        scene_headers, parent_buf, topo_buf, bind_pose_buf,
-        channels_buf, samplers_buf, times_buf, values_buf,
-        joint_nodes_buf, inverse_binds_buf, world_scratch, palette_out,
+        args.scene_headers, args.parent_buf, args.topo_buf, args.bind_pose_buf,
+        args.channels_buf, args.samplers_buf, args.times_buf, args.values_buf,
+        args.joint_nodes_buf, args.inverse_binds_buf, args.world_scratch,
+        args.palette_out,
     };
     {
         MTL::Buffer* records_mtl =

@@ -137,22 +137,26 @@ public:
     // buffers on Metal. records_byte_offset selects this frame's slice in
     // the kDynamic ring (vk); records_buffer / records_byte_offset together
     // are read by Metal directly.
+    // #222 Phase R.1: 13-buffer + 2-uint param sprawl collapsed to a
+    // parameter object. Add fields here, not to the signature.
+    struct AnimEvalArgs {
+        Handle<Buffer> scene_headers;
+        Handle<Buffer> parent_buf;
+        Handle<Buffer> topo_buf;
+        Handle<Buffer> bind_pose_buf;
+        Handle<Buffer> channels_buf;
+        Handle<Buffer> samplers_buf;
+        Handle<Buffer> times_buf;
+        Handle<Buffer> values_buf;
+        Handle<Buffer> joint_nodes_buf;
+        Handle<Buffer> inverse_binds_buf;
+        Handle<Buffer> world_scratch;
+        Handle<Buffer> palette_out;
+        uint32_t records_byte_offset = 0;
+        uint32_t actor_count = 0;
+    };
     void DispatchAnimEval(Resources& res, Allocator& alloc,
-                          Handle<Kernel> kernel,
-                          Handle<Buffer> scene_headers,
-                          Handle<Buffer> parent_buf,
-                          Handle<Buffer> topo_buf,
-                          Handle<Buffer> bind_pose_buf,
-                          Handle<Buffer> channels_buf,
-                          Handle<Buffer> samplers_buf,
-                          Handle<Buffer> times_buf,
-                          Handle<Buffer> values_buf,
-                          Handle<Buffer> joint_nodes_buf,
-                          Handle<Buffer> inverse_binds_buf,
-                          Handle<Buffer> world_scratch,
-                          Handle<Buffer> palette_out,
-                          uint32_t records_byte_offset,
-                          uint32_t actor_count);
+                          Handle<Kernel> kernel, const AnimEvalArgs& args);
     void BeginRenderPass(Resources& res, const SwapResolveTarget& target,
                           const RenderPassDesc& desc);
     void DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list);
