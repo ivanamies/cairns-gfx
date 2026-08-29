@@ -755,3 +755,63 @@ SCENARIO("C4.2 CAP-1 camera surface: listCameras + Camera.main + setCameraEntity
         disp("cairns.scene.listCameras", cairns::json::object());
     REQUIRE(lc["result"]["cameras"].size() == 2u);
 }
+
+// #229 C7: deterministic headless resize. Renders a champion, cycles the
+// final target down/up/odd, and asserts correct dims + non-black at each size.
+// Catches the two real resize bugs: wrong (stale) dims, and the black-screen
+// on a size mismatch. Bit-exact round-trip invariance is intentionally NOT
+// asserted here -- the scene animates, so equal pixels would need a frozen sim.
+SCENARIO("C7 resize: headless final-target resize cycle (dims + non-black)",
+         "[spec][scenarios][resize]") {
+    if (!seam::AssetsPresent({"aatrox.glb"})) {
+        SKIP("assets absent");
+    }
+    seam::EnsureImguiContext();
+    cairns::rhi::InitConfig icfg{};
+    icfg.surfaceless = true;
+    icfg.width = 320;
+    icfg.height = 240;
+    cairns::EngineConfig ecfg{};
+    ecfg.use_fixed_clock = true;
+    cairns::Engine e;
+    REQUIRE(e.GreaterInit(icfg, ecfg));
+    cairns::control::CommandRegistry& reg = cairns::golden::SetupJs(e);
+    auto disp = [&](const char* op, const cairns::json& args) -> cairns::json {
+        return reg.Dispatch({{"op", op}, {"args", args}});
+    };
+    auto nonblack = [](const std::vector<uint8_t>& px) -> bool {
+        for (uint8_t v : px) {
+            if (v != 0) {
+                return true;
+            }
+        }
+        return false;
+    };
+    auto render_at = [&](uint32_t w, uint32_t h) {
+        disp("cairns.window.resize", {{"w", w}, {"h", h}});
+        disp("cairns.render.advanceFrames", {{"count", 2}});
+        std::vector<uint8_t> px;
+        uint32_t gw = 0;
+        uint32_t gh = 0;
+        REQUIRE(seam::ReadFinalTargetRgba(e, px, gw, gh));
+        REQUIRE(gw == w);            // dims followed the resize (no stale target)
+        REQUIRE(gh == h);
+        REQUIRE(nonblack(px));       // rendered, not the black-on-mismatch bug
+    };
+
+    disp("cairns.scene.spawnFitted",
+         {{"glbs", {"aatrox.glb"}}, {"instances", 1}});
+    disp("cairns.render.advanceFrames", {{"count", 2}});
+    std::vector<uint8_t> base;
+    uint32_t bw = 0;
+    uint32_t bh = 0;
+    REQUIRE(seam::ReadFinalTargetRgba(e, base, bw, bh));
+    REQUIRE(bw == 320u);
+    REQUIRE(bh == 240u);
+    REQUIRE(nonblack(base));
+
+    render_at(160, 120);   // shrink
+    render_at(320, 240);   // grow back
+    render_at(200, 150);   // odd, non-power-of-two
+    render_at(320, 240);   // restore
+}

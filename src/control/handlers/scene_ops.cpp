@@ -588,9 +588,9 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.window.resize",
         json::object(),
-        "Reallocate final_target_ at the new dimensions. Real work in "
-        "headless mode; future windowed-mode wiring routes through "
-        "Engine::requestResizeFrameBuffer.",
+        "Resize the render target. Routes through Engine::ApplyResize -- the "
+        "unified drain+WaitIdle+flush+realloc path shared with the windowed "
+        "ApplyPendingResize (was a raw realloc that skipped the drain).",
         [engine = &engine](const json& args) -> json {
             const uint64_t w64 = args.value("w", uint64_t{1280});
             const uint64_t h64 = args.value("h", uint64_t{720});

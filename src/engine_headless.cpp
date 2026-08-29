@@ -29,7 +29,9 @@ bool ResizeFinalTarget(Engine* engine, uint32_t w, uint32_t h) {
     if (!engine) {
         return false;
     }
-    return engine->ResizeFinalTarget(w, h);
+    // #229 C7: route through the unified drain+flush+realloc path (was a raw
+    // ResizeFinalTarget that skipped the render-thread drain).
+    return engine->ApplyResize(w, h);
 }
 
 uint32_t GetFinalTargetWidth(Engine* engine) {

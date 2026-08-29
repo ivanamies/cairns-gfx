@@ -215,6 +215,20 @@ public:
         return true;
     }
 
+    // #229 C7: the single synchronous resize entry. Record the target dims,
+    // then run the exact drain+WaitIdle+flush+realloc ApplyPendingResize does
+    // at the top of draw(). Headless cairns.window.resize routes here so it
+    // shares the windowed path's drain safety instead of destroying
+    // final_target under a possibly-in-flight frame (the old direct path).
+    bool ApplyResize(uint32_t width, uint32_t height) {
+        if (width == 0 || height == 0) {
+            return false;
+        }
+        requestResizeFrameBuffer(width, height);
+        ApplyPendingResize();
+        return true;
+    }
+
     bool RequestViewportDump(const std::filesystem::path& path) {
         rhi_.frame_capture.SetDumpPath(path);
         return true;
