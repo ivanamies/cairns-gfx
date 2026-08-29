@@ -353,6 +353,7 @@ public:
                     memcpy(tptr, &draw_tmp, sizeof(draw_tmp));
 
                     cairns::Draw draw{};
+                    draw.bind_groups[1] = material_bind_groups_[mat_id];  // set 2: material
                     draw.index_buffer = index;
                     const uint32_t index_base_off = rhi_.resources.BufferBaseOffset(rhi_.alloc, index);
                     draw.index_offset = index_base_off + (prim.firstIndex * sizeof(uint32_t));
@@ -544,6 +545,19 @@ public:
             }
 
             rhi_.bindless.Finalize(bindless_bg_);
+
+            // set-2 per-material bind groups (portable path). Dense, indexed by
+            // MatId. Texture+sampler arrive via this group, not the global table.
+            material_bind_groups_.assign(materials_.size(),
+                                         rhi::Handle<rhi::BindGroup>::Null);
+            for (size_t m = 0; m < materials_.size(); ++m) {
+                const rhi::TextureBinding tb{0, materials_[m].color};
+                const rhi::SamplerBinding sb{0, materials_[m].sampler};
+                rhi::BindGroupDesc bgd{};
+                bgd.textures = std::span<const rhi::TextureBinding>(&tb, 1);
+                bgd.samplers = std::span<const rhi::SamplerBinding>(&sb, 1);
+                material_bind_groups_[m] = rhi_.resources.CreateBindGroup(bgd);
+            }
         }
 
         {  // unlit graphics pipeline via rhi
@@ -699,6 +713,8 @@ private:
     std::vector<glm::mat4> debugSceneXforms_;
 
     std::vector<cairns::LoadedMaterial> materials_;
+    // set-2 per-material bind groups, dense by MatId (NO hash). Built once at load.
+    std::vector<rhi::Handle<rhi::BindGroup>> material_bind_groups_;
 
     std::vector<std::pair<cairns::DrawKey,uint32_t>,cairns::Allocator<std::pair<cairns::DrawKey,uint32_t>>> drawListSorted_;
     std::vector<cairns::Draw,cairns::Allocator<cairns::Draw>> drawList_;
