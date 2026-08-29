@@ -224,6 +224,52 @@ public:
         return true;
     }
 
+    // #269: spawn one hero entity in active_world_ from a pre-loaded
+    // scene. Returns the new entt entity id (0 on failure: bad
+    // scene_idx, no active world, scene_ids_ not populated, etc.).
+    // Caller supplies the full world transform; rendered immediately
+    // next frame. SkinRef is opportunistically attached via
+    // TryCreateSkinForScene (so [SKIN-FAIL] logs cover the failure modes).
+    uint32_t SpawnHero(uint32_t scene_idx, const glm::mat4& world,
+                        float time_phase) {
+        if (scene_idx >= scene_ids_.size() ||
+            scene_idx >= per_scene_asset_.size()) {
+            return 0;
+        }
+        cairns::World::Cold* wc = worlds_.GetCold(active_world_);
+        if (!wc) {
+            return 0;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = reg.create();
+        cairns::WorldTransform wt;
+        wt.world = world;
+        reg.emplace<cairns::WorldTransform>(e, wt);
+        cairns::AssetRef ar;
+        ar.asset = per_scene_asset_[scene_idx];
+        reg.emplace<cairns::AssetRef>(e, ar);
+        cairns::Renderable rdr;
+        rdr.layer_mask = 0xFFFFFFFFu;
+        rdr.flags = cairns::kProxyVisible;
+        reg.emplace<cairns::Renderable>(e, rdr);
+        cairns::SkinId sid =
+            TryCreateSkinForScene(scene_ids_[scene_idx], time_phase);
+        if (!sid.IsNull()) {
+            reg.emplace<cairns::SkinRef>(e, cairns::SkinRef{sid});
+        }
+        // Mark world dirty so the proxy extract picks up the new entity.
+        if (auto* wh = worlds_.GetHot(active_world_)) {
+            wh->dirty = true;
+        }
+        return static_cast<uint32_t>(entt::to_integral(e));
+    }
+
+    // #269: how many scenes (GLBs) loaded; clients call SpawnHero with
+    // scene_idx in [0, NumScenes()). Lets the NDJSON op validate args.
+    uint32_t NumScenes() const {
+        return static_cast<uint32_t>(scene_ids_.size());
+    }
+
     // P1 input surface for main.cpp. Both no-op under CAIRNS_CAM_POSE so a
     // byte-gate dump can't be perturbed by an event that snuck through.
 
@@ -1058,11 +1104,14 @@ public:
             const auto attr_handle = m0_hot->attrHandle;
             const auto idx_handle = m0_hot->indexHandle;
 
-            std::vector<cairns::AssetId> per_scene_asset;
-            per_scene_asset.reserve(scene_ids_.size());
+            // #269: per_scene_asset_ promoted to engine member so
+            // SpawnHero can resolve AssetRef post-init without
+            // reconstructing.
+            per_scene_asset_.clear();
+            per_scene_asset_.reserve(scene_ids_.size());
             for (size_t s_idx = 0; s_idx < scene_ids_.size(); ++s_idx) {
                 // #220 Step 3: AssetRegistry registers by SceneId.
-                per_scene_asset.push_back(
+                per_scene_asset_.push_back(
                     assets_.RegisterExistingScene(
                         static_cast<uint32_t>(s_idx), scene_ids_[s_idx],
                         pos_handle, attr_handle, idx_handle));
@@ -1087,7 +1136,7 @@ public:
                     wt.world = debugSceneXforms_[i];
                     reg.emplace<cairns::WorldTransform>(e, wt);
                     cairns::AssetRef ar;
-                    ar.asset = per_scene_asset[scene_idx];
+                    ar.asset = per_scene_asset_[scene_idx];
                     reg.emplace<cairns::AssetRef>(e, ar);
                     cairns::Renderable rdr;
                     rdr.layer_mask = 0xFFFFFFFFu;
@@ -1134,7 +1183,7 @@ public:
                         wt.world = debugSceneXforms_[i];
                         reg2.emplace<cairns::WorldTransform>(e, wt);
                         cairns::AssetRef ar;
-                        ar.asset = per_scene_asset[scene_idx];
+                        ar.asset = per_scene_asset_[scene_idx];
                         reg2.emplace<cairns::AssetRef>(e, ar);
                         cairns::Renderable rdr;
                         rdr.layer_mask = 0xFFFFFFFFu;
@@ -3732,6 +3781,9 @@ private:
     // #222 Phase #267: parallel to scene_ids_; index N maps to the GLB
     // path that produced scene_ids_[N]. Read by the [PICK] log line.
     std::vector<std::filesystem::path> glb_paths_;
+    // #269: parallel to scene_ids_; AssetId registered for each scene.
+    // SpawnHero consumes this to stamp AssetRef on the new entity.
+    std::vector<cairns::AssetId> per_scene_asset_;
     // #222 Phase H.6: built once at scene-load + uploadAnimTablesGpu;
     // every frame's resident_textures span points at this vector
     // instead of being arena-allocated + filled per frame.

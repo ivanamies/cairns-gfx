@@ -205,6 +205,37 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.RegisterAlias("viewport.setCamera", "cairns.viewport.setCamera");
     registry.RegisterAlias("viewport.setWorld", "cairns.viewport.setWorld");
     registry.RegisterAlias("window.resize", "cairns.window.resize");
+
+    // #269: real spawn op. Inserts one hero entity in active_world_
+    // from a pre-loaded scene (scene_idx in [0, NumScenes())). The
+    // auto-spawn grid in Engine::GreaterInit retires once this path
+    // replaces the env-driven entity count.
+    registry.Register(
+        "cairns.world.spawnHero",
+        json::object(),
+        "Spawn one hero entity in active world from a pre-loaded scene. "
+        "Args: scene_idx (uint), x/y/z (float, world position), "
+        "scale (float), time_phase (float, anim time offset). "
+        "Returns: entity (entt id) or 0 on bad scene_idx.",
+        [&engine](const json& args) -> json {
+            const uint32_t scene_idx = args.value("scene_idx", uint32_t{0});
+            const float x = args.value("x", 0.0f);
+            const float y = args.value("y", 0.0f);
+            const float z = args.value("z", -3.0f);
+            const float scale = args.value("scale", 0.005f);
+            const float time_phase = args.value("time_phase", 0.0f);
+            const uint32_t eid = cairns::headless::SpawnHero(
+                &engine, scene_idx, x, y, z, scale, time_phase);
+            return {{"entity", eid}, {"scene_idx", scene_idx}};
+        });
+
+    registry.Register(
+        "cairns.world.numScenes",
+        json::object(),
+        "Number of pre-loaded scenes (GLBs). Spawn args clamp to [0, N).",
+        [&engine](const json&) -> json {
+            return {{"count", cairns::headless::NumScenes(&engine)}};
+        });
 }
 
 }  // namespace cairns::control

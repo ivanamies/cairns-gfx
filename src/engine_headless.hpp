@@ -87,5 +87,15 @@ struct PickResultExport {
 };
 PickResultExport ConsumePickResult(Engine* engine);
 
+// #269: spawn one hero entity in active_world_ from a pre-loaded scene
+// at the given world-space position + uniform scale. Returns the new
+// entt entity id (0 on failure). Frame-thread safe assuming the engine
+// is between Begin()/End() — call from the control thread; the next
+// frame picks up the new entity via the dirty-world rebuild path.
+uint32_t SpawnHero(Engine* engine, uint32_t scene_idx,
+                    float x, float y, float z, float scale,
+                    float time_phase);
+uint32_t NumScenes(Engine* engine);
+
 }  // namespace headless
 }  // namespace cairns
