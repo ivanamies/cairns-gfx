@@ -9,6 +9,8 @@
 #include <numbers>
 #include <variant>
 
+#include <stb_image_write.h>
+
 #include "rhi/tag.hpp"
 #include "rhi/sampler.hpp"
 #include "rhi/device.hpp"
@@ -342,6 +344,11 @@ public:
     
     bool requestResizeFrameBuffer(uint32_t width, uint32_t height) {
         resizeFrameBufferRequest_ = ResizeFrameBufferRequest{.width = width, .height = height};
+        return true;
+    }
+
+    bool RequestViewportDump(const std::filesystem::path& path) {
+        dumpPath_ = path;
         return true;
     }
     
@@ -728,6 +735,9 @@ public:
     
     bool draw() {
         const uint32_t frame = frame_++ % kBufferedFrames;
+        if (frame_ == 5 && dumpPath_.empty()) {
+            dumpPath_ = "/tmp/cairns_dump.png";
+        }
         
         dispatch_semaphore_wait(frameSemaphore, DISPATCH_TIME_FOREVER);
         
@@ -850,9 +860,39 @@ public:
 
         encoder->endEncoding();
         timer1.End();
-        
+
         cairns::Timer::PrintReport(true);
-        
+
+        if (!dumpPath_.empty()) {
+            MTL::Texture* drawableTex = swapChain_->GetDrawable()->texture();
+            const NS::UInteger w = drawableTex->width();
+            const NS::UInteger h = drawableTex->height();
+            const NS::UInteger bytesPerRow = w * 4;
+            const NS::UInteger bufSize = bytesPerRow * h;
+            MTL::Buffer* readback = device.get()->newBuffer(bufSize, MTL::ResourceStorageModeShared);
+            MTL::BlitCommandEncoder* blitEnc = cmdBuf->blitCommandEncoder();
+            blitEnc->copyFromTexture(drawableTex, 0, 0,
+                                     MTL::Origin{0, 0, 0}, MTL::Size{w, h, 1},
+                                     readback, 0, bytesPerRow, 0);
+            blitEnc->endEncoding();
+            cmdBuf->presentDrawable(swapChain_->GetDrawable());
+            cmdBuf->commit();
+            cmdBuf->waitUntilCompleted();
+            std::vector<uint8_t> rgba(bufSize);
+            const uint8_t* bgra = static_cast<const uint8_t*>(readback->contents());
+            for (NS::UInteger i = 0; i < w * h; ++i) {
+                rgba[i*4+0] = bgra[i*4+2];
+                rgba[i*4+1] = bgra[i*4+1];
+                rgba[i*4+2] = bgra[i*4+0];
+                rgba[i*4+3] = bgra[i*4+3];
+            }
+            stbi_write_png(dumpPath_.string().c_str(), static_cast<int>(w), static_cast<int>(h), 4, rgba.data(), static_cast<int>(bytesPerRow));
+            printf("viewport dumped -> %s\n", dumpPath_.string().c_str());
+            readback->release();
+            dumpPath_.clear();
+            return true;
+        }
+
         // 5. Present and Commit
         cmdBuf->presentDrawable(swapChain_->GetDrawable());
         cmdBuf->commit();
@@ -1083,7 +1123,8 @@ private:
         uint32_t height = std::numeric_limits<uint32_t>::max();
     };
     std::optional<ResizeFrameBufferRequest> resizeFrameBufferRequest_ = std::nullopt;
-    
+    std::filesystem::path dumpPath_;
+
     std::unique_ptr<cairns::rhi::SwapChain> swapChain_ = nullptr;
     // command queue
     MTL::CommandQueue* metalCommandQueue = nullptr;

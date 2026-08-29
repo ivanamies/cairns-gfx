@@ -226,7 +226,7 @@ if (APPLE)
     endforeach()
 
     # 4. Hack in copying all of my league of legends assets
-    set(EXTERNAL_ASSETS_DIR "/Users/ivanamies/Documents/academics/cs/gfx/assets/riot/lol_champions/staging")
+    set(EXTERNAL_ASSETS_DIR "/Users/ivanamies/dev/gfx/assets/riot/lol_champions/staging")
     file(GLOB EXTERNAL_GLB_FILES "${EXTERNAL_ASSETS_DIR}/*.glb")
     foreach(EXT_GLB ${EXTERNAL_GLB_FILES})
         add_resource("${EXT_GLB}")
