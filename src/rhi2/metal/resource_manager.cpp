@@ -418,6 +418,17 @@ MTL::Buffer* ResourceManager::GetBumpMasterBuffer(Memory mem) const {
     return impl_->memory.HeapMasterBuffer(hi);
 }
 
+Handle<BindGroup> ResourceManager::CreateBindGroupFromMtlBuffer(MTL::Buffer* buf,
+                                                                  uint32_t offset) {
+    Handle<BindGroup> h = impl_->bind_groups.Acquire();
+    BindGroup::Hot* hot = impl_->bind_groups.GetHot(h);
+    hot->api_descriptor_set = buf;
+    hot->arg_buf_offset = offset;
+    BindGroup::Cold* cold = impl_->bind_groups.GetCold(h);
+    cold->debug_name = nullptr;
+    return h;
+}
+
 }  // namespace cairns::rhi2
 
 #endif  // CAIRNS_METAL

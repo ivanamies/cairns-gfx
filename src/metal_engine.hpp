@@ -598,8 +598,6 @@ public:
         const glm::mat4 proj_matrix = glm::perspectiveRH_ZO(fov, aspect_ratio, near_z, far_z);
         
         const ShaderHandle shader = unlit_;
-        auto& shader_obj = *shaderManager_->GetObj(shader);
-        auto& gpu_scene_registry = shader_obj.gpu_scene_registry;
         
         const BindGroupHandle bg_globals = getBindGroup();
         auto& glob_obj = *bindGroupManager_->GetObj(bg_globals);
@@ -664,8 +662,8 @@ public:
                     const SamplerHandle sampler_handle = materialManager_->GetObj(mat_handle)->sampler;
                     
                     const uint32_t gpu_tex_id = tex_handle.get_id();
-                    const uint32_t gpu_sampler_id = gpu_scene_registry.sampler_id[sampler_handle.get_id()];
-                    const uint32_t gpu_attr_idx = gpu_scene_registry.attr_id[mesh.attrHandle.get_id()];
+                    const uint32_t gpu_sampler_id = sampler_id_map_[sampler_handle.get_id()];
+                    const uint32_t gpu_attr_idx = mesh_attr_id_map_[mesh.attrHandle.get_id()];
                     
                     //                    cairns::Timer timer7("timer7", 7);
                     const BindGroupHandle bg_material = getBindGroup();
@@ -798,17 +796,21 @@ public:
         {
             auto& shader_obj = *shaderManager_->GetObj(unlit_);
             auto& pso = shader_obj.pso;
-            auto& scene_registry_handle = shader_obj.scene_registry_handle;
-            
+
             encoder->setRenderPipelineState(pso);
             encoder->setDepthStencilState(depthStencilState);
             encoder->setFrontFacingWinding(MTL::WindingCounterClockwise);
             encoder->setCullMode(MTL::CullModeBack);
-            
-            // set up argument table
-            auto* regObj = bufferManager_->GetObj(scene_registry_handle);
-            encoder->setVertexBuffer(regObj->buffer, regObj->mem.offset, cairns::rhi::GpuSceneRegistry::kBindSlot);
-            encoder->setFragmentBuffer(regObj->buffer, regObj->mem.offset, cairns::rhi::GpuSceneRegistry::kBindSlot);
+
+            {
+                rhi2::BindGroup::Hot* bg_hot = rm_.GetHot(bindless_bg_handle_);
+                MTL::Buffer* bg_buf = static_cast<MTL::Buffer*>(bg_hot->api_descriptor_set);
+                const uint32_t bg_off = bg_hot->arg_buf_offset;
+                encoder->setVertexBuffer(bg_buf, bg_off,
+                                         cairns::rhi::GpuSceneRegistry::kBindSlot);
+                encoder->setFragmentBuffer(bg_buf, bg_off,
+                                           cairns::rhi::GpuSceneRegistry::kBindSlot);
+            }
             // use resource call for all textures in argument table
             encoder->useHeap(allocTransientHeap_->GetHeap());
             for (auto& s : scenes_) {
@@ -996,81 +998,81 @@ public:
         gpu_scene_registry.attr_id.resize(bufferManager_->GetCapacity());
         gpu_scene_registry.sampler_id.resize(samplerManager_->GetCapacity());
         
-        { // bindless resources set up
-            // I picked 10 just because. This must correspond with the shader.
+        { // bindless resources set up via rhi2
             auto* texArg = MTL::ArgumentDescriptor::alloc()->init();
             texArg->setDataType(MTL::DataTypeTexture);
             texArg->setIndex(cairns::rhi::GpuSceneRegistry::kTexturesSlotOffset);
             texArg->setArrayLength(cairns::rhi::GpuSceneRegistry::kMaxTextures);
             texArg->setAccess(MTL::ArgumentAccessReadOnly);
-            
-            // 2. Create the descriptor for vertex attribute pointers (device pointers)
+
             auto* attrArg = MTL::ArgumentDescriptor::alloc()->init();
-            attrArg->setDataType(MTL::DataTypePointer); // Use Pointer for device VertexAttribute*
+            attrArg->setDataType(MTL::DataTypePointer);
             attrArg->setIndex(cairns::rhi::GpuSceneRegistry::kMeshesSlotOffset);
             attrArg->setArrayLength(cairns::rhi::GpuSceneRegistry::kMaxMeshes);
             attrArg->setAccess(MTL::ArgumentAccessReadOnly);
-            
-            // 3. Create the descriptor for samplers
+
             auto* sampArg = MTL::ArgumentDescriptor::alloc()->init();
             sampArg->setDataType(MTL::DataTypeSampler);
             sampArg->setIndex(cairns::rhi::GpuSceneRegistry::kSamplersSlotOffset);
             sampArg->setArrayLength(cairns::rhi::GpuSceneRegistry::kMaxSamplers);
             sampArg->setAccess(MTL::ArgumentAccessReadOnly);
-            
+
             NS::Array* args = NS::Array::array((NS::Object*[]){ texArg, attrArg, sampArg }, 3);
             MTL::ArgumentEncoder* arg_encoder = device.get()->newArgumentEncoder(args);
-            
-            const int64_t size = arg_encoder->encodedLength();
-            const int64_t align = arg_encoder->alignment();
-            // the argument table is basically a small SSBO
-            // it shares all the same semantics and lifecycle ideas as a small SSBO.
-            BufHandle& scene_registry_handle = obj.scene_registry_handle;
-            scene_registry_handle = bufferManager_->New();
-            auto* obj2 = bufferManager_->GetObj(scene_registry_handle);
-            obj2->mem = allocTransientLinear1_->Alloc(size, align);
-            obj2->buffer =  allocTransientLinear1_->GetBuffer();
-            
-            arg_encoder->setArgumentBuffer(allocTransientLinear1_->GetBuffer(), obj2->mem.offset);
-            
-            for ( size_t i = 0; i < scenes_.size(); ++i ) {
+
+            rhi2::BufferDesc bd;
+            bd.byte_size = static_cast<uint32_t>(arg_encoder->encodedLength());
+            bd.usage = rhi2::kUsageUniform | rhi2::kUsageStorage;
+            bd.memory = rhi2::Memory::kUpload;
+            rhi2::Handle<rhi2::Buffer> arg_buf_h = rm_.CreateBuffer(bd);
+            uint32_t arg_off = 0;
+            MTL::Buffer* arg_buf = rm_.GetMtlBuffer(arg_buf_h, &arg_off);
+
+            arg_encoder->setArgumentBuffer(arg_buf, arg_off);
+
+            mesh_attr_id_map_.resize(bufferManager_->GetCapacity(), 0);
+            sampler_id_map_.resize(samplerManager_->GetCapacity(), 0);
+
+            uint32_t num_tex = 0;
+            uint32_t num_attr = 0;
+            uint32_t num_sampler = 0;
+
+            for (size_t i = 0; i < scenes_.size(); ++i) {
                 cairns::Scene& scene = scenes_[i];
-                for ( size_t j = 0; j < scene.textureHandles.size(); ++j ) {
+                for (size_t j = 0; j < scene.textureHandles.size(); ++j) {
                     auto h = scene.textureHandles[j];
-                    auto* obj = texManager_->GetObj(h);
-                    if ( obj && obj->texture) {
-                        uint32_t& num_tex = gpu_scene_registry.num_tex;
-                        // IN ALL CASES, THE SCENE'S TEXTURE HANDLE MANAGER SHOULD BE 1-1 WITH THE PSO SCENE REGISTRY
+                    auto* tobj = texManager_->GetObj(h);
+                    if (tobj && tobj->texture) {
                         assert(h.get_id() == num_tex);
-                        arg_encoder->setTexture(obj->texture, cairns::rhi::GpuSceneRegistry::kTexturesSlotOffset + num_tex);
-                        //                        gpu_scene_registry.tex_id[h.get_id()] = static_cast<uint32_t>(num_tex);
+                        arg_encoder->setTexture(tobj->texture,
+                            cairns::rhi::GpuSceneRegistry::kTexturesSlotOffset + num_tex);
                         ++num_tex;
                     }
                 }
-                
-                for ( size_t j = 0; j < scene.meshes.size(); ++j ) {
+                for (size_t j = 0; j < scene.meshes.size(); ++j) {
                     auto h = scene.meshes[j].attrHandle;
-                    auto* obj = bufferManager_->GetObj(h);
-                    if ( obj && obj->buffer ) {
-                        uint32_t& num_attr = gpu_scene_registry.num_attr;
-                        arg_encoder->setBuffer(obj->buffer, obj->mem.offset, cairns::rhi::GpuSceneRegistry::kMeshesSlotOffset + num_attr);
-                        gpu_scene_registry.attr_id[h.get_id()] = static_cast<uint32_t>(num_attr);
+                    auto* bobj = bufferManager_->GetObj(h);
+                    if (bobj && bobj->buffer) {
+                        arg_encoder->setBuffer(bobj->buffer, bobj->mem.offset,
+                            cairns::rhi::GpuSceneRegistry::kMeshesSlotOffset + num_attr);
+                        mesh_attr_id_map_[h.get_id()] = num_attr;
                         ++num_attr;
                     }
                 }
-                
                 for (size_t j = 0; j < scene.samplerHandles.size(); ++j) {
                     auto h = scene.samplerHandles[j];
-                    auto* obj = samplerManager_->GetObj(h);
-                    uint32_t& num_sampler = gpu_scene_registry.num_sampler;
-                    arg_encoder->setSamplerState(obj->sampler_state, cairns::rhi::GpuSceneRegistry::kSamplersSlotOffset + num_sampler);
-                    gpu_scene_registry.sampler_id[h.get_id()] = static_cast<uint32_t>(num_sampler);
+                    auto* sobj = samplerManager_->GetObj(h);
+                    arg_encoder->setSamplerState(sobj->sampler_state,
+                        cairns::rhi::GpuSceneRegistry::kSamplersSlotOffset + num_sampler);
+                    sampler_id_map_[h.get_id()] = num_sampler;
                     ++num_sampler;
                 }
             }
-            
+
             arg_encoder->release();
             arg_encoder = nullptr;
+
+            bindless_bg_handle_ = rm_.CreateBindGroupFromMtlBuffer(arg_buf, arg_off);
         }
         
         MTL::DepthStencilDescriptor* depthStencilDescriptor = MTL::DepthStencilDescriptor::alloc()->init();
@@ -1142,6 +1144,9 @@ private:
     
     rhi2::ResourceManager rm_;
     MTL::Buffer* mesh_master_buf_ = nullptr;
+    rhi2::Handle<rhi2::BindGroup> bindless_bg_handle_;
+    std::vector<uint32_t> mesh_attr_id_map_;
+    std::vector<uint32_t> sampler_id_map_;
 
     std::unique_ptr<cairns::rhi::GpuAllocator> allocTransientLinear1_;
     std::unique_ptr<cairns::rhi::GpuAllocator> allocTransientLinear2_;

@@ -345,6 +345,7 @@ struct Sampler {
 struct BindGroup {
     struct Hot {
         void* api_descriptor_set = nullptr;  // VkDescriptorSet / MTLArgumentBuffer / WGPUBindGroup
+        uint32_t arg_buf_offset = 0;         // byte offset into api_descriptor_set (Metal only)
     };
     struct Cold {
         const char* debug_name = nullptr;
@@ -438,6 +439,7 @@ public:
     uint8_t* MappedPtr(Handle<Buffer> h);
     MTL::Heap* GetMtlHeap(Handle<Buffer> h);
     MTL::Buffer* GetBumpMasterBuffer(Memory mem) const;
+    Handle<BindGroup> CreateBindGroupFromMtlBuffer(MTL::Buffer* buf, uint32_t offset);
 #endif  // CAIRNS_METAL
 
 private:
