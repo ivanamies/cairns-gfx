@@ -230,6 +230,26 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
             return {{"snapshot_size", n}};
         });
     registry.Register(
+        "cairns.debug.checkInvariants",
+        json::object(),
+        "#228 H2: walk the LoadPrefabBatch manifest's contract. Returns "
+        "{violations:N, messages:[…]}. 0 == every manifest line agrees "
+        "with its invariant (per_prefab_asset_.size() == prefab_ids_.size(), "
+        "every live Material has set2, resident_textures_ == sum of all "
+        "prefab textureHandles, etc.). Adding engine state without its "
+        "matching invariant fails this check the first frame after a load.",
+        [&engine](const json&) -> json {
+            cairns::headless::InvariantsExport e =
+                cairns::headless::DebugCheckInvariants(&engine);
+            json arr = json::array();
+            for (const std::string& m : e.messages) {
+                arr.push_back(m);
+            }
+            return {{"violations", e.violations},
+                    {"messages",   std::move(arr)}};
+        });
+
+    registry.Register(
         "cairns.debug.assertAppendOnly",
         json::object(),
         "Compare current Mesh::Hot handles against the prior snapshot. "

@@ -58,6 +58,14 @@ function _ticks(n) {
 function _dump(path) {
     return _call("cairns.io.dumpTexture", { target: "final", path });
 }
+function _assertInvariants(where) {
+    const r = _call("cairns.debug.checkInvariants");
+    if (r.violations !== 0) {
+        throw new Error("invariant violation @ " + where + " (" +
+                        r.violations + "): " +
+                        JSON.stringify(r.messages || []));
+    }
+}
 // The shell sets globalThis.LF_BACKEND ("metal" or "vk") via eval prelude
 // so dump paths don't collide between backends.
 const BK = (typeof globalThis.LF_BACKEND === "string")
@@ -95,6 +103,7 @@ run("step 3: load 3 paths -> count becomes 3", () => {
     if (c !== 3) {
         throw new Error("expected count=3 after batch A, got " + c);
     }
+    _assertInvariants("after batch A load");
 });
 
 // ── step 4 ────────────────────────────────────────────────────────────
@@ -117,6 +126,7 @@ run("step 5: load 3 MORE paths -> count becomes 6", () => {
     if (c !== 6) {
         throw new Error("expected count=6 after batch B, got " + c);
     }
+    _assertInvariants("after batch B load");
 });
 
 // ── step 6 ────────────────────────────────────────────────────────────
@@ -155,6 +165,7 @@ run("step 7: instantiate all 6 prefabs; listEntities.count == 6", () => {
         throw new Error("expected " + n_total +
                         " entities after instantiate, got " + r.count);
     }
+    _assertInvariants("after instantiate");
 });
 
 // ── step 8 ────────────────────────────────────────────────────────────

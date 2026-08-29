@@ -276,6 +276,16 @@ uint32_t DebugAssertAppendOnly(Engine* engine) {
     return engine ? engine->DebugAssertAppendOnly() : 0u;
 }
 
+InvariantsExport DebugCheckInvariants(Engine* engine) {
+    InvariantsExport out;
+    if (!engine) {
+        out.violations = 0;  // no engine, no contract to violate
+        return out;
+    }
+    out.violations = engine->CheckPrefabStateInvariants(&out.messages);
+    return out;
+}
+
 uint32_t DebugDeterminismCheck(Engine* engine,
                                  uint32_t cursor, uint32_t count) {
     if (!engine) {

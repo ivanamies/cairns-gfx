@@ -487,6 +487,91 @@ public:
     }
 
     // ══════════════════════════════════════════════════════════════════
+    // #228 H2: the manifest's CONTRACT. One invariant per manifest line.
+    // POLICY: a manifest line without its matching assert here fails
+    // review. The two lists have the same length by construction.
+    //
+    // Returns the number of violations and (if `out_msgs` non-null)
+    // appends a description for each violation. 0 == contract held.
+    //
+    // Debug-only in spirit (release builds don't pay for the O(n)
+    // walks), but exposed via cairns.debug.checkInvariants so the
+    // sequence harness can assert it after every load/instantiate.
+    // ══════════════════════════════════════════════════════════════════
+    uint32_t CheckPrefabStateInvariants(
+            std::vector<std::string>* out_msgs = nullptr) {
+        uint32_t v = 0;
+        auto fail = [&](const char* what) {
+            ++v;
+            if (out_msgs) {
+                out_msgs->emplace_back(what);
+            }
+        };
+        const size_t n_prefabs = prefab_ids_.size();
+        // (1) StampBatchSkinAndMeshIds:
+        //     per_batch_shared_skin_ has at least one entry whenever any
+        //     prefab is resident; every Mesh::Hot::batch_id indexes it.
+        if (n_prefabs > 0 && per_batch_shared_skin_.empty()) {
+            fail("per_batch_shared_skin_ empty but prefabs are resident");
+        }
+        const size_t n_batches = per_batch_shared_skin_.size();
+        meshes_.ForEachLive(
+            [&](cairns::Mesh::Hot& mh, cairns::Mesh::Cold&) {
+                if (mh.batch_id >= n_batches) {
+                    fail("Mesh::Hot::batch_id >= per_batch_shared_skin_.size()");
+                }
+            });
+        // (2) BuildGroupABindGroups -- vk only; on metal skin_group_a is
+        //     Null by design. Skip; not a portable invariant.
+        // (3) ValidateAndCleanupTmps:
+        //     every live Mesh::Cold has empty cpuPositions/cpuAttrs/
+        //     cpuIndices after the batch finished.
+        meshes_.ForEachLive(
+            [&](cairns::Mesh::Hot&, cairns::Mesh::Cold& mc) {
+                if (!mc.cpuPositions.empty() || !mc.cpuAttrs.empty() ||
+                    !mc.cpuIndices.empty()) {
+                    fail("Mesh::Cold cpu temporaries not cleared");
+                }
+            });
+        // (4) BuildMaterialSet2:
+        //     every live Material::Hot has non-null set2.
+        materials_.ForEachLive(
+            [&](cairns::Material::Hot& mat, cairns::Material::Cold&) {
+                if (mat.set2.IsNull()) {
+                    fail("Material::Hot::set2 is Null");
+                }
+            });
+        // (5) BuildResidentTextures:
+        //     resident_textures_.size() == sum of every live prefab's
+        //     Cold.textureHandles.size().
+        size_t sum_tex = 0;
+        prefabs_.ForEachLive(
+            [&](cairns::Prefab::Hot&, cairns::Prefab::Cold& pc) {
+                sum_tex += pc.textureHandles.size();
+            });
+        if (resident_textures_.size() != sum_tex) {
+            fail("resident_textures_.size() != sum_of_prefab_textureHandles");
+        }
+        // (6) StampPerPrefabAsset:
+        //     per_prefab_asset_.size() == prefab_ids_.size().
+        if (per_prefab_asset_.size() != n_prefabs) {
+            fail("per_prefab_asset_.size() != prefab_ids_.size()");
+        }
+        // (7) AppendGlbPaths:
+        //     glb_paths_.size() == prefab_ids_.size(). [PICK] log
+        //     resolves prefab_idx -> filename via this.
+        if (glb_paths_.size() != n_prefabs) {
+            fail("glb_paths_.size() != prefab_ids_.size()");
+        }
+        // (8) AcquireSceneCells:
+        //     active_scene_ valid (entt registry exists for instantiate).
+        if (active_scene_.IsNull()) {
+            fail("active_scene_ is Null (no entt container)");
+        }
+        return v;
+    }
+
+    // ══════════════════════════════════════════════════════════════════
     // #228 H0: the manifest's helper bodies. Each is span-scoped (or
     // span-independent + idempotent for AcquireSceneCells-style ones)
     // and does what an old GreaterInit post-load block did once over

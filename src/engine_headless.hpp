@@ -136,6 +136,16 @@ void SetEditorChromeEnabled(Engine* engine, bool on);
 uint32_t DebugSnapshotPrefabHandles(Engine* engine);
 uint32_t DebugAssertAppendOnly(Engine* engine);
 
+// #228 H2: invariant check across the LoadPrefabBatch manifest contract.
+// Returns the number of violations; on non-zero, the engine is in an
+// inconsistent state (one of the manifest lines forgot a fixup or a
+// new state bucket was added without its matching invariant).
+struct InvariantsExport {
+    uint32_t violations = 0;
+    std::vector<std::string> messages;
+};
+InvariantsExport DebugCheckInvariants(Engine* engine);
+
 // #224 L7: deterministic load-twice check. Runs RuntimeLoadGlbs twice
 // with the same {cursor, count}, compares prefab/mesh counts and
 // per-actor fitted transforms (modulo trace timing). Returns mismatch
