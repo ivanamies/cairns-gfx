@@ -18,6 +18,8 @@
 #include <Metal/Metal.hpp>
 #endif
 
+struct ImDrawData;
+
 namespace cairns::rhi {
 
 class Resources;
@@ -90,6 +92,9 @@ public:
     void BeginRenderPass(SwapChain& sc, const RenderPassDesc& desc);
     void DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list);
     void DrawPoints(Resources& res, Allocator& alloc, const PointDraw& draw);
+    void DrawImGui(Resources& res, Allocator& alloc, Handle<Shader> pipeline,
+                   Handle<Texture> font, Handle<Sampler> sampler,
+                   const ImDrawData* draw_data);
     void EndRenderPass();
 
     // Per-frame recording state, populated by Frames::Begin.

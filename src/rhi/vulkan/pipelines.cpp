@@ -178,7 +178,9 @@ VkShaderFiles resolve_vk_shader(const char* logical) {
     if (std::strcmp(logical, "unlit") == 0) {
         return {"unlit.vert.spv", "unlit.frag.spv", nullptr};
     }
-    // "particle"
+    if (std::strcmp(logical, "imgui") == 0) {
+        return {"imgui.vert.spv", "imgui.frag.spv", nullptr};
+    }
     return {"particle.vert.spv", "particle.frag.spv", "particle.comp.spv"};
 }
 
