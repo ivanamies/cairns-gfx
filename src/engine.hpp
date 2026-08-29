@@ -2346,14 +2346,10 @@ public:
                 for (uint32_t k = 0; k < pkt.sim_steps_this_frame; ++k) {
                     const uint32_t step_src =
                         pkt.particle_parity_in ^ (k & 1u);
-                    const uint32_t step_dst = step_src ^ 1u;
-                    rhi::BoundBuffer cbufs[3] = {
-                        {0, rhi_.alloc.BumpMasterBuffer(rhi::Memory::kDynamic),
-                         s.dt_off},
-                        {1, particle_ssbo_[step_src], 0},
-                        {2, particle_ssbo_[step_dst], 0},
-                    };
-                    cd.buffers = std::span<const rhi::BoundBuffer>(cbufs, 3);
+                    // #222 Phase D.4: parity DynamicBuffers holds bindings
+                    // 1+2 pre-bound; dyn offset carries dt only.
+                    cd.dyn_set_0 = dyn_particle_parity_[step_src];
+                    cd.dyn_offset_0 = s.dt_off;
                     cd.step_index = k;
                     cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
                 }
@@ -3327,12 +3323,56 @@ public:
     bool initParticles() {
         const char* base = SDL_GetBasePath();
         const std::string shader_dir = base ? base : "";
+        // #222 Phase D.4: SSBOs created first so the parity DynamicBuffers
+        // can write their bindings 1+2 at create time. Particle kernel
+        // then references the parity layout (set 0) instead of the
+        // legacy frames.plat.compute_layout_.
+        if (!initParticleSsbos()) {
+            return false;
+        }
+        {  // #222 Phase D.4: 2 parity DynamicBuffers, one per (src,dst) order.
+           // Binding 0 = UBO_DYN dt over kDynamic master (per-dispatch dyn off).
+           // Bindings 1+2 = SSBO over particle_ssbo_[A]/[B] no-dyn.
+            for (uint32_t p = 0; p < 2; ++p) {
+                cairns::rhi::DynamicBinding pb[3]{};
+                pb[0].slot = 0;
+                pb[0].kind = cairns::rhi::BufferKind::kUniform;
+                pb[0].max_range = sizeof(float);
+                pb[0].has_dynamic_offset = true;
+                pb[1].slot = 1;
+                pb[1].kind = cairns::rhi::BufferKind::kStorage;
+                pb[1].max_range = 0;  // VK_WHOLE_SIZE
+                pb[1].has_dynamic_offset = false;
+                pb[1].backing = particle_ssbo_[p];          // src
+                pb[2].slot = 2;
+                pb[2].kind = cairns::rhi::BufferKind::kStorage;
+                pb[2].max_range = 0;
+                pb[2].has_dynamic_offset = false;
+                pb[2].backing = particle_ssbo_[p ^ 1];      // dst
+                cairns::rhi::DynamicBuffersDesc pd{};
+                pd.debug_name = (p == 0) ? "dyn_particle_parity_0"
+                                          : "dyn_particle_parity_1";
+                pd.bindings =
+                    std::span<const cairns::rhi::DynamicBinding>(pb, 3);
+                dyn_particle_parity_[p] =
+                    rhi_.resources.CreateDynamicBuffers(rhi_.alloc,
+                                                          rhi_.frames, pd);
+                if (dyn_particle_parity_[p].IsNull()) {
+                    CAIRNS_PRINT("initParticles: dyn_particle_parity create failed\n");
+                    return false;
+                }
+            }
+        }
         {  // particle compute kernel via rhi
             rhi::ComputePipelineDesc desc{};
             desc.logical_shader = "particle";
             desc.shader_dir = shader_dir.c_str();
             desc.debug_name = "particle_compute";
             desc.layout = rhi::ComputePipelineLayout::kParticle;
+            // #222 Phase D.4: pipeline layout reads from parity[0]'s
+            // DynamicBuffers Hot layout (UBO_DYN @0 + 2 SSBO). Both
+            // parity sets share the same layout shape.
+            desc.dyn_set_0 = dyn_particle_parity_[0];
             particle_kernel_ = rhi_.pipelines.CreateComputePipeline(rhi_.resources, rhi_.frames, desc);
             if (particle_kernel_.IsNull()) {
                 return false;
@@ -3488,6 +3528,13 @@ public:
             imgui_sampler_ = rhi_.resources.CreateSampler(sd);
         }
 
+        return !particle_ssbo_[0].IsNull() && !particle_ssbo_[1].IsNull();
+    }
+
+    // #222 Phase D.4: particle SSBOs split out of initParticles so the
+    // parity DynamicBuffers can grab their handles before the kernel
+    // pipeline is built (pipeline layout is sourced from parity[0]).
+    bool initParticleSsbos() {
         // Deterministic particle seed -- matches the golden capture path.
         // Override via Engine::SetRandomSeed before GreaterInit if you need
         // a different starting state (e.g. the rng.seed NDJSON op).
@@ -3521,7 +3568,6 @@ public:
         particle_ssbo_[0] = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
         bd.initial_data = init_data;
         particle_ssbo_[1] = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
-
         return !particle_ssbo_[0].IsNull() && !particle_ssbo_[1].IsNull();
     }
 
@@ -3708,6 +3754,12 @@ private:
     // the per-dispatch dynamic-offset bindings (params/inst_meta/records).
     rhi::Handle<rhi::DynamicBuffers> dyn_skin_group_b_;
     rhi::Handle<rhi::DynamicBuffers> dyn_anim_eval_;
+    // #222 Phase D.4: particle parity DynamicBuffers. Index 0 binds
+    // particle_ssbo_[0] -> binding 1 and particle_ssbo_[1] -> binding 2
+    // (step_src=0). Index 1 swaps them (step_src=1). Binding 0 (UBO_DYN
+    // dt) backed by kDynamic master; per-dispatch dyn offset = current
+    // dt_off. Replaces the per-step vkUpdateDescriptorSets path.
+    rhi::Handle<rhi::DynamicBuffers> dyn_particle_parity_[2];
     ShaderHandle composite_pip_ = ShaderHandle::Null;
     ShaderHandle depthviz_ = ShaderHandle::Null;
     ShaderHandle outline_pip_ = ShaderHandle::Null;

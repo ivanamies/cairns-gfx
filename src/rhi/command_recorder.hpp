@@ -75,6 +75,14 @@ struct ComputeDispatch {
     uint32_t local_y = 1;
     uint32_t local_z = 1;
     uint32_t step_index = 0;
+    // #222 Phase D.4: when dyn_set_0 is non-null, recorder binds set 0
+    // from GetHot(dyn_set_0)->plat.vk_sets[frame_] with dyn_offset_0
+    // and SKIPS the per-dispatch vkUpdateDescriptorSets path (buffers
+    // span is ignored). Caller pre-built the parity BindGroup-equivalent
+    // via DynamicBuffers (binding 0 UBO_DYN dt, bindings 1..N SSBO over
+    // persistent backing). Metal ignores both fields (binds directly).
+    Handle<DynamicBuffers> dyn_set_0;
+    uint32_t dyn_offset_0 = 0;
 };
 
 struct MeshDrawList {

@@ -31,11 +31,33 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
     }
     MTL::ComputeCommandEncoder* cenc = plat.cmd_->computeCommandEncoder();
     cenc->setComputePipelineState(res.GetHot(d.kernel)->api_pso);
-    for (size_t i = 0; i < d.buffers.size(); ++i) {
-        const BoundBuffer& b = d.buffers[i];
-        uint32_t off = 0;
-        MTL::Buffer* buf = res.plat.GetMtlBuffer(alloc,b.buffer, &off);
-        cenc->setBuffer(buf, off + b.offset, b.slot);
+    // #222 Phase D.4: dyn_set_0 path walks the DynamicBuffers Cold layout.
+    // has_dynamic_offset=true binding -> kDynamic master at d.dyn_offset_0
+    // (only one dyn offset supported here; particle uses binding 0 = dt).
+    // has_dynamic_offset=false -> binding's backing buffer at its base_off.
+    if (!d.dyn_set_0.IsNull()) {
+        DynamicBuffers::Cold* cold = res.dynamic_buffers.GetCold(d.dyn_set_0);
+        if (cold) {
+            MTL::Buffer* dyn_master =
+                res.plat.GetBumpMasterBuffer(alloc, Memory::kDynamic);
+            for (const DynamicBinding& b : cold->layout) {
+                if (b.has_dynamic_offset) {
+                    cenc->setBuffer(dyn_master, d.dyn_offset_0, b.slot);
+                } else {
+                    uint32_t off = 0;
+                    MTL::Buffer* buf =
+                        res.plat.GetMtlBuffer(alloc, b.backing, &off);
+                    cenc->setBuffer(buf, off, b.slot);
+                }
+            }
+        }
+    } else {
+        for (size_t i = 0; i < d.buffers.size(); ++i) {
+            const BoundBuffer& b = d.buffers[i];
+            uint32_t off = 0;
+            MTL::Buffer* buf = res.plat.GetMtlBuffer(alloc,b.buffer, &off);
+            cenc->setBuffer(buf, off + b.offset, b.slot);
+        }
     }
     cenc->dispatchThreadgroups(MTL::Size{d.groups_x, d.groups_y, d.groups_z},
                                MTL::Size{d.local_x, d.local_y, d.local_z});

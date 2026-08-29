@@ -374,6 +374,24 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb,
                              0, nullptr, 0, nullptr);
     }
+    // #222 Phase D.4: when dyn_set_0 non-null, set 0 comes from the
+    // DynamicBuffers Hot (prebuilt parity sets; one per FIF). Bind it
+    // with dyn_offset_0 (binding 0 = UBO_DYN dt). Skip the per-dispatch
+    // vkUpdateDescriptorSets + BoundBuffer write loop entirely.
+    if (!d.dyn_set_0.IsNull()) {
+        DynamicBuffers::Hot* dh = res.dynamic_buffers.GetHot(d.dyn_set_0);
+        if (!k || !dh || dh->plat.vk_sets[plat.frame_] == VK_NULL_HANDLE) {
+            return;
+        }
+        VkDescriptorSet ds = dh->plat.vk_sets[plat.frame_];
+        vkCmdBindPipeline(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE,
+                           k->plat.vk_pipeline);
+        vkCmdBindDescriptorSets(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                 k->plat.vk_layout, 0, 1, &ds,
+                                 1, &d.dyn_offset_0);
+        vkCmdDispatch(plat.comp_, d.groups_x, d.groups_y, d.groups_z);
+        return;
+    }
     VkDescriptorSet set = plat.compute_sets_[d.step_index];
 
     const size_t n = d.buffers.size();
