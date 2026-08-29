@@ -658,7 +658,7 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
         VkResult acquire = vkAcquireNextImageKHR(dev, sc->plat.swapChain, UINT64_MAX,
                                                  plat.image_available_[cf], VK_NULL_HANDLE,
                                                  &image_index);
-        if (acquire == VK_ERROR_OUT_OF_DATE_KHR || acquire == VK_SUBOPTIMAL_KHR ||
+        if (acquire == VK_ERROR_OUT_OF_DATE_KHR ||
             acquire == VK_ERROR_SURFACE_LOST_KHR) {
             plat.recreate_pending_.store(true, std::memory_order_release);
             FrameContext fc{};
@@ -777,7 +777,7 @@ void Frames::Present(const SwapResolveTarget& target, FrameContext& fc) {
         std::lock_guard<std::mutex> lk(plat.swapchain_mutex_);
         present = vkQueuePresentKHR(plat.present_queue_, &pi);
     }
-    if (present == VK_ERROR_OUT_OF_DATE_KHR || present == VK_SUBOPTIMAL_KHR) {
+    if (present == VK_ERROR_OUT_OF_DATE_KHR) {
         plat.recreate_pending_.store(true, std::memory_order_release);
     }
 
