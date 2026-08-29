@@ -716,7 +716,14 @@ public:
             const float kRefWidth = 900.0f;
             const float raw_scale =
                 static_cast<float>(swapchain_.Width()) / kRefWidth;
-            const float dpi_scale = std::clamp(raw_scale, 1.0f, 2.0f);
+#if CAIRNS_ANDROID
+            const float kScaleMax = 2.5f;
+#elif CAIRNS_APPLE && TARGET_OS_IPHONE
+            const float kScaleMax = 1.0f;
+#else
+            const float kScaleMax = 1.5f;
+#endif
+            const float dpi_scale = std::clamp(raw_scale, 1.0f, kScaleMax);
             ImFontConfig fc;
             fc.SizePixels = 13.0f * dpi_scale;
             io.Fonts->Clear();
