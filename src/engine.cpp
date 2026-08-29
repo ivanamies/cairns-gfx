@@ -1275,6 +1275,55 @@ void Engine::RecordFrame(FramePacket& pkt) {
         // on Metal). Gated on non-empty batches AND a valid skin kernel --
         // absent either, the pass is omitted and the static path is
         // bit-for-bit unchanged.
+        // anim_eval is its own graph pass so the palette edge into the skin
+        // pass is ordered + barriered by the graph, not by an ad-hoc fence.
+        if (!pkt.skin_batches.empty() && !pkt.actor_records.empty() &&
+            !skinning_.eval_kernel.IsNull() && skinning_.eval_tables_uploaded &&
+            !skinning_.palette_out_buf.IsNull()) {
+            graph_->AddPass(
+                "anim_eval", rhi::PassType::kCompute,
+                [&](rhi::PassBuilder& b) {
+                    rhi::GraphBufferDesc bd{};
+                    bd.usage = rhi::kUsageStorage;
+                    rhi::GraphBuffer pal =
+                        b.ImportBuffer(skinning_.palette_out_buf, bd);
+                    b.WriteBuffer(pal);
+                },
+                [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
+                    const uint32_t n_actors =
+                        static_cast<uint32_t>(pkt.actor_records.size());
+                    // BuildSkinFrame clamps; this catches any caller that
+                    // skips the clamp.
+                    assert(n_actors <= kAnimActorsCap);
+                    const uint32_t ubo_align = rhi_.alloc.UboAlign();
+                    const uint32_t records_bytes = n_actors *
+                        static_cast<uint32_t>(sizeof(cairns::GpuActorRecord));
+                    uint32_t records_off = 0;
+                    void* records_ptr = rhi_.alloc.BumpAllocate(
+                        records_bytes, ubo_align,
+                        rhi::Memory::kDynamic, &records_off);
+                    if (records_ptr == nullptr) {
+                        return;
+                    }
+                    memcpy(records_ptr, pkt.actor_records.data(),
+                           records_bytes);
+                    rhi::CommandRecorder::AnimEvalArgs ae{};
+                    ae.i32_buf = skinning_.ae_i32_buf;
+                    ae.vec4_buf = skinning_.ae_vec4_buf;
+                    ae.word16_buf = skinning_.ae_word16_buf;
+                    ae.scene_headers = skinning_.scene_headers_buf;
+                    ae.world_scratch = skinning_.world_scratch_buf;
+                    ae.palette_out = skinning_.palette_out_buf;
+                    // dyn_set_0 = per-FIF DynamicBuffers set (binding 0 dyn
+                    // UBO + 1..6 SSBO over backing). vk reads it; metal
+                    // ignores it.
+                    ae.dyn_set_0 = skinning_.dyn_anim_eval;
+                    ae.records_byte_offset = records_off;
+                    ae.actor_count = n_actors;
+                    cmd.DispatchAnimEval(rhi_.resources, rhi_.alloc,
+                                         skinning_.eval_kernel, ae);
+                });
+        }
         if (!pkt.skin_batches.empty() && !skinning_.skin_kernel.IsNull() &&
             !skinning_.output_pool_buffer.IsNull()) {
             graph_->AddPass(
@@ -1285,13 +1334,17 @@ void Engine::RecordFrame(FramePacket& pkt) {
                     rhi::GraphBuffer pool =
                         b.ImportBuffer(skinning_.output_pool_buffer, bd);
                     b.WriteBuffer(pool);
+                    if (!skinning_.palette_out_buf.IsNull()) {
+                        rhi::GraphBuffer pal =
+                            b.ImportBuffer(skinning_.palette_out_buf, bd);
+                        b.ReadBuffer(pal);
+                    }
                 },
                 [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
-                    // Dispatch anim_eval first to fill the persistent
-                    // skinning_.palette_out_buf + skinning_.world_scratch_buf.
-                    // Then SkinDispatchBatch reads palettes from binding 1
-                    // pointing at skinning_.palette_out_buf, with per-batch dynamic
-                    // offset = batch.first_palette_mat4 * sizeof(mat4).
+                    // SkinDispatchBatch reads palettes from binding 1 pointing
+                    // at skinning_.palette_out_buf (filled by the anim_eval
+                    // pass), per-batch dynamic offset =
+                    // batch.first_palette_mat4 * sizeof(mat4).
                     PerSlot& s2 = slots_[pkt.slot];
                     const uint32_t n_batches =
                         static_cast<uint32_t>(pkt.skin_batches.size());
@@ -1300,40 +1353,6 @@ void Engine::RecordFrame(FramePacket& pkt) {
                     }
                     const uint32_t ubo_align = rhi_.alloc.UboAlign();
                     const uint32_t ssbo_align = rhi_.alloc.StorageAlign();
-                    // Upload ActorRecords into kDynamic; bind as DYNAMIC_UBO.
-                    const uint32_t n_actors =
-                        static_cast<uint32_t>(pkt.actor_records.size());
-                    if (n_actors > 0 && !skinning_.eval_kernel.IsNull() &&
-                        skinning_.eval_tables_uploaded) {
-                        // BuildSkinFrame clamps; this catches any caller
-                        // that skips the clamp.
-                        assert(n_actors <= kAnimActorsCap);
-                        const uint32_t records_bytes = n_actors *
-                            static_cast<uint32_t>(sizeof(cairns::GpuActorRecord));
-                        uint32_t records_off = 0;
-                        void* records_ptr = rhi_.alloc.BumpAllocate(
-                            records_bytes, ubo_align,
-                            rhi::Memory::kDynamic, &records_off);
-                        if (records_ptr) {
-                            memcpy(records_ptr, pkt.actor_records.data(),
-                                   records_bytes);
-                            rhi::CommandRecorder::AnimEvalArgs ae{};
-                            ae.i32_buf = skinning_.ae_i32_buf;
-                            ae.vec4_buf = skinning_.ae_vec4_buf;
-                            ae.word16_buf = skinning_.ae_word16_buf;
-                            ae.scene_headers = skinning_.scene_headers_buf;
-                            ae.world_scratch = skinning_.world_scratch_buf;
-                            ae.palette_out = skinning_.palette_out_buf;
-                            // dyn_set_0 = per-FIF DynamicBuffers set
-                            // (binding 0 dyn UBO + 1..6 SSBO over backing).
-                            // vk reads it; metal ignores it.
-                            ae.dyn_set_0 = skinning_.dyn_anim_eval;
-                            ae.records_byte_offset = records_off;
-                            ae.actor_count = n_actors;
-                            cmd.DispatchAnimEval(rhi_.resources, rhi_.alloc,
-                                                  skinning_.eval_kernel, ae);
-                        }
-                    }
                     rhi::SkinDispatchBatch* dbatches =
                         s2.arena.AllocateArray<rhi::SkinDispatchBatch>(
                             n_batches);
@@ -1438,6 +1457,9 @@ void Engine::RecordFrame(FramePacket& pkt) {
                 sim_out = b.ImportBuffer(
                     particles_.ssbo[pkt.particle_parity_out], bd);
                 b.WriteBuffer(sim_out);
+                rhi::GraphBuffer sim_in = b.ImportBuffer(
+                    particles_.ssbo[pkt.particle_parity_in], bd);
+                b.ReadBuffer(sim_in);
             },
             [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
                 rhi::ComputeDispatch cd{};
@@ -1506,6 +1528,22 @@ void Engine::RecordFrame(FramePacket& pkt) {
                         b.AddColorOutput("id", id_off[vp_idx], rhi::LoadOp::kClear, id_clear);
                     }
                     b.AddDepthOutput("fwd_depth", depth_off[vp_idx], rhi::LoadOp::kClear, 1.0f);
+                    // Vertex-fetched SSBO reads (skin pool as the stream-0
+                    // alias; particle SSBO for DrawPoints) -- declared so the
+                    // graph orders + barriers compute -> vertex fetch.
+                    rhi::GraphBufferDesc sbd{};
+                    sbd.usage = rhi::kUsageStorage;
+                    if (!pkt.skin_batches.empty() &&
+                        !skinning_.output_pool_buffer.IsNull()) {
+                        rhi::GraphBuffer pool = b.ImportBuffer(
+                            skinning_.output_pool_buffer, sbd);
+                        b.ReadBuffer(pool);
+                    }
+                    if (particles_active) {
+                        rhi::GraphBuffer psb = b.ImportBuffer(
+                            particles_.ssbo[pkt.particle_parity_out], sbd);
+                        b.ReadBuffer(psb);
+                    }
                 },
                 [&, vp_idx](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
                     cmd.DrawMeshes(rhi_.resources, rhi_.alloc, mls[vp_idx]);

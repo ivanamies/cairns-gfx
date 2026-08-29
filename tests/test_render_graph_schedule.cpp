@@ -213,3 +213,61 @@ SCENARIO("WAR: readers accumulate and the write resets them",
     // The write replaced the accumulation with its own stage.
     REQUIRE(pe.src_stages == cairns::rhi::kPipeCompute);
 }
+
+SCENARIO("buffers barrier on flush and WAR but never on layout",
+         "[spec][graph_barrier]") {
+    // The buffer arm pins layout to kUndefined: first use emits nothing,
+    // RAW emits the flush, a later write emits the reader-only barrier.
+    PipelineEvent pe{};
+    BarrierEmit e{};
+    const bool first = AccessResource(pe, cairns::rhi::kAccessShaderRead,
+                                      cairns::rhi::kPipeCompute,
+                                      BarrierLayout::kUndefined,
+                                      /*is_write=*/false, &e);
+    REQUIRE_FALSE(first);
+    AccessResource(pe, cairns::rhi::kAccessShaderWrite,
+                   cairns::rhi::kPipeCompute, BarrierLayout::kUndefined,
+                   /*is_write=*/true, &e);
+    const bool raw = AccessResource(pe, cairns::rhi::kAccessShaderRead,
+                                    cairns::rhi::kPipeVertex,
+                                    BarrierLayout::kUndefined,
+                                    /*is_write=*/false, &e);
+    REQUIRE(raw);
+    REQUIRE(e.src_access == cairns::rhi::kAccessShaderWrite);
+    REQUIRE(e.dst_stage == cairns::rhi::kPipeVertex);
+    const bool war = AccessResource(pe, cairns::rhi::kAccessShaderWrite,
+                                    cairns::rhi::kPipeCompute,
+                                    BarrierLayout::kUndefined,
+                                    /*is_write=*/true, &e);
+    REQUIRE(war);
+    REQUIRE(e.src_access == cairns::rhi::kAccessNone);
+    REQUIRE((e.src_stage & cairns::rhi::kPipeVertex) != 0);
+}
+
+SCENARIO("the anim->skin->forward chain emits exactly its three edges",
+         "[spec][graph_barrier]") {
+    // palette: anim writes, skin reads (RAW). pool: skin writes, forward
+    // vertex-reads (RAW). Next frame, anim's write waits skin's read (WAR).
+    PipelineEvent palette{};
+    PipelineEvent pool{};
+    BarrierEmit e{};
+    AccessResource(palette, cairns::rhi::kAccessShaderWrite,
+                   cairns::rhi::kPipeCompute, BarrierLayout::kUndefined,
+                   true, &e);
+    REQUIRE(AccessResource(palette, cairns::rhi::kAccessShaderRead,
+                           cairns::rhi::kPipeCompute,
+                           BarrierLayout::kUndefined, false, &e));
+    REQUIRE(e.src_access == cairns::rhi::kAccessShaderWrite);
+    AccessResource(pool, cairns::rhi::kAccessShaderWrite,
+                   cairns::rhi::kPipeCompute, BarrierLayout::kUndefined,
+                   true, &e);
+    REQUIRE(AccessResource(pool, cairns::rhi::kAccessShaderRead,
+                           cairns::rhi::kPipeVertex | cairns::rhi::kPipeFragment,
+                           BarrierLayout::kUndefined, false, &e));
+    // Frame N+1: anim writes palette again -- waits frame N's skin read.
+    REQUIRE(AccessResource(palette, cairns::rhi::kAccessShaderWrite,
+                           cairns::rhi::kPipeCompute,
+                           BarrierLayout::kUndefined, true, &e));
+    REQUIRE(e.src_access == cairns::rhi::kAccessNone);
+    REQUIRE((e.src_stage & cairns::rhi::kPipeCompute) != 0);
+}

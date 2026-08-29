@@ -5,7 +5,13 @@
 // owning WGPUTexture for readback/present.
 #pragma once
 
-#include <webgpu/webgpu.h>
+// Opaque-handle forward declarations instead of webgpu.h -- the pure-CPU spec
+// tests reach this header with no backend include dirs (same pattern as
+// resource_manager_plat.hpp).
+extern "C" {
+typedef struct WGPUTextureViewImpl* WGPUTextureView;
+typedef struct WGPUTextureImpl* WGPUTexture;
+}
 
 namespace cairns::rhi {
 

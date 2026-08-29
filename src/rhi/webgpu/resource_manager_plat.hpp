@@ -9,7 +9,17 @@
 
 #include <cstdint>
 
-#include <webgpu/webgpu.h>
+// Forward-declare the opaque WGPU handle typedefs instead of including
+// webgpu.h (mirrors the metal plat header's MTL:: forward declarations): the
+// pure-CPU spec tests include this transitively and carry no backend include
+// dirs. Redeclaring an identical typedef is legal if webgpu.h is also seen.
+extern "C" {
+typedef struct WGPUPipelineLayoutImpl* WGPUPipelineLayout;
+typedef struct WGPUBindGroupLayoutImpl* WGPUBindGroupLayout;
+typedef struct WGPUBindGroupImpl* WGPUBindGroup;
+typedef struct WGPUDeviceImpl* WGPUDevice;
+typedef struct WGPUQueueImpl* WGPUQueue;
+}
 
 namespace cairns::rhi {
 

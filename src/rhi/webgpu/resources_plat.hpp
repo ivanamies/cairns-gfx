@@ -3,7 +3,13 @@
 
 #include <cstdint>
 
-#include <webgpu/webgpu.h>
+// Opaque-handle forward declarations instead of webgpu.h -- the pure-CPU spec
+// tests reach this header with no backend include dirs.
+extern "C" {
+typedef struct WGPUDeviceImpl* WGPUDevice;
+typedef struct WGPUQueueImpl* WGPUQueue;
+typedef struct WGPUBufferImpl* WGPUBuffer;
+}
 
 #include "rhi/resource_manager.hpp"  // Handle<>, Memory, Buffer
 
