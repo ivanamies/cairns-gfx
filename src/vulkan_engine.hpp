@@ -2043,7 +2043,6 @@ private:
     bool drawFrame() {
         rhi::FrameContext fc = rm_.BeginFrame(sc_);
         updateComputeUniformBuffer(fc.frame_index);
-        updateUniformBuffer(fc.frame_index);
 
         if (!BuildMeshOpaqueDraws()) {
             return false;
