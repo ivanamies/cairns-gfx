@@ -5,6 +5,40 @@ Newest first.
 
 ---
 
+## `6674340` (2026-06-22) — perf smoke, 300 actors / 100 distinct GLBs
+
+**Forced down from 500 → 300 actors by WebGPU.** The anim_eval SSBO pack (12 → 6
+buffers, to fit WebGPU's 8/10 storage-buffers-per-stage floor) and the
+WebGPU-portable **256 MB skin-pool cap** are the cause: the whole skin-output
+pool is bound as ONE storage buffer, and the max storage-buffer-binding range is
+128 MB on mobile (Adreno-730 / S22, measured on-device) / 256 MB on desktop +
+webgpu. 400 actors' skinned output is ~285 MB (measured headless via cairns_serve
+— it overflows 256 MB and aborts); 300 fits (~214 MB). So the desktop benchmark
+drops 500 → 300 as the price of WebGPU support.
+
+Loaded via the new `cairns.scenario.load("00_perf_smoke_300")`. M2 Max, sdl-min
+windowed, ~40 s capture / 120-frame window, vsync (present_pacing ~13.3 ms).
+
+| Pass               | metal Release | vk Release |
+|--------------------|---------------|------------|
+| `frame`            |  0.58 ms      |  1.26 ms   |
+| `build_draws`      |  0.46 ms      |  1.06 ms   |
+| `record`           |  0.45 ms      |  0.33 ms   |
+| `skinning_compute` |  3.56 ms      |  3.21 ms   |
+| `particle_sim`     |  0.10 ms      |  0.00 ms   |
+| `forward_vp0`      |  1.11 ms      |  1.46 ms   |
+| `swap`             |  0.12 ms      |  0.09 ms   |
+| `skin_eval`        |  0.02 ms      |  0.03 ms   |
+| `present_wait`     |  0.00 ms      |  0.03 ms   |
+| `acquire_wait`     | —             |  0.03 ms   |
+| `fence_wait`       | —             |  0.01 ms   |
+
+`skin_eval` (the packed anim_eval palette build) is ~0.02–0.03 ms — the 12 → 6
+SSBO pack added no measurable per-frame cost vs the pre-pack 0.03 ms baseline.
+The cost of WebGPU portability is the actor-count drop (500 → 300), not frame time.
+
+---
+
 ## `73ce3c4` (2026-06-17) — run.js boot, 500 actors / 100 distinct GLBs
 
 ### macOS, M2 Max, vk Release, 2560×1440, 30s capture, 120-frame window
