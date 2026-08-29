@@ -7,6 +7,7 @@
 #pragma once
 
 #include "util/define.hpp"
+#include "util/log.hpp"
 
 #if CAIRNS_VULKAN
 
@@ -397,17 +398,35 @@ private:
         // so the swapchain image is landscape-oriented, matching the display.
         // Everything downstream (Width/Height, viewport, scissor, projection)
         // sees landscape dims and Just Works.
+        // Android Vulkan pre-rotation handling. currentTransform tells us the
+        // device's natural orientation (e.g. ROTATE_270 on a Pixel 6a whose
+        // hardware is portrait native but the activity is sensorLandscape).
+        // currentExtent's orientation depends on the platform: on Pixel 6a AVD
+        // it already reports landscape (post-rotation) dims; on other Androids
+        // it may report pre-rotation portrait. We don't try to "fix up" extent
+        // -- whatever currentExtent is, we render to it. We do, however,
+        // request preTransform = IDENTITY when we'd otherwise inherit a
+        // non-identity transform, so the WSI handles any required compositor
+        // rotation rather than us pre-baking it into the projection matrix.
         VkSurfaceTransformFlagBitsKHR preTransform =
             swapChainSupport.capabilities.currentTransform;
-        const bool is_rotated_90_or_270 =
-            (preTransform & (VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR |
-                             VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR)) != 0;
+        const bool is_non_identity =
+            preTransform != VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
         const bool identity_supported =
             (swapChainSupport.capabilities.supportedTransforms &
              VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) != 0;
-        if (is_rotated_90_or_270 && identity_supported) {
+        CAIRNS_PRINT("[SWAP] currentTransform=0x%x supportedTransforms=0x%x "
+                     "currentExtent=%ux%u chosenExtent=%ux%u non_identity=%d "
+                     "identity_supported=%d\n",
+                     (unsigned)preTransform,
+                     (unsigned)swapChainSupport.capabilities.supportedTransforms,
+                     swapChainSupport.capabilities.currentExtent.width,
+                     swapChainSupport.capabilities.currentExtent.height,
+                     extent.width, extent.height,
+                     (int)is_non_identity, (int)identity_supported);
+        if (is_non_identity && identity_supported) {
             preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
-            std::swap(extent.width, extent.height);
+            CAIRNS_PRINT("[SWAP] preTransform forced to IDENTITY (WSI rotates)\n");
         }
 
         uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1;

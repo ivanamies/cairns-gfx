@@ -7,6 +7,7 @@
 #include <vulkan/vulkan.h>
 
 #include <algorithm>
+#include <cassert>
 #include <cstring>
 
 #include "rhi/resources.hpp"
