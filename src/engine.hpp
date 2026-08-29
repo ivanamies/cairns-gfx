@@ -190,16 +190,16 @@ public:
             const int kRows = 5;
             const int per_slice = kCols * kRows;
             const int instance_count = per_slice * kHeroSlices;
-            const float dx = 0.5f;
-            const float dy = 0.5f;
-            const float dz = 1.5f;
+            const float dx = 0.7f;
+            const float dy = 0.7f;
+            const float dz = 2.0f;
             const float scale =
                 std::getenv("CAIRNS_SCALE")
                     ? static_cast<float>(std::atof(std::getenv("CAIRNS_SCALE")))
-                    : 0.005f;
+                    : 0.01f;
             const float start_x = -dx * static_cast<float>(kCols - 1) * 0.5f;
             const float start_y = -dy * static_cast<float>(kRows - 1) * 0.5f;
-            const float start_z = -3.0f;
+            const float start_z = -4.0f;
             debugSceneXforms_.clear();
             debugSceneXforms_.reserve(instance_count);
             for (int i = 0; i < instance_count; ++i) {

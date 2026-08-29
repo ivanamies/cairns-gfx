@@ -47,8 +47,8 @@ SDL_AppResult SDL_Fail(){
 
 SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
     
-    constexpr uint32_t kWindowStartWidth = 1280;
-    constexpr uint32_t kWindowStartHeight = 576;
+    constexpr uint32_t kWindowStartWidth = 2400;
+    constexpr uint32_t kWindowStartHeight = 1080;
 
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
     
