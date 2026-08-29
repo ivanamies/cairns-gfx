@@ -237,6 +237,28 @@ LoadBatchExport RuntimeLoadGlbs(Engine* engine,
     return out;
 }
 
+uint32_t RuntimeLoadGlbPath(Engine* engine, const std::string& path) {
+    if (!engine || path.empty()) {
+        return UINT32_MAX;
+    }
+    std::filesystem::path fp(path);
+    if (!fp.is_absolute()) {
+        std::filesystem::path resolved;
+        if (!cairns::GetStaticResourceFilepath(path, resolved)) {
+            return UINT32_MAX;
+        }
+        fp = resolved;
+    }
+    std::array<std::filesystem::path, 1> one_path{fp};
+    Engine::LoadPrefabBatchResult r =
+        engine->RuntimeLoadBatch(std::span<const std::filesystem::path>(
+            one_path.data(), one_path.size()));
+    if (r.count == 0) {
+        return UINT32_MAX;
+    }
+    return r.first_prefab_idx;
+}
+
 bool EditorChromeEnabled(Engine* engine) {
     return engine ? engine->EditorChromeEnabled() : true;
 }

@@ -136,14 +136,19 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.prefab.load",
         json::object(),
-        "Load a GLB/texture/audio file as a Prefab. Today: stub returns "
-        "a synthetic asset id (no GPU upload); real per-path load lands "
-        "with the AssetRegistry hookup. Use cairns.prefab.loadBatch for "
-        "the real batched path. Args: {path}.",
-        [](const json& args) -> json {
+        "#224 L9: load ONE GLB at `path` as a Prefab. Path is absolute "
+        "or a short name resolved via the engine's static resource "
+        "lookup. Returns: {prefab, path, ok}. The JS catalog script "
+        "loops + calls this per file -- the engine does NOT take a "
+        "list, by design (the loop belongs in the script).",
+        [&engine](const json& args) -> json {
             const std::string path = args.value("path", std::string{});
-            return {{"prefab", g_asset_counter.fetch_add(1)},
-                    {"path", path}};
+            const uint32_t prefab_idx =
+                cairns::headless::RuntimeLoadGlbPath(&engine, path);
+            const bool ok = prefab_idx != UINT32_MAX;
+            return {{"prefab", ok ? prefab_idx : 0u},
+                    {"path",   path},
+                    {"ok",     ok}};
         });
 
     registry.Register(

@@ -114,6 +114,12 @@ ValidationReport LastValidationReport(Engine* engine);
 struct LoadBatchExport { uint32_t first_prefab_idx = 0; uint32_t count = 0; };
 LoadBatchExport RuntimeLoadGlbs(Engine* engine,
                                   uint32_t cursor, uint32_t count);
+// #224 L9: single-path load. The JS catalog loops + calls this once
+// per file. Path is absolute OR a short name resolved via the engine's
+// static resource lookup. Returns the new prefab_idx (or UINT32_MAX
+// on failure -- the agent should check). drain + re-upload anim
+// tables happen inside, same as the multi-path batch.
+uint32_t RuntimeLoadGlbPath(Engine* engine, const std::string& path);
 
 // #224 L5: instantiate `prefab_count` prefabs starting at `first_prefab_idx`
 // into active scene + slide all existing actors to the new fitted grid.

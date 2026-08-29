@@ -1478,30 +1478,17 @@ public:
                         glb_paths.push_back(resolved);
                     }
                 }
-            } else {
-                // #269: env-driven entity count retired. All GLBs in the
-                // kDebugGlbs static window load; entities spawn via the
-                // cairns.world.spawnHero NDJSON op post-init.
-                for (size_t glb_idx = cairns::kDebugGlbsToParseStart;
-                     glb_idx < cairns::kDebugGlbsToParseStart +
-                                   cairns::kDebugGlbsToParse;
-                     ++glb_idx) {
-                    std::filesystem::path filepath;
-                    if (!cairns::GetStaticResourceFilepath(cairns::kDebugGlbs[glb_idx],
-                                                           filepath)) {
-                        CAIRNS_PRINT_ERR("file missing %s\n",
-                                          cairns::kDebugGlbs[glb_idx]);
-                        continue;
-                    }
-                    glb_paths.push_back(filepath);
-                }
             }
-
-            // #224 L1: parse + upload + Group A build now go through
-            // LoadPrefabBatch (the same method runtime cairns.prefab.loadBatch
-            // will call). GreaterInit's call is just the boot-time batch.
-            LoadPrefabBatch(std::span<const std::filesystem::path>(
-                glb_paths.data(), glb_paths.size()));
+            // #224 L9: NO IMPLICIT BOOT LOAD. The default (empty
+            // glb_overrides) leaves the prefab pool empty; the agent
+            // calls cairns.prefab.loadBatch (or sdl-min's CAIRNS_GLB
+            // env, which still pre-populates glb_paths above) when it
+            // actually needs a Prefab. Boot is sub-second; nothing
+            // parses or uploads until asked.
+            if (!glb_paths.empty()) {
+                LoadPrefabBatch(std::span<const std::filesystem::path>(
+                    glb_paths.data(), glb_paths.size()));
+            }
 
             {
                 uint64_t total_skin_verts = 0;

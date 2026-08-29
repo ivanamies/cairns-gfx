@@ -38,7 +38,18 @@ run("Vector3.zero", () => {
 run("Mathf.Lerp", () => _assertEq("lerp", Mathf.Lerp(0, 10, 0.5), 5));
 
 // ── New nouns: Prefab + Scene + Editor + Prefabs. ──
-run("Prefabs.list returns non-empty", () => {
+// #224 L9: boot loads zero prefabs. The script must explicitly load
+// at least one before testing Prefabs.list / Scene.instantiate. The
+// JS owns the catalog -- cairns.prefab.load takes a single path; the
+// loop belongs in the script.
+run("cairns.prefab.load (single path) succeeds", () => {
+    const r = cairns.dispatch("cairns.prefab.load", { path: "aatrox.glb" });
+    if (!r.ok || !r.result || !r.result.ok) {
+        throw new Error("aatrox.glb load failed: " + JSON.stringify(r));
+    }
+});
+
+run("Prefabs.list returns non-empty after load", () => {
     const ps = Prefabs.list();
     if (!Array.isArray(ps) || ps.length === 0) {
         throw new Error("expected non-empty array, got " + JSON.stringify(ps));
