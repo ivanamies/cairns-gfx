@@ -27,6 +27,8 @@
 #include <glm/gtx/string_cast.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 
+#include "util/gpu_anim_types.hpp"
+
 #include <memory>
 
 namespace cairns {
@@ -48,6 +50,7 @@ struct AnimatedTRS {
     glm::quat R{1.0f, 0.0f, 0.0f, 0.0f};
     glm::vec3 S{1.0f};
 };
+
 
 // #221 Skinning Phase 1: per-vertex joint + weight payload for skinned
 // meshes. 32 B; only populated for meshes whose primitives carry JOINTS_0
@@ -233,10 +236,28 @@ struct Scene {
         // Renamed from materialIds (legacy uint32_t name). Each element
         // is a Handle<LoadedMaterial> into Engine::materials_.
         std::vector<cairns::Handle<LoadedMaterial>> materials;
+
+        // #221 Phase 5b: index into engine's flat scene_headers array.
+        // UINT32_MAX = scene not registered with anim_eval (no skin/clip).
+        uint32_t gpu_scene_header_idx = UINT32_MAX;
     };
     struct Cold {
         std::vector<Node> nodes;
         std::vector<AnimatedTRS> bind_pose;
+        // #221 Phase 5b: per-scene flat tables for GPU palette eval.
+        // Populated at load by LoadSceneFromGltf and consumed by
+        // engine's anim-table upload sweep.
+        std::vector<int32_t> gpu_parent;
+        std::vector<int32_t> gpu_topo;
+        std::vector<GpuTRS> gpu_bind_pose;
+        std::vector<GpuChannel> gpu_channels;
+        std::vector<GpuSampler> gpu_samplers;
+        std::vector<float> gpu_times;
+        std::vector<glm::vec4> gpu_values;
+        std::vector<int32_t> gpu_joint_nodes;
+        std::vector<glm::mat4> gpu_inverse_binds;
+        int32_t gpu_mesh_node = -1;
+        float gpu_clip_duration = 0.0f;
         // #221 Skinning Phase 1: glTF skins + clips for this scene. Per
         // decision 2 of plan v7 these ride std::vector on Cold to match
         // the existing shape (proper Tier-1 bump migration is a separate
@@ -656,6 +677,112 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path,
         glm::decompose(nd.localTransform, trs.S, trs.R, trs.T, skew, persp);
         cold.bind_pose[i] = trs;
     }
+
+    {
+        const uint32_t n = static_cast<uint32_t>(cold.nodes.size());
+        cold.gpu_parent.assign(n, -1);
+        for (uint32_t i = 0; i < n; ++i) {
+            for (int32_t c : cold.nodes[i].children) {
+                if (c >= 0 && static_cast<uint32_t>(c) < n) {
+                    cold.gpu_parent[static_cast<uint32_t>(c)] =
+                        static_cast<int32_t>(i);
+                }
+            }
+        }
+        cold.gpu_topo.clear();
+        cold.gpu_topo.reserve(n);
+        std::vector<int32_t> stack;
+        stack.reserve(n);
+        for (auto it = hot.rootNodes.rbegin(); it != hot.rootNodes.rend(); ++it) {
+            stack.push_back(*it);
+        }
+        while (!stack.empty()) {
+            int32_t ni = stack.back();
+            stack.pop_back();
+            if (ni < 0 || static_cast<uint32_t>(ni) >= n) {
+                continue;
+            }
+            cold.gpu_topo.push_back(ni);
+            const Node& nd = cold.nodes[static_cast<uint32_t>(ni)];
+            for (auto cit = nd.children.rbegin(); cit != nd.children.rend(); ++cit) {
+                stack.push_back(*cit);
+            }
+        }
+        cold.gpu_bind_pose.resize(n);
+        for (uint32_t i = 0; i < n; ++i) {
+            const AnimatedTRS& s = cold.bind_pose[i];
+            cold.gpu_bind_pose[i].T = glm::vec4(s.T, 0.0f);
+            cold.gpu_bind_pose[i].R = glm::vec4(s.R.x, s.R.y, s.R.z, s.R.w);
+            cold.gpu_bind_pose[i].S = glm::vec4(s.S, 0.0f);
+        }
+    }
+
+    int32_t walk_clip = -1;
+    {
+        auto contains_ci = [](const std::string& s, const char* needle) {
+            const size_t n = std::strlen(needle);
+            if (s.size() < n) return false;
+            for (size_t i = 0; i + n <= s.size(); ++i) {
+                bool ok = true;
+                for (size_t k = 0; k < n; ++k) {
+                    char a = static_cast<char>(std::tolower(s[i + k]));
+                    char b = static_cast<char>(std::tolower(needle[k]));
+                    if (a != b) { ok = false; break; }
+                }
+                if (ok) return true;
+            }
+            return false;
+        };
+        int walk = -1;
+        int run = -1;
+        for (size_t i = 0; i < cold.clips.size(); ++i) {
+            if (walk < 0 && contains_ci(cold.clips[i].name, "walk")) {
+                walk = static_cast<int>(i);
+            } else if (run < 0 && contains_ci(cold.clips[i].name, "run")) {
+                run = static_cast<int>(i);
+            }
+        }
+        walk_clip = (walk >= 0) ? walk : (run >= 0 ? run : 0);
+    }
+    if (!cold.clips.empty()) {
+        const Clip& clip = cold.clips[static_cast<size_t>(walk_clip)];
+        cold.gpu_clip_duration = clip.duration;
+        cold.gpu_samplers.reserve(clip.samplers.size());
+        for (const AnimationSampler& s : clip.samplers) {
+            GpuSampler gs{};
+            gs.times_off = static_cast<uint32_t>(cold.gpu_times.size());
+            gs.values_off = static_cast<uint32_t>(cold.gpu_values.size());
+            gs.count = static_cast<uint32_t>(s.times.size());
+            gs.interp = static_cast<uint32_t>(s.interp);
+            cold.gpu_samplers.push_back(gs);
+            cold.gpu_times.insert(cold.gpu_times.end(),
+                                   s.times.begin(), s.times.end());
+            cold.gpu_values.insert(cold.gpu_values.end(),
+                                    s.values.begin(), s.values.end());
+        }
+        cold.gpu_channels.reserve(clip.channels.size());
+        for (const AnimationChannel& ch : clip.channels) {
+            GpuChannel gc{};
+            gc.node_idx = ch.nodeIndex;
+            gc.path = static_cast<uint32_t>(ch.path);
+            gc.sampler_idx = ch.samplerIndex;
+            cold.gpu_channels.push_back(gc);
+        }
+    }
+
+    if (!cold.skins.empty()) {
+        const Skin& sk = cold.skins[0];
+        cold.gpu_joint_nodes.assign(sk.jointNodes.begin(), sk.jointNodes.end());
+        cold.gpu_inverse_binds.assign(sk.inverseBinds.begin(),
+                                       sk.inverseBinds.end());
+        for (uint32_t i = 0; i < cold.nodes.size(); ++i) {
+            if (cold.nodes[i].meshIndex >= 0 && cold.nodes[i].skinIndex == 0) {
+                cold.gpu_mesh_node = static_cast<int32_t>(i);
+                break;
+            }
+        }
+    }
+
     return true;
 }
 

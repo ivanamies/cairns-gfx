@@ -47,6 +47,11 @@ struct FramesPlat {
     VkDescriptorSetLayout skin_group_b_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout skin_group_a_layout_ = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> skin_group_b_sets_;
+    // #221 Phase 5b: anim_eval set layout has 13 bindings (see
+    // assets/anim_eval.comp.glsl). One set per frame-in-flight; bound by
+    // CommandRecorder::DispatchAnimEval before each anim_eval dispatch.
+    VkDescriptorSetLayout anim_eval_layout_ = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> anim_eval_sets_;
     std::vector<VkDescriptorSet> globals_sets_;
     std::vector<VkDescriptorSet> drawtmp_sets_;
     // One DescriptorSet per in-flight slot per sim step. Indexed

@@ -81,7 +81,28 @@ public:
     // binding 3 (OutputPool) is bound whole. Metal: no-op. CALLER: ENGINE
     // (post initSkinKernel + skin_output_pool_buffer_ create).
     void WriteSkinGroupBDescriptors(Resources& resources, Allocator& alloc,
-                                     rhi::Handle<rhi::Buffer> output_pool);
+                                     rhi::Handle<rhi::Buffer> output_pool,
+                                     rhi::Handle<rhi::Buffer> palette_buf = {});
+
+    // #221 Phase 5b: write the anim_eval descriptor set (kFramesInFlight of
+    // them) ONCE the engine has allocated the persistent scene-table buffers
+    // + the persistent palette/world-scratch buffers. The actor-records
+    // binding 0 is DYNAMIC_UBO over the kDynamic master; offset is set
+    // per-dispatch by the recorder. Metal: no-op.
+    void WriteAnimEvalDescriptors(
+        Resources& resources, Allocator& alloc,
+        rhi::Handle<rhi::Buffer> scene_headers,
+        rhi::Handle<rhi::Buffer> parent_buf,
+        rhi::Handle<rhi::Buffer> topo_buf,
+        rhi::Handle<rhi::Buffer> bind_pose_buf,
+        rhi::Handle<rhi::Buffer> channels_buf,
+        rhi::Handle<rhi::Buffer> samplers_buf,
+        rhi::Handle<rhi::Buffer> times_buf,
+        rhi::Handle<rhi::Buffer> values_buf,
+        rhi::Handle<rhi::Buffer> joint_nodes_buf,
+        rhi::Handle<rhi::Buffer> inverse_binds_buf,
+        rhi::Handle<rhi::Buffer> world_scratch,
+        rhi::Handle<rhi::Buffer> palette_out);
 
     // #237 fix: write the per-frame globals_sets_ + drawtmp_sets_ ONCE
     // at engine init. Both bindings are UNIFORM_BUFFER_DYNAMIC pointing

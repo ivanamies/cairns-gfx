@@ -282,6 +282,54 @@ void CommandRecorder::DispatchSkinBatches(
     }
 }
 
+void CommandRecorder::DispatchAnimEval(
+    Resources& res, Allocator& /*alloc*/, Handle<Kernel> kernel,
+    Handle<Buffer> /*scene_headers*/,
+    Handle<Buffer> /*parent_buf*/,
+    Handle<Buffer> /*topo_buf*/,
+    Handle<Buffer> /*bind_pose_buf*/,
+    Handle<Buffer> /*channels_buf*/,
+    Handle<Buffer> /*samplers_buf*/,
+    Handle<Buffer> /*times_buf*/,
+    Handle<Buffer> /*values_buf*/,
+    Handle<Buffer> /*joint_nodes_buf*/,
+    Handle<Buffer> /*inverse_binds_buf*/,
+    Handle<Buffer> /*world_scratch*/,
+    Handle<Buffer> /*palette_out*/,
+    uint32_t records_byte_offset,
+    uint32_t actor_count) {
+    if (kernel.IsNull() || actor_count == 0 ||
+        plat.anim_eval_set_ == VK_NULL_HANDLE) {
+        return;
+    }
+    if (plat.pending_pass_idx_ != UINT32_MAX &&
+        plat.pass_cb_ == VK_NULL_HANDLE) {
+        plat.pass_cb_ = plat.comp_;
+        vkCmdWriteTimestamp(plat.pass_cb_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                            plat.ts_pool_,
+                            2 * kMaxPasses * plat.frame_ +
+                                2 * plat.pending_pass_idx_);
+    }
+    Kernel::Hot* k = res.GetHot(kernel);
+    if (!k) {
+        return;
+    }
+    vkCmdBindPipeline(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE,
+                       k->plat.vk_pipeline);
+    VkDescriptorSet set = plat.anim_eval_set_;
+    const uint32_t dyn = records_byte_offset;
+    vkCmdBindDescriptorSets(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE,
+                             k->plat.vk_layout, 0, 1, &set, 1, &dyn);
+    vkCmdDispatch(plat.comp_, actor_count, 1, 1);
+    VkMemoryBarrier mb{};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(plat.comp_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb,
+                         0, nullptr, 0, nullptr);
+}
+
 void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDispatch& d) {
     if (plat.pending_pass_idx_ != UINT32_MAX && plat.pass_cb_ == VK_NULL_HANDLE) {
         plat.pass_cb_ = plat.comp_;

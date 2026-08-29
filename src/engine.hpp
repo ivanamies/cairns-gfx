@@ -754,6 +754,24 @@ public:
             // Slices in vec4 units (16 B). Capacity = total / 16.
             skin_output_pool_.Init(kSkinOutputBytes / 16u);
         }
+        // #221 Phase 5b: persistent palette out + world scratch for GPU
+        // palette eval. 1024 actors * 256 mat4 = 16 MB each.
+        {
+            static constexpr uint32_t kAnimActorsCap = 1024u;
+            static constexpr uint32_t kAnimMaxNodes = 256u;
+            static constexpr uint32_t kAnimMaxJoints = 256u;
+            rhi::BufferDesc bd{};
+            bd.usage = rhi::kUsageStorage;
+            bd.memory = rhi::Memory::kDefault;
+            bd.byte_size = kAnimActorsCap * kAnimMaxJoints * 64u;
+            palette_out_buf_ = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
+            bd.byte_size = kAnimActorsCap * kAnimMaxNodes * 64u;
+            world_scratch_buf_ = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
+            if (palette_out_buf_.IsNull() || world_scratch_buf_.IsNull()) {
+                CAIRNS_PRINT("GreaterInit: anim_eval persistent buffers alloc failed\n");
+                return false;
+            }
+        }
         if (!rhi_.frames.Init(rhi_.device)) {
             CAIRNS_PRINT("GreaterInit: frames.Init failed\n");
             return false;
@@ -1087,13 +1105,29 @@ public:
             return false;
         }
         initSkinKernel();  // best-effort; missing shader doesn't fail GreaterInit.
+        initAnimEvalKernel();  // best-effort; failure -> GPU palette eval off.
+        uploadAnimTablesGpu();  // flattens + uploads all scene tables.
         // #221 Phase 9 (vk): write the per-frame skin_group_b descriptors
         // ONCE here (kernel + pool both ready). Per-dispatch we just bind
         // with 3 dynamic byte offsets, avoiding VUID-03047 (set in use by
         // pending cmd) that fires when re-writing each frame. Metal: no-op.
+        // #221 Phase 5b: binding 1 (palettes) points at the persistent
+        // palette_out_buf_ written by anim_eval (instead of the kDynamic
+        // ring); the per-batch dynamic offset still selects the bucket's
+        // palette window. Skin kernel reads palette[off + j.x] unchanged.
         if (!skin_kernel_.IsNull() && !skin_output_pool_buffer_.IsNull()) {
             rhi_.frames.WriteSkinGroupBDescriptors(
-                rhi_.resources, rhi_.alloc, skin_output_pool_buffer_);
+                rhi_.resources, rhi_.alloc, skin_output_pool_buffer_,
+                anim_eval_tables_uploaded_ ? palette_out_buf_
+                                            : rhi::Handle<rhi::Buffer>{});
+        }
+        if (anim_eval_tables_uploaded_) {
+            rhi_.frames.WriteAnimEvalDescriptors(
+                rhi_.resources, rhi_.alloc,
+                scene_headers_buf_, ae_parent_buf_, ae_topo_buf_,
+                ae_bind_pose_buf_, ae_channels_buf_, ae_samplers_buf_,
+                ae_times_buf_, ae_values_buf_, ae_joint_nodes_buf_,
+                ae_inverse_binds_buf_, world_scratch_buf_, palette_out_buf_);
         }
         // #237 fix: globals + drawtmp DYNAMIC UBO descriptors point at
         // the master kDynamic buffer with sizeof(struct) range; per-pass
@@ -1974,23 +2008,47 @@ public:
                     b.WriteBuffer(pool);
                 },
                 [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
-                    // P9d translation: per batch, bump Params (16B UBO),
-                    // palettes (joint_count * 64B SSBO), InstanceMeta
-                    // (instance_count * 8B SSBO) into kDynamic and resolve
-                    // the mesh's pos + skin-attrs buffer handles + base
-                    // offsets. The recorder iterates the resulting
-                    // SkinDispatchBatch span.
+                    // #221 Phase 5b: dispatch anim_eval first to fill the
+                    // persistent palette_out_buf_ + world_scratch_buf_.
+                    // Then SkinDispatchBatch reads palettes from binding 1
+                    // pointing at palette_out_buf_, with per-batch dynamic
+                    // offset = batch.first_palette_mat4 * sizeof(mat4).
                     PerSlot& s2 = slots_[pkt.slot];
                     const uint32_t n_batches =
                         static_cast<uint32_t>(pkt.skin_batches.size());
                     if (n_batches == 0) {
                         return;
                     }
+                    const uint32_t ubo_align = rhi_.alloc.UboAlign();
+                    const uint32_t ssbo_align = rhi_.alloc.StorageAlign();
+                    // Upload ActorRecords into kDynamic; bind as DYNAMIC_UBO.
+                    const uint32_t n_actors =
+                        static_cast<uint32_t>(pkt.actor_records.size());
+                    if (n_actors > 0 && !anim_eval_kernel_.IsNull() &&
+                        anim_eval_tables_uploaded_) {
+                        const uint32_t records_bytes = n_actors *
+                            static_cast<uint32_t>(sizeof(cairns::GpuActorRecord));
+                        uint32_t records_off = 0;
+                        void* records_ptr = rhi_.alloc.BumpAllocate(
+                            records_bytes, ubo_align,
+                            rhi::Memory::kDynamic, &records_off);
+                        if (records_ptr) {
+                            memcpy(records_ptr, pkt.actor_records.data(),
+                                   records_bytes);
+                            cmd.DispatchAnimEval(
+                                rhi_.resources, rhi_.alloc, anim_eval_kernel_,
+                                scene_headers_buf_, ae_parent_buf_,
+                                ae_topo_buf_, ae_bind_pose_buf_,
+                                ae_channels_buf_, ae_samplers_buf_,
+                                ae_times_buf_, ae_values_buf_,
+                                ae_joint_nodes_buf_, ae_inverse_binds_buf_,
+                                world_scratch_buf_, palette_out_buf_,
+                                records_off, n_actors);
+                        }
+                    }
                     rhi::SkinDispatchBatch* dbatches =
                         s2.arena.AllocateArray<rhi::SkinDispatchBatch>(
                             n_batches);
-                    const uint32_t ubo_align = rhi_.alloc.UboAlign();
-                    const uint32_t ssbo_align = rhi_.alloc.StorageAlign();
                     for (uint32_t bi = 0; bi < n_batches; ++bi) {
                         const cairns::SkinBatchGpu& sbg =
                             pkt.skin_batches[bi];
@@ -2023,28 +2081,13 @@ public:
                         }
                         memcpy(params_ptr, &params, sizeof(SkinParamsCpu));
 
-                        // Per-batch palette window: joint_count = (next batch's
-                        // first_palette_mat4 - this one) or remaining for last.
-                        const uint32_t pal_start = sbg.first_palette_mat4;
-                        const uint32_t pal_end =
-                            (bi + 1 < n_batches)
-                                ? pkt.skin_batches[bi + 1].first_palette_mat4
-                                : static_cast<uint32_t>(
-                                      pkt.palettes.size());
-                        const uint32_t pal_count =
-                            (pal_end > pal_start) ? (pal_end - pal_start)
-                                                  : 0;
-                        uint32_t pal_bytes = pal_count *
+                        // #221 Phase 5b: palettes live in palette_out_buf_;
+                        // per-batch dynamic offset selects the bucket window
+                        // in mat4 stride. instance_meta.x stays
+                        // bucket-relative (cursor * joint_count).
+                        const uint32_t pal_off =
+                            sbg.first_palette_mat4 *
                             static_cast<uint32_t>(sizeof(glm::mat4));
-                        uint32_t pal_off = 0;
-                        void* pal_ptr = rhi_.alloc.BumpAllocate(
-                            pal_bytes ? pal_bytes : 64u, ssbo_align,
-                            rhi::Memory::kDynamic, &pal_off);
-                        if (pal_bytes > 0 && pal_ptr) {
-                            memcpy(pal_ptr,
-                                   pkt.palettes.data() + pal_start,
-                                   pal_bytes);
-                        }
                         // InstanceMeta window for this batch.
                         const uint32_t meta_start = sbg.first_meta;
                         const uint32_t meta_count = sbg.instance_count;
@@ -2074,6 +2117,7 @@ public:
                         db.params_byte_offset = params_off;
                         db.palettes_byte_offset = pal_off;
                         db.instance_meta_byte_offset = meta_off;
+                        db.palette_buffer = palette_out_buf_;
                         db.workgroups = sbg.workgroups;
                         db.instance_count = sbg.instance_count;
                     }
@@ -2584,8 +2628,12 @@ public:
         s.pkt.skin_batches = std::span<const cairns::SkinBatchGpu>{};
         s.pkt.palettes = std::span<const glm::mat4>{};
         s.pkt.instance_meta = std::span<const glm::uvec2>{};
+        s.pkt.actor_records = std::span<const cairns::GpuActorRecord>{};
 
         if (skin_kernel_.IsNull() || skin_output_pool_buffer_.IsNull()) {
+            return;
+        }
+        if (anim_eval_kernel_.IsNull() || !anim_eval_tables_uploaded_) {
             return;
         }
         cairns::World::Cold* wc = worlds_.GetCold(active_world_);
@@ -2672,10 +2720,12 @@ public:
             return;
         }
 
-        glm::mat4* palettes =
-            s.arena.AllocateArray<glm::mat4>(palette_running);
         glm::uvec2* instance_meta =
             s.arena.AllocateArray<glm::uvec2>(meta_running);
+        cairns::GpuActorRecord* actor_records =
+            s.arena.AllocateArray<cairns::GpuActorRecord>(meta_running);
+
+        constexpr uint32_t kAnimMaxNodesPerScene = 256u;
 
         const float anim_t = static_cast<float>(sim_frame_) *
                               static_cast<float>(cairns::kFixedDt);
@@ -2695,95 +2745,197 @@ public:
             }
             cairns::SkinBatchGpu& b = batches[bi];
             cairns::Scene::Hot* shot = scenes_.GetHot(sc->scene);
-            cairns::Scene::Cold* scold = scenes_.GetCold(sc->scene);
-            if (!shot || !scold) {
+            if (!shot) {
                 continue;
             }
-            if (sc->skin_index >= scold->skins.size()) {
+            if (shot->gpu_scene_header_idx == UINT32_MAX) {
                 continue;
             }
-            const cairns::Skin& skin = scold->skins[sc->skin_index];
-            const cairns::Mesh::Hot* mhot = meshes_.GetHot(sh->mesh);
-            const cairns::Mesh::Cold* mcold = meshes_.GetCold(sh->mesh);
-            if (!mhot || !mcold) {
-                continue;
-            }
-            const uint32_t n_nodes =
-                static_cast<uint32_t>(scold->nodes.size());
-            if (n_nodes == 0) {
-                continue;
-            }
-
-            const auto mark = s.arena.Mark();
-            cairns::AnimatedTRS* trs =
-                s.arena.AllocateArray<cairns::AnimatedTRS>(n_nodes);
-            glm::mat4* local_xforms =
-                s.arena.AllocateArray<glm::mat4>(n_nodes);
-            glm::mat4* world_out =
-                s.arena.AllocateArray<glm::mat4>(n_nodes);
-
-            if (scold->bind_pose.size() == n_nodes) {
-                std::memcpy(trs, scold->bind_pose.data(),
-                            sizeof(cairns::AnimatedTRS) * n_nodes);
-            } else {
-                for (uint32_t i = 0; i < n_nodes; ++i) {
-                    trs[i] = cairns::DecomposeNodeLocal(scold->nodes[i]);
-                }
-            }
-            if (sh->clip_index >= 0 &&
-                sh->clip_index <
-                    static_cast<int32_t>(scold->clips.size())) {
-                const cairns::Clip& clip = scold->clips[sh->clip_index];
-                const float t = anim_t * sh->time_scale + sh->time_offset;
-                cairns::SampleClip(
-                    clip, t,
-                    std::span<cairns::AnimatedTRS>(trs, n_nodes));
-            }
-            for (uint32_t i = 0; i < n_nodes; ++i) {
-                local_xforms[i] = cairns::ComposeTRS(trs[i]);
-            }
-            cairns::ComputeNodeWorldMatrices(
-                scold->nodes,
-                std::span<const int32_t>(shot->rootNodes.data(),
-                                          shot->rootNodes.size()),
-                std::span<const glm::mat4>(local_xforms, n_nodes),
-                std::span<glm::mat4>(world_out, n_nodes),
-                s.arena);
-
-            glm::mat4 mesh_node_world = glm::mat4(1.0f);
-            for (uint32_t i = 0; i < n_nodes; ++i) {
-                const cairns::Node& nd = scold->nodes[i];
-                if (nd.meshIndex >= 0 &&
-                    nd.skinIndex ==
-                        static_cast<int32_t>(sc->skin_index)) {
-                    mesh_node_world = world_out[i];
-                    break;
-                }
-            }
-            const glm::mat4 mesh_node_world_inv =
-                glm::inverse(mesh_node_world);
             const uint32_t cursor = bucket_inst_cursor[bi];
+            const uint32_t actor_idx = b.first_meta + cursor;
             const uint32_t palette_slot_base =
                 b.first_palette_mat4 + cursor * b.joint_count;
-            cairns::ComputeSkinningPalette(
-                skin,
-                std::span<const glm::mat4>(world_out, n_nodes),
-                mesh_node_world_inv,
-                std::span<glm::mat4>(palettes + palette_slot_base,
-                                      sh->joint_count));
 
-            instance_meta[b.first_meta + cursor] =
+            instance_meta[actor_idx] =
                 glm::uvec2(cursor * b.joint_count, sh->slice.offset);
+
+            cairns::GpuActorRecord& rec = actor_records[actor_idx];
+            rec.scene_idx = shot->gpu_scene_header_idx;
+            rec.world_scratch_base = actor_idx * kAnimMaxNodesPerScene;
+            rec.palette_out_base = palette_slot_base;
+            rec.time = anim_t * sh->time_scale + sh->time_offset;
+
             ++bucket_inst_cursor[bi];
-            s.arena.Rewind(mark);
         }
 
-        s.pkt.palettes =
-            std::span<const glm::mat4>(palettes, palette_running);
         s.pkt.instance_meta =
             std::span<const glm::uvec2>(instance_meta, meta_running);
+        s.pkt.actor_records =
+            std::span<const cairns::GpuActorRecord>(actor_records, meta_running);
         s.pkt.skin_batches =
             std::span<const cairns::SkinBatchGpu>(batches, bucket_count);
+    }
+
+    void initAnimEvalKernel() {
+        const char* base = SDL_GetBasePath();
+        const std::string shader_dir = base ? base : "";
+        rhi::ComputePipelineDesc desc{};
+        desc.logical_shader = "anim_eval";
+        desc.shader_dir = shader_dir.c_str();
+        desc.debug_name = "anim_eval";
+        desc.layout = rhi::ComputePipelineLayout::kAnimEval;
+        anim_eval_kernel_ = rhi_.pipelines.CreateComputePipeline(
+            rhi_.resources, rhi_.frames, desc);
+        if (anim_eval_kernel_.IsNull()) {
+            CAIRNS_PRINT("initAnimEvalKernel: load failed -- gpu palette eval disabled\n");
+        }
+    }
+
+    // #221 Phase 5b: flatten every loaded scene's animation tables into
+    // shared kDefault SSBOs and stamp per-scene base offsets into the
+    // scene_headers SSBO. Called ONCE after all scenes are loaded. Bumps
+    // anim_eval_tables_uploaded_ = true on success.
+    void uploadAnimTablesGpu() {
+        if (anim_eval_kernel_.IsNull()) {
+            return;
+        }
+        const auto& scene_ids = scene_ids_;
+        if (scene_ids.empty()) {
+            return;
+        }
+        std::vector<cairns::GpuSceneHeader> headers;
+        headers.reserve(scene_ids.size());
+        std::vector<int32_t> parent_flat;
+        std::vector<int32_t> topo_flat;
+        std::vector<cairns::GpuTRS> bind_pose_flat;
+        std::vector<cairns::GpuChannel> channels_flat;
+        std::vector<cairns::GpuSampler> samplers_flat;
+        std::vector<float> times_flat;
+        std::vector<glm::vec4> values_flat;
+        std::vector<int32_t> joint_nodes_flat;
+        std::vector<glm::mat4> inverse_binds_flat;
+        for (cairns::SceneId sid : scene_ids) {
+            cairns::Scene::Hot* hot = scenes_.GetHot(sid);
+            cairns::Scene::Cold* cold = scenes_.GetCold(sid);
+            if (!hot || !cold) {
+                continue;
+            }
+            if (cold->skins.empty() || cold->clips.empty() ||
+                cold->nodes.empty()) {
+                hot->gpu_scene_header_idx = UINT32_MAX;
+                continue;
+            }
+            cairns::GpuSceneHeader sh{};
+            sh.node_count = static_cast<uint32_t>(cold->nodes.size());
+            sh.joint_count = static_cast<uint32_t>(cold->gpu_joint_nodes.size());
+            sh.channel_count = static_cast<uint32_t>(cold->gpu_channels.size());
+            sh.sampler_count = static_cast<uint32_t>(cold->gpu_samplers.size());
+            sh.parent_off = static_cast<uint32_t>(parent_flat.size());
+            sh.topo_off = static_cast<uint32_t>(topo_flat.size());
+            sh.bind_pose_off = static_cast<uint32_t>(bind_pose_flat.size());
+            sh.channel_off = static_cast<uint32_t>(channels_flat.size());
+            sh.sampler_off = static_cast<uint32_t>(samplers_flat.size());
+            sh.times_off = static_cast<uint32_t>(times_flat.size());
+            sh.values_off = static_cast<uint32_t>(values_flat.size());
+            sh.joint_nodes_off = static_cast<uint32_t>(joint_nodes_flat.size());
+            sh.inverse_binds_off = static_cast<uint32_t>(inverse_binds_flat.size());
+            sh.mesh_node = cold->gpu_mesh_node;
+            sh.duration = cold->gpu_clip_duration;
+            const uint32_t local_times_base = sh.times_off;
+            const uint32_t local_values_base = sh.values_off;
+            parent_flat.insert(parent_flat.end(), cold->gpu_parent.begin(),
+                                cold->gpu_parent.end());
+            topo_flat.insert(topo_flat.end(), cold->gpu_topo.begin(),
+                              cold->gpu_topo.end());
+            bind_pose_flat.insert(bind_pose_flat.end(),
+                                    cold->gpu_bind_pose.begin(),
+                                    cold->gpu_bind_pose.end());
+            channels_flat.insert(channels_flat.end(),
+                                  cold->gpu_channels.begin(),
+                                  cold->gpu_channels.end());
+            for (cairns::GpuSampler gs : cold->gpu_samplers) {
+                gs.times_off += local_times_base;
+                gs.values_off += local_values_base;
+                samplers_flat.push_back(gs);
+            }
+            times_flat.insert(times_flat.end(), cold->gpu_times.begin(),
+                               cold->gpu_times.end());
+            values_flat.insert(values_flat.end(), cold->gpu_values.begin(),
+                                cold->gpu_values.end());
+            joint_nodes_flat.insert(joint_nodes_flat.end(),
+                                     cold->gpu_joint_nodes.begin(),
+                                     cold->gpu_joint_nodes.end());
+            inverse_binds_flat.insert(inverse_binds_flat.end(),
+                                       cold->gpu_inverse_binds.begin(),
+                                       cold->gpu_inverse_binds.end());
+            hot->gpu_scene_header_idx = static_cast<uint32_t>(headers.size());
+            headers.push_back(sh);
+        }
+        if (headers.empty()) {
+            return;
+        }
+        auto upload = [&](const void* data, size_t bytes,
+                          rhi::Handle<rhi::Buffer>& out) -> bool {
+            if (bytes == 0) {
+                bytes = 16;
+            }
+            rhi::BufferDesc bd{};
+            bd.byte_size = static_cast<uint32_t>(bytes);
+            bd.usage = rhi::kUsageStorage;
+            bd.memory = rhi::Memory::kDefault;
+            out = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
+            if (out.IsNull()) {
+                return false;
+            }
+            if (data) {
+                rhi_.resources.UploadBuffer(
+                    rhi_.alloc, out, 0,
+                    std::span<const uint8_t>(
+                        static_cast<const uint8_t*>(data), bytes));
+            }
+            return true;
+        };
+        if (!upload(headers.data(),
+                    headers.size() * sizeof(cairns::GpuSceneHeader),
+                    scene_headers_buf_) ||
+            !upload(parent_flat.data(),
+                    parent_flat.size() * sizeof(int32_t),
+                    ae_parent_buf_) ||
+            !upload(topo_flat.data(),
+                    topo_flat.size() * sizeof(int32_t),
+                    ae_topo_buf_) ||
+            !upload(bind_pose_flat.data(),
+                    bind_pose_flat.size() * sizeof(cairns::GpuTRS),
+                    ae_bind_pose_buf_) ||
+            !upload(channels_flat.empty() ? nullptr : channels_flat.data(),
+                    channels_flat.size() * sizeof(cairns::GpuChannel),
+                    ae_channels_buf_) ||
+            !upload(samplers_flat.empty() ? nullptr : samplers_flat.data(),
+                    samplers_flat.size() * sizeof(cairns::GpuSampler),
+                    ae_samplers_buf_) ||
+            !upload(times_flat.empty() ? nullptr : times_flat.data(),
+                    times_flat.size() * sizeof(float),
+                    ae_times_buf_) ||
+            !upload(values_flat.empty() ? nullptr : values_flat.data(),
+                    values_flat.size() * sizeof(glm::vec4),
+                    ae_values_buf_) ||
+            !upload(joint_nodes_flat.data(),
+                    joint_nodes_flat.size() * sizeof(int32_t),
+                    ae_joint_nodes_buf_) ||
+            !upload(inverse_binds_flat.data(),
+                    inverse_binds_flat.size() * sizeof(glm::mat4),
+                    ae_inverse_binds_buf_)) {
+            return;
+        }
+        anim_eval_tables_uploaded_ = true;
+        CAIRNS_PRINT("uploadAnimTablesGpu: %zu scenes, parent=%zu topo=%zu "
+                     "bind_pose=%zu channels=%zu samplers=%zu times=%zu "
+                     "values=%zu joint_nodes=%zu inverse_binds=%zu\n",
+                     headers.size(), parent_flat.size(), topo_flat.size(),
+                     bind_pose_flat.size(), channels_flat.size(),
+                     samplers_flat.size(), times_flat.size(),
+                     values_flat.size(), joint_nodes_flat.size(),
+                     inverse_binds_flat.size());
     }
 
     // #221 Phase 4: best-effort load of skin compute kernel. Failing the
@@ -3043,6 +3195,25 @@ private:
     cairns::ResourceManager<cairns::SkinnedAttachment> skins_;
     rhi::Handle<rhi::Buffer> skin_output_pool_buffer_;
     cairns::RangePool skin_output_pool_;
+
+    // #221 Phase 5b: GPU palette evaluation buffers + kernel. Scene-table
+    // SSBOs are shared across all scenes with per-scene base offsets stored
+    // in SceneHeader entries. World scratch + palette output are
+    // actors_cap-sized (1024 * 256 mat4 = 16 MB each).
+    rhi::Handle<rhi::Kernel> anim_eval_kernel_;
+    rhi::Handle<rhi::Buffer> scene_headers_buf_;
+    rhi::Handle<rhi::Buffer> ae_parent_buf_;
+    rhi::Handle<rhi::Buffer> ae_topo_buf_;
+    rhi::Handle<rhi::Buffer> ae_bind_pose_buf_;
+    rhi::Handle<rhi::Buffer> ae_channels_buf_;
+    rhi::Handle<rhi::Buffer> ae_samplers_buf_;
+    rhi::Handle<rhi::Buffer> ae_times_buf_;
+    rhi::Handle<rhi::Buffer> ae_values_buf_;
+    rhi::Handle<rhi::Buffer> ae_joint_nodes_buf_;
+    rhi::Handle<rhi::Buffer> ae_inverse_binds_buf_;
+    rhi::Handle<rhi::Buffer> world_scratch_buf_;
+    rhi::Handle<rhi::Buffer> palette_out_buf_;
+    bool anim_eval_tables_uploaded_ = false;
 
     // Per-slot frame buffers (drawList / drawListSorted / proxies /
     // resident_textures / draw_world_matrices / pending_globals / globals_offset

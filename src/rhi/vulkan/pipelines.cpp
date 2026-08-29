@@ -207,6 +207,9 @@ VkShaderFiles resolve_vk_shader(const char* logical) {
         // #221 Phase 4: skin compute kernel (no vert/frag).
         return {nullptr, nullptr, "skin.comp.spv"};
     }
+    if (std::strcmp(logical, "anim_eval") == 0) {
+        return {nullptr, nullptr, "anim_eval.comp.spv"};
+    }
     return {"particle.vert.spv", "particle.frag.spv", "particle.comp.spv"};
 }
 
@@ -558,6 +561,8 @@ Handle<Kernel> Pipelines::CreateComputePipeline(
         compute_layouts[0] = frames.plat.skin_group_b_layout_;
         compute_layouts[1] = frames.plat.skin_group_a_layout_;
         set_count = 2;
+    } else if (desc.layout == ComputePipelineLayout::kAnimEval) {
+        compute_layouts[0] = frames.plat.anim_eval_layout_;
     } else {
         compute_layouts[0] = frames.plat.compute_layout_;
     }

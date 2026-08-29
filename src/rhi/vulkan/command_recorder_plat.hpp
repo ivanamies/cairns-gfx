@@ -82,6 +82,9 @@ struct CommandRecorderPlat {
     // InstanceMeta as DYNAMIC + OutputPool whole). Frames::Begin publishes
     // this from FramesPlat::skin_group_b_sets_[current_frame_].
     VkDescriptorSet skin_group_b_set_ = VK_NULL_HANDLE;
+    // #221 Phase 5b: per-frame anim_eval set (13 bindings; see
+    // assets/anim_eval.comp.glsl). Published from FramesPlat::anim_eval_sets_.
+    VkDescriptorSet anim_eval_set_ = VK_NULL_HANDLE;
     VkDescriptorSet point_set_ = VK_NULL_HANDLE;
     // Composite descriptor ring for DrawFullscreen (multiple per-pass draws
     // with distinct textures). Advanced by composite_next_idx_ on each

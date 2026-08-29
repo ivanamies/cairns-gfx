@@ -108,6 +108,10 @@ struct SkinDispatchBatch {
     uint32_t params_byte_offset = 0;       // dynamic offset for Group B binding 0
     uint32_t palettes_byte_offset = 0;     // dynamic offset for Group B binding 1
     uint32_t instance_meta_byte_offset = 0; // dynamic offset for Group B binding 2
+    // #221 Phase 5b: Metal-only: when non-null, binding 1 (palettes) points
+    // at this persistent buffer instead of the kDynamic ring. Vulkan picks
+    // this up via Frames::WriteSkinGroupBDescriptors(palette_buf) at init.
+    Handle<Buffer> palette_buffer;
     uint32_t workgroups = 0;                // workgroups along X axis (per instance)
     uint32_t instance_count = 1;            // dispatched along Y axis
 };
@@ -127,6 +131,28 @@ public:
                               Handle<Kernel> kernel,
                               Handle<Buffer> output_pool_buffer,
                               std::span<const SkinDispatchBatch> batches);
+    // #221 Phase 5b: dispatch anim_eval (one workgroup per actor; 64 threads
+    // per workgroup). Persistent scene-table SSBOs + actor_records dynUBO are
+    // bound through the anim_eval descriptor set on vk and directly as
+    // buffers on Metal. records_byte_offset selects this frame's slice in
+    // the kDynamic ring (vk); records_buffer / records_byte_offset together
+    // are read by Metal directly.
+    void DispatchAnimEval(Resources& res, Allocator& alloc,
+                          Handle<Kernel> kernel,
+                          Handle<Buffer> scene_headers,
+                          Handle<Buffer> parent_buf,
+                          Handle<Buffer> topo_buf,
+                          Handle<Buffer> bind_pose_buf,
+                          Handle<Buffer> channels_buf,
+                          Handle<Buffer> samplers_buf,
+                          Handle<Buffer> times_buf,
+                          Handle<Buffer> values_buf,
+                          Handle<Buffer> joint_nodes_buf,
+                          Handle<Buffer> inverse_binds_buf,
+                          Handle<Buffer> world_scratch,
+                          Handle<Buffer> palette_out,
+                          uint32_t records_byte_offset,
+                          uint32_t actor_count);
     void BeginRenderPass(Resources& res, const SwapResolveTarget& target,
                           const RenderPassDesc& desc);
     void DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list);

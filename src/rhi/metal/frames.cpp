@@ -132,9 +132,28 @@ void Frames::OnSurfaceResize() {}
 
 void Frames::WriteSkinGroupBDescriptors(Resources& /*resources*/,
                                           Allocator& /*alloc*/,
-                                          Handle<Buffer> /*output_pool*/) {
+                                          Handle<Buffer> /*output_pool*/,
+                                          Handle<Buffer> /*palette_buf*/) {
     // Metal: compute path binds buffers directly per batch via
     // setBuffer:offset:atIndex: in DispatchSkinBatches; no Group B set.
+}
+
+void Frames::WriteAnimEvalDescriptors(
+    Resources& /*resources*/, Allocator& /*alloc*/,
+    Handle<Buffer> /*scene_headers*/,
+    Handle<Buffer> /*parent_buf*/,
+    Handle<Buffer> /*topo_buf*/,
+    Handle<Buffer> /*bind_pose_buf*/,
+    Handle<Buffer> /*channels_buf*/,
+    Handle<Buffer> /*samplers_buf*/,
+    Handle<Buffer> /*times_buf*/,
+    Handle<Buffer> /*values_buf*/,
+    Handle<Buffer> /*joint_nodes_buf*/,
+    Handle<Buffer> /*inverse_binds_buf*/,
+    Handle<Buffer> /*world_scratch*/,
+    Handle<Buffer> /*palette_out*/) {
+    // Metal: compute path binds buffers directly per dispatch via
+    // setBuffer:offset:atIndex: in DispatchAnimEval; no descriptor set.
 }
 
 void Frames::WriteUnlitDescriptors(Resources& /*resources*/,

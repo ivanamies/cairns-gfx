@@ -396,6 +396,7 @@ struct GraphicsPipelineDesc {
 enum class ComputePipelineLayout : uint8_t {
     kParticle = 0,
     kSkin = 1,
+    kAnimEval = 2,
 };
 
 struct ComputePipelineDesc {

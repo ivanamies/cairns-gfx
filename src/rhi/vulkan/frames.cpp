@@ -289,6 +289,30 @@ bool Frames::Init(Device& device) {
                 return false;
             }
         }
+        {  // #221 Phase 5b -- anim_eval set layout (13 bindings; see
+           // assets/anim_eval.comp.glsl). One DYNAMIC_UBO for actor records,
+           // 12 SSBOs for scene tables + scratch + palette out.
+            VkDescriptorSetLayoutBinding b[13]{};
+            b[0].binding = 0;
+            b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+            for (uint32_t i = 1; i < 13; ++i) {
+                b[i].binding = i;
+                b[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            }
+            for (uint32_t i = 0; i < 13; ++i) {
+                b[i].descriptorCount = 1;
+                b[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            }
+            VkDescriptorSetLayoutCreateInfo li{};
+            li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            li.bindingCount = 13;
+            li.pBindings = b;
+            if (vkCreateDescriptorSetLayout(dev, &li, nullptr,
+                                            &plat.anim_eval_layout_) !=
+                VK_SUCCESS) {
+                return false;
+            }
+        }
         {  // #221 Skinning Phase 4 -- Group A (per-mesh). Set 1 of the
            // skin kernel: SSBO positions slice @ 0, SSBO skin-attrs slice
            // @ 1. Built at load via Resources::CreateBindGroup; one set
@@ -378,10 +402,12 @@ bool Frames::Init(Device& device) {
         sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         // #221 Phase 9 (vk): + skin Group A (2 SSBO per skinned mesh,
         // independent of frame-in-flight count; 1024 budget per plan v7).
+        // #221 Phase 5b (vk): + anim_eval (12 SSBO per frame-in-flight).
         sizes[1].descriptorCount =
-            2 * n * kMaxStepsPerFrame + n + 2 * kMaxSkinnedMeshes;
+            2 * n * kMaxStepsPerFrame + n + 2 * kMaxSkinnedMeshes + 12 * n;
         sizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        sizes[2].descriptorCount = 2 * n + n;
+        // #221 Phase 5b: + anim_eval ActorRecord (1 dynUBO per frame-in-flight).
+        sizes[2].descriptorCount = 2 * n + n + n;
         sizes[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         // 3 bindings per composite set (#207 outline shares the layout:
         // color + id + highlights).
@@ -397,7 +423,7 @@ bool Frames::Init(Device& device) {
         // (kCompositeRingSize) + skin_group_b (1) per slot. Plus skin
         // Group A: one set per loaded skinned mesh (1024 budget).
         pci.maxSets = 3 * n + n * kMaxStepsPerFrame +
-                       n * kCompositeRingSize + n + kMaxSkinnedMeshes;
+                       n * kCompositeRingSize + n + kMaxSkinnedMeshes + n;
         if (vkCreateDescriptorPool(dev, &pci, nullptr, &plat.descriptor_pool_) !=
             VK_SUCCESS) {
             return false;
@@ -417,7 +443,8 @@ bool Frames::Init(Device& device) {
         if (!alloc_sets(plat.point_layout_, plat.point_sets_) ||
             !alloc_sets(plat.globals_set_layout_, plat.globals_sets_) ||
             !alloc_sets(plat.drawtmp_set_layout_, plat.drawtmp_sets_) ||
-            !alloc_sets(plat.skin_group_b_layout_, plat.skin_group_b_sets_)) {
+            !alloc_sets(plat.skin_group_b_layout_, plat.skin_group_b_sets_) ||
+            !alloc_sets(plat.anim_eval_layout_, plat.anim_eval_sets_)) {
             return false;
         }
         plat.compute_sets_.resize(n);
@@ -499,6 +526,9 @@ void Frames::Deinit() {
     if (plat.skin_group_a_layout_) {
         vkDestroyDescriptorSetLayout(dev, plat.skin_group_a_layout_, nullptr);
     }
+    if (plat.anim_eval_layout_) {
+        vkDestroyDescriptorSetLayout(dev, plat.anim_eval_layout_, nullptr);
+    }
     if (plat.point_layout_) {
         vkDestroyDescriptorSetLayout(dev, plat.point_layout_, nullptr);
     }
@@ -562,7 +592,8 @@ void Frames::WriteUnlitDescriptors(Resources& resources, Allocator& alloc) {
 
 void Frames::WriteSkinGroupBDescriptors(Resources& resources,
                                           Allocator& alloc,
-                                          Handle<Buffer> output_pool) {
+                                          Handle<Buffer> output_pool,
+                                          Handle<Buffer> palette_buf) {
     if (plat.skin_group_b_sets_.empty() || output_pool.IsNull()) {
         return;
     }
@@ -574,6 +605,19 @@ void Frames::WriteSkinGroupBDescriptors(Resources& resources,
     if (dyn_master == VK_NULL_HANDLE || pool_buf == VK_NULL_HANDLE) {
         return;
     }
+    // #221 Phase 5b: when palette_buf is non-null, binding 1 (palettes) points
+    // at the persistent palette_out_buf_ (written by anim_eval) instead of
+    // the kDynamic ring; the per-batch dynamic offset still selects the
+    // bucket-relative palette window in mat4 stride.
+    VkBuffer palette_target = dyn_master;
+    uint32_t palette_master_off = 0;
+    if (!palette_buf.IsNull()) {
+        VkBuffer pal = resources.plat.GetVkBuffer(alloc, palette_buf,
+                                                    &palette_master_off);
+        if (pal != VK_NULL_HANDLE) {
+            palette_target = pal;
+        }
+    }
     for (VkDescriptorSet set : plat.skin_group_b_sets_) {
         if (set == VK_NULL_HANDLE) {
             continue;
@@ -583,8 +627,8 @@ void Frames::WriteSkinGroupBDescriptors(Resources& resources,
         bi[0].buffer = dyn_master;
         bi[0].offset = 0;
         bi[0].range = 64u;
-        bi[1].buffer = dyn_master;
-        bi[1].offset = 0;
+        bi[1].buffer = palette_target;
+        bi[1].offset = palette_master_off;
         bi[1].range = 65536u;
         bi[2].buffer = dyn_master;
         bi[2].offset = 0;
@@ -604,6 +648,74 @@ void Frames::WriteSkinGroupBDescriptors(Resources& resources,
         w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
         w[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         vkUpdateDescriptorSets(plat.device_, 4, w, 0, nullptr);
+    }
+}
+
+void Frames::WriteAnimEvalDescriptors(
+    Resources& resources, Allocator& alloc,
+    Handle<Buffer> scene_headers,
+    Handle<Buffer> parent_buf,
+    Handle<Buffer> topo_buf,
+    Handle<Buffer> bind_pose_buf,
+    Handle<Buffer> channels_buf,
+    Handle<Buffer> samplers_buf,
+    Handle<Buffer> times_buf,
+    Handle<Buffer> values_buf,
+    Handle<Buffer> joint_nodes_buf,
+    Handle<Buffer> inverse_binds_buf,
+    Handle<Buffer> world_scratch,
+    Handle<Buffer> palette_out) {
+    if (plat.anim_eval_sets_.empty()) {
+        return;
+    }
+    VkBuffer dyn_master =
+        resources.plat.GetVkBumpMasterBuffer(alloc, Memory::kDynamic);
+    if (dyn_master == VK_NULL_HANDLE) {
+        return;
+    }
+    Handle<Buffer> ssbo_handles[12] = {
+        scene_headers, parent_buf, topo_buf, bind_pose_buf,
+        channels_buf, samplers_buf, times_buf, values_buf,
+        joint_nodes_buf, inverse_binds_buf, world_scratch, palette_out,
+    };
+    uint32_t ssbo_offs[12]{};
+    VkBuffer ssbo_bufs[12]{};
+    for (uint32_t i = 0; i < 12; ++i) {
+        if (ssbo_handles[i].IsNull()) {
+            return;
+        }
+        ssbo_bufs[i] =
+            resources.plat.GetVkBuffer(alloc, ssbo_handles[i], &ssbo_offs[i]);
+        if (ssbo_bufs[i] == VK_NULL_HANDLE) {
+            return;
+        }
+    }
+    for (VkDescriptorSet set : plat.anim_eval_sets_) {
+        if (set == VK_NULL_HANDLE) {
+            continue;
+        }
+        VkDescriptorBufferInfo bi[13]{};
+        VkWriteDescriptorSet w[13]{};
+        bi[0].buffer = dyn_master;
+        bi[0].offset = 0;
+        // ActorRecord size 16 B; max kAnimActorsCap = 1024 records => 16 KB.
+        bi[0].range = 16384u;
+        for (uint32_t i = 0; i < 12; ++i) {
+            bi[1 + i].buffer = ssbo_bufs[i];
+            bi[1 + i].offset = ssbo_offs[i];
+            bi[1 + i].range = VK_WHOLE_SIZE;
+        }
+        for (uint32_t i = 0; i < 13; ++i) {
+            w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[i].dstSet = set;
+            w[i].dstBinding = i;
+            w[i].descriptorCount = 1;
+            w[i].pBufferInfo = &bi[i];
+            w[i].descriptorType = (i == 0)
+                ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
+                : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        }
+        vkUpdateDescriptorSets(plat.device_, 13, w, 0, nullptr);
     }
 }
 
@@ -712,6 +824,7 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     fc.cmd.plat.drawtmp_set_ = plat.drawtmp_sets_[cf];
     fc.cmd.plat.compute_sets_ = plat.compute_sets_[cf];
     fc.cmd.plat.skin_group_b_set_ = plat.skin_group_b_sets_[cf];
+    fc.cmd.plat.anim_eval_set_ = plat.anim_eval_sets_[cf];
     fc.cmd.plat.point_set_ = plat.point_sets_[cf];
     fc.cmd.plat.composite_sets_ = plat.composite_sets_[cf];
     fc.cmd.plat.composite_next_idx_ = 0;

@@ -11,6 +11,7 @@
 #include "rhi/resources.hpp"
 #include "util/draw.hpp"
 #include "util/draw_key.hpp"
+#include "util/gpu_anim_types.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -65,6 +66,9 @@ struct FramePacket {
     std::span<const SkinBatchGpu> skin_batches;
     std::span<const glm::mat4> palettes;       // flat array; per-actor slabs
     std::span<const glm::uvec2> instance_meta;  // {palette_off_mat4s, output_off_vec4s}
+    // #221 Phase 5b: per-actor records consumed by anim_eval.comp. Empty
+    // when the GPU palette path is off (palettes span is used instead).
+    std::span<const GpuActorRecord> actor_records;
 
     uint32_t sim_steps_this_frame = 0;
     float fixed_dt = 1.0f / 60.0f;

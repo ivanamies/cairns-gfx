@@ -75,7 +75,14 @@ void CommandRecorder::DispatchSkinBatches(
             continue;
         }
         cenc->setBuffer(dyn_master, b.params_byte_offset, 0);
-        cenc->setBuffer(dyn_master, b.palettes_byte_offset, 1);
+        if (b.palette_buffer.IsNull()) {
+            cenc->setBuffer(dyn_master, b.palettes_byte_offset, 1);
+        } else {
+            uint32_t pal_master_off = 0;
+            MTL::Buffer* pal_buf =
+                res.plat.GetMtlBuffer(alloc, b.palette_buffer, &pal_master_off);
+            cenc->setBuffer(pal_buf, pal_master_off + b.palettes_byte_offset, 1);
+        }
         cenc->setBuffer(dyn_master, b.instance_meta_byte_offset, 2);
         cenc->setBuffer(pool_buf, pool_master_off, 3);
         uint32_t pos_master_off = 0;
@@ -89,6 +96,57 @@ void CommandRecorder::DispatchSkinBatches(
         cenc->dispatchThreadgroups(MTL::Size{b.workgroups, b.instance_count, 1u},
                                     MTL::Size{64u, 1u, 1u});
     }
+    cenc->endEncoding();
+}
+
+// #221 Phase 5b: Metal mirror of DispatchAnimEval. One workgroup per actor,
+// 64 threads. setBuffer all 13 buffers + setThreadgroupMemoryLength for the
+// shared GpuTRS[256]. Encoder boundary acts as the compute->compute barrier;
+// the subsequent DispatchSkinBatches sees this kernel's writes via Metal's
+// implicit hazard tracking.
+void CommandRecorder::DispatchAnimEval(
+    Resources& res, Allocator& alloc, Handle<Kernel> kernel,
+    Handle<Buffer> scene_headers,
+    Handle<Buffer> parent_buf,
+    Handle<Buffer> topo_buf,
+    Handle<Buffer> bind_pose_buf,
+    Handle<Buffer> channels_buf,
+    Handle<Buffer> samplers_buf,
+    Handle<Buffer> times_buf,
+    Handle<Buffer> values_buf,
+    Handle<Buffer> joint_nodes_buf,
+    Handle<Buffer> inverse_binds_buf,
+    Handle<Buffer> world_scratch,
+    Handle<Buffer> palette_out,
+    uint32_t records_byte_offset,
+    uint32_t actor_count) {
+    if (kernel.IsNull() || actor_count == 0) {
+        return;
+    }
+    if (plat.cmd_ == nullptr) {
+        plat.cmd_ = plat.queue_->commandBuffer();
+    }
+    MTL::ComputeCommandEncoder* cenc = plat.cmd_->computeCommandEncoder();
+    cenc->setComputePipelineState(res.GetHot(kernel)->api_pso);
+    Handle<Buffer> hs[12] = {
+        scene_headers, parent_buf, topo_buf, bind_pose_buf,
+        channels_buf, samplers_buf, times_buf, values_buf,
+        joint_nodes_buf, inverse_binds_buf, world_scratch, palette_out,
+    };
+    {
+        MTL::Buffer* records_mtl =
+            res.plat.GetBumpMasterBuffer(alloc, Memory::kDynamic);
+        cenc->setBuffer(records_mtl, records_byte_offset, 0);
+    }
+    for (uint32_t i = 0; i < 12; ++i) {
+        uint32_t off = 0;
+        MTL::Buffer* b = res.plat.GetMtlBuffer(alloc, hs[i], &off);
+        cenc->setBuffer(b, off, 1 + i);
+    }
+    // GpuTRS = 48 B per node; 256 max nodes per scene = 12 KB shared.
+    cenc->setThreadgroupMemoryLength(256u * 48u, 0);
+    cenc->dispatchThreadgroups(MTL::Size{actor_count, 1u, 1u},
+                                MTL::Size{64u, 1u, 1u});
     cenc->endEncoding();
 }
 
