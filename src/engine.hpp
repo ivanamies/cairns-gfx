@@ -1063,21 +1063,6 @@ public:
             return 0;
         }
         auto& reg = wc->registry;
-        auto skin_view = reg.view<const cairns::SkinRef>();
-        for (auto e : skin_view) {
-            const cairns::SkinId sid = skin_view.get<const cairns::SkinRef>(e).id;
-            if (auto* sc = skins_.GetCold(sid)) {
-                if (sc->slice.IsValid()) {
-                    skin_output_pool_.Free(sc->slice);
-                }
-            }
-            if (auto* sh = skins_.GetHot(sid)) {
-                if (!sh->pos_stream.IsNull()) {
-                    rhi_.resources.buffers.Release(sh->pos_stream);
-                }
-            }
-            skins_.Release(sid);
-        }
         const uint32_t n =
             static_cast<uint32_t>(reg.storage<entt::entity>().size());
         reg.clear();

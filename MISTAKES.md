@@ -152,6 +152,25 @@ indexed by id?"** If not, the SECOND question is **"have I asked?"**
 There is no third question. Either the user explicitly approves the
 map, or I do not write it.
 
+## Committed without verifying (counter: 4)
+
+### Incident 4 — 2026-06-14 night, "fixed" 500 heroes without checking the window
+
+End-of-night #321 + #322 close: I committed the skin-pool / clip-
+selection fixes, took ONE 100-hero windowed dump showing animated
+heroes, and went straight to marking 320/321/322 completed in the
+task list. Next morning the user came back, asked for 500 heroes,
+spawnTotal(500) reported entities=500, prefabs=100, skin_eval +
+skinning_compute both nonzero -- and the window was EMPTY. Zero
+heroes on screen. Yesterday's "fixed" was for the 100-hero case I
+actually screenshotted; the 500 case I never re-tested in the
+windowed app after the restart-under-stdin path.
+
+Rule reinforced: closing a task that says "for 500 heroes" requires
+a 500-hero screenshot. A 100-hero screenshot is not evidence the
+500-hero path works. The cap of "good enough" is whatever the task
+literally says.
+
 ## Committed without verifying (counter: 3)
 
 > ❯ wait, did you do any verification of the thing you just completed?
