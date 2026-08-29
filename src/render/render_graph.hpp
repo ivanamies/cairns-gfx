@@ -111,6 +111,13 @@ public:
     // is the lock -- no two callers can ever hand the same slot to Bake
     // concurrently because the slot was Acquire'd exclusively.
     void BindSlotArena(uint32_t slot, BumpArena& arena);
+    // #229 GPU-determinism: when set, Bake gives every created transient its own
+    // physical texture instead of intra-frame aliasing a slot whose lifetime
+    // ended. Aliased memory is UNDEFINED until written -> a read-before-write is
+    // bistable + sync-sensitive (the top suspect for the three_champ flake).
+    // Behaviour-preserving (pure memory layout); the pool auto-grows. Set in
+    // golden mode.
+    void SetDisableTransientAliasing(bool on) { disable_aliasing_ = on; }
     bool Bake(uint32_t slot);
     bool Execute(FrameContext& fc, const SwapResolveTarget& target);
 
@@ -224,6 +231,7 @@ private:
     std::vector<Handle<Buffer>> resolved_buf_;
     std::vector<PooledTex> tex_pool_;
     std::vector<PooledBuf> buf_pool_;
+    bool disable_aliasing_ = false;  // #229 golden-mode determinism
 
     // #210 per-slot arena table. Engine binds once at init; Bake(slot)
     // resolves slot_arenas_[slot] -> the BumpArena that owns Bake's

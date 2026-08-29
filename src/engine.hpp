@@ -3730,6 +3730,11 @@ public:
             for (uint32_t s = 0; s < kFramesInFlight; ++s) {
                 graph_->BindSlotArena(s, slots_[s].arena);
             }
+            // #229 GPU-determinism: golden mode disables intra-frame transient
+            // aliasing (the top suspect for the three_champ flake -- aliased
+            // memory is undefined until written, so a read-before-write is
+            // bistable). Behaviour-preserving (pure layout); pool auto-grows.
+            graph_->SetDisableTransientAliasing(golden_);
         }
         graph_->Reset();
 

@@ -489,18 +489,24 @@ bool RenderGraph::Bake(uint32_t slot) {
     for (uint32_t oi = 0; oi < order_n; ++oi) {
         const uint16_t t = order[oi];
         Handle<Texture> chosen = Handle<Texture>::Null;
-        for (uint32_t si = 0; si < slots_n; ++si) {
-            Slot& s = slots[si];
-            if (s.last < tex_first[t] &&
-                DescEq(textures_[s.desc_tex].desc, textures_[t].desc)) {
-                chosen = s.handle;
-                s.last = tex_last[t];
-                s.desc_tex = t;
-                if (log) {
-                    fprintf(stderr, "[RG] alias tex %u -> reuse slot (lifetime %d..%d)\n",
-                            t, tex_first[t], tex_last[t]);
+        // #229 GPU-determinism: golden mode skips intra-frame slot aliasing so a
+        // transient never reuses physical memory whose prior occupant's lifetime
+        // ended this frame (the read-before-write hazard). Every transient gets
+        // its own physical texture (AcquireTransientTexFlat; pool auto-grows).
+        if (!disable_aliasing_) {
+            for (uint32_t si = 0; si < slots_n; ++si) {
+                Slot& s = slots[si];
+                if (s.last < tex_first[t] &&
+                    DescEq(textures_[s.desc_tex].desc, textures_[t].desc)) {
+                    chosen = s.handle;
+                    s.last = tex_last[t];
+                    s.desc_tex = t;
+                    if (log) {
+                        fprintf(stderr, "[RG] alias tex %u -> reuse slot (lifetime %d..%d)\n",
+                                t, tex_first[t], tex_last[t]);
+                    }
+                    break;
                 }
-                break;
             }
         }
         if (chosen.IsNull()) {
