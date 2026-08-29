@@ -346,7 +346,7 @@ private:
                 1.0f / static_cast<float>(sc_.Height()))
         };
         void* gptr = rm_.BumpAllocate(
-            sizeof(cairns::rhi::RenderPassGlobals), ubo_align_, rhi::Memory::kDynamic);
+            sizeof(cairns::rhi::RenderPassGlobals), rm_.UboAlign(), rhi::Memory::kDynamic);
         memcpy(gptr, &render_pass_globals, sizeof(render_pass_globals));
         globals_offset_ = rm_.BumpOffset(gptr);
 
@@ -389,7 +389,7 @@ private:
                         .sampler_id = gpu_sampler_id,
                     };
                     void* mptr = rm_.BumpAllocate(
-                        sizeof(cairns::rhi::MaterialGpu), ubo_align_, rhi::Memory::kDynamic);
+                        sizeof(cairns::rhi::MaterialGpu), rm_.UboAlign(), rhi::Memory::kDynamic);
                     memcpy(mptr, &material_gpu, sizeof(material_gpu));
                     const uint32_t material_offset = rm_.BumpOffset(mptr);
 
@@ -401,7 +401,7 @@ private:
                         .sampler_id = gpu_sampler_id
                     };
                     void* tptr = rm_.BumpAllocate(
-                        sizeof(cairns::rhi::DrawTmp), ubo_align_, rhi::Memory::kDynamic);
+                        sizeof(cairns::rhi::DrawTmp), rm_.UboAlign(), rhi::Memory::kDynamic);
                     memcpy(tptr, &draw_tmp, sizeof(draw_tmp));
                     const uint32_t drawtmp_offset = rm_.BumpOffset(tptr);
 
@@ -442,12 +442,6 @@ private:
         presentQueue = rm_.GetVkPresentQueue();
         commandPool = rm_.GetVkCommandPool();
         msaaSamples = rm_.GetVkMsaaSamples();
-        {
-            VkPhysicalDeviceProperties props{};
-            vkGetPhysicalDeviceProperties(physicalDevice, &props);
-            ubo_align_ = std::max(1u, static_cast<uint32_t>(
-                props.limits.minUniformBufferOffsetAlignment));
-        }
         if (!rm_.InitSwapChain(sc_, window_)) return false;
         if (!loadScenes()) return false;
         if (!createBindlessRegistry()) return false;
@@ -2184,7 +2178,6 @@ private:
     VkDescriptorSetLayout dynamicUboLayout_ = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> dynUboSets_;
 
-    uint32_t ubo_align_ = 256;
     uint32_t globals_offset_ = 0;
     std::vector<cairns::Draw> drawList_;
     std::vector<std::pair<cairns::DrawKey, uint32_t>> drawListSorted_;
