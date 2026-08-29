@@ -407,7 +407,8 @@ bool Frames::Init(Device& device) {
             2 * n * kMaxStepsPerFrame + n + 2 * kMaxSkinnedMeshes + 12 * n;
         sizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         // #221 Phase 5b: + anim_eval ActorRecord (1 dynUBO per frame-in-flight).
-        sizes[2].descriptorCount = 2 * n + n + n;
+        // #222 Phase D.2: + dyn_globals_ + dyn_drawtmp_ (2 * n).
+        sizes[2].descriptorCount = 2 * n + n + n + 2 * n;
         sizes[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         // 3 bindings per composite set (#207 outline shares the layout:
         // color + id + highlights).
@@ -422,8 +423,10 @@ bool Frames::Init(Device& device) {
         // 3 single-set layouts + compute (kMaxStepsPerFrame) + composite
         // (kCompositeRingSize) + skin_group_b (1) per slot. Plus skin
         // Group A: one set per loaded skinned mesh (1024 budget).
+        // #222 Phase D.2: + 2*n for dyn_globals_ + dyn_drawtmp_.
         pci.maxSets = 3 * n + n * kMaxStepsPerFrame +
-                       n * kCompositeRingSize + n + kMaxSkinnedMeshes + n;
+                       n * kCompositeRingSize + n + kMaxSkinnedMeshes + n +
+                       2 * n;
         if (vkCreateDescriptorPool(dev, &pci, nullptr, &plat.descriptor_pool_) !=
             VK_SUCCESS) {
             return false;

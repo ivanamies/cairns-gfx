@@ -710,20 +710,91 @@ Handle<BindGroup> Resources::CreateSkinGroupA(Allocator& alloc,
 
 Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
     const DynamicBuffersDesc& desc) {
-    // #222 Phase D.1 (vk minimal): store the binding layout in Cold +
-    // record binding_count on Hot. The VkDescriptorSetLayout + descriptor
-    // set construction is deferred to D.2 when the first consumer wires
-    // up (engine pre-allocates pool capacity by then). Returning a valid
-    // handle lets future code reference DynamicBuffers without rerouting
-    // through the old plat.*_set_layout_ path.
+    // #222 Phase D.1 (vk minimal): metadata-only. Hot.plat.vk_layout +
+    // vk_sets stay Null; D.2 path (with Frames&) does the real work.
     Handle<DynamicBuffers> h = dynamic_buffers.Acquire();
     DynamicBuffers::Hot* hot = dynamic_buffers.GetHot(h);
     DynamicBuffers::Cold* cold = dynamic_buffers.GetCold(h);
     hot->api_descriptor_set = nullptr;
-    hot->binding_count =
-        static_cast<uint8_t>(desc.bindings.size());
+    hot->binding_count = static_cast<uint8_t>(desc.bindings.size());
     cold->layout.assign(desc.bindings.begin(), desc.bindings.end());
     cold->debug_name = desc.debug_name;
+    return h;
+}
+
+// #222 Phase D.2 full impl. Build layout + per-FIF sets + write descriptors
+// against the kDynamic master with each binding's max_range. The bindings'
+// `kind` selects VkDescriptorType (kUniform → UBO_DYNAMIC,
+// kStorage → SSBO_DYNAMIC). Caller passes the same FIF count Frames was
+// configured with.
+Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
+    Allocator& alloc, Frames& frames, const DynamicBuffersDesc& desc) {
+    Handle<DynamicBuffers> h = dynamic_buffers.Acquire();
+    DynamicBuffers::Hot* hot = dynamic_buffers.GetHot(h);
+    DynamicBuffers::Cold* cold = dynamic_buffers.GetCold(h);
+    hot->binding_count = static_cast<uint8_t>(desc.bindings.size());
+    cold->layout.assign(desc.bindings.begin(), desc.bindings.end());
+    cold->debug_name = desc.debug_name;
+
+    // Build the VkDescriptorSetLayout.
+    std::vector<VkDescriptorSetLayoutBinding> vk_bindings;
+    vk_bindings.reserve(desc.bindings.size());
+    for (const DynamicBinding& b : desc.bindings) {
+        VkDescriptorSetLayoutBinding vb{};
+        vb.binding = b.slot;
+        vb.descriptorType = (b.kind == BufferKind::kUniform)
+            ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
+            : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+        vb.descriptorCount = 1;
+        vb.stageFlags = VK_SHADER_STAGE_ALL;
+        vk_bindings.push_back(vb);
+    }
+    VkDescriptorSetLayoutCreateInfo lci{};
+    lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    lci.bindingCount = static_cast<uint32_t>(vk_bindings.size());
+    lci.pBindings = vk_bindings.data();
+    if (vkCreateDescriptorSetLayout(plat.device_, &lci, nullptr,
+                                      &hot->plat.vk_layout) != VK_SUCCESS) {
+        return Handle<DynamicBuffers>::Null;
+    }
+
+    // Allocate kFramesInFlight sets, write each against kDynamic master.
+    const uint32_t n = kFramesInFlight;
+    std::vector<VkDescriptorSetLayout> layouts(n, hot->plat.vk_layout);
+    VkDescriptorSetAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool = frames.plat.descriptor_pool_;
+    ai.descriptorSetCount = n;
+    ai.pSetLayouts = layouts.data();
+    VkDescriptorSet sets[DynamicBuffersHotPlat::kMaxFrames] = {};
+    if (vkAllocateDescriptorSets(plat.device_, &ai, sets) != VK_SUCCESS) {
+        vkDestroyDescriptorSetLayout(plat.device_, hot->plat.vk_layout, nullptr);
+        hot->plat.vk_layout = VK_NULL_HANDLE;
+        return Handle<DynamicBuffers>::Null;
+    }
+    VkBuffer dyn_master = plat.GetVkBumpMasterBuffer(alloc, Memory::kDynamic);
+    for (uint32_t f = 0; f < n; ++f) {
+        hot->plat.vk_sets[f] = sets[f];
+        std::vector<VkDescriptorBufferInfo> bi(desc.bindings.size());
+        std::vector<VkWriteDescriptorSet> w(desc.bindings.size());
+        for (size_t i = 0; i < desc.bindings.size(); ++i) {
+            const DynamicBinding& b = desc.bindings[i];
+            bi[i].buffer = dyn_master;
+            bi[i].offset = 0;
+            bi[i].range = (b.max_range == 0) ? VK_WHOLE_SIZE : b.max_range;
+            w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[i].dstSet = sets[f];
+            w[i].dstBinding = b.slot;
+            w[i].descriptorCount = 1;
+            w[i].descriptorType = (b.kind == BufferKind::kUniform)
+                ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
+                : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+            w[i].pBufferInfo = &bi[i];
+        }
+        vkUpdateDescriptorSets(plat.device_,
+                                static_cast<uint32_t>(w.size()),
+                                w.data(), 0, nullptr);
+    }
     return h;
 }
 

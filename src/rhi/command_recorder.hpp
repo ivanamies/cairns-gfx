@@ -84,6 +84,11 @@ struct MeshDrawList {
     uint32_t globals_offset = 0;
     std::span<const Handle<Texture>> resident_textures;
     std::span<const Handle<Buffer>> resident_buffers;
+    // #222 Phase D.2: DynamicBuffers handle for set 0 (pass globals).
+    // Carries the per-FIF descriptor set + layout that replaces
+    // FramesPlat::globals_set_layout_ / globals_sets_. Null = fall back to
+    // the legacy frames.plat.globals_set_ binding.
+    Handle<DynamicBuffers> dyn_globals;
 };
 
 struct PointDraw {

@@ -784,6 +784,36 @@ public:
             CAIRNS_PRINT("GreaterInit: frames.Init failed\n");
             return false;
         }
+        // #222 Phase D.2: dyn_globals_ + dyn_drawtmp_ — per-FIF descriptor
+        // sets for unlit's set 0 + set 2, backed by the kDynamic master.
+        // Must run AFTER frames.Init (needs descriptor_pool_) and BEFORE
+        // initRenderPipeline (the unlit PSO references their layout).
+        {
+            cairns::rhi::DynamicBinding gb{};
+            gb.slot = 0;
+            gb.kind = cairns::rhi::BufferKind::kUniform;
+            gb.max_range = sizeof(cairns::rhi::RenderPassGlobals);
+            cairns::rhi::DynamicBuffersDesc gd{};
+            gd.debug_name = "dyn_globals";
+            gd.bindings =
+                std::span<const cairns::rhi::DynamicBinding>(&gb, 1);
+            dyn_globals_ = rhi_.resources.CreateDynamicBuffers(rhi_.alloc,
+                                                                 rhi_.frames, gd);
+            cairns::rhi::DynamicBinding db{};
+            db.slot = 0;
+            db.kind = cairns::rhi::BufferKind::kUniform;
+            db.max_range = sizeof(cairns::rhi::DrawTmp);
+            cairns::rhi::DynamicBuffersDesc dd{};
+            dd.debug_name = "dyn_drawtmp";
+            dd.bindings =
+                std::span<const cairns::rhi::DynamicBinding>(&db, 1);
+            dyn_drawtmp_ = rhi_.resources.CreateDynamicBuffers(rhi_.alloc,
+                                                                 rhi_.frames, dd);
+            if (dyn_globals_.IsNull() || dyn_drawtmp_.IsNull()) {
+                CAIRNS_PRINT("GreaterInit: DynamicBuffers create failed\n");
+                return false;
+            }
+        }
         if (!rhi_.pipelines.Init(rhi_.device)) {
             CAIRNS_PRINT("GreaterInit: pipelines.Init failed\n");
             return false;
@@ -1438,6 +1468,8 @@ public:
                     cairns::Draw draw{};
                     // #220 Step 1: bind group lives in LoadedMaterial::Hot.
                     draw.bind_groups[1] = materials_.GetHot(mat_id)->set2;
+                    // #222 Phase D.2: route set 2 (per-draw drawtmp UBO).
+                    draw.dynamic_buffers = dyn_drawtmp_;
                     draw.index_buffer = index;
                     draw.index_offset =
                         index_base_off + (prim.first_index * sizeof(uint32_t));
@@ -2050,6 +2082,8 @@ public:
             mls[v].draws = pkt.draws;
             mls[v].sorted_draws = pkt.sorted;
             mls[v].pipeline = forward_pso;
+            // #222 Phase D.2: route set 0 (pass globals) through dyn_globals_.
+            mls[v].dyn_globals = dyn_globals_;
             mls[v].globals_offset = s.globals_offset[v];
             mls[v].resident_textures = pkt.resident_textures;
             mls[v].resident_buffers =
@@ -3609,6 +3643,12 @@ private:
     // #222 Phase A.1: id-less variant; selected when no consumer wants the
     // R32U id attachment this frame.
     ShaderHandle unlit_offscreen_noid_ = ShaderHandle::Null;
+    // #222 Phase D.2: DynamicBuffers for unlit set 0 (pass globals UBO) +
+    // set 2 (per-draw drawtmp UBO). Created post-Frames::Init with backing
+    // = kDynamic master. RecordFrame stamps them on MeshDrawList +
+    // Draw::dynamic_buffers; recorder reads the per-FIF set from Hot.
+    rhi::Handle<rhi::DynamicBuffers> dyn_globals_;
+    rhi::Handle<rhi::DynamicBuffers> dyn_drawtmp_;
     ShaderHandle composite_pip_ = ShaderHandle::Null;
     ShaderHandle depthviz_ = ShaderHandle::Null;
     ShaderHandle outline_pip_ = ShaderHandle::Null;

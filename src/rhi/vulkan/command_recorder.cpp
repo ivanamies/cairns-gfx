@@ -526,9 +526,22 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     }
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->plat.vk_pipeline);
 
-    // set 0 globals: bind once for the whole pass.
-    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->plat.vk_layout, 0, 1,
-                            &plat.globals_set_, 1, &list.globals_offset);
+    // set 0 globals: bind once for the whole pass. #222 Phase D.2 routes
+    // through list.dyn_globals's per-FIF set when set; falls back to the
+    // legacy plat.globals_set_ otherwise (recorder + Frames still own that
+    // until callers opt all the way in).
+    {
+        VkDescriptorSet s0 = plat.globals_set_;
+        if (!list.dyn_globals.IsNull()) {
+            DynamicBuffers::Hot* dh = res.GetHot(list.dyn_globals);
+            if (dh && plat.frame_ < DynamicBuffersHotPlat::kMaxFrames) {
+                s0 = dh->plat.vk_sets[plat.frame_];
+            }
+        }
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                 unlit->plat.vk_layout, 0, 1, &s0, 1,
+                                 &list.globals_offset);
+    }
 
     // Pack-meshes (Aaltonen slide 26): bind each stream at its mesh-region base
     // and select the primitive via baseVertex/baseIndex in the draw call, so the
@@ -613,9 +626,21 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
             vkCmdBindIndexBuffer(cb, idx_buf, idx_base, VK_INDEX_TYPE_UINT32);
         }
         const uint32_t first_index = (draw.index_offset - idx_base) / sizeof(uint32_t);
-        // set 2 drawtmp: the only per-draw dynamic offset.
-        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->plat.vk_layout, 2, 1,
-                                &plat.drawtmp_set_, 1, &draw.dynamic_buffer_offsets[1]);
+        // set 2 drawtmp: the only per-draw dynamic offset. #222 Phase D.2
+        // routes through draw.dynamic_buffers's per-FIF set when non-null;
+        // legacy plat.drawtmp_set_ otherwise.
+        {
+            VkDescriptorSet s2 = plat.drawtmp_set_;
+            if (!draw.dynamic_buffers.IsNull()) {
+                DynamicBuffers::Hot* dh = res.GetHot(draw.dynamic_buffers);
+                if (dh && plat.frame_ < DynamicBuffersHotPlat::kMaxFrames) {
+                    s2 = dh->plat.vk_sets[plat.frame_];
+                }
+            }
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                     unlit->plat.vk_layout, 2, 1, &s2, 1,
+                                     &draw.dynamic_buffer_offsets[1]);
+        }
         vkCmdDrawIndexed(cb, draw.triangle_count * 3, draw.instance_count, first_index,
                          static_cast<int32_t>(draw.vertex_offset), draw.instance_offset);
     }

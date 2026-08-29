@@ -432,17 +432,21 @@ Handle<BindGroup> Resources::CreateSkinGroupA(Allocator& /*alloc*/,
 
 Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
     const DynamicBuffersDesc& desc) {
-    // #222 Phase D.1 (metal minimal): metal has no descriptor objects;
-    // store the binding layout in Cold so D.2's recorder loop can read
-    // slot/kind per call. Hot stays default (no API state to cache).
     Handle<DynamicBuffers> h = dynamic_buffers.Acquire();
     DynamicBuffers::Hot* hot = dynamic_buffers.GetHot(h);
     DynamicBuffers::Cold* cold = dynamic_buffers.GetCold(h);
-    hot->binding_count =
-        static_cast<uint8_t>(desc.bindings.size());
+    hot->binding_count = static_cast<uint8_t>(desc.bindings.size());
     cold->layout.assign(desc.bindings.begin(), desc.bindings.end());
     cold->debug_name = desc.debug_name;
     return h;
+}
+
+// #222 Phase D.2 (metal): same as the minimal path; no descriptor objects
+// to build. The Allocator& + Frames& params are unused but kept so the
+// caller can be backend-agnostic.
+Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
+    Allocator& /*alloc*/, Frames& /*frames*/, const DynamicBuffersDesc& desc) {
+    return CreateDynamicBuffers(desc);
 }
 
 uint32_t Resources::BufferBaseOffset(Allocator& alloc, Handle<Buffer> h) {

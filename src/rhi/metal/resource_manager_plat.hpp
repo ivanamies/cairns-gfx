@@ -30,6 +30,9 @@ using ApiKernelHandle = MTL::ComputePipelineState*;
 struct TextureColdPlat {};
 struct ShaderHotPlat {};
 struct KernelHotPlat {};
+// #222 Phase D.2: Metal has no descriptor objects; DynamicBuffers plat is
+// empty. Recorder reads bindings from Cold's layout vector per draw.
+struct DynamicBuffersHotPlat {};
 
 struct BackendInitParams {
     MTL::Device* device = nullptr;

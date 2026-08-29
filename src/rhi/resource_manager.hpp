@@ -288,8 +288,10 @@ struct BindGroup {
 // ring's master buffer; only the per-draw offsets change.
 struct DynamicBuffers {
     struct Hot {
-        void* api_descriptor_set = nullptr;  // pre-built once at create
+        void* api_descriptor_set = nullptr;  // legacy slot; D.2 reads plat
         uint8_t binding_count = 0;
+        // #222 Phase D.2: per-backend Hot state (vk: layout + per-FIF sets).
+        DynamicBuffersHotPlat plat;
     };
     struct Cold {
         std::vector<DynamicBinding> layout;
@@ -357,6 +359,13 @@ struct BlendState {
 struct GraphicsPipelineDesc {
     const char* logical_shader = nullptr;  // "unlit" / "particle"
     const char* shader_dir = nullptr;      // base dir for shader files
+    // #222 Phase D.2: optional DynamicBuffers handles for set 0 (pass
+    // globals) + set 2 (per-draw drawtmp). When non-null, pipelines.cpp
+    // resolves the VkDescriptorSetLayout from these instead of from
+    // frames.plat.globals_set_layout_ / drawtmp_set_layout_. Null = use
+    // the legacy path (still required for kernels + non-unlit pipelines).
+    Handle<DynamicBuffers> dyn_set_0;
+    Handle<DynamicBuffers> dyn_set_2;
     std::span<const VertexInputAttribute> vertex_attributes;
     std::span<const VertexBufferLayout> vertex_buffers;
     PrimitiveTopology topology = PrimitiveTopology::kTriangleList;

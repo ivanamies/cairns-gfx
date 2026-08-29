@@ -44,6 +44,19 @@ struct KernelHotPlat {
     VkPipelineLayout vk_layout = VK_NULL_HANDLE;
 };
 
+// #222 Phase D.2: vk-side per-FIF descriptor sets for DynamicBuffers.
+// One layout, one set per frame-in-flight (matches the FramesPlat per-FIF
+// rotation it replaces). All sets bound against the same backing buffer
+// at offset 0 with the binding's max_range; per-draw dynamic offsets shift
+// the access window. kMaxFrames=4 (covers FIF=2 and FIF=3 with headroom);
+// slots past frames_in_flight stay Null.
+struct DynamicBuffersHotPlat {
+    VkDescriptorSetLayout vk_layout = VK_NULL_HANDLE;
+    static constexpr uint32_t kMaxFrames = 4;
+    VkDescriptorSet vk_sets[kMaxFrames] = {VK_NULL_HANDLE, VK_NULL_HANDLE,
+                                           VK_NULL_HANDLE, VK_NULL_HANDLE};
+};
+
 struct BackendInitParams {
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice physical = VK_NULL_HANDLE;

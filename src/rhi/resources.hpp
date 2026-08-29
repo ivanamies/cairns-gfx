@@ -61,6 +61,12 @@ public:
     Handle<BindGroup> CreateSkinGroupA(Allocator& alloc, Frames& frames,
                                         const BindGroupDesc& desc);
     Handle<DynamicBuffers> CreateDynamicBuffers(const DynamicBuffersDesc& desc);
+    // #222 Phase D.2: full impl variant. Vulkan builds VkDescriptorSetLayout
+    // from bindings, allocates one VkDescriptorSet per FIF from
+    // frames.plat.descriptor_pool_, writes each against the kDynamic master
+    // at offset 0 + max_range. Metal stores Cold's layout; same as minimal.
+    Handle<DynamicBuffers> CreateDynamicBuffers(Allocator& alloc, Frames& frames,
+                                                  const DynamicBuffersDesc& desc);
 
     // Typed generational pools — public; walk them directly for debug/iteration.
     ResourceManager<Buffer> buffers;
