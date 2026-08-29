@@ -218,12 +218,10 @@ bool LoadSceneGpu(Scene& scene,
     return true;
 }
 
-bool InitRenderPassDescriptor(Handle<RenderPass> render_pass, Handle<Texture> msaa, Handle<Texture> depth,
-                              ResourceManager<RenderPass>& render_pass_mgr, ResourceManager<Texture>& tex_mgr, SwapChain& swap_chain) {
-    auto& desc = *render_pass_mgr.GetDesc(render_pass);
-    auto*& renderPassDescriptor = desc.render_pass_descriptor;
+bool InitRenderPassDescriptor(MTL::RenderPassDescriptor*& renderPassDescriptor, Handle<Texture> msaa, Handle<Texture> depth,
+                              ResourceManager<Texture>& tex_mgr, SwapChain& swap_chain) {
     renderPassDescriptor = MTL::RenderPassDescriptor::alloc()->init();
-    
+
     MTL::RenderPassColorAttachmentDescriptor* colorAttachment = renderPassDescriptor->colorAttachments()->object(0);
     MTL::RenderPassDepthAttachmentDescriptor* depthAttachment = renderPassDescriptor->depthAttachment();
     
@@ -241,9 +239,7 @@ bool InitRenderPassDescriptor(Handle<RenderPass> render_pass, Handle<Texture> ms
     return true;
 }
 
-bool UpdateRenderPassDescriptor(Handle<RenderPass> render_pass, Handle<Texture> msaa, Handle<Texture> depth, ResourceManager<RenderPass>& render_pass_mgr, ResourceManager<Texture>& texture_mgr, SwapChain& swap_chain) {
-    auto& desc = *render_pass_mgr.GetDesc(render_pass);
-    MTL::RenderPassDescriptor* render_pass_desc = desc.render_pass_descriptor;
+bool UpdateRenderPassDescriptor(MTL::RenderPassDescriptor* render_pass_desc, Handle<Texture> msaa, Handle<Texture> depth, ResourceManager<Texture>& texture_mgr, SwapChain& swap_chain) {
     render_pass_desc->colorAttachments()->object(0)->setTexture(texture_mgr.GetObj(msaa)->texture);
     render_pass_desc->colorAttachments()->object(0)->setResolveTexture(swap_chain.GetDrawable()->texture());
     render_pass_desc->depthAttachment()->setTexture(texture_mgr.GetObj(depth)->texture);
@@ -266,7 +262,6 @@ public:
     using BufHandle = cairns::rhi::Handle<cairns::rhi::Buffer>;
     using DbufHandle = cairns::rhi::Handle<cairns::rhi::DynamicBuffers>;
     using ShaderHandle = rhi2::Handle<rhi2::Shader>;
-    using RenderPassHandle = cairns::rhi::Handle<cairns::rhi::RenderPass>;
     using MatId = uint32_t;
     using SamplerHandle = cairns::rhi::Handle<cairns::rhi::Sampler>;
     using BindGroupHandle = cairns::rhi::Handle<cairns::rhi::BindGroup>;
@@ -379,7 +374,6 @@ public:
         dynamicBuffersManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::DynamicBuffers>>(hot_arena_, hot_arena_, estUbos);
         // 4 because we're only pretending to be a real UGC engine at this point
         samplerManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Sampler>>(hot_arena_, hot_arena_, 256);
-        renderPassManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::RenderPass>>(hot_arena_, hot_arena_, 1);
         materialBufferManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Buffer>>(hot_arena_, hot_arena_, 1024);
         bindGroupManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::BindGroup>>(hot_arena_, hot_arena_, 1024);
         dynamicBuffersManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::DynamicBuffers>>(hot_arena_, hot_arena_, 1024);
@@ -539,10 +533,7 @@ public:
     }
     
     bool initRenderPassDescriptor() {
-        if ( renderPass_ == RenderPassHandle::Null ) {
-            renderPass_ = renderPassManager_->New();
-        }
-        if ( !cairns::rhi::InitRenderPassDescriptor(renderPass_, msaaHandle_, depthHandle_, *renderPassManager_, *texManager_, *swapChain_)) {
+        if ( !cairns::rhi::InitRenderPassDescriptor(render_pass_descriptor_, msaaHandle_, depthHandle_, *texManager_, *swapChain_)) {
             return false;
         }
         return true;
@@ -554,7 +545,7 @@ public:
     }
     
     bool updateRenderPassDescriptor() {
-        if ( cairns::rhi::UpdateRenderPassDescriptor(renderPass_, msaaHandle_, depthHandle_, *renderPassManager_, *renderPassTexManager_, *swapChain_)) {
+        if ( cairns::rhi::UpdateRenderPassDescriptor(render_pass_descriptor_, msaaHandle_, depthHandle_, *renderPassTexManager_, *swapChain_)) {
             return false;
         }
         return true;
@@ -777,8 +768,7 @@ public:
         cairns::Timer timer1("timer 1", 1);
         MTL::RenderCommandEncoder* encoder = nullptr;
         {
-            auto& desc = *renderPassManager_->GetDesc(renderPass_);
-            encoder = cmdBuf->renderCommandEncoder(desc.render_pass_descriptor);
+            encoder = cmdBuf->renderCommandEncoder(render_pass_descriptor_);
         }
         
         {
@@ -1099,7 +1089,6 @@ private:
     std::vector<cairns::LoadedMaterial> materials_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Buffer>> materialBufferManager_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Texture>> renderPassTexManager_;
-    cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::RenderPass>> renderPassManager_;
     
     std::vector<BufHandle> renderPassGlobals_;
     std::vector<uint32_t> drawTmpIdxs_;
@@ -1145,7 +1134,7 @@ private:
     static constexpr size_t sampleCount = 4;
     TexHandle msaaHandle_ = TexHandle::Null;
     TexHandle depthHandle_ = TexHandle::Null;
-    RenderPassHandle renderPass_ = RenderPassHandle::Null;
+    MTL::RenderPassDescriptor* render_pass_descriptor_ = nullptr;
     // fences and semaphores
     dispatch_semaphore_t frameSemaphore;
 };
