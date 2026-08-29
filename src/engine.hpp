@@ -155,7 +155,7 @@ public:
         // Next Acquire on the same slot resets and reuses the bytes.
         std::span<cairns::Draw> drawList;
         std::span<std::pair<cairns::DrawKey, uint32_t>> drawListSorted;
-        std::span<rhi::Handle<rhi::Texture>> resident_textures;
+        // #222 Phase H.6: resident_textures lives on Engine, not PerSlot.
         std::span<glm::mat4> draw_world_matrices;
         // #207 parallel to draw_world_matrices; baked from MeshProxy::entity_id
         // by BuildMeshOpaqueDraws so unlit.frag can write the per-fragment id.
@@ -1126,6 +1126,20 @@ public:
                     h.gpu_scene_header_idx = sht->gpu_scene_header_idx;
                 }
             });
+        // #222 Phase H.6: textureHandles never change after scene load;
+        // build the engine-side resident_textures_ once here. Per-frame
+        // draw() drops its arena alloc + copy and just points the packet
+        // span at this vector. Same content, just hoisted.
+        resident_textures_.clear();
+        for (cairns::SceneId sid : scene_ids_) {
+            cairns::Scene::Hot* shot = scenes_.GetHot(sid);
+            if (!shot) {
+                continue;
+            }
+            for (rhi::Handle<rhi::Texture> th : shot->textureHandles) {
+                resident_textures_.push_back(th);
+            }
+        }
         // #221 Phase 9 (vk): write the per-frame skin_group_b descriptors
         // ONCE here (kernel + pool both ready). Per-dispatch we just bind
         // with 3 dynamic byte offsets, avoiding VUID-03047 (set in use by
@@ -1692,22 +1706,9 @@ public:
         // #219 Chunk A: count-then-allocate the resident-textures gather on
         // the per-slot BumpArena. scenes_ + textureHandles are persistent
         // engine state, so two-pass costs nothing.
-        // #220 Step 3: iterate scene_ids_ + pool lookup.
-        uint32_t rt_count = 0;
-        for (cairns::SceneId sid : scene_ids_) {
-            cairns::Scene::Hot* shot = scenes_.GetHot(sid);
-            rt_count += static_cast<uint32_t>(shot->textureHandles.size());
-        }
-        s.resident_textures = {
-            s.arena.AllocateArray<rhi::Handle<rhi::Texture>>(rt_count),
-            rt_count};
-        uint32_t rt_idx = 0;
-        for (cairns::SceneId sid : scene_ids_) {
-            cairns::Scene::Hot* shot = scenes_.GetHot(sid);
-            for (const auto th : shot->textureHandles) {
-                s.resident_textures[rt_idx++] = th;
-            }
-        }
+        // #222 Phase H.6: resident_textures hoisted to the engine-owned
+        // resident_textures_ vector built once at scene-load (uploadAnim
+        // TablesGpu). draw() drops the per-frame arena alloc + copy.
 
         // #221 Skinning P5/P8: BuildSkinFrame populates the per-frame skin
         // payload (palettes, InstanceMeta, SkinBatchGpu list) on the per-
@@ -1744,7 +1745,7 @@ public:
         s.pkt.sorted = std::span<const std::pair<cairns::DrawKey, uint32_t>>(
             s.drawListSorted.data(), s.drawListSorted.size());
         s.pkt.resident_textures = std::span<const rhi::Handle<rhi::Texture>>(
-            s.resident_textures.data(), s.resident_textures.size());
+            resident_textures_.data(), resident_textures_.size());
 
         // Skip ImGui in golden-dump mode (windowed CAIRNS_DUMP, no overlay
         // in the byte-gate) AND in surfaceless mode (cairns_serve has no
@@ -3304,6 +3305,10 @@ private:
     // / Scene::Cold records live in the pool, not the vector.
     cairns::ResourceManager<cairns::Scene> scenes_;
     std::vector<cairns::SceneId> scene_ids_;
+    // #222 Phase H.6: built once at scene-load + uploadAnimTablesGpu;
+    // every frame's resident_textures span points at this vector
+    // instead of being arena-allocated + filled per frame.
+    std::vector<rhi::Handle<rhi::Texture>> resident_textures_;
     std::vector<int32_t> root_nodes_stack_cache_;
 
     std::vector<glm::mat4> debugSceneXforms_;
