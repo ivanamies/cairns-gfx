@@ -15,10 +15,13 @@
 
 #pragma once
 
+#include <cassert>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+
+#include "util/chunk_allocator.hpp"  // #229 M0b: block-backed pool storage.
 
 namespace cairns {
 
@@ -53,6 +56,11 @@ public:
             hot_[idx] = typename T::Hot{};
             cold_[idx] = typename T::Cold{};
         } else {
+            // #229 M0b: a Reserved pool must NOT grow (a grow relocates Cold
+            // records -> dangling Cold* + changed addresses break the hash);
+            // un-Reserved pools (capacity_==0) grow on the malloc fallback.
+            assert((capacity_ == 0 || hot_.size() < capacity_) &&
+                   "ResourceManager over cap -- raise the MemoryBudget reserve");
             idx = static_cast<uint16_t>(hot_.size());
             hot_.emplace_back();
             cold_.emplace_back();
@@ -93,6 +101,23 @@ public:
     }
 
     size_t Size() const { return hot_.size(); }
+    uint16_t Capacity() const { return capacity_; }
+
+    // #229 M0b: bind the four arrays to the block + fix capacity. After this,
+    // Acquire never grows, so Reserve MUST precede the first Acquire. POCMA on
+    // ChunkStdAllocator makes the move-assign adopt the block allocator;
+    // un-Reserved pools keep the malloc fallback (RHI pools, tests).
+    void Reserve(ChunkAllocator& block, uint16_t cap) {
+        hot_ = HotVec(ChunkStdAllocator<typename T::Hot>(block));
+        cold_ = ColdVec(ChunkStdAllocator<typename T::Cold>(block));
+        generation_ = U16Vec(ChunkStdAllocator<uint16_t>(block));
+        freelist_ = U16Vec(ChunkStdAllocator<uint16_t>(block));
+        hot_.reserve(cap);
+        cold_.reserve(cap);
+        generation_.reserve(cap);
+        freelist_.reserve(cap);
+        capacity_ = cap;
+    }
 
     template <typename Fn>
     void ForEachLive(Fn fn) {
@@ -108,10 +133,14 @@ public:
     }
 
 private:
-    std::vector<typename T::Hot> hot_;
-    std::vector<typename T::Cold> cold_;
-    std::vector<uint16_t> generation_;
-    std::vector<uint16_t> freelist_;
+    using HotVec = std::vector<typename T::Hot, ChunkStdAllocator<typename T::Hot>>;
+    using ColdVec = std::vector<typename T::Cold, ChunkStdAllocator<typename T::Cold>>;
+    using U16Vec = std::vector<uint16_t, ChunkStdAllocator<uint16_t>>;
+    HotVec hot_;
+    ColdVec cold_;
+    U16Vec generation_;
+    U16Vec freelist_;
+    uint16_t capacity_ = 0;  // #229 M0b: 0 = un-Reserved (malloc fallback).
 };
 
 }  // namespace cairns

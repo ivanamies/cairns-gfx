@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <type_traits>
 #include <vector>
 
 namespace cairns {
@@ -352,13 +353,30 @@ template <typename T>
 class ChunkStdAllocator {
 public:
     using value_type = T;
+    // #229 M0b: a stateful allocator must PROPAGATE on container move/copy/swap
+    // so ResourceManager::Reserve(block) -- which move-assigns a block-allocated
+    // temporary into the default-constructed member -- actually adopts the block
+    // (else the target keeps its own allocator and elements land elsewhere).
+    using propagate_on_container_move_assignment = std::true_type;
+    using propagate_on_container_copy_assignment = std::true_type;
+    using propagate_on_container_swap = std::true_type;
 
+    // Null-arena default ctor: a default-constructed container (a pool not yet
+    // Reserved, or a non-Engine ResourceManager such as the RHI resource pools)
+    // allocates via malloc -- behaviorally identical to std::allocator, just
+    // outside the block (and the hash). Reserve() re-seats it onto the block.
+    ChunkStdAllocator() : alloc_(nullptr) {}
     explicit ChunkStdAllocator(ChunkAllocator& alloc) : alloc_(&alloc) {}
     template <typename U>
     ChunkStdAllocator(const ChunkStdAllocator<U>& other) : alloc_(other.alloc_) {}
 
     T* allocate(size_t n) {
         const size_t bytes = n * sizeof(T);
+        if (alloc_ == nullptr) {
+            void* p = std::malloc(bytes);
+            if (p == nullptr) { std::abort(); }
+            return static_cast<T*>(p);
+        }
         assert(bytes <= 0xFFFFFFFFu && "ChunkStdAllocator: allocation > 4 GB");
         void* p = alloc_->Allocate(static_cast<uint32_t>(bytes), alignof(T));
         if (p == nullptr) {
@@ -367,7 +385,13 @@ public:
         }
         return static_cast<T*>(p);
     }
-    void deallocate(T* p, size_t /*n*/) { alloc_->Free(p); }
+    void deallocate(T* p, size_t /*n*/) {
+        if (alloc_ == nullptr) {
+            std::free(p);
+            return;
+        }
+        alloc_->Free(p);
+    }
 
     template <typename U>
     bool operator==(const ChunkStdAllocator<U>& o) const { return alloc_ == o.alloc_; }

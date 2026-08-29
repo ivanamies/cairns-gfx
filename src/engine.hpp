@@ -2129,6 +2129,18 @@ public:
         per_prefab_asset_.reserve(kPrefabResidencyCap);
         resident_textures_.reserve(kPrefabResidencyCap * 4);
         per_batch_shared_skin_.reserve(64);
+
+        // #229 M0b: Reserve the persistent ResourceManager pools onto cpu_block_
+        // (size==capacity -> span-hashable; counted in the 1 GB budget). Caps are
+        // generous upper bounds for the 100-GLB workload; exceeding one grows via
+        // the block (relocates -- the content hash stays clean). viewports_ is
+        // acquired before the block exists (InitInitialViewport, see GreaterInit
+        // order) so it keeps the malloc fallback.
+        prefabs_.Reserve(cpu_block_, static_cast<uint16_t>(kPrefabResidencyCap));
+        meshes_.Reserve(cpu_block_, 8192);
+        materials_.Reserve(cpu_block_, 8192);
+        skins_.Reserve(cpu_block_, 4096);
+        scenes_.Reserve(cpu_block_, static_cast<uint16_t>(kMaxScenes));
         return true;
     }
     
@@ -2429,10 +2441,9 @@ public:
         // trigger a vector growth that would move Scene::Cold and
         // invalidate any cached pointers. The unique_ptr<entt::registry>
         // inside Cold is the second safety layer.
-        for (uint32_t w = 0; w < kMaxScenes; ++w) {
-            cairns::SceneId tmp = scenes_.Acquire();
-            scenes_.Release(tmp);
-        }
+        // #229 M0b: scenes_ is Reserved(cpu_block_, kMaxScenes) in
+        // initResourceManagers -- block-backed, Cold* stable (no realloc up to
+        // the cap), hashable. (Was an Acquire/Release pre-grow loop here.)
         active_scene_ = scenes_.Acquire();
         primary_scene_ = active_scene_;  // index-0; UseScene may move active_
         if (cairns::Scene::Hot* wh = scenes_.GetHot(active_scene_)) {
