@@ -78,6 +78,10 @@ inline void ExtractFromWorld(World::Cold& wc, const glm::mat4& root,
             proxy.skin = kInvalidSkin;
             proxy.layer_mask = rdr.layer_mask;
             proxy.flags = rdr.flags;
+            // #207 +1 so the value 0 (the id_off clear color) means
+            // "background" rather than entity index 0.
+            proxy.entity_id =
+                static_cast<uint32_t>(entt::to_integral(entity)) + 1u;
             for (const Primitive& prim : mesh.primitives) {
                 PrimitiveProxy pp;
                 pp.first_index = prim.firstIndex;

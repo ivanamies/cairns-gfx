@@ -98,6 +98,14 @@ public:
     // (surfaceless render-to-texture not yet wired).
     bool ReadBackTextureRgba(Handle<Texture> h, std::vector<uint8_t>& out_rgba,
                               uint32_t& out_w, uint32_t& out_h);
+    // #207 pick: read one R32U texel from |h| at (x, y). Returns false if
+    // the texture is invalid, the coord is out of range, or the backend
+    // failed to map the readback buffer. Caller is expected to have
+    // drained in-flight work targeting |h| before calling -- this helper
+    // does NOT add any cross-frame synchronization beyond an immediate
+    // waitUntilCompleted on its own blit command buffer.
+    bool ReadBackTextureR32UTexel(Handle<Texture> h, uint32_t x, uint32_t y,
+                                  uint32_t& out_value);
     bool ClearColorTexture(Handle<Texture> h, const float color[4]);
     SwapResolveTarget MakeSurfacelessSwapResolveTarget(Handle<Texture> h,
                                                         uint32_t w, uint32_t h_px);

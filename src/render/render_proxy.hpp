@@ -26,6 +26,11 @@ struct MeshProxy {
     uint32_t skin = kInvalidSkin;
     uint32_t layer_mask = 0xFFFFFFFFu;
     uint32_t flags = kProxyVisible;
+    // #207 entity id baked into the R32U id_off by unlit.frag. Stored as
+    // entt::to_integral(entity) + 1 so the value 0 means "background" (the
+    // forward pass clears id_off to 0 and the outline shader treats id==0
+    // as the empty highlight). 0xFFFFFFFF reserved for "unknown".
+    uint32_t entity_id = 0;
 };
 
 struct PrimitiveProxy {

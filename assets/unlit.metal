@@ -41,15 +41,16 @@ struct VertexOut {
     // is the clip space position of the vertex when this structure is
     // returned from the vertex function.
     float4 position [[position]];
-    
+
     // Since this member does not have a special attribute, the rasterizer
     // interpolates its value with the values of the other triangle vertices
     // and then passes the interpolated value to the fragment shader for each
     // fragment in the triangle.
     float2 textureCoordinate;
-    
+
     uint tex_color_id [[flat]];
     uint sampler_id [[flat]];
+    uint entity_id [[flat]];  // #207
 };
     
 struct RenderPassGlobals {
@@ -75,7 +76,7 @@ struct DrawTmp {
     uint mesh_id;
     uint tex_id;
     uint sampler_id;
-    uint yolo_padding;
+    uint entity_id;  // #207
 };
 
 // set 2: per-material argument buffer (texture @ id 0, sampler @ id 1),
@@ -94,11 +95,12 @@ vertex VertexOut vertexShader(VertexInput in [[stage_in]],
     out.textureCoordinate = in.uv;
     out.tex_color_id = material.tex_color_id;
     out.sampler_id = material.sampler_id;
+    out.entity_id = draw_tmp.entity_id;  // #207
     return out;
 }
 
-// #206 MRT: color + R32U id buffer. id is stubbed to 0 until per-draw
-// {type<<24 | id} encoding lands via instance buffer.
+// #206 MRT: color + R32U id buffer. id is the per-draw entity id forwarded
+// from DrawTmp through VertexOut [[flat]] interpolation.
 struct FragmentOut {
     float4 color [[color(0)]];
     uint id [[color(1)]];
@@ -107,7 +109,7 @@ struct FragmentOut {
 fragment FragmentOut fragmentShader(VertexOut in [[stage_in]], constant MaterialArg& material [[buffer(CUBE_MATERIAL_BUFFER_SLOT)]]) {
     FragmentOut out;
     out.color = material.tex.sample(material.samp, in.textureCoordinate);
-    out.id = 0u;
+    out.id = in.entity_id;
     return out;
 }
     

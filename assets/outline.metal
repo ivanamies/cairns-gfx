@@ -19,22 +19,39 @@ vertex VertexOut vertexShader(uint vid [[vertex_id]]) {
     return out;
 }
 
+static bool id_in_highlights(texture2d<uint> highlights, sampler samp,
+                              uint id) {
+    if (id == 0u) {
+        return false;
+    }
+    uint count = highlights.read(uint2(0u, 0u)).r;
+    for (uint i = 0u; i < count; ++i) {
+        if (highlights.read(uint2(i + 1u, 0u)).r == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
 fragment float4 fragmentShader(
         VertexOut in [[stage_in]],
         texture2d<float> color_tex [[texture(0)]],
         texture2d<uint>  id_tex    [[texture(1)]],
+        texture2d<uint>  highlights [[texture(2)]],
         sampler color_samp [[sampler(0)]]) {
-    float4 colour = color_tex.sample(color_samp, in.uv);
-    uint centre = id_tex.sample(color_samp, in.uv).r;
-    if (centre == 0u) {
+    // Y-flip on sample (matches composite_pip.metal); see outline.frag.
+    float2 s = float2(in.uv.x, 1.0 - in.uv.y);
+    float4 colour = color_tex.sample(color_samp, s);
+    uint centre = id_tex.sample(color_samp, s).r;
+    if (!id_in_highlights(highlights, color_samp, centre)) {
         return colour;
     }
     float2 texel = 1.0 / float2(id_tex.get_width(), id_tex.get_height());
-    uint n = id_tex.sample(color_samp, in.uv + float2(0.0,  texel.y)).r;
-    uint s = id_tex.sample(color_samp, in.uv + float2(0.0, -texel.y)).r;
-    uint e = id_tex.sample(color_samp, in.uv + float2( texel.x, 0.0)).r;
-    uint w = id_tex.sample(color_samp, in.uv + float2(-texel.x, 0.0)).r;
-    if (n != centre || s != centre || e != centre || w != centre) {
+    uint nn = id_tex.sample(color_samp, s + float2(0.0,  texel.y)).r;
+    uint ss = id_tex.sample(color_samp, s + float2(0.0, -texel.y)).r;
+    uint ee = id_tex.sample(color_samp, s + float2( texel.x, 0.0)).r;
+    uint ww = id_tex.sample(color_samp, s + float2(-texel.x, 0.0)).r;
+    if (nn != centre || ss != centre || ee != centre || ww != centre) {
         return float4(1.0, 0.95, 0.2, 1.0);
     }
     return colour;

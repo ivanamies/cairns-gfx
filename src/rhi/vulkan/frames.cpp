@@ -274,15 +274,14 @@ bool Frames::Init(Device& device) {
             return false;
         }
 
-        // Composite descriptor set layout: 2 COMBINED_IMAGE_SAMPLER frag.
-        // Binding 0 = primary color (used by all of composite_pip, depthviz,
-        // outline). Binding 1 = secondary tex (id_off for outline; unused by
-        // composite_pip + depthviz). Sharing the layout across the three
-        // fullscreen pipelines keeps the descriptor pool sizing simple --
-        // depthviz/composite_pip don't statically access binding 1, so the
-        // bind is a no-op for them.
+        // Composite descriptor set layout: 3 COMBINED_IMAGE_SAMPLER frag.
+        // Binding 0 = primary color (all of composite_pip, depthviz, outline).
+        // Binding 1 = secondary tex (id_off for outline). Binding 2 =
+        // highlights texture (R32U 1xN; outline-only). composite_pip and
+        // depthviz don't statically access bindings 1/2 so writing them is
+        // a no-op for those pipelines.
         {
-            VkDescriptorSetLayoutBinding b[2]{};
+            VkDescriptorSetLayoutBinding b[3]{};
             b[0].binding = 0;
             b[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             b[0].descriptorCount = 1;
@@ -291,9 +290,13 @@ bool Frames::Init(Device& device) {
             b[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             b[1].descriptorCount = 1;
             b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            b[2].binding = 2;
+            b[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            b[2].descriptorCount = 1;
+            b[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
             VkDescriptorSetLayoutCreateInfo li{};
             li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            li.bindingCount = 2;
+            li.bindingCount = 3;
             li.pBindings = b;
             if (vkCreateDescriptorSetLayout(dev, &li, nullptr,
                                             &plat.composite_set_layout_) !=
@@ -316,8 +319,9 @@ bool Frames::Init(Device& device) {
         sizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         sizes[2].descriptorCount = 2 * n;
         sizes[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        // 2 bindings per composite set (#207 outline shares the layout).
-        sizes[3].descriptorCount = 2 * n * kCompositeRingSize;
+        // 3 bindings per composite set (#207 outline shares the layout:
+        // color + id + highlights).
+        sizes[3].descriptorCount = 3 * n * kCompositeRingSize;
         VkDescriptorPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pci.poolSizeCount = 4;

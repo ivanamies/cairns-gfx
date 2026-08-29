@@ -132,6 +132,9 @@ public:
         std::vector<std::pair<cairns::DrawKey, uint32_t>> drawListSorted;
         std::vector<rhi::Handle<rhi::Texture>> resident_textures;
         std::vector<glm::mat4> draw_world_matrices;
+        // #207 parallel to draw_world_matrices; baked from MeshProxy::entity_id
+        // by BuildMeshOpaqueDraws so unlit.frag can write the per-fragment id.
+        std::vector<uint32_t> draw_entity_ids;
         // Per-viewport camera state. One RenderPassGlobals upload per
         // viewport at distinct globals_offset; RecordFrame issues one
         // forward pass per viewport with the matching offset.
@@ -390,6 +393,73 @@ public:
     }
     uint32_t FrameHeight() const {
         return final_target_.IsNull() ? swapchain_.Height() : final_target_h_;
+    }
+
+    // #207 (re)allocate per-viewport persistent R32U id targets if dims drift.
+    // Called at the top of RecordFrame so each viewport's id_target_ matches
+    // the current vp_w/vp_h. Destroys old targets through the rhi destroy
+    // queue so any in-flight frame using the prior dims is unaffected.
+    void EnsureIdTargets(uint32_t w, uint32_t h) {
+        if (w == id_target_w_ && h == id_target_h_ &&
+            !id_target_[0].IsNull()) {
+            return;
+        }
+        for (int v = 0; v < kNumViewports; ++v) {
+            if (!id_target_[v].IsNull()) {
+                rhi_.resources.Destroy(rhi_.alloc, id_target_[v]);
+                id_target_[v] = rhi::Handle<rhi::Texture>::Null;
+            }
+        }
+        id_target_w_ = w;
+        id_target_h_ = h;
+        for (int v = 0; v < kNumViewports; ++v) {
+            rhi::TextureDesc td{};
+            td.debug_name = "id_target";
+            td.dimensions = {static_cast<int32_t>(w),
+                             static_cast<int32_t>(h), 1};
+            td.format = rhi::Format::kR32Uint;
+            td.usage = rhi::kTexUsageColorTarget | rhi::kTexUsageSampled |
+                       rhi::kTexUsageTransferSrc;
+            td.memory = rhi::Memory::kDefault;
+            id_target_[v] = rhi_.resources.CreateTexture(rhi_.alloc, td);
+        }
+    }
+
+    // #207 (re)build the highlights texture from highlights_. Called by
+    // RecordFrame each frame; if the rev hasn't changed, no-op. On change,
+    // destroys the prior texture through the rhi destroy queue and creates
+    // a fresh 65x1 R32U with the new pack. Empty highlight set still
+    // produces a valid texture (count=0) so the outline frag's descriptor
+    // binding is always satisfied -- the early-out in id_in_highlights
+    // keeps it cheap.
+    void EnsureHighlightsTex() {
+        if (!highlights_tex_.IsNull() &&
+            highlights_tex_rev_ == highlights_rev_) {
+            return;
+        }
+        if (!highlights_tex_.IsNull()) {
+            rhi_.resources.Destroy(rhi_.alloc, highlights_tex_);
+            highlights_tex_ = rhi::Handle<rhi::Texture>::Null;
+        }
+        std::array<uint32_t, kMaxHighlights + 1> pack{};
+        const uint32_t n =
+            static_cast<uint32_t>(std::min<size_t>(highlights_.size(),
+                                                   kMaxHighlights));
+        pack[0] = n;
+        for (uint32_t i = 0; i < n; ++i) {
+            pack[i + 1] = highlights_[i].id;
+        }
+        rhi::TextureDesc td{};
+        td.debug_name = "highlights_tex";
+        td.dimensions = {static_cast<int32_t>(kMaxHighlights + 1), 1, 1};
+        td.format = rhi::Format::kR32Uint;
+        td.usage = rhi::kTexUsageSampled | rhi::kTexUsageTransferDst;
+        td.memory = rhi::Memory::kDefault;
+        td.initial_data = std::span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(pack.data()),
+            sizeof(uint32_t) * pack.size());
+        highlights_tex_ = rhi_.resources.CreateTexture(rhi_.alloc, td);
+        highlights_tex_rev_ = highlights_rev_;
     }
 
     // Reallocate final_target_ at the new dimensions. Surfaceless mode only.
@@ -887,6 +957,7 @@ public:
         s.drawList.resize(total_draws);
         s.drawListSorted.resize(total_draws);
         s.draw_world_matrices.resize(total_draws);
+        s.draw_entity_ids.resize(total_draws);
 
         // Fill pass -- stable_idx assigned by prefix sum over the proxy walk
         // (deterministic of input order, independent of execution order so a
@@ -928,6 +999,11 @@ public:
                     stable_idx);
                 s.drawList[stable_idx] = draw;
                 s.draw_world_matrices[stable_idx] = world_mat;
+                // Always emit the real entity id; outline.frag does the
+                // highlight-set filter via the highlights texture so pick
+                // can readback the real id from id_target_ regardless of
+                // outline state.
+                s.draw_entity_ids[stable_idx] = mp.entity_id;
                 ++stable_idx;
             }
         }
@@ -982,7 +1058,8 @@ public:
             assert(mptr && "bump alloc failed: material");
             memcpy(mptr, &material_gpu, sizeof(material_gpu));
 
-            const cairns::rhi::DrawTmp draw_tmp { .model_matrix = s.draw_world_matrices[i] };
+            cairns::rhi::DrawTmp draw_tmp { .model_matrix = s.draw_world_matrices[i] };
+            draw_tmp.entity_id = s.draw_entity_ids[i];
             uint32_t drawtmp_offset = 0;
             void* tptr = rhi_.alloc.BumpAllocate(
                 sizeof(cairns::rhi::DrawTmp), rhi_.alloc.UboAlign(),
@@ -1264,36 +1341,39 @@ public:
         // Also drain in surfaceless mode (cairns_serve) so the next
         // io.dumpTexture op sees the rendered pixels rather than reading
         // final_target_ while the render thread is still working on it.
-        if (golden_ || !final_target_.IsNull()) {
+        // #207 also drain when a pick is pending so the id_target_ readback
+        // sees the just-rendered frame -- windowed sdl-min normally lets
+        // the render thread run async, but Shift+LMB stalls one frame to
+        // resolve the pick (acceptable cost for an interactive event).
+        if (golden_ || !final_target_.IsNull() || pick_pending_) {
             render_thread_->Drain();
         }
 
-        // #208 stub: if a RequestPick fired this frame, readback
-        // final_target_ at the click coord. Today we sample BGRA (cheap
-        // visible check) and treat the raw color as the pick value;
-        // {type, id} swap with the R32U ID buffer once #206 lands.
-        // Surfaceless-only for now -- windowed dump path uses swapchain
-        // image readback (different code path) and isn't wired here.
-        if (pick_pending_ && !final_target_.IsNull()) {
-            std::vector<uint8_t> rgba;
-            uint32_t rw = 0;
-            uint32_t rh = 0;
-            if (rhi_.resources.ReadBackTextureRgba(final_target_, rgba, rw, rh)
-                && pick_x_ < rw && pick_y_ < rh) {
-                const size_t idx = (static_cast<size_t>(pick_y_) * rw +
-                                     pick_x_) * 4;
-                const uint32_t raw =
-                    (static_cast<uint32_t>(rgba[idx + 0])      ) |
-                    (static_cast<uint32_t>(rgba[idx + 1]) <<  8) |
-                    (static_cast<uint32_t>(rgba[idx + 2]) << 16) |
-                    (static_cast<uint32_t>(rgba[idx + 3]) << 24);
+        // #207 pick: read one R32U texel from id_target_[vp]. The forward
+        // pass writes entt::to_integral(entity)+1 there; value 0 = clear
+        // background (clicked empty space). Drop the result into highlights_
+        // so the outline pass activates on the next frame.
+        if (pick_pending_ && pick_viewport_ < kNumViewports &&
+            !id_target_[pick_viewport_].IsNull()) {
+            uint32_t entity_plus_one = 0;
+            if (rhi_.resources.ReadBackTextureR32UTexel(
+                    id_target_[pick_viewport_], pick_x_, pick_y_,
+                    entity_plus_one)) {
                 last_pick_result_.viewport = pick_viewport_;
                 last_pick_result_.x = pick_x_;
                 last_pick_result_.y = pick_y_;
                 last_pick_result_.type = cairns::SelectionType::kEntity;
-                last_pick_result_.id = 0;  // R32U decoder lands with #206
-                last_pick_result_.raw = raw;
+                last_pick_result_.id = entity_plus_one;
+                last_pick_result_.raw = entity_plus_one;
                 pick_resolved_ = true;
+                if (entity_plus_one != 0u) {
+                    std::vector<cairns::SelectionTarget> next;
+                    next.push_back({cairns::SelectionType::kEntity,
+                                    entity_plus_one, 0u});
+                    SetHighlights(std::move(next));
+                } else {
+                    ClearHighlights();
+                }
             }
             pick_pending_ = false;
         }
@@ -1405,6 +1485,8 @@ public:
         const int n_live = std::max(1, active_viewport_count_);
         const uint32_t vp_w = fb_w / static_cast<uint32_t>(n_live);
         const uint32_t vp_h = fb_h;
+        EnsureIdTargets(vp_w, vp_h);
+        EnsureHighlightsTex();
 
         // pass 1: particle_sim kCompute. import the writer ssbo so prune keeps
         // it (external side effect -- game thread reads particle_parity_out).
@@ -1467,10 +1549,11 @@ public:
                     dd.format = rhi::Format::kD32F;
                     dd.usage = rhi::kTexUsageDepthTarget | rhi::kTexUsageSampled;
                     depth_off[vp_idx] = b.CreateDepthTarget(dd);
-                    // #206 R32U id buffer (MRT). sampled+transfer_src so the
-                    // pick readback (#208) and the outline shader (#207)
-                    // can read it. Same dims as color_off so the MRT
-                    // framebuffer attachments match.
+                    // #207 R32U id buffer (MRT). Persistent (engine-owned via
+                    // id_target_[vp]) so end-of-frame pick can copyImageToBuffer
+                    // a 1x1 region after the render thread drains. Importing
+                    // skips the transient pool aliasing race that would
+                    // otherwise reuse the texture before readback.
                     rhi::GraphTextureDesc id_desc{};
                     id_desc.width = vp_w;
                     id_desc.height = vp_h;
@@ -1478,7 +1561,7 @@ public:
                     id_desc.usage = rhi::kTexUsageColorTarget |
                                      rhi::kTexUsageSampled |
                                      rhi::kTexUsageTransferSrc;
-                    id_off[vp_idx] = b.CreateColorTarget(id_desc);
+                    id_off[vp_idx] = b.ImportTexture(id_target_[vp_idx], id_desc);
                     b.AddColorOutput("color", color_off[vp_idx], rhi::LoadOp::kClear, clear);
                     const float id_clear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
                     b.AddColorOutput("id", id_off[vp_idx], rhi::LoadOp::kClear, id_clear);
@@ -1516,22 +1599,34 @@ public:
                         outline_off[vp_idx] = b.CreateColorTarget(od);
                         b.AddAttachmentInput(color_off[vp_idx]);
                         b.AddAttachmentInput(id_off[vp_idx]);
+                        // Import highlights_tex_ as a graph input so its
+                        // SHADER_READ_ONLY layout transition is emitted by
+                        // BeginRenderPass before DrawFullscreen samples it.
+                        rhi::GraphTextureDesc hd{};
+                        hd.width = kMaxHighlights + 1;
+                        hd.height = 1;
+                        hd.format = rhi::Format::kR32Uint;
+                        hd.usage = rhi::kTexUsageSampled;
+                        rhi::GraphTexture hg =
+                            b.ImportTexture(highlights_tex_, hd);
+                        b.AddAttachmentInput(hg);
                         const float oclear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
                         b.AddColorOutput("outline_color", outline_off[vp_idx],
                                          rhi::LoadOp::kClear, oclear);
                     },
                     [&, vp_idx](rhi::CommandRecorder& cmd,
                                 const rhi::PassResources& res) {
-                        const rhi::Handle<rhi::Texture> srcs[2] = {
+                        const rhi::Handle<rhi::Texture> srcs[3] = {
                             res.Resolve(color_off[vp_idx]),
                             res.Resolve(id_off[vp_idx]),
+                            highlights_tex_,
                         };
                         cmd.SetViewport(0.0f, 0.0f, static_cast<float>(vp_w),
                                         static_cast<float>(vp_h));
                         cmd.SetScissor(0, 0, vp_w, vp_h);
                         cmd.DrawFullscreen(
                             rhi_.resources, outline_pip_,
-                            std::span<const rhi::Handle<rhi::Texture>>(srcs, 2),
+                            std::span<const rhi::Handle<rhi::Texture>>(srcs, 3),
                             outline_sampler_);
                     });
             }
@@ -2134,6 +2229,22 @@ private:
     rhi::Handle<rhi::Texture> final_target_ = rhi::Handle<rhi::Texture>::Null;
     uint32_t final_target_w_ = 0;
     uint32_t final_target_h_ = 0;
+
+    // #207 persistent per-viewport R32U id targets. Replaces the previous
+    // transient id_off graph texture so end-of-frame pick readback (a
+    // vkCmdCopyImageToBuffer / metal blit on a 1x1 region) can read the
+    // last-rendered id without racing the transient pool's reuse. Sized
+    // (vp_w, vp_h); reallocated lazily by EnsureIdTargets when dims drift.
+    std::array<rhi::Handle<rhi::Texture>, kNumViewports> id_target_{};
+    uint32_t id_target_w_ = 0;
+    uint32_t id_target_h_ = 0;
+
+    // #207 highlights texture: R32U 65x1 packed as [count, id0, id1, ...].
+    // Sampled by outline.frag to filter the edge-detect to the current
+    // highlight set. Recreated on highlights_rev_ change (rare -- clicks).
+    rhi::Handle<rhi::Texture> highlights_tex_ = rhi::Handle<rhi::Texture>::Null;
+    uint32_t highlights_tex_rev_ = 0;
+    static constexpr uint32_t kMaxHighlights = 64;
 
     // P4 selection / highlight / pick. Selection + highlight are
     // document-side state; rev counters let the protocol's

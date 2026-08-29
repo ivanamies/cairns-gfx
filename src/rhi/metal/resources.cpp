@@ -516,6 +516,38 @@ bool Resources::ReadBackTextureRgba(Handle<Texture> h,
     return true;
 }
 
+// #207 single-texel R32U readback for pick. Blits a 1x1 region into a
+// shared MTL::Buffer, waits, returns the uint32_t. Caller drains in-flight
+// work targeting |h| beforehand (we don't add cross-frame sync here).
+bool Resources::ReadBackTextureR32UTexel(Handle<Texture> h, uint32_t x,
+                                         uint32_t y, uint32_t& out_value) {
+    Texture::Hot* hot = textures.GetHot(h);
+    if (!hot || !hot->api_view) {
+        return false;
+    }
+    MTL::Texture* tex = hot->api_view;
+    if (x >= tex->width() || y >= tex->height()) {
+        return false;
+    }
+    const NS::UInteger bpr = 4;  // R32U = 4 bytes / texel; 1-texel row.
+    MTL::Buffer* readback = plat.device_->newBuffer(
+        bpr, MTL::ResourceStorageModeShared);
+    if (!readback) {
+        return false;
+    }
+    MTL::CommandBuffer* cb = plat.queue_->commandBuffer();
+    MTL::BlitCommandEncoder* blit = cb->blitCommandEncoder();
+    blit->copyFromTexture(tex, 0, 0, MTL::Origin{x, y, 0},
+                          MTL::Size{1, 1, 1}, readback, 0, bpr, 0);
+    blit->endEncoding();
+    cb->commit();
+    cb->waitUntilCompleted();
+    const uint32_t* p = static_cast<const uint32_t*>(readback->contents());
+    out_value = *p;
+    readback->release();
+    return true;
+}
+
 // One-shot clear via a render-pass with loadActionClear / storeActionStore.
 bool Resources::ClearColorTexture(Handle<Texture> h, const float color[4]) {
     Texture::Hot* hot = textures.GetHot(h);

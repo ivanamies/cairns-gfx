@@ -16,12 +16,14 @@ layout(set = 2, binding = 0) uniform DrawTmpUBO {
     uint mesh_id;
     uint tex_id;
     uint sampler_id;
-    uint yolo_padding;
+    uint entity_id;  // #207
 } draw_tmp;
 
 layout(location = 0) out vec2 outTexCoord;
+layout(location = 1) flat out uint outEntityId;  // #207
 
 void main() {
     gl_Position = globals.view_proj * draw_tmp.model_matrix * inPos;
     outTexCoord = inUV;
+    outEntityId = draw_tmp.entity_id;
 }

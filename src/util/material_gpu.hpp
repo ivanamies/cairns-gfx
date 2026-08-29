@@ -21,7 +21,10 @@ struct DrawTmp {
     uint32_t mesh_id = std::numeric_limits<uint32_t>::max();
     uint32_t tex_id = std::numeric_limits<uint32_t>::max();
     uint32_t sampler_id = std::numeric_limits<uint32_t>::max();
-    uint32_t yolo_padding = std::numeric_limits<uint32_t>::max();
+    // #207 per-draw entity id (== MeshProxy::entity_id; +1 over the
+    // entt::entity index so 0 means "background"). Written to the R32U
+    // id_off attachment by unlit.frag; sampled by outline.frag.
+    uint32_t entity_id = 0;
 };
 
 }  // namespace cairns::rhi

@@ -849,6 +849,125 @@ bool Resources::ReadBackTextureRgba(Handle<Texture> h,
     return true;
 }
 
+// #207 single-texel R32U readback for pick. vkCmdCopyImageToBuffer of a
+// 1x1 region into a host-visible staging buffer, waits, reads the uint32.
+// Caller is expected to have drained in-flight rendering before calling
+// (we don't add cross-frame sync beyond an immediate queueWaitIdle).
+bool Resources::ReadBackTextureR32UTexel(Handle<Texture> h, uint32_t x,
+                                         uint32_t y, uint32_t& out_value) {
+    Texture::Cold* cold = textures.GetCold(h);
+    if (!cold) {
+        return false;
+    }
+    VkImage img = static_cast<VkImage>(cold->api_image);
+    if (img == VK_NULL_HANDLE || x >= cold->width || y >= cold->height) {
+        return false;
+    }
+    const VkDeviceSize buf_size = 4;  // one R32U texel
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = buf_size;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VkBuffer buf = VK_NULL_HANDLE;
+    if (vkCreateBuffer(plat.device_, &bci, nullptr, &buf) != VK_SUCCESS) {
+        return false;
+    }
+    VkMemoryRequirements mr{};
+    vkGetBufferMemoryRequirements(plat.device_, buf, &mr);
+    VkPhysicalDeviceMemoryProperties mp{};
+    vkGetPhysicalDeviceMemoryProperties(plat.physical_, &mp);
+    uint32_t type_idx = 0;
+    bool found_type = false;
+    for (uint32_t i = 0; i < mp.memoryTypeCount; ++i) {
+        const auto need = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        if ((mr.memoryTypeBits & (1u << i)) &&
+            (mp.memoryTypes[i].propertyFlags & need) == need) {
+            type_idx = i;
+            found_type = true;
+            break;
+        }
+    }
+    if (!found_type) {
+        vkDestroyBuffer(plat.device_, buf, nullptr);
+        return false;
+    }
+    VkMemoryAllocateInfo mai{};
+    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.allocationSize = mr.size;
+    mai.memoryTypeIndex = type_idx;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    vkAllocateMemory(plat.device_, &mai, nullptr, &mem);
+    vkBindBufferMemory(plat.device_, buf, mem, 0);
+
+    VkCommandBufferAllocateInfo cai{};
+    cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cai.commandPool = plat.command_pool_;
+    cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cai.commandBufferCount = 1;
+    VkCommandBuffer cb = VK_NULL_HANDLE;
+    vkAllocateCommandBuffers(plat.device_, &cai, &cb);
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cb, &bi);
+
+    // id_off was last written as a color attachment in the forward pass --
+    // its finalLayout is COLOR_ATTACHMENT_OPTIMAL. Outline reads it via a
+    // shader sample which transitions it to SHADER_READ_ONLY_OPTIMAL. Use
+    // SHADER_READ_ONLY as the oldLayout so the barrier is correct for the
+    // typical post-outline state; if it's in COLOR_ATTACHMENT_OPTIMAL the
+    // tracker's transition() upstream of this call will have updated it.
+    VkImageMemoryBarrier to_src{};
+    to_src.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    to_src.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    to_src.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    to_src.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_src.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_src.image = img;
+    to_src.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    to_src.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    to_src.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
+                          0, nullptr, 1, &to_src);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageOffset = {static_cast<int32_t>(x), static_cast<int32_t>(y), 0};
+    region.imageExtent = {1, 1, 1};
+    vkCmdCopyImageToBuffer(cb, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                            buf, 1, &region);
+
+    VkImageMemoryBarrier to_shader = to_src;
+    to_shader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    to_shader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    to_shader.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    to_shader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                          0, nullptr, 0, nullptr, 1, &to_shader);
+
+    vkEndCommandBuffer(cb);
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cb;
+    vkQueueSubmit(plat.queue_, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(plat.queue_);
+
+    void* mapped = nullptr;
+    vkMapMemory(plat.device_, mem, 0, buf_size, 0, &mapped);
+    out_value = *static_cast<const uint32_t*>(mapped);
+    vkUnmapMemory(plat.device_, mem);
+
+    vkFreeCommandBuffers(plat.device_, plat.command_pool_, 1, &cb);
+    vkDestroyBuffer(plat.device_, buf, nullptr);
+    vkFreeMemory(plat.device_, mem, nullptr);
+    return true;
+}
+
 // vkCmdClearColorImage on a freshly-acquired image; transition into
 // SHADER_READ_ONLY_OPTIMAL so the subsequent dump path can read it.
 bool Resources::ClearColorTexture(Handle<Texture> h, const float color[4]) {
