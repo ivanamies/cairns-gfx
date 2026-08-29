@@ -70,12 +70,10 @@ public:
     }
     
     bool initSwapChain(SDL_Window* window) {
-        swapChain_ = std::make_unique<cairns::rhi::SwapChain>();
-        
-        if ( !rm_.InitSwapChain(*swapChain_, window)) {
+        if ( !rm_.InitSwapChain(swapchain_, window)) {
             return false;
         }
-        
+
         return true;
     }
     
@@ -202,7 +200,7 @@ public:
         if ( !initRenderPipeline() ) {
             return false;
         }
-        if ( !rm_.InitFrameTargets(*swapChain_) ) {
+        if ( !rm_.InitFrameTargets(swapchain_) ) {
             return false;
         }
         if ( !initParticles() ) {
@@ -244,7 +242,7 @@ public:
         
         const glm::mat4 view_matrix = glm::lookAtRH(camera_pos, camera_pos + camera_dir, world_up);
         
-        const float aspect_ratio = (1.0f * swapChain_->Width()) / swapChain_->Height();
+        const float aspect_ratio = (1.0f * swapchain_.Width()) / swapchain_.Height();
         const float fov = 90 * (std::numbers::pi / 180.0f);
         const float near_z = 0.1f;
         const float far_z = 100.0f;
@@ -253,8 +251,8 @@ public:
         
         { // set up render pass globals
             // set up camera
-            const float screen_width = swapChain_->Width();
-            const float screen_height = swapChain_->Height();
+            const float screen_width = swapchain_.Width();
+            const float screen_height = swapchain_.Height();
             glm::mat4 view_proj = proj_matrix * view_matrix;
             cairns::rhi::RenderPassGlobals render_pass_globals {
                 .view_proj = view_proj,
@@ -366,7 +364,7 @@ public:
             rm_.SetDumpPath("/tmp/cairns_dump.png");
         }
 
-        rhi::FrameContext fc = rm_.BeginFrame(*swapChain_);
+        rhi::FrameContext fc = rm_.BeginFrame(swapchain_);
 
         const uint64_t now_ticks = SDL_GetTicks();
         float delta_time = 0.016f;
@@ -417,8 +415,8 @@ public:
         rhi::RenderPassDesc rp{};
         rp.color = rhi::Span<const rhi::ColorAttachment>(col, 1);
         rp.depth.clear_depth = 1.0f;
-        rp.width = swapChain_->Width();
-        rp.height = swapChain_->Height();
+        rp.width = swapchain_.Width();
+        rp.height = swapchain_.Height();
         fc.cmd.BeginRenderPass(rp);
 
         rhi::MeshDrawList ml{};
@@ -426,7 +424,7 @@ public:
         ml.sorted_indices =
             rhi::Span<const uint32_t>(sorted_draw_indices_.data(), sorted_draw_indices_.size());
         ml.pipeline = unlit_;
-        ml.bindless = bindless_bg_handle_;
+        ml.bindless = bindless_bg_;
         ml.globals_offset = globals_offset_;
         ml.resident_textures = rhi::Span<const rhi::Handle<rhi::Texture>>(
             resident_textures_.data(), resident_textures_.size());
@@ -435,7 +433,7 @@ public:
         fc.cmd.DrawMeshes(ml);
 
         rhi::PointDraw pd{};
-        pd.pipeline = particle_render_pso_;
+        pd.pipeline = particle_render_shader_;
         pd.vertex_buffer = particle_ssbo_[1 - particle_parity_];
         pd.vertex_offset = 0;
         pd.vertex_count = kParticleCount;
@@ -482,7 +480,7 @@ public:
             rdesc.attr_buffer_slot = R::kMeshesSlotOffset;
             rdesc.sampler_slot = R::kSamplersSlotOffset;
             rdesc.debug_name = "bindless";
-            bindless_bg_handle_ = rm_.CreateBindlessRegistry(rdesc);
+            bindless_bg_ = rm_.CreateBindlessRegistry(rdesc);
 
             texture_id_map_.clear();
             mesh_attr_id_map_.clear();
@@ -495,24 +493,24 @@ public:
                     MTL::Texture* tex = rm_.GetHot(h)->api_view;
                     if (tex) {
                         texture_id_map_[h.index] =
-                            rm_.BindlessAddTexture(bindless_bg_handle_, h);
+                            rm_.BindlessAddTexture(bindless_bg_, h);
                     }
                 }
                 for (size_t j = 0; j < scene.meshes.size(); ++j) {
                     auto h = scene.meshes[j].attrHandle;
                     if (!h.IsNull()) {
                         mesh_attr_id_map_[h.index] =
-                            rm_.BindlessAddAttrBuffer(bindless_bg_handle_, h);
+                            rm_.BindlessAddAttrBuffer(bindless_bg_, h);
                     }
                 }
                 for (size_t j = 0; j < scene.samplerHandles.size(); ++j) {
                     auto h = scene.samplerHandles[j];
                     sampler_id_map_[h.index] =
-                        rm_.BindlessAddSampler(bindless_bg_handle_, h);
+                        rm_.BindlessAddSampler(bindless_bg_, h);
                 }
             }
 
-            rm_.BindlessFinalize(bindless_bg_handle_);
+            rm_.BindlessFinalize(bindless_bg_);
         }
 
         return true;
@@ -545,8 +543,8 @@ public:
             desc.depth_format = rhi::Format::kD32F;
             desc.sample_count = sampleCount;
             desc.debug_name = "particle_render";
-            particle_render_pso_ = rm_.CreateGraphicsPipeline(desc);
-            if (particle_render_pso_.IsNull()) {
+            particle_render_shader_ = rm_.CreateGraphicsPipeline(desc);
+            if (particle_render_shader_.IsNull()) {
                 return false;
             }
         }
@@ -595,7 +593,7 @@ public:
         // Since we have raw pointers from create/new, we should release them.
         if (metalCommandQueue) metalCommandQueue->release();
 
-        swapChain_->Deinit();
+        swapchain_.Deinit();
 
         return true;
     }
@@ -628,12 +626,12 @@ private:
     
     rhi::ResourceManager rm_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
-    rhi::Handle<rhi::BindGroup> bindless_bg_handle_;
+    rhi::Handle<rhi::BindGroup> bindless_bg_;
     std::unordered_map<uint32_t, uint32_t> texture_id_map_;
     std::unordered_map<uint32_t, uint32_t> mesh_attr_id_map_;
     std::unordered_map<uint32_t, uint32_t> sampler_id_map_;
 
-    std::unique_ptr<cairns::rhi::SwapChain> swapChain_ = nullptr;
+    cairns::rhi::SwapChain swapchain_;
     // command queue
     MTL::CommandQueue* metalCommandQueue = nullptr;
     // shaders
@@ -641,7 +639,7 @@ private:
     // particles
     static constexpr uint32_t kParticleCount = 512;
     rhi::Handle<rhi::Kernel> particle_kernel_;
-    rhi::Handle<rhi::Shader> particle_render_pso_;
+    rhi::Handle<rhi::Shader> particle_render_shader_;
     rhi::Handle<rhi::Buffer> particle_ssbo_[2];
     uint32_t particle_parity_ = 0;
     uint32_t globals_offset_ = 0;
