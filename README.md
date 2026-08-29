@@ -70,7 +70,7 @@ readout walks the entire engine surface in one pass.
 **+ mesh LOD** (after the LOD plan lands):
 - Same demo. **And now check mesh LOD un-effed the triangle
   bottleneck on phones.** The geometry-bound forward pass diagnosed
-  at `6386768` (tiny-quad commit) was specifically per-triangle
+  at `b9a936e` (tiny-quad commit) was specifically per-triangle
   vertex/binner work on Adreno. LOD swap-out at distance must drop
   per-frame triangle count by ≥4× at the documented camera poses,
   and S22 forward GPU time must drop proportionally — not flat. This
@@ -186,14 +186,14 @@ build-on-game-thread is the headliner; see there.
 
 `src/render/render_graph` is a partial copy of Themaister's Granite render graph
 (`renderer/render_graph.{cpp,hpp}`). Granite's headline feature is *automatic,
-complete* barrier/semaphore generation — and as of `309fb53` the
+complete* barrier/semaphore generation — and as of `09da9be` the
 synchronization model is fully ported for correctness (invalidate/flush +
 WAR + buffers, all backends off the same graph-computed barriers; the
 historical cross-frame `final_target_` WAW flake is dead). **Rule: copy
 Granite, do not re-invent.** Point-by-point:
 
 **The core stray — barriers belonged in the graph with persistent per-resource
-state. PORTED (texture model `08fccb5`; WAR + buffers `3d9cd68`..`309fb53`).**
+state. PORTED (texture model `82a5505`; WAR + buffers `1c2c000`..`09da9be`).**
 
 - **Granite computes barriers in `bake()`; now we do too.** `render_graph::
   Execute` computes per-pass `invalidate` (before) + `flush` (after) barriers
@@ -843,7 +843,7 @@ choice. Then open the IDE project inside `build/` and run.
 
 Note: UWP support was [removed from SDL3](https://github.com/libsdl-org/SDL/pull/10731)
 during its development. For historical reasons, a working UWP sample exists
-at [df270da](https://github.com/Ravbug/sdl3-sample/tree/df270daa8d6d48426e128e50c73357dfdf89afbf).
+at [735f0ff](https://github.com/Ravbug/sdl3-sample/tree/df270daa8d6d48426e128e50c73357dfdf89afbf).
 
 ### Updating SDL
 

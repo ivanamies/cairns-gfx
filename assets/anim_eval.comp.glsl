@@ -14,7 +14,7 @@
 //   4. Cooperative palette build: palette[j] = inv(mesh_world) * world[joint_node[j]] * inverse_bind[j],
 //      writing into the persistent palette buffer.
 //
-// Caps (ratified over plan v7 baseline of 96/128, after Phase 0a `aa6e02d`
+// Caps (ratified over plan v7 baseline of 96/128, after Phase 0a `3692803`
 // measured max_joints=254 / max_nodes=256 on the LoL champion set):
 //   kMaxJointsPerSkin   = 256
 //   kMaxNodesPerScene   = 256

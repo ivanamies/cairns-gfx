@@ -56,7 +56,7 @@ call. None of that should ever malloc; the slab was right there.
 Because I only have a theoretical understanding of allocators and my
 human caught them when he fired up the profiler.
 
-### Incident 3 — `ac2746d`, "tag every STL" -> tagged half of one tree
+### Incident 3 — `ae52bcc`, "tag every STL" -> tagged half of one tree
 
 Phase E: user said "for each STL struct, give each one a custom print
 allocator... it is everything that is still using an STL allocator
@@ -93,7 +93,7 @@ currently looking at*. The rule for next time: when the user says
 "every X", grep for X across `src/` and confirm the list against
 the result before doing anything else.
 
-### Incident 2 — `44df8ab`, build_draws worker pool
+### Incident 2 — `86eaaf1`, build_draws worker pool
 
 Adding multithreaded fan-out for `BuildMeshOpaqueDraws`, I reached for
 `std::vector<std::thread> build_workers_;` as the worker storage and
@@ -154,7 +154,7 @@ map, or I do not write it.
 
 ## Committed without verifying (counter: 4)
 
-### Incident 4 — `8ea55de`, "fixed" 500 heroes without checking the window
+### Incident 4 — `4c348dc`, "fixed" 500 heroes without checking the window
 
 End-of-night #321 + #322 close: I committed the skin-pool / clip-
 selection fixes, took ONE 100-hero windowed dump showing animated
@@ -162,7 +162,7 @@ heroes, and went straight to marking 320/321/322 completed in the
 task list. Next morning the user came back, asked for 500 heroes,
 spawnTotal(500) reported entities=500, prefabs=100, skin_eval +
 skinning_compute both nonzero -- and the window was EMPTY. Zero
-heroes on screen. The `3f6cf8c`/`811bff8` "fixed" was for the 100-hero case I
+heroes on screen. The `f528615`/`d21e3c1` "fixed" was for the 100-hero case I
 actually screenshotted; the 500 case I never re-tested in the
 windowed app after the restart-under-stdin path.
 
@@ -229,7 +229,7 @@ allocator discipline can't cover the case.
 
 ## Added a field to a per-draw / per-dispatch struct (counter: 1)
 
-### Incident 1 — `ba741db`, `SkinDispatchBatch::palette_buffer`
+### Incident 1 — `23a915c`, `SkinDispatchBatch::palette_buffer`
 
 Wiring up Phase 5b GPU palette eval, the skin kernel's Group B binding 1
 (palettes) needed to point at the persistent `palette_out_buf_` instead
@@ -287,9 +287,9 @@ honest about its scope.
 
 ## Edited user-curated files without permission (counter: 1)
 
-### Incident 1 — `1faaf14`, PERFORMANCE.md (twice) + MISTAKES.md
+### Incident 1 — `50bc276`, PERFORMANCE.md (twice) + MISTAKES.md
 
-Wrote new sections to PERFORMANCE.md (commits `967239d` + `0404525`)
+Wrote new sections to PERFORMANCE.md (commits `f38a780` + `5d6f996`)
 and extended MISTAKES.md with the per-draw-field entry above without
 first asking. User caught the second PERFORMANCE.md write mid-flight
 and told me to remove both.
@@ -311,7 +311,7 @@ before writing.
 
 ## Cited an optimization for the wrong GPU family (counter: 1)
 
-### Incident 1 — Phase S.1 LDS palette in skin.comp (`b5495c4`)
+### Incident 1 — Phase S.1 LDS palette in skin.comp (`131d1a4`)
 
 Plan: `~/dev/plans/gfx_skinning-compute-optimization.md`.
 
@@ -319,7 +319,7 @@ Landed LDS palette (`shared mat4 s_palette[256]`, 16 KB). Aaltonen +
 Naughty Dog ship this — on **GCN**. Cairns targets Apple TBDR (dev)
 + Adreno (S22) + WebGPU. Different hardware families.
 
-Receipts (PERFORMANCE.md `b5495c4`):
+Receipts (PERFORMANCE.md `131d1a4`):
 - M2 Max metal: skinning_compute 5.0 ms → 11.7 ms (2.3× regression).
 - S22 Adreno 730: animation broken, no valid perf number.
 - Metal mirror needed "4 rows per joint, rebuild on read" gymnastics

@@ -7,7 +7,7 @@ here.
 
 ---
 
-## #picking-accel — CPU ray-cast pick is a linear scan (`2d133cb`)
+## #picking-accel — CPU ray-cast pick is a linear scan (`3e11f43`)
 
 Picking was moved from the GPU id-buffer readback to a CPU ray-cast
 (`Engine::ResolvePickRaycast`) so it is SYNCHRONOUS + identical on metal/vulkan/
@@ -26,7 +26,7 @@ Current shortcuts, fine at hundreds of actors, fix before the 3300-GLB rung:
 
 ---
 
-## #resize-surface-bugs — window/surface resize is broken across backends (`8b874a4`)
+## #resize-surface-bugs — window/surface resize is broken across backends (`f957b1f`)
 
 One bug class, three surfaces. The engine renders correctly (golden gate is green
 on metal/vk/webgpu; headless WebGPU captures the die/viking perfectly and stably)
@@ -60,9 +60,9 @@ flaky, so investigate with a real repro before "fixing."
 
 ---
 
-## #webgpu-browser-strictness — animated champions in Chrome (`8fdbbd8`)
+## #webgpu-browser-strictness — animated champions in Chrome (`437b071`)
 
-**RESOLVED `9e22e9e` — the WebGPU/Chrome web app reached metal/vulkan SDL
+**RESOLVED `9221a6b` — the WebGPU/Chrome web app reached metal/vulkan SDL
 parity.** Same imgui scenario picker + HUD; all scenarios (triangle, dice,
 viking, static + ANIMATED champions, 20-champ + depth strip); CPU ray-cast
 pick + selection highlight; click-to-pick. The Dawn-strictness rejections below
@@ -77,14 +77,14 @@ WebGPU reached full parity with metal in the **native/headless golden gate**
 things that pass the native gate are rejected in Chrome. STATIC champions render
 fine in-browser (W7 move-a-champion works); ANIMATED (skinned) champions hit:
 
-- ~~**anim_eval has 12 storage buffers > Chrome's 10**~~ — DONE (b727ddf, #231):
+- ~~**anim_eval has 12 storage buffers > Chrome's 10**~~ — DONE (0b291b5, #231):
   packed 12 → 6 SSBOs (ae_i32 = parent/topo/joint_nodes/times-bits; ae_vec4 =
   bind_pose/values/inverse_binds; ae_word16 = channels/samplers; + headers +
   world_scratch + palette_out). Pure data-layout change, all 3 backends bit-identical
   (no re-bake). Plus a 10-SSBO / 256 MB boot floor in DeviceCaps that REFUSES devices
-  below it (fc921fa) — so the count is no longer a silent-disable, and 6 is well under
+  below it (a68af81) — so the count is no longer a silent-disable, and 6 is well under
   the floor.
-- ~~**skin output pool 1 GiB whole-pool bind > 128 MiB floor**~~ — MITIGATED (fc921fa):
+- ~~**skin output pool 1 GiB whole-pool bind > 128 MiB floor**~~ — MITIGATED (a68af81):
   desktop pool capped 1 GiB → 256 MB and the boot guard refuses devices with
   `maxStorageBufferRange` < 256 MB, so the whole-pool bind always fits. (A further
   refinement — binding only the per-batch output slice instead of `WGPU_WHOLE_SIZE` —
@@ -144,7 +144,7 @@ champion, before/after capture) is DONE with static champions.
 
 ---
 
-## #229 scenario launcher + Unity-components refactor (`c8b5112`)
+## #229 scenario launcher + Unity-components refactor (`ff8ab70`)
 
 Remaining work:
 
@@ -170,7 +170,7 @@ Remaining work:
 
 Our `src/render/render_graph` is a partial copy of Granite's render graph,
 whose headline feature is *automatic* barrier/semaphore insertion.
-**Correctness parity reached at `309fb53`** (granite-sync-port plan, G0–G2c):
+**Correctness parity reached at `09da9be`** (granite-sync-port plan, G0–G2c):
 persistent per-resource `PipelineEvent` (textures AND buffers), RAW/WAW/layout
 + WAR (read-as-fake-flush), compute passes barriered via
 `BeginComputePass`/`EndComputePass`, all backends off the same graph-computed
@@ -205,7 +205,7 @@ Also surfaced (not a graph gap): a **pre-existing MSAA sample-count mismatch**
 
 ## Deterministic imgui rendering (per-pixel hash gates for the UI work)
 
-The imgui overlay IS bit-stable per process run today (proven at `e5edf12`:
+The imgui overlay IS bit-stable per process run today (proven at `95117ba`:
 identical MD5 across standalone runs). The heavy JS/imgui editor work
 (`~/dev/plans/gfx_js-imgui-editor-ui.md`) keeps per-pixel goldens
 viable by holding these invariants -- each one, when violated, is a
@@ -237,7 +237,7 @@ diagnosed source of drift:
    gap). Until then, run `[imgui]` isolated -- and after any picker-visible
    change (adding/renaming assets/scripts/*.js!), REBAKE `imgui.overlay`:
    the overlay renders the scenario button list, so a stable-but-new image
-   is expected, not a flake (exactly the `1cbf608` incident).
+   is expected, not a flake (exactly the `4baa236` incident).
 7. **Content rule for UI scripts.** No `Date.now()`/random in draw paths;
    text is fixed or mocked; scrolling starts pinned (`SetScrollY(0)`).
 
@@ -245,7 +245,7 @@ diagnosed source of drift:
 
 ## Active
 
-### wgpu_readback_smoke broken -> full spec-mac-metal builds stop early (`36e364d`)
+### wgpu_readback_smoke broken -> full spec-mac-metal builds stop early (`2375a83`)
 `tests/wgpu_readback_smoke.cpp:70/:89` fail to compile in spec-mac-metal
 (`td.size = {..}` / `ca.clearValue = {..}` "expected expression" -- the
 wgpu-native vs emdawnwebgpu header divergence bit the brace-inits). The W3
@@ -256,7 +256,7 @@ worked around with `--target cairns_golden_tests`). Either fix the inits per
 header or drop the target from the default build (CAIRNS_BUILD_WGPU_SMOKE off).
 
 ### Shadow-map correctness: side-polarity + acne + peter-pan all machine-proven
-`bdf7a5f`+`bb358f7`: tests/test_npr_properties.cpp proves headlessly (metal+vk) that
+`45a71ea`+`de68b6f`: tests/test_npr_properties.cpp proves headlessly (metal+vk) that
 shadows (a) only darken, (b) toggle with castShadows, (c) land on the
 geometrically correct side (darkened-centroid tracks light X-tilt), (d) NO
 acne: an unoccluded convex ground renders identical (<=1 LSB) with shadows on
@@ -289,10 +289,10 @@ pass it explicitly; per-instance state lives as a member. ONLY exceptions: state
 the language/ABI forces global (the replaceable global `operator new`/`delete`,
 e.g. `src/util/alloc_count.cpp`'s counters) or a 3rd-party dependency forces it.
 Known offenders:
-- `CommandRegistry::Instance()` — DONE (08d3ea7). Constructible + non-copyable;
+- `CommandRegistry::Instance()` — DONE (d82b704). Constructible + non-copyable;
   serve/main(AppContext)/web(WebApp) own + pass it; RegisterAlias forwards via
   captured `this`; tests use fresh local registries.
-- `static JsState s` (script_ops.cpp) — DONE (9a4bc9b). Now a `ScriptHost` struct
+- `static JsState s` (script_ops.cpp) — DONE (0f43965). Now a `ScriptHost` struct
   owned alongside the registry; the JS->C++ bridge reaches it via
   JS_SetContextOpaque (no static). serve/main/web/tests each own one.
 - `cairns::Timer` static accumulators (accum_times_/accum_itrs_/slot_names_ +
@@ -346,7 +346,7 @@ draws. WebGPU / WebGL / DX12 have no base-instance (Aaltonen slide 42), so index
 per-instance data off `instance_index`. Consumers: two_die (die.glb ×2) + the
 grid scenarios.
 
-### White champion in the nested golden -- RESOLVED: broken asset, engine faithful (`70706b3`)
+### White champion in the nested golden -- RESOLVED: broken asset, engine faithful (`5ac7fdf`)
 The near-white champion in `nested graph: 20 GLBs` is **aatrox_victorious.glb**
 (kDebugGlbs idx 12, prefab 12, entity_id 13; earlier notes blamed
 aatrox_prestige_blood_moon idx 7 -- that was a crop x/y mix-up; idx 7/8 render

@@ -5,7 +5,7 @@ Newest first.
 
 ---
 
-## `b69f582` — perf smoke, 4-platform pass
+## `41ee82b` — perf smoke, 4-platform pass
 
 Scenario-driven (desktop via `scripts/dev_drive.sh` eval of the scenario script;
 Android + web via the picker), 120-frame timer windows at steady state. Actor
@@ -62,7 +62,7 @@ browser."
 
 ---
 
-## `6674340` — perf smoke, 300 actors / 100 distinct GLBs
+## `90f619c` — perf smoke, 300 actors / 100 distinct GLBs
 
 **Forced down from 500 → 300 actors by WebGPU.** The anim_eval SSBO pack (12 → 6
 buffers, to fit WebGPU's 8/10 storage-buffers-per-stage floor) and the
@@ -96,7 +96,7 @@ The cost of WebGPU portability is the actor-count drop (500 → 300), not frame 
 
 ---
 
-## `73ce3c4` — run.js boot, 500 actors / 100 distinct GLBs
+## `550bd90` — run.js boot, 500 actors / 100 distinct GLBs
 
 ### macOS, M2 Max, vk Release, 2560×1440, 30s capture, 120-frame window
 
@@ -118,7 +118,7 @@ The cost of WebGPU portability is the actor-count drop (500 → 300), not frame 
 
 ---
 
-## `c78ed77` — revert S.1 LDS palette; 500 actors / 100 distinct GLBs
+## `1a05c2d` — revert S.1 LDS palette; 500 actors / 100 distinct GLBs
 
 ### macOS, M2 Max, 2560×1440, vsync, CAIRNS_AGENT_STDIN + spawnTotal(500)
 
@@ -141,7 +141,7 @@ Note on `frame` = 20.84 ms: `CGDisplayCopyDisplayMode(CGMainDisplayID()).refresh
 
 ---
 
-## bisect `8e778e9` — skinning_compute regression `c838f5f` → `9a94846`
+## bisect `18966c5` — skinning_compute regression `08230ad` → `8611ab4`
 
 Bisect run on `bisect/skinning-perf` to chase the bad animation GPU numbers.
 500 actors / 100 distinct GLBs, metal Release, M2 Max, 2560×1440, vsync (frame locked ~20.84 ms).
@@ -149,30 +149,30 @@ Bisect threshold: skinning_compute < 8 ms = good, ≥ 8 ms = bad.
 
 | commit       | description                                | skinning_compute    | forward_vp0 | record  | build_draws | verdict |
 |--------------|--------------------------------------------|---------------------|-------------|---------|-------------|---------|
-| `c838f5f` | P9 walking-clip + SkinRef attach | — (slot not present)| 1.72 ms     | 0.40 ms | 0.52 ms     | —       |
-| `302f58c` | imgui flicker fix               | 5.18 ms             | 3.87 ms     | 0.60 ms | 0.64 ms     | good    |
-| `9737baa` | phase A.1 conditional id MRT               | 4.97 ms             | —           | —       | —           | good    |
-| `a82c326` | windowed crash fix (ImDrawData bypass)     | 4.86 ms             | —           | —       | —           | good    |
-| `2694662` | phase H.6 hoist resident_textures          | 4.84 ms             | —           | —       | —           | good    |
-| `a155ac9` | phase E.0 vk generic recorder loops        | 4.94 ms             | —           | —       | —           | good    |
-| **`b5495c4`** | **phase S.1 LDS palette in skin.comp** | **11.70 ms**    | —           | —       | —           | **first BAD** |
-| `9a94846` | Phase S.2 pack skin attrs       | 11.09 ms            | 1.49 ms     | 0.48 ms | 0.53 ms     | bad     |
-| `577938e` | known-good rewind = `984dae1`              | 14.11 ms            | 1.51 ms     | 0.42 ms | 0.47 ms     | bad     |
+| `08230ad` | P9 walking-clip + SkinRef attach | — (slot not present)| 1.72 ms     | 0.40 ms | 0.52 ms     | —       |
+| `ab89335` | imgui flicker fix               | 5.18 ms             | 3.87 ms     | 0.60 ms | 0.64 ms     | good    |
+| `b3de3b3` | phase A.1 conditional id MRT               | 4.97 ms             | —           | —       | —           | good    |
+| `e5c1770` | windowed crash fix (ImDrawData bypass)     | 4.86 ms             | —           | —       | —           | good    |
+| `359f229` | phase H.6 hoist resident_textures          | 4.84 ms             | —           | —       | —           | good    |
+| `d64e135` | phase E.0 vk generic recorder loops        | 4.94 ms             | —           | —       | —           | good    |
+| **`131d1a4`** | **phase S.1 LDS palette in skin.comp** | **11.70 ms**    | —           | —       | —           | **first BAD** |
+| `8611ab4` | Phase S.2 pack skin attrs       | 11.09 ms            | 1.49 ms     | 0.48 ms | 0.53 ms     | bad     |
+| `95114df` | known-good rewind = `564d1c9`              | 14.11 ms            | 1.51 ms     | 0.42 ms | 0.47 ms     | bad     |
 
-First bad commit: `b5495c4`. `shared mat4 s_palette[256]` (16 KB threadgroup memory per workgroup); metal mirror stores palette as 4-rows-per-joint with rebuild-on-read.
+First bad commit: `131d1a4`. `shared mat4 s_palette[256]` (16 KB threadgroup memory per workgroup); metal mirror stores palette as 4-rows-per-joint with rebuild-on-read.
 
 ### Samsung S22 vk Release (Adreno 730), 1280×720, CAIRNS_N=500 default workload
 
 | commit | description | frame | skinning_compute | forward_vp0 | build_draws | record | present_wait | acquire_wait | swap | skin_eval |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `9737baa` | phase A.1 conditional id MRT (good) | 42.04 ms | 30.46 ms | 11.13 ms | 12.77 ms | 12.76 ms | 28.07 ms | 25.42 ms | 0.44 ms | 0.22 ms |
-| `b5495c4` | phase S.1 LDS palette in skin.comp (first BAD) | — | — | — | — | — | — | — | — | — |
+| `b3de3b3` | phase A.1 conditional id MRT (good) | 42.04 ms | 30.46 ms | 11.13 ms | 12.77 ms | 12.76 ms | 28.07 ms | 25.42 ms | 0.44 ms | 0.22 ms |
+| `131d1a4` | phase S.1 LDS palette in skin.comp (first BAD) | — | — | — | — | — | — | — | — | — |
 
-`b5495c4` row not captured on S22: all animations are broken at this commit on Adreno (skin output unusable), so the perf number isn't a valid comparison.
+`131d1a4` row not captured on S22: all animations are broken at this commit on Adreno (skin output unusable), so the perf number isn't a valid comparison.
 
 ---
 
-## `577938e` — known-good baseline, 500 actors / 100 distinct GLBs
+## `95114df` — known-good baseline, 500 actors / 100 distinct GLBs
 
 ### macOS Metal Release — M2 Max, 2560×1440
 
@@ -193,7 +193,7 @@ First bad commit: `b5495c4`. `shared mat4 s_palette[256]` (16 KB threadgroup mem
 
 ---
 
-## `f8ea407` — #221 Skinning Phase 3: ring growth + persistent skin output pool
+## `3496418` — #221 Skinning Phase 3: ring growth + persistent skin output pool
 
 Memory budget note (no perf rows yet -- skinned content not loaded yet):
 
@@ -213,24 +213,24 @@ Memory budget note (no perf rows yet -- skinned content not loaded yet):
 
 ---
 
-## `88f7d70+` — #220 Steps 1+2+3 (handle-ify LoadedMaterial / Mesh / Scene) + render_graph PassRecord vectors -> std::array push_or_die + multithreaded build_draws experiment (WorkerPool, max-4 cap)
+## `25a67cb+` — #220 Steps 1+2+3 (handle-ify LoadedMaterial / Mesh / Scene) + render_graph PassRecord vectors -> std::array push_or_die + multithreaded build_draws experiment (WorkerPool, max-4 cap)
 
-What changed since `dc9b669+`:
-- `4e2189a` #220 Step 1: `LoadedMaterial -> ResourceManager<LoadedMaterial>`,
+What changed since `05ff5bc+`:
+- `66e036e` #220 Step 1: `LoadedMaterial -> ResourceManager<LoadedMaterial>`,
   `MatId = Handle<LoadedMaterial>`, set-2 bind group folded into
   `LoadedMaterial::Hot`. Parallel `material_bind_groups_` vector deleted.
-- `94c12a5` #220 Step 2: `Mesh -> ResourceManager<Mesh>`, lifted out of
+- `6938bec` #220 Step 2: `Mesh -> ResourceManager<Mesh>`, lifted out of
   `Scene::meshes` into engine-owned `meshes_`; `Scene::meshes` is now
   `std::vector<MeshId>`. CPU temporaries moved to `Mesh::Cold`.
-- `18c922e` #220 Step 3: `Scene -> ResourceManager<Scene>`,
+- `ea8015e` #220 Step 3: `Scene -> ResourceManager<Scene>`,
   `SceneId = Handle<Scene>`; `Asset::Cold::cpu_graph` flipped from
   `const Scene*` to `SceneId`. Engine carries a parallel
   `std::vector<SceneId> scene_ids_` for order-stable iteration.
-- `5796e4d` `PassRecord::baked_color` `std::vector` ->
+- `4f790f7` `PassRecord::baked_color` `std::vector` ->
   `std::array<ColorAttachment, kMaxColorFormats=4>` + `uint8_t count`,
   overflow = fprintf+abort. -77 KB / -1849 grows seen in 3300-hero
   trace.
-- `88f7d70` All five PassRecord `std::vector<uint16_t>` fields
+- `25a67cb` All five PassRecord `std::vector<uint16_t>` fields
   (`reads` / `writes` / `buf_reads` / `buf_writes` /
   `attachment_inputs`) plus `color_outputs` (already in `kMaxColorFormats`)
   and `baked_inputs` converted to fixed `std::array<,N>` + `uint8_t`
@@ -261,7 +261,7 @@ macOS; thermally-pinned on S22 (~7–8 fps GPU-bound at this workload).
 | `forward_vp0` (GPU)   |  8.6–9.2 ms |   8.1–9.0 ms     |   8.8–9.7 ms           |
 | `swap` (GPU)          |   0.27 ms   |   0.24 ms        |   0.25 ms              |
 
-vs `dc9b669+` ST: `build_draws` +0.23 (2.10 -> 2.33); `record` -0.04;
+vs `05ff5bc+` ST: `build_draws` +0.23 (2.10 -> 2.33); `record` -0.04;
 `forward_vp0` flat within run variance.
 
 ### macOS Vulkan / MoltenVK Release — 1280×720
@@ -275,7 +275,7 @@ vs `dc9b669+` ST: `build_draws` +0.23 (2.10 -> 2.33); `record` -0.04;
 | `forward_vp0` (GPU)   |  8.9–10.3 ms|   9.8–10.2 ms    |   8.4–10.2 ms          |
 | `swap` (GPU)          |   0.04 ms   |   0.04 ms        |   0.04 ms              |
 
-vs `dc9b669+` ST: `build_draws` +0.22 (1.98 -> 2.20).
+vs `05ff5bc+` ST: `build_draws` +0.22 (1.98 -> 2.20).
 
 ### Android Vulkan Release — Samsung Galaxy S22 (Adreno 730), 2115×1008
 
@@ -332,9 +332,9 @@ taskflow Executor's worker init, which is out of scope for this commit.
 
 ---
 
-## `dc9b669+` — #201 / #202 / #204 / #205 landed + Frames::End -> EndSubmit/Present split (vkQueuePresentKHR hoisted to main)
+## `05ff5bc+` — #201 / #202 / #204 / #205 landed + Frames::End -> EndSubmit/Present split (vkQueuePresentKHR hoisted to main)
 
-What changed since `0b51ce3+`:
+What changed since `3eab0c9+`:
 - #201 platform `#ifdef`s removed from `engine.hpp` + `main.cpp`. Engine-side
   surfaceless / dump / clear / resize paths moved into `rhi::Resources` +
   `rhi::Frames` + `rhi::Device`. SDL/RHI glue split into
@@ -362,7 +362,7 @@ M2 Max). V-synced at 60 Hz on macOS.
 
 ### macOS Metal Release — M2 Max, 1280×720
 
-| Pass                  | avg      | vs `0b51ce3+` |
+| Pass                  | avg      | vs `3eab0c9+` |
 |-----------------------|----------|---------------|
 | `frame` (CPU)         |  2.10 ms | -0.91 (build_draws + record split sharper) |
 | `build_draws` (CPU)   |  2.10 ms | -0.25 |
@@ -380,7 +380,7 @@ are the meaningful tracking targets.
 
 ### macOS Vulkan Release (MoltenVK) — M2 Max, 1280×720
 
-| Pass                  | avg      | vs `0b51ce3+` |
+| Pass                  | avg      | vs `3eab0c9+` |
 |-----------------------|----------|---------------|
 | `frame` (CPU)         |  1.97 ms | -0.97 |
 | `build_draws` (CPU)   |  1.98 ms | -0.31 |
@@ -402,7 +402,7 @@ one report at ~5 s in, before thermal saturation). Workload here is
 slightly lighter than macOS: 98 of 100 GLBs loaded (the apk's asset
 copy missed 2; same 33-slice grid -> 3234 entities / 10890 draws).
 
-| Pass                  | avg (cold start) | vs `0b51ce3+` thermal-saturated |
+| Pass                  | avg (cold start) | vs `3eab0c9+` thermal-saturated |
 |-----------------------|------------------|---------------------------------|
 | `frame` (CPU)         | 144.11 ms        | +136 (driving GPU @ 7 fps) |
 | `build_draws` (CPU)   |   8.11 ms        | +0.15 |
@@ -418,7 +418,7 @@ previous note ("ramps from cold 97 ms to sustained ~130 ms").
 
 ---
 
-## `0b51ce3+` — P0–P4 cameras+viewports+selection landed, rhi composition refactor, kNumViewports=1
+## `3eab0c9+` — P0–P4 cameras+viewports+selection landed, rhi composition refactor, kNumViewports=1
 
 P0–P4 of the Resizing & Cameras plan all landed (`#188`–`#192`), plus
 the rhi composition-not-ifdef refactor across Pipelines/Device/Frames/
@@ -436,7 +436,7 @@ Steady-state medians (last 3 of 9–10 timer reports, warmup window dropped).
 1280×720 (2560×1440 HiDPI).
 
 ### macOS Metal Release — M2 Max, 1280×720
-| Pass                  | avg      | vs `757f552` |
+| Pass                  | avg      | vs `13b80c4` |
 |-----------------------|----------|--------------|
 | `frame` (CPU)         |  3.01 ms | +0.19 |
 | `build_draws` (CPU)   |  2.35 ms | +0.14 |
@@ -447,7 +447,7 @@ Steady-state medians (last 3 of 9–10 timer reports, warmup window dropped).
 | GPU total             | ~10.98 ms | +1.43 |
 
 ### macOS Vulkan Release (MoltenVK) — M2 Max, 1280×720
-| Pass                  | avg      | vs `757f552` |
+| Pass                  | avg      | vs `13b80c4` |
 |-----------------------|----------|--------------|
 | `frame` (CPU)         |  2.94 ms | n/a (P2 forward split visible) |
 | `build_draws` (CPU)   |  2.29 ms | n/a |
@@ -492,7 +492,7 @@ builds clean (`build/ios/`) but the run is a separate step.
 
 ### Reading the numbers
 - macOS GPU forward got slightly heavier (+1 to +1.5 ms vs the
-  `757f552` single-viewport baseline). Cause is structural: the
+  `13b80c4` single-viewport baseline). Cause is structural: the
   per-viewport forward pass now writes to an offscreen at
   fb_w/kNumViewports × fb_h (with kNumViewports = 1 that's the full
   swap-target dimensions, so no shrinkage benefit). The composite is
@@ -508,7 +508,7 @@ builds clean (`build/ios/`) but the run is a separate step.
 
 ---
 
-## `757f552` — studio surface Day 1 (Unity-shaped scripting via `studio.js`)
+## `13b80c4` — studio surface Day 1 (Unity-shaped scripting via `studio.js`)
 
 Day 1 of the Unity-shaped op surface landed: `RegisterAlias` +
 `Command.aliased_for` + `tools.search` on the registry; 18 ops migrated
@@ -521,7 +521,7 @@ leak fix (global+JSON refs were leaked per call → SIGABRT at
 `JS_FreeRuntime` after enough `cairns.dispatch` calls).
 
 None of these commits touch the windowed `sdl-min` `Engine::draw()` path.
-Perf deltas vs `52d5d16` are pure thermal/system noise.
+Perf deltas vs `7efb206` are pure thermal/system noise.
 
 Workload: `100 GLBs × 33 slices = 3300 entities`, 11517 draws. Release.
 Steady-state medians (warmup window dropped).
@@ -537,7 +537,7 @@ Steady-state medians (warmup window dropped).
 | `swap`          |  0.45 ms (GPU) |
 | GPU total       | ~9.55 ms |
 
-vs `52d5d16`: frame 2.87 → 2.82 (-0.05), build 2.23 → 2.21 (-0.02),
+vs `7efb206`: frame 2.87 → 2.82 (-0.05), build 2.23 → 2.21 (-0.02),
 record 1.46 → 1.45 (-0.01), forward 9.27 → 9.10 (-0.17),
 swap 0.46 → 0.45 (-0.01). Everything within thermal noise; net
 −0.25 ms / frame combined, consistent with a slightly cooler run.
@@ -553,10 +553,10 @@ swap 0.46 → 0.45 (-0.01). Everything within thermal noise; net
 | `swap`          |  0.12 ms (GPU) |
 | GPU total       | ~9.22 ms |
 
-vs `52d5d16`: **the vk CPU regression is gone.** frame 4.42 → 2.86
+vs `7efb206`: **the vk CPU regression is gone.** frame 4.42 → 2.86
 (−1.56 ms), build 3.52 → 2.25 (−1.27 ms), record 1.00 → 0.63 (−0.37 ms).
 The previous run's high CPU + high window-to-window variance was
-thermal / system noise; this run lands back near the `c90a43b`
+thermal / system noise; this run lands back near the `fc93bfa`
 baseline (frame 3.20, build 2.55, record 0.72) — actually under it,
 which is suspicious but reproducible across 4 windows here. GPU forward
 9.38 → 9.08 (-0.30) within thermals; swap unchanged.
@@ -567,12 +567,12 @@ which is suspicious but reproducible across 4 windows here. GPU forward
 | `frame`         |  8.61 ms |
 | `build_draws`   |  7.53 ms |
 | `record`        | 11.52 ms |
-| `particle_sim`  |  n/a (Android Vulkan timestamps disabled, see f2625d1) |
+| `particle_sim`  |  n/a (Android Vulkan timestamps disabled, see d4c1af4) |
 | `forward`       | 90.24 ms (GPU) |
 | `swap`          |  0.70 ms (GPU) |
 | GPU total       | ~90.9 ms |
 
-vs `52d5d16` S22: CPU side +0.83 ms (frame +0.83, build +0.74, record
+vs `7efb206` S22: CPU side +0.83 ms (frame +0.83, build +0.74, record
 +0.90); forward GPU 83.0 → 90.24 (+7.24 ms). Phone was charging on
 USB-FAST again — Samsung thermal mgmt almost certainly throttling. The
 prior entry's "re-run cold/non-charging" call still stands as the way
@@ -590,7 +590,7 @@ surface adds negligible per-call latency above the existing
 
 ---
 
-## `52d5d16` — headless editor mode P0–P5 + 0xCC heap garbage init
+## `7efb206` — headless editor mode P0–P5 + 0xCC heap garbage init
 
 Full headless-editor-mode plan landed P0–P5: CMake split (`cairns_core` +
 `sdl-min` + `cairns_serve`), RHI surface lift via `InitConfig`,
@@ -619,7 +619,7 @@ dropped).
 | `swap`          |  0.46 ms (GPU, composite + PIP + ImGui) |
 | GPU total       | ~9.74 ms |
 
-vs `c90a43b`: `frame` +0.08 ms, `build_draws` +0.06 ms, `record` +0.03 ms
+vs `fc93bfa`: `frame` +0.08 ms, `build_draws` +0.06 ms, `record` +0.03 ms
 — all within thermal noise. `forward` 10.3 → 9.27 ms (~1.0 ms drop; this
 is a real win, attributing to the 0xCC pre-fill on heap blocks
 sometimes nudging the driver to commit pages eagerly — unproven, may be
@@ -640,7 +640,7 @@ state. Net: GPU total -0.9 ms, CPU total +0.17 ms.
 | `swap`          |  0.12 ms (GPU) |
 | GPU total       | ~9.52 ms |
 
-vs `c90a43b`: `frame` 3.20 → 4.42 ms (+1.22 ms); `build_draws` 2.55 →
+vs `fc93bfa`: `frame` 3.20 → 4.42 ms (+1.22 ms); `build_draws` 2.55 →
 3.52 ms (+0.97 ms); `record` 0.72 → 1.00 ms (+0.28 ms). **CPU-side
 regression** on vk; `forward`/`swap` GPU within thermals (forward
 9.07 → 9.38 ms, swap 0.036 → 0.12 ms). vk run had visibly higher
@@ -658,15 +658,15 @@ Worth a focused investigation when the next round of vk work lands.
 | `frame`         |  7.78 ms |
 | `build_draws`   |  6.79 ms |
 | `record`        | 10.62 ms |
-| `particle_sim`  |  n/a (Android Vulkan timestamps disabled, see f2625d1) |
+| `particle_sim`  |  n/a (Android Vulkan timestamps disabled, see d4c1af4) |
 | `forward`       | 83.0 ms (GPU) |
 | `swap`          |  0.66 ms (GPU) |
 | GPU total       | ~83.7 ms |
 
-vs `c90a43b` S22: CPU side -0.6 ms across the three CPU timers (frame
+vs `fc93bfa` S22: CPU side -0.6 ms across the three CPU timers (frame
 8.10 → 7.78, build 7.12 → 6.79, record 10.72 → 10.62). **`forward`
 regressed 56.5 → 83.0 ms (+47%) — significant**, and `swap` 0.43 → 0.66
-(+0.23 ms). The `c90a43b` entry explicitly called itself the
+(+0.23 ms). The `fc93bfa` entry explicitly called itself the
 "cold end of the thermally-noisy range" — this run is plausibly the
 warm end, but two converged 120-frame windows (82 ms and 84 ms) and
 a warmup window (96 ms) is a consistent profile not a one-off spike.
@@ -675,7 +675,7 @@ sat at 92% battery, USB-FAST charging — Samsung's thermal mgmt may
 have throttled the GPU. **Re-run when next at the bench with cooler
 device + non-charging state to confirm.** If the regression holds
 cold, suspects to chase: anything that increased per-draw bandwidth
-or shader instruction count between `c90a43b` and `52d5d16` — but
+or shader instruction count between `fc93bfa` and `7efb206` — but
 the only engine-side changes shipped are gated to `cfg.surfaceless`
 so this is unexpected.
 
@@ -693,7 +693,7 @@ to the windowed numbers — separate code path through
 
 ---
 
-## `c90a43b` — EnTT scene layer landed (P0–P8 done; iOS Debug refreshed)
+## `fc93bfa` — EnTT scene layer landed (P0–P8 done; iOS Debug refreshed)
 
 Full P0–P8 sequence of the EnTT scene-layer plan is in. Engine drives
 the active world through `ResourceManager<World>` + `entt::registry`;
@@ -715,7 +715,7 @@ Steady-state medians over multiple 120-frame windows.
 | `swap`          |  0.31 ms (GPU, composite + PIP + ImGui) |
 | GPU total       | ~10.6 ms |
 
-`build_draws` dropped vs `042ebec` (2.84 → 2.17 ms) — EnTT view
+`build_draws` dropped vs `b239111` (2.84 → 2.17 ms) — EnTT view
 iteration is leaner than the `std::vector<SceneEntity>` walk + manual
 `scene_index` lookup that the old `Extract` did. `forward` /
 `record` /` swap` all within prior thermals.
@@ -731,7 +731,7 @@ iteration is leaner than the `std::vector<SceneEntity>` walk + manual
 | `swap`          |  0.036 ms |
 | GPU total       | ~9.12 ms |
 
-Same MoltenVK-faster-than-native-Metal pattern from `042ebec` holds:
+Same MoltenVK-faster-than-native-Metal pattern from `b239111` holds:
 slimmer recorder path (`record` 0.72 vs 1.43 ms), tighter MSAA-resolve
 on the swap pass.
 
@@ -741,13 +741,13 @@ on the swap pass.
 | `frame`         |  8.10 ms |
 | `build_draws`   |  7.12 ms |
 | `record`        | 10.72 ms |
-| `particle_sim`  |  n/a (Android Vulkan timestamps disabled, see f2625d1) |
+| `particle_sim`  |  n/a (Android Vulkan timestamps disabled, see d4c1af4) |
 | `forward`       | 56.5 ms (GPU) |
 | `swap`          |  0.43 ms (GPU) |
 | GPU total       | ~57.0 ms |
 
 S22 settled at the "cold" end of the thermally-noisy range
-documented at `042ebec` — `forward` 56.5 ms, well below the
+documented at `b239111` — `forward` 56.5 ms, well below the
 steady-state ~120 ms observed in some warmer sessions. **Apply the
 same thermal caveat**: a single reading on this device names a point
 in the [~57, ~120] ms band, not a fixed steady-state. The pattern of
@@ -778,7 +778,7 @@ is sub-millisecond on every other platform so the implicit `forward`
 
 iOS at this workload is GPU-bound (`gpu_frame` 34.87 vs CPU `frame`
 7.12 ms): 29 FPS = ~34.5 ms/frame wall-clock, set by GPU not CPU.
-That matches the iPhone 15 result documented at `9c8356e`
+That matches the iPhone 15 result documented at `5dbdfa9`
 (prior-baseline ~32 ms forward at 1280×720 in earlier benches; this
 run is at the iPhone's native screen res which is ~2.8× pixels).
 
@@ -793,19 +793,19 @@ is false for x86_64-iphonesimulator → `CAIRNS_METAL=0` → `SwapChain`
 has no body. Fix when next needed: drop the `__aarch64__` requirement
 in `define.hpp`, or force `ARCHS=arm64` for simulator builds.
 
-### Observations vs. `042ebec`
+### Observations vs. `b239111`
 - `build_draws` is ~25% faster (M2 Max metal) on the EnTT path. The
   EnTT view's contiguous storage + tight component handling beats the
   legacy `std::vector<SceneEntity>::iterator` + `scenes_[scene_index]`
   indirection. Same effect on MoltenVK (smaller margin).
 - `forward` / `swap` unchanged within thermals on all three platforms.
 - Per-platform `gpu_frame` total (sum of `particle_sim` + `forward` +
-  `swap`) is the same as `042ebec` within noise; the scene-layer
+  `swap`) is the same as `b239111` within noise; the scene-layer
   rewrite is forward-time-neutral, as designed.
 
 ---
 
-## `042ebec` — RecordFrame routed through render graph (forward → swap)
+## `b239111` — RecordFrame routed through render graph (forward → swap)
 
 Frame is now graph-routed: `particle_sim` (kCompute) → `forward` (offscreen
 single-sample color + depth) → `swap` (composite full-screen color +
@@ -855,14 +855,14 @@ of the same APK, `forward` settled at one of two regimes:
   stable for 5–10 timer windows (~10 s each) before drifting.
 - **Steady-state**: ~120 ms forward, ~0.98 ms swap, total ~121 ms.
   This is the rate the device holds once thermals settle, and matches
-  the pre-graph `6386768` baseline within noise.
+  the pre-graph `b9a936e` baseline within noise.
 
 | Pass            | cold (~10 s window) | steady-state |
 |-----------------|---------------------|--------------|
 | `frame`         |  8.7 ms             |  9.0 ms      |
 | `build_draws`   |  7.6 ms             |  7.7 ms      |
 | `record`        | 11.5 ms             | 12.1 ms      |
-| `particle_sim`  |  n/a (Android Vulkan timestamps disabled, see f2625d1) |  n/a   |
+| `particle_sim`  |  n/a (Android Vulkan timestamps disabled, see d4c1af4) |  n/a   |
 | `forward`       | 60 ms               | 121 ms       |
 | `swap`          |  0.46 ms            |  0.98 ms     |
 | GPU total       | ~60.5 ms            | ~122 ms      |
@@ -888,7 +888,7 @@ load-bearing factor on Adreno here either.
   storeOp=DONT_CARE / StoreActionMultisampleResolve constraint). The
   graph still expresses it as the read-from-`color_off`/`depth_off`
   consumer; the encoder boundary is the merge point.
-- The `6386768` "geometry-bound" attribution should be read with a
+- The `b9a936e` "geometry-bound" attribution should be read with a
   grain of salt — the tiny-quad test reduced both triangle count AND
   pixel coverage simultaneously, so it doesn't cleanly separate binner
   from per-pixel rasterizer work. Cost on this scene is likely a mix of
@@ -898,7 +898,7 @@ load-bearing factor on Adreno here either.
 
 ---
 
-## `6386768` — tiny-quad diagnostic isolates geometry vs draw-submission
+## `b9a936e` — tiny-quad diagnostic isolates geometry vs draw-submission
 
 S22 Android Vulkan Release. CAIRNS_TINY_QUAD=1 pins every draw's
 `triangle_count = 2`. Draw count + submission identical (11517 draws);
@@ -935,7 +935,7 @@ intent extras).
 
 ---
 
-## `fce2ade` — game/render thread split landed; APK asset loading
+## `f3245ab` — game/render thread split landed; APK asset loading
 
 Workload: `100 GLBs × 33 slices = 3300 entities`, 11517 draws. Release.
 
@@ -991,7 +991,7 @@ a glTF), which we haven't tried yet.
 
 ---
 
-## `c311cd7` — full readout + Android bisect
+## `37522a6` — full readout + Android bisect
 
 Workload: `100 GLBs × 33 slices = 3300 entities`, 11517 draws. Release.
 
@@ -1042,22 +1042,22 @@ record         8.95 ms
 ```
 ~4× slower than iPhone 15 Pro on gpu_frame at similar pixel count.
 
-### Android regression bisect (vs `f2625d1` baseline gpu_frame 128.78 ms → 140 ms)
+### Android regression bisect (vs `d4c1af4` baseline gpu_frame 128.78 ms → 140 ms)
 
-User-driven bisect of the 9 commits in `f2625d1..c311cd7`. Two Vulkan-touching
+User-driven bisect of the 9 commits in `d4c1af4..37522a6`. Two Vulkan-touching
 candidates were prime suspects; both **exonerated**:
 
-- `ab789d9` (vk bump: one VkDeviceMemory + HOST_COHERENT collapse) — **129 ms, not the culprit**.
-- `73e1876` (swap_chain preTransform = IDENTITY, WSI rotates) — **127 ms, not the culprit**.
+- `875c3ab` (vk bump: one VkDeviceMemory + HOST_COHERENT collapse) — **129 ms, not the culprit**.
+- `537e985` (swap_chain preTransform = IDENTITY, WSI rotates) — **127 ms, not the culprit**.
 
-**Cause**: `2abd6af` raised the Android ImGui scale cap from 1.5× to 2.5×.
+**Cause**: `deee150` raised the Android ImGui scale cap from 1.5× to 2.5×.
 The overlay panel grows ~2.78× in pixel area (`ScaleAllSizes(2.5)`), which
 costs ~10 ms in `forward` on Adreno's fragment pipeline. **Trade accepted,
 not reverting** — readable overlay is worth the 10 ms.
 
 ---
 
-## `f2625d1` — gpu_frame row, per-pass GPU timing landed
+## `d4c1af4` — gpu_frame row, per-pass GPU timing landed
 
 Workload: `100 GLBs × 33 slices = 3300 entities`, 11517 draws. Release.
 
@@ -1104,7 +1104,7 @@ throughput dominates as expected.
 
 ---
 
-## `b6c7785` — fragment / rasterization proof
+## `5d2a99d` — fragment / rasterization proof
 
 iPhone 15 Release. Two runs, same workload (`100 GLBs × 33 slices = 3300
 entities`, 11517 draws, batched upload), only the window size + hero scale
@@ -1145,10 +1145,10 @@ arrangement / memory transfer / CPU build loop itself.**
 
 ---
 
-## `b0febf1` — `ia/26-05-30/performance_debug` (re-baseline)
+## `c69b898` — `ia/26-05-30/performance_debug` (re-baseline)
 
-9d90f90 source + cherry-picked batched upload (`b0febf1`). No layout, window,
-or orientation changes vs 9d90f90 baseline. Engine now also prints
+c16789a source + cherry-picked batched upload (`c69b898`). No layout, window,
+or orientation changes vs c16789a baseline. Engine now also prints
 `N GLBs x M slices = E entities` next to draws so the workload shape is
 explicit in every report.
 
@@ -1178,13 +1178,13 @@ Observations:
 - Both miss v-sync (~25 fps and ~31 fps respectively); CPU-bound on phone.
 - 100×33 is ~20% faster than 50×66 because the second half of `kDebugGlbs`
   has fewer primitives per GLB — fewer total draws (11.5k vs 15.1k).
-- build_draws 9.1 ms at 15k draws is in line with the `9d90f90` baseline's 8.3 ms
+- build_draws 9.1 ms at 15k draws is in line with the `c16789a` baseline's 8.3 ms
   at 11.5k draws (per-draw cost is similar). The 17 ms iPhone 15 number from
   earlier was on a different branch state; this re-baseline is healthy.
 
 ---
 
-## `e2d0c26` — `ia/26-05-30/performance_debug`
+## `9a43ee5` — `ia/26-05-30/performance_debug`
 
 Layout: 20×5 grid × 33 slices = **3300 entities**, ~11.5k draws.
 Heroes: scale 0.01, dx=dy=0.7, dz=2.0, front slice z=-4.
@@ -1211,7 +1211,7 @@ representative-of-low-end-mobile bytecode-path numbers but actual hardware
 will differ (memory subsystem, mali-equivalent throughput etc).
 
 ### iOS Simulator (iPhone 16 Pro, Release) — runs, 11517 draws
-Fixed at `30e383c`: metal/memory_allocator `CreateBufferBlock` skips the
+Fixed at `d2734cb`: metal/memory_allocator `CreateBufferBlock` skips the
 MTL::Heap wrapper for non-Private storage modes and allocates the master
 buffer directly. MTLSimDevice's "Private-only heaps" rejection no longer fires.
 ```
@@ -1245,20 +1245,20 @@ slot 4 (build opaque draw list):         avg  5641– 5938 us
 draws: 11517
 ```
 
-Both desktop backends regressed vs `9d90f90` baseline (build_draws ~2x: 3.07 → 6.3 ms
+Both desktop backends regressed vs `c16789a` baseline (build_draws ~2x: 3.07 → 6.3 ms
 Metal, 2.16 → 5.9 ms Vulkan). Suspect: bigger window (720×1280 → 2400×1080) +
 larger heroes (scale 0.005 → 0.01) push more pixels and the CPU sort/build
 loop touches more state per draw. Worth bisecting if we want to recover the
-`9d90f90` numbers.
+`c16789a` numbers.
 
 ### iOS device — not yet measured at this commit.
 
 ---
 
-## `4fb1e46` — `ia/26-05-30/performance_debug`
+## `1c93ddc` — `ia/26-05-30/performance_debug`
 
-Branch base = `9d90f90`. Constants flipped: `kDebugGlbsToParse 50→100`,
-`kHeroSlices 66→33`. Same 3300-entity / ~11.5k-draw workload as `9d90f90`; just
+Branch base = `c16789a`. Constants flipped: `kDebugGlbsToParse 50→100`,
+`kHeroSlices 66→33`. Same 3300-entity / ~11.5k-draw workload as `c16789a`; just
 redistributed (each of 100 GLBs drawn 33×).
 
 ### iOS Simulator (iPhone 16 Pro, Release)
@@ -1300,7 +1300,7 @@ Not yet measured at this commit.
 
 ---
 
-## `9d90f90` — *across-GLB packing*
+## `c16789a` — *across-GLB packing*
 
 Workload: 10 × 10 × 30 = 3300 entities → **11517 draws** (`set 11k draws`).
 Timer slots active at this commit: 0=frame, 1=build_draws, 2=record,
@@ -1346,7 +1346,7 @@ build_draws.
 
 ---
 
-## `792998b` — SDL windowed, post cpu_block_ compaction + string interning
+## `00f2592` — SDL windowed, post cpu_block_ compaction + string interning
 
 Apple-silicon Mac, **SDL windowed** (real swapchain, 1280×720 window → 2560×1440
 retina), **Release**, **500 actors (100 GLBs × 5)**, the run.js boot scene. Numbers
@@ -1354,7 +1354,7 @@ read live via `cairns.perf.last` after ~12 s of rendering. State = end of the #2
 arena work (all CPU state in `cpu_block_`, prefab tables interned to `prefab_arena_`).
 Windowed teardown now exits 0 (the 100-GLB oversize-Free use-after-free is fixed).
 
-**Measured on commit `792998b`** (`perf: note skinning_compute 5.4ms is idle-clock`).
+**Measured on commit `00f2592`** (`perf: note skinning_compute 5.4ms is idle-clock`).
 
 NOTE: the `frame` slot here is **CPU frame work only** (build+record+dispatch),
 NOT the old vsync-inclusive frame time — present pacing is a separate slot now.
@@ -1411,7 +1411,7 @@ platform-aware `cairns.instancePasses`; the Adreno tile budget can't take 500
 skinned actors). Read from logcat `[Timer]` after settle. Same 100 GLBs loaded as
 desktop. The GLB load took **9.1 s** on the phone.
 
-**Measured on commit `4a5e39d`** (`mobile: cpu_persistent 256->512MB; cpu* stay
+**Measured on commit `f766890`** (`mobile: cpu_persistent 256->512MB; cpu* stay
 malloc`) — the native `.so` deployed to the device was built from that tree.
 ```
 slot 0  frame              9108 us    (CPU frame -- but mostly GPU-fence-bound, below)
