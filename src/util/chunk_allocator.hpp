@@ -149,12 +149,17 @@ public:
         uint8_t* user = static_cast<uint8_t*>(p);
         Header* h = reinterpret_cast<Header*>(user - kHeaderBytes);
         if (h->flags & kFlagOversize) {
-            // Recover the malloc base from the header's stored prefix bytes.
+            // #229: read EVERY header field BEFORE std::free -- the header lives
+            // inside the malloc'd block, and large oversize allocs are mmap-
+            // backed, so std::free munmaps the page and any later h->... read
+            // faults (the 100-GLB teardown crash). Recover the malloc base from
+            // the stored prefix, stash the size, THEN free.
+            const uint64_t freed_bytes = h->cell_bytes;
             uint8_t* malloc_base = user - h->prefix_bytes;
             std::free(malloc_base);
             assert(oversize_count_ > 0);
             --oversize_count_;
-            bytes_in_use_ -= h->cell_bytes;
+            bytes_in_use_ -= freed_bytes;
 #ifndef NDEBUG
             --outstanding_;
 #endif

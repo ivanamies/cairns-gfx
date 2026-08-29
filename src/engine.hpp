@@ -5597,6 +5597,23 @@ public:
 private:
     uint32_t frame_ = 0;
 
+    // #229 M0b: the single owning CPU memory block. All persistent + per-frame
+    // CPU state is carved from here (1 GB desktop / 256 MB mobile, fail-loud).
+    // Declared BEFORE every block-backed member (pools, loose vectors, entt
+    // registry, prefab_arena_) so it is destroyed LAST -- those containers'
+    // ChunkStdAllocator dtors deallocate into it at ~Engine teardown, so the
+    // block (and its mmap-backed chunks) must outlive them. Defensive ordering;
+    // the actual 100-GLB teardown crash was an oversize-Free use-after-free in
+    // ChunkAllocator::Free (read header after std::free), fixed separately.
+    cairns::ChunkAllocator cpu_block_;
+    // #229 P3 string interning: persistent block-backed arena for the prefab
+    // load tables that used to embed std::string/std::vector headers (node/clip
+    // names, Node::children, Skin/Clip inner arrays). NameRef + ArenaSlice store
+    // byte offsets into this slab -> the pool structs become pointer-free POD.
+    // Monotonic (no per-asset free yet; reload churn bump-leaks -- bounded). Slab
+    // is carved from cpu_block_, so it sits right after it (destroyed before it).
+    cairns::BumpArena prefab_arena_{};
+
     // #220 Step 3: prefabs_ is now a generational pool. prefab_ids_ is the
     // order-stable parallel list of SceneIds; consumers that want
     // index-by-position semantics (LoadPrefabsGpu's span, entity
@@ -5798,16 +5815,9 @@ private:
     // resize from data). Stored on PerSlot (the slot IS the lock).
     // Initialized in initCpuAllocators, Reset()'d at slot Acquire (render
     // thread already drained).
-    // #229 M0b: the single owning CPU memory block. All persistent + per-frame
-    // CPU state is carved from here (1 GB desktop / 256 MB mobile, fail-loud).
-    cairns::ChunkAllocator cpu_block_;
-
-    // #229 P3 string interning: persistent block-backed arena for the prefab
-    // load tables that used to embed std::string/std::vector headers (node/clip
-    // names, Node::children, Skin/Clip inner arrays). NameRef + ArenaSlice store
-    // byte offsets into this slab -> the pool structs become pointer-free POD.
-    // Monotonic (no per-asset free yet; reload churn bump-leaks -- bounded).
-    cairns::BumpArena prefab_arena_{};
+    // #229 cpu_block_ / prefab_arena_ are declared EARLY (before the pools) so
+    // they are destroyed LAST -- the pools' ChunkStdAllocator vectors deallocate
+    // into cpu_block_ in ~ResourceManager, so the block must outlive them.
 
     static constexpr size_t kArenaBytesPerSlot = 16u * 1024u * 1024u;
     static constexpr size_t kPrefabArenaBytes = 64u * 1024u * 1024u;
