@@ -139,6 +139,11 @@ MetalShaderInfo resolve_metal_shader(const char* logical) {
         return {"depthviz.metal", "depthvizfx::depthviz_vertex",
                 "depthvizfx::depthviz_fragment", nullptr};
     }
+    if (std::strcmp(logical, "outline") == 0) {
+        // #207 outline fullscreen post-process.
+        return {"outline.metal", "cube::vertexShader", "cube::fragmentShader",
+                nullptr};
+    }
     return {"particle.metal", "particle_vertex", "particle_fragment", "particle_compute"};
 }
 

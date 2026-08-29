@@ -199,6 +199,10 @@ VkShaderFiles resolve_vk_shader(const char* logical) {
         // depthviz reuses the composite full-screen tri vert.
         return {"composite_pip.vert.spv", "depthviz.frag.spv", nullptr};
     }
+    if (std::strcmp(logical, "outline") == 0) {
+        // #207 outline post-process fullscreen tri.
+        return {"outline.vert.spv", "outline.frag.spv", nullptr};
+    }
     return {"particle.vert.spv", "particle.frag.spv", "particle.comp.spv"};
 }
 

@@ -329,6 +329,7 @@ if (NOT ANDROID AND NOT IOS AND NOT EMSCRIPTEN)
         "imgui.vert.spv" "imgui.frag.spv"
         "composite_pip.vert.spv" "composite_pip.frag.spv"
         "depthviz.frag.spv"
+        "outline.vert.spv" "outline.frag.spv"  # #207
     )
     if (APPLE)
         # Metal needs the .metal source files (compile_metal_library reads
@@ -459,6 +460,8 @@ else()
     copy_helper("composite_pip.vert.spv")
     copy_helper("composite_pip.frag.spv")
     copy_helper("depthviz.frag.spv")
+    copy_helper("outline.vert.spv")  # #207
+    copy_helper("outline.frag.spv")
 endif()
 
 # set some extra configs for each platform
