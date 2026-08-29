@@ -49,20 +49,21 @@ struct Rung {
     cairns::EngineConfig::CamPose cam;
 };
 
-// The amalgam's canonical asset names (dye/viking_room/lol_a..c) aren't in
-// the cairns asset tree; substitute production glbs from kDebugGlbs that DO
-// ship with the project so L2..L7 actually exercise the pipeline. Their
-// `false` skinning intent is informational only -- InstantiatePrefab attaches
-// a skin opportunistically (via TryCreateSkinForScene) when the glb has one,
-// so the LoL champs are always animated in practice.
+// C.20: amalgam-canonical names restored (one_die / two_die / viking_room)
+// now that die.glb + viking_room.glb are in assets/. C.17 honors the
+// `animated` flag via InstantiatePrefabNoSkin (Phase A.11) so L5 static
+// diverges from L6 anim.
+// C.19 cam tunes: zoomed back so subject is fully in frame (the previous
+// poses cropped to feet). Models are roughly Y-up 2-3 units tall; cams at
+// y=2 z=8..25 fit the subject + headroom in a 512x512 viewport.
 const std::vector<Rung> kLadder = {
-    {"triangle",          {},                                              1,   false, false, {0,0,3, 0,0}},
-    {"one_aatrox",        {"aatrox.glb"},                                  1,   false, false, {0,1,4, 0,0}},
-    {"two_aatrox",        {"aatrox.glb"},                                  2,   false, false, {0,1,5, 0,0}},
-    {"viking_room",       {"viking_room.glb"},                             1,   false, false, {2,2,2, 3.9f,-0.5f}},
-    {"three_champ_static",{"ahri.glb","akali.glb","alistar.glb"},          3,   false, false, {0,1.5f,6, 0,0}},
-    {"three_champ_anim",  {"ahri.glb","akali.glb","alistar.glb"},          3,   true,  true,  {0,1.5f,6, 0,0}},
-    {"hundred_champ_anim",{"ahri.glb","akali.glb","alistar.glb"},          100, true,  true,  {0,8,22, 0,0}},
+    {"triangle",           {},                                             1,   false, false, {0, 0, 3,  0, 0}},
+    {"one_die",            {"die.glb"},                                    1,   false, false, {0, 1, 5,  0, 0}},
+    {"two_die",            {"die.glb"},                                    2,   false, false, {0, 1, 6,  0, 0}},
+    {"viking_room",        {"viking_room.glb"},                            1,   false, false, {0, 1, 4, 0, 0}},
+    {"three_champ_static", {"ahri.glb","akali.glb","alistar.glb"},          3,   false, false, {0, 4, 16, 0, -0.15f}},
+    {"three_champ_anim",   {"ahri.glb","akali.glb","alistar.glb"},          3,   true,  true,  {0, 4, 16, 0, -0.15f}},
+    {"hundred_champ_anim", {"ahri.glb","akali.glb","alistar.glb"},          100, true,  true,  {0, 18, 48, 0, -0.35f}},
 };
 
 constexpr uint32_t kGoldenW = 512;
@@ -104,32 +105,51 @@ TEST_CASE("golden ladder", "[golden][ladder]") {
     REQUIRE(engine.GreaterInit(icfg, ecfg));
     REQUIRE(cairns::test_seams::BuildLadderScene(engine, rung.glbs,
                                                   rung.instances, rung.animated));
-    REQUIRE(cairns::test_seams::AdvanceToGoldenFrame(engine));
 
-    SECTION("golden image matches the per-platform reference") {
-        // Particle compute runs every frame in production engine code (see
-        // src/engine.hpp's initParticles + particle_parity ping-pong) and
-        // uses std::rand-seeded state that varies run-to-run. The triangle
-        // and small ladder rungs are particle-noise-dominated so their
-        // hashes flake intermittently. The middle/large rungs (3..100
-        // animated champs) are dominated by mesh rendering and tend to be
-        // stable. Until initParticles switches to ParticleRng
-        // (src/render/particle_emitter.hpp), the image hash isn't a true
-        // regression check -- but the framework, the bake, and the per-
-        // platform divergence-detection all still work.
+    // C.18: two-frame capture. Settle to frame 9 then to frame 55, hash
+    // each, compare to per-platform refs. Catches animation-continuity
+    // bugs a single settled-frame capture would miss.
+    auto capture_and_check = [&](const char* tag,
+                                  uint32_t frame_number) -> std::string {
         std::vector<uint8_t> rgba;
         uint32_t w = 0;
         uint32_t h = 0;
         REQUIRE(cairns::test_seams::ReadFinalTargetRgba(engine, rgba, w, h));
         REQUIRE(w == kGoldenW);
         REQUIRE(h == kGoldenH);
-        const std::string observed = cairns::test_seams::Md5Hex(rgba);
-        const std::string ref = cairns::test_refs::LoadImageRef(rung.name, PlatformKey(), observed);
+        if (const char* dump_dir = std::getenv("CAIRNS_DUMP_PNGS")) {
+            std::error_code ec;
+            std::filesystem::create_directories(dump_dir, ec);
+            std::string png_path = std::string(dump_dir) + "/" + rung.name +
+                                   "." + PlatformKey() + ".f" + tag + ".png";
+            (void)engine.DumpFinalTarget(png_path);
+        }
+        return cairns::test_seams::Md5Hex(rgba);
+    };
+
+    REQUIRE(cairns::test_seams::AdvanceFrames(engine, 9));
+    const std::string hash_f09 = capture_and_check("09", 9);
+    REQUIRE(cairns::test_seams::AdvanceFrames(engine, 46));
+    const std::string hash_f55 = capture_and_check("55", 55);
+
+    SECTION("golden image (frame 9) matches the per-platform reference") {
+        const std::string ref = cairns::test_refs::LoadImageRef(
+            std::string(rung.name) + ".f09", PlatformKey(), hash_f09);
         if (ref.empty()) {
-            SKIP("no image reference yet for {" << rung.name << ", "
+            SKIP("no f09 image reference yet for {" << rung.name << ", "
                                                 << PlatformKey() << "} -- bake one");
         }
-        REQUIRE(observed == ref);
+        REQUIRE(hash_f09 == ref);
+    }
+
+    SECTION("golden image (frame 55) matches the per-platform reference") {
+        const std::string ref = cairns::test_refs::LoadImageRef(
+            std::string(rung.name) + ".f55", PlatformKey(), hash_f55);
+        if (ref.empty()) {
+            SKIP("no f55 image reference yet for {" << rung.name << ", "
+                                                << PlatformKey() << "} -- bake one");
+        }
+        REQUIRE(hash_f55 == ref);
     }
 
     SECTION("skin output matches the shared cross-platform reference") {

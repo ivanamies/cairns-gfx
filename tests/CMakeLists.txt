@@ -135,12 +135,10 @@ if(CAIRNS_GFX_BUILD_GOLDEN_TESTS)
         "${_cairns_assets_root}/run.js"
         "${_cairns_assets_root}/Inter-VariableFont.ttf")
 
-    if(APPLE)
-        # iOS .app + macOS bundle: tag every asset MACOSX_PACKAGE_LOCATION
-        # Resources so it lands inside the .app's Contents/Resources (macOS)
-        # or .app/ root (iOS). EXECUTABLE_NAME already does this for sdl-min;
-        # we replicate for cairns_golden_tests so xcrun simctl spawn finds
-        # the shaders + glbs the engine looks up at runtime.
+    if(APPLE AND IOS)
+        # iOS .app: tag every asset MACOSX_PACKAGE_LOCATION Resources so it
+        # lands inside the .app/Resources directory. xcrun simctl spawn
+        # finds them via SDL_GetBasePath = the .app root.
         macro(_cairns_bundle_one FILE)
             if(EXISTS "${FILE}")
                 target_sources(cairns_golden_tests PRIVATE "${FILE}")
@@ -153,6 +151,19 @@ if(CAIRNS_GFX_BUILD_GOLDEN_TESTS)
         foreach(F ${_cairns_misc_assets} ${_cairns_metal_shaders}
                   ${_cairns_spv_shaders} ${_cairns_glbs} ${_cairns_ext_glbs})
             _cairns_bundle_one("${F}")
+        endforeach()
+    elseif(APPLE)
+        # macOS desktop -- cairns_golden_tests is NOT a .app bundle, so
+        # MACOSX_PACKAGE_LOCATION doesn't apply. Copy assets next to the
+        # binary instead (SDL_GetBasePath returns its directory).
+        foreach(F ${_cairns_misc_assets} ${_cairns_metal_shaders}
+                  ${_cairns_spv_shaders} ${_cairns_glbs} ${_cairns_ext_glbs})
+            get_filename_component(_name "${F}" NAME)
+            if(EXISTS "${F}")
+                add_custom_command(POST_BUILD TARGET cairns_golden_tests
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${F}" "$<TARGET_FILE_DIR:cairns_golden_tests>/${_name}")
+            endif()
         endforeach()
     elseif(ANDROID)
         # Push assets alongside the binary at MOBILE_ASSETS_DIR (also used by

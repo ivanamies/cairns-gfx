@@ -99,10 +99,13 @@ bool BootHeadless(cairns::Engine& engine, uint32_t width, uint32_t height) {
 }
 
 bool AdvanceToGoldenFrame(cairns::Engine& engine) {
-    // Tick RenderHeadlessFrame until we cross cairns::kGoldenDumpFrame.
-    // The engine increments sim_frame_ inside draw(); after kGoldenDumpFrame
-    // draws the final target is settled and ready for readback.
-    for (uint64_t i = 0; i < cairns::kGoldenDumpFrame + 1; ++i) {
+    // Back-compat: kGoldenDumpFrame + 1 ticks. C.18 prefers AdvanceFrames(N)
+    // for the multi-sample capture pattern (frame 9 + frame 55).
+    return AdvanceFrames(engine, cairns::kGoldenDumpFrame + 1);
+}
+
+bool AdvanceFrames(cairns::Engine& engine, uint32_t n) {
+    for (uint32_t i = 0; i < n; ++i) {
         if (!engine.RenderHeadlessFrame()) {
             return false;
         }
@@ -114,31 +117,49 @@ bool BuildLadderScene(cairns::Engine& engine,
                       const std::vector<std::string>& glbs,
                       uint32_t instances, bool animated) {
     (void)EnsureImguiContextImpl();
-    (void)animated;
     if (glbs.empty()) {
         // L1 triangle path: tiny_quad was set on EngineConfig at
         // GreaterInit. Nothing else to do.
         return true;
     }
-    // L2..L7: load the glbs once, then spawn `instances` total entities.
-    const cairns::headless::LoadBatchExport loaded =
-        cairns::headless::RuntimeLoadGlbs(&engine, 0,
-                                           static_cast<uint32_t>(glbs.size()));
-    if (loaded.count == 0) {
+    // C.16: resolve each glb name explicitly via RuntimeLoadGlbPath rather
+    // than cycling kDebugGlbs[cursor]. Now L4 viking_room actually loads
+    // viking_room.glb, L5/L6/L7 actually load ahri/akali/alistar.
+    std::vector<uint32_t> prefab_idxs;
+    prefab_idxs.reserve(glbs.size());
+    for (const std::string& name : glbs) {
+        const uint32_t idx = cairns::headless::RuntimeLoadGlbPath(&engine, name);
+        if (idx == UINT32_MAX) {
+            return false;
+        }
+        prefab_idxs.push_back(idx);
+    }
+    if (prefab_idxs.empty()) {
         return false;
     }
-    const uint32_t prefab_count = engine.NumPrefabs();
-    if (prefab_count == 0) {
-        return false;
-    }
-    for (uint32_t i = 0; i < instances; ++i) {
-        const uint32_t scene_idx = i % prefab_count;
+    // Layout: 1-3 instances centered around origin; 4+ falls into the grid.
+    // L1-L3 (1-2 dies) and L4 (1 viking) were rendering empty because the
+    // i%10*2 - 9 placement put a single instance at -9 way off-camera.
+    auto place_for = [instances](uint32_t i) -> glm::vec3 {
+        if (instances <= 3) {
+            const float step = 2.0f;
+            const float x0 = -step * 0.5f * static_cast<float>(instances - 1);
+            return glm::vec3(x0 + step * static_cast<float>(i), 0.0f, 0.0f);
+        }
         const float x = static_cast<float>(i % 10) * 2.0f - 9.0f;
         const float z = static_cast<float>(i / 10) * 2.0f;
+        return glm::vec3(x, 0.0f, z);
+    };
+    for (uint32_t i = 0; i < instances; ++i) {
+        const uint32_t scene_idx =
+            prefab_idxs[i % prefab_idxs.size()];
         const glm::mat4 world =
-            glm::translate(glm::mat4(1.0f), glm::vec3(x, 0.0f, z));
-        const uint32_t out =
-            engine.InstantiatePrefab(scene_idx, world, /*time_phase=*/0.0f);
+            glm::translate(glm::mat4(1.0f), place_for(i));
+        // C.17: honor `animated`. Static rungs use the no-skin variant so
+        // L5 actually diverges from L6 instead of being byte-identical.
+        const uint32_t out = animated
+            ? engine.InstantiatePrefab(scene_idx, world, /*time_phase=*/0.0f)
+            : engine.InstantiatePrefabNoSkin(scene_idx, world);
         if (out == UINT32_MAX) {
             return false;
         }

@@ -40,6 +40,11 @@ bool BootHeadless(cairns::Engine& engine, uint32_t width, uint32_t height);
 // Returns true iff every tick returned true.
 bool AdvanceToGoldenFrame(cairns::Engine& engine);
 
+// C.18: parameterized advance + per-frame capture support. Tick `N`
+// frames forward. Tests call this twice to land on frame 9 then frame
+// 55 -- two refs per rung per platform.
+bool AdvanceFrames(cairns::Engine& engine, uint32_t n);
+
 // Compose a ladder scene from glb file names + instance count. Returns true
 // iff the requested entities are live. When `glbs` is empty, configures the
 // tiny_quad path (L1 triangle rung).
