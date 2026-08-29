@@ -461,8 +461,8 @@ public:
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.1f, 0.1f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_PlotLines, ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
-            ImGui::SetNextWindowSize(ImVec2(420.0f, 320.0f), ImGuiCond_Always);
-            ImGui::Begin("cairns", nullptr, ImGuiWindowFlags_NoResize);
+            ImGui::SetNextWindowSize(ImVec2(420.0f, 0.0f), ImGuiCond_Always);
+            ImGui::Begin("cairns", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
             ImGui::SetWindowFontScale(2.0f);
             const float fps = cpu_ms_last_ > 0.0f ? 1000.0f / cpu_ms_last_ : 0.0f;
             float ms_max = 1.0f;
@@ -483,6 +483,14 @@ public:
                     cairns::Timer::accum_times_[s] / static_cast<double>(n) /
                     1000.0);
             };
+            const uint32_t gpu_mask = cairns::TimerStorage::GpuSlotMask();
+            float gpu_frame_ms = 0.0f;
+            for (uint32_t s = 0; s < cairns::Timer::kMaxSlots; ++s) {
+                if (gpu_mask & (1u << s)) {
+                    gpu_frame_ms += slot_avg_ms(s);
+                }
+            }
+            ImGui::Text("%-12s %5.2f ms", "gpu_frame", gpu_frame_ms);
             for (uint32_t s = 0; s < cairns::Timer::kMaxSlots; ++s) {
                 if (cairns::Timer::accum_itrs_[s] == 0) {
                     continue;

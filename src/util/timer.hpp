@@ -114,7 +114,9 @@ class TimerStorage {
  public:
   // Walks Timer::slot_names_ (the shared global mapping). If name already lives
   // in a slot (whether claimed by a Timer CPU ctor or a prior SlotForPass call),
-  // returns it; otherwise claims the first unused slot. Returns -1 when full.
+  // returns it; otherwise claims the first unused slot AND records it as a GPU
+  // pass slot (so the overlay can roll all such slots into `gpu_frame`).
+  // Returns -1 when full.
   static int SlotForPass(const char* name) {
     std::lock_guard<std::mutex> lk(mu_);
     for (uint32_t i = 0; i < Timer::kMaxSlots; ++i) {
@@ -129,10 +131,16 @@ class TimerStorage {
     for (uint32_t i = 0; i < Timer::kMaxSlots; ++i) {
       if (Timer::slot_names_[i] == nullptr) {
         Timer::slot_names_[i] = name;
+        gpu_slot_mask_ |= (1u << i);
         return static_cast<int>(i);
       }
     }
     return -1;
+  }
+
+  static uint32_t GpuSlotMask() {
+    std::lock_guard<std::mutex> lk(mu_);
+    return gpu_slot_mask_;
   }
 
   static void Span(int slot, const char* name, uint64_t us) {
@@ -147,8 +155,10 @@ class TimerStorage {
 
  private:
   static std::mutex mu_;
+  static uint32_t gpu_slot_mask_;
 };
 
 inline std::mutex TimerStorage::mu_;
+inline uint32_t TimerStorage::gpu_slot_mask_ = 0;
 
 } // namespace cairns
