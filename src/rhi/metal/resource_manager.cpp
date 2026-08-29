@@ -33,6 +33,15 @@ struct ResourceManager::Impl {
     Pool<Kernel> kernels;
 
     uint32_t frame_index = 1;
+
+    // Bindless registry builder (one in-flight at a time).
+    MTL::ArgumentEncoder* bindless_encoder = nullptr;
+    uint32_t bindless_tex_base = 0;
+    uint32_t bindless_attr_base = 0;
+    uint32_t bindless_samp_base = 0;
+    uint32_t bindless_num_tex = 0;
+    uint32_t bindless_num_attr = 0;
+    uint32_t bindless_num_samp = 0;
 };
 
 namespace {
@@ -678,6 +687,88 @@ Handle<BindGroup> ResourceManager::CreateBindGroupFromMtlBuffer(MTL::Buffer* buf
     BindGroup::Cold* cold = impl_->bind_groups.GetCold(h);
     cold->debug_name = nullptr;
     return h;
+}
+
+Handle<BindGroup> ResourceManager::CreateBindlessRegistry(
+    const BindlessRegistryDesc& desc) {
+    MTL::Device* device = impl_->params.device;
+
+    auto* texArg = MTL::ArgumentDescriptor::alloc()->init();
+    texArg->setDataType(MTL::DataTypeTexture);
+    texArg->setIndex(desc.texture_slot);
+    texArg->setArrayLength(desc.max_textures);
+    texArg->setAccess(MTL::ArgumentAccessReadOnly);
+
+    auto* attrArg = MTL::ArgumentDescriptor::alloc()->init();
+    attrArg->setDataType(MTL::DataTypePointer);
+    attrArg->setIndex(desc.attr_buffer_slot);
+    attrArg->setArrayLength(desc.max_attr_buffers);
+    attrArg->setAccess(MTL::ArgumentAccessReadOnly);
+
+    auto* sampArg = MTL::ArgumentDescriptor::alloc()->init();
+    sampArg->setDataType(MTL::DataTypeSampler);
+    sampArg->setIndex(desc.sampler_slot);
+    sampArg->setArrayLength(desc.max_samplers);
+    sampArg->setAccess(MTL::ArgumentAccessReadOnly);
+
+    NS::Array* args = NS::Array::array((NS::Object*[]){texArg, attrArg, sampArg}, 3);
+    MTL::ArgumentEncoder* arg_encoder = device->newArgumentEncoder(args);
+
+    BufferDesc bd;
+    bd.byte_size = static_cast<uint32_t>(arg_encoder->encodedLength());
+    bd.usage = kUsageUniform | kUsageStorage;
+    bd.memory = Memory::kUpload;
+    Handle<Buffer> arg_buf_h = CreateBuffer(bd);
+    uint32_t arg_off = 0;
+    MTL::Buffer* arg_buf = GetMtlBuffer(arg_buf_h, &arg_off);
+    arg_encoder->setArgumentBuffer(arg_buf, arg_off);
+
+    impl_->bindless_encoder = arg_encoder;
+    impl_->bindless_tex_base = desc.texture_slot;
+    impl_->bindless_attr_base = desc.attr_buffer_slot;
+    impl_->bindless_samp_base = desc.sampler_slot;
+    impl_->bindless_num_tex = 0;
+    impl_->bindless_num_attr = 0;
+    impl_->bindless_num_samp = 0;
+
+    Handle<BindGroup> h = impl_->bind_groups.Acquire();
+    BindGroup::Hot* hot = impl_->bind_groups.GetHot(h);
+    hot->api_descriptor_set = arg_buf;
+    hot->arg_buf_offset = arg_off;
+    impl_->bind_groups.GetCold(h)->debug_name = desc.debug_name;
+    return h;
+}
+
+uint32_t ResourceManager::BindlessAddTexture(Handle<BindGroup>, Handle<Texture> tex) {
+    MTL::Texture* t = impl_->textures.GetHot(tex)->api_view;
+    const uint32_t slot = impl_->bindless_num_tex;
+    impl_->bindless_encoder->setTexture(t, impl_->bindless_tex_base + slot);
+    impl_->bindless_num_tex = slot + 1;
+    return slot;
+}
+
+uint32_t ResourceManager::BindlessAddAttrBuffer(Handle<BindGroup>, Handle<Buffer> buf) {
+    uint32_t off = 0;
+    MTL::Buffer* b = GetMtlBuffer(buf, &off);
+    const uint32_t slot = impl_->bindless_num_attr;
+    impl_->bindless_encoder->setBuffer(b, off, impl_->bindless_attr_base + slot);
+    impl_->bindless_num_attr = slot + 1;
+    return slot;
+}
+
+uint32_t ResourceManager::BindlessAddSampler(Handle<BindGroup>, Handle<Sampler> samp) {
+    MTL::SamplerState* s = impl_->samplers.GetHot(samp)->api_sampler;
+    const uint32_t slot = impl_->bindless_num_samp;
+    impl_->bindless_encoder->setSamplerState(s, impl_->bindless_samp_base + slot);
+    impl_->bindless_num_samp = slot + 1;
+    return slot;
+}
+
+void ResourceManager::BindlessFinalize(Handle<BindGroup>) {
+    if (impl_->bindless_encoder) {
+        impl_->bindless_encoder->release();
+        impl_->bindless_encoder = nullptr;
+    }
 }
 
 }  // namespace cairns::rhi

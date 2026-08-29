@@ -514,6 +514,22 @@ struct ComputePipelineDesc {
 #endif
 };
 
+// --- Bindless registry -----------------------------------------------------
+// One descriptor table (Vulkan) / argument buffer (Metal) holding three arrays:
+// sampled textures, attribute storage buffers, and samplers. Build it by
+// CreateBindlessRegistry, then BindlessAdd* (each returns the dense per-array
+// slot index), then BindlessFinalize. `*_slot` is the Metal argument-index base
+// for that array; on Vulkan it is the descriptor binding number.
+struct BindlessRegistryDesc {
+    uint32_t max_textures = 0;
+    uint32_t max_attr_buffers = 0;
+    uint32_t max_samplers = 0;
+    uint32_t texture_slot = 0;
+    uint32_t attr_buffer_slot = 0;
+    uint32_t sampler_slot = 0;
+    const char* debug_name = nullptr;
+};
+
 #if CAIRNS_VULKAN
 struct BackendInitParams {
     VkInstance instance = VK_NULL_HANDLE;
@@ -558,6 +574,12 @@ public:
     Handle<Shader> CreateGraphicsPipeline(const GraphicsPipelineDesc& desc);
     Handle<Kernel> CreateComputePipeline(const ComputePipelineDesc& desc);
 
+    Handle<BindGroup> CreateBindlessRegistry(const BindlessRegistryDesc& desc);
+    uint32_t BindlessAddTexture(Handle<BindGroup> reg, Handle<Texture> tex);
+    uint32_t BindlessAddAttrBuffer(Handle<BindGroup> reg, Handle<Buffer> buf);
+    uint32_t BindlessAddSampler(Handle<BindGroup> reg, Handle<Sampler> samp);
+    void BindlessFinalize(Handle<BindGroup> reg);
+
     void Destroy(Handle<Buffer> h);
     void Destroy(Handle<Texture> h);
     void Destroy(Handle<Sampler> h);
@@ -596,6 +618,9 @@ public:
     // Wrap an app-provided VkDescriptorSet as a BindGroup handle (wrap-only;
     // rhi does not own the set). Parallel to Metal's CreateBindGroupFromMtlBuffer.
     Handle<BindGroup> CreateBindGroupFromVkDescriptorSet(VkDescriptorSet set);
+    // The VkDescriptorSetLayout backing a bindless registry, for pipeline layout
+    // creation. Valid after CreateBindlessRegistry.
+    VkDescriptorSetLayout GetBindlessLayout(Handle<BindGroup> reg);
 #endif  // CAIRNS_VULKAN
 
 #if CAIRNS_METAL
