@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "core/handle.hpp"
+#include "rhi/barrier.hpp"  // PipelineEvent (Granite per-resource sync state)
 #include "util/define.hpp"
 #include "util/offset_allocator.hpp"
 
@@ -249,6 +250,7 @@ struct Buffer {
         BufferUsage usage = kUsageNone;
         Memory mem_type = Memory::kDefault;
         const char* debug_name = nullptr;
+        PipelineEvent sync;  // Granite per-resource barrier state (persists)
     };
 };
 
@@ -269,6 +271,7 @@ struct Texture {
         Memory mem_type = Memory::kDefault;
         uint32_t heap_buffer_index = 0xFFFFFFFFu;  // 0xFFFFFFFF if dedicated
         const char* debug_name = nullptr;
+        PipelineEvent sync;  // Granite per-resource barrier state (persists)
         TextureColdPlat plat;
     };
 };
