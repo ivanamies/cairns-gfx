@@ -14,6 +14,9 @@ struct DevicePlat {
     WGPUDevice device = nullptr;
     WGPUQueue queue = nullptr;
     WGPUSurface surface = nullptr;  // null in headless
+    // False when the handles were injected by the web entry (it owns + frees
+    // them); true when this Device requested them and releases in Deinit.
+    bool owns_handles = true;
 };
 
 }  // namespace cairns::rhi

@@ -9,7 +9,9 @@
 #include <cstdio>
 
 #include <webgpu/webgpu.h>
-#include <webgpu/wgpu.h>
+#ifndef __EMSCRIPTEN__
+#include <webgpu/wgpu.h>  // wgpu-native extensions (wgpuDevicePoll); not in the browser
+#endif
 
 namespace cairns::rhi {
 
@@ -27,7 +29,34 @@ void OnDevice(WGPURequestDeviceStatus, WGPUDevice d, WGPUStringView, void* u1, v
 Device::~Device() { Deinit(); }
 
 bool Device::Init(const InitConfig& cfg) {
-    (void)cfg;
+    // Browser: the async adapter/device request cannot be busy-waited (callbacks
+    // only fire when control returns to the JS event loop), so the web entry
+    // acquires them up front and injects them here. Adopt + skip the request.
+    if (cfg.plat.device) {
+        plat.instance = cfg.plat.instance;
+        plat.adapter = cfg.plat.adapter;
+        plat.device = cfg.plat.device;
+        plat.queue = cfg.plat.queue ? cfg.plat.queue
+                                    : wgpuDeviceGetQueue(cfg.plat.device);
+        plat.surface = cfg.plat.surface;
+        plat.owns_handles = false;
+        WGPULimits limits = {};
+        if (wgpuDeviceGetLimits(plat.device, &limits) == WGPUStatus_Success) {
+            const uint64_t sb = limits.maxStorageBufferBindingSize;
+            const uint64_t ub = limits.maxUniformBufferBindingSize;
+            caps.max_storage_buffer_range =
+                sb > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(sb);
+            caps.max_uniform_buffer_range =
+                ub > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(ub);
+        } else {
+            caps.max_storage_buffer_range = 128u * 1024u * 1024u;
+            caps.max_uniform_buffer_range = 64u * 1024u;
+        }
+        caps.resident_budget_bytes = 8ull * 1024 * 1024 * 1024;
+        inited_ = true;
+        return true;
+    }
+
     plat.instance = wgpuCreateInstance(nullptr);
     if (!plat.instance) { return false; }
 
@@ -80,10 +109,12 @@ bool Device::Init(const InitConfig& cfg) {
 }
 
 void Device::Deinit() {
-    if (plat.queue) { wgpuQueueRelease(plat.queue); }
-    if (plat.device) { wgpuDeviceRelease(plat.device); }
-    if (plat.adapter) { wgpuAdapterRelease(plat.adapter); }
-    if (plat.instance) { wgpuInstanceRelease(plat.instance); }
+    if (plat.owns_handles) {
+        if (plat.queue) { wgpuQueueRelease(plat.queue); }
+        if (plat.device) { wgpuDeviceRelease(plat.device); }
+        if (plat.adapter) { wgpuAdapterRelease(plat.adapter); }
+        if (plat.instance) { wgpuInstanceRelease(plat.instance); }
+    }
     plat = DevicePlat{};
     inited_ = false;
 }
@@ -94,7 +125,10 @@ bool Device::InitSwapChain(SwapChain& sc, const InitConfig& cfg) {
 }
 
 void Device::WaitIdle() {
+#ifndef __EMSCRIPTEN__
     if (plat.device) { wgpuDevicePoll(plat.device, true, nullptr); }
+#endif
+    // Browser: no blocking poll; the rAF loop + async callbacks drain work.
 }
 
 }  // namespace cairns::rhi

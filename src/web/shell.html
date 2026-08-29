@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cairns-gfx (WebGPU)</title>
+<style>
+  body { margin: 0; background: #1b1d22; color: #cdd2da; font: 14px system-ui, sans-serif; }
+  #bar { text-align: center; padding: 8px; }
+  #bar button { margin: 3px; padding: 6px 12px; background: #2c2f36; color: #cdd2da;
+                border: 1px solid #3a3e46; border-radius: 4px; cursor: pointer; }
+  #bar button:hover { background: #363a42; }
+  #canvas { display: block; margin: 4px auto; background: #000; }
+  #status { text-align: center; opacity: .6; font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <button onclick="scn('triangle')">Triangle</button>
+  <button onclick="scn('one_die')">One Die</button>
+  <button onclick="scn('two_die')">Two Die</button>
+  <button onclick="scn('viking')">Viking Room</button>
+</div>
+<canvas id="canvas" width="1280" height="720"></canvas>
+<div id="status">loading…</div>
+
+<script>
+  var Module = {
+    canvas: document.getElementById('canvas'),
+    print: function (t) { console.log(t); },
+    printErr: function (t) { console.warn(t); },
+    onRuntimeInitialized: function () {
+      window.cairns = {
+        dispatch: function (op, args) {
+          var a = args ? JSON.stringify(args) : "";
+          var p = Module.ccall('cairns_dispatch', 'number',
+                               ['string', 'string'], [op, a]);
+          var s = Module.UTF8ToString(p);
+          Module._cairns_free(p);
+          try { return JSON.parse(s); } catch (e) { return s; }
+        }
+      };
+      document.getElementById('status').textContent = 'ready';
+      console.log('cairns ready — window.cairns.dispatch(op, args) available');
+    }
+  };
+
+  // Reset to a clean scene, then run the selected scenario. Mirrors the native
+  // ScenarioLauncher reset ops.
+  function scn(name) {
+    if (!window.cairns) { return; }
+    cairns.dispatch('cairns.scene.clear');
+    cairns.dispatch('cairns.prefab.unloadAll');
+    cairns.dispatch('cairns.render.tinyTriangle', { on: false });
+    if (name === 'triangle') {
+      cairns.dispatch('cairns.render.tinyTriangle', { on: true });
+    } else if (name === 'one_die') {
+      cairns.dispatch('cairns.viewport.setCamera', { viewport: 0, z: 4 });
+      cairns.dispatch('cairns.scene.spawnFitted',
+                      { glbs: ['die.glb'], instances: 1, animated: false });
+    } else if (name === 'two_die') {
+      cairns.dispatch('cairns.scene.spawnFitted',
+                      { glbs: ['die.glb'], instances: 2, animated: false });
+    } else if (name === 'viking') {
+      cairns.dispatch('cairns.scene.spawnFitted',
+                      { glbs: ['viking_room.glb'], instances: 1, animated: false });
+    }
+    document.getElementById('status').textContent = name;
+  }
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

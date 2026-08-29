@@ -16,7 +16,9 @@
 #include <webgpu/webgpu.h>
 #include <cstdio>
 
-#include <webgpu/wgpu.h>
+#ifndef __EMSCRIPTEN__
+#include <webgpu/wgpu.h>  // wgpuDevicePoll: wgpu-native only (headless readback)
+#endif
 
 namespace cairns::rhi {
 
@@ -351,7 +353,13 @@ bool Resources::ReadBackTextureRgba(Handle<Texture> h, std::vector<uint8_t>& out
     mcb.callback = [](WGPUMapAsyncStatus, WGPUStringView, void* u1, void*) { *static_cast<bool*>(u1) = true; };
     mcb.userdata1 = &done;
     wgpuBufferMapAsync(buf, WGPUMapMode_Read, 0, bd.size, mcb);
+#ifndef __EMSCRIPTEN__
     for (int i = 0; i < 4000 && !done; ++i) { wgpuDevicePoll(plat.device_, true, nullptr); }
+#else
+    // Browser: no blocking poll. In-process readback is unsupported here (the
+    // windowed path presents to the canvas; capture is via CDP screenshot).
+    (void)done;
+#endif
     const uint8_t* data = static_cast<const uint8_t*>(wgpuBufferGetConstMappedRange(buf, 0, bd.size));
     if (!data) { wgpuBufferRelease(buf); return false; }
     out.resize(static_cast<size_t>(unpadded) * ht);

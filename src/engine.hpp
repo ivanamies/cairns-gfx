@@ -2086,6 +2086,19 @@ public:
         return rhi_.resources.ReadBackTextureRgba(final_target_, rgba, w, h);
     }
 
+#if CAIRNS_WEBGPU
+    // Browser present support: the offscreen final_target_'s native texture
+    // (WGPUTexture as void*). The web entry copies it into the canvas surface
+    // each frame, reusing the whole surfaceless render path. Null if unset.
+    void* FinalTargetNativeTexture() {
+        if (final_target_.IsNull()) {
+            return nullptr;
+        }
+        rhi::Texture::Cold* cold = rhi_.resources.textures.GetCold(final_target_);
+        return cold ? cold->api_image : nullptr;
+    }
+#endif
+
     // Headless texture readback: blit final_target_ -> Shared buffer ->
     // PNG. Mirrors the windowed dump in metal/frames.cpp::End() but reads
     // from the offscreen target instead of the swapchain drawable. Apple

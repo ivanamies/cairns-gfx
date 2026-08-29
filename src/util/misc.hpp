@@ -7,7 +7,9 @@
 #include <string>
 #include <string_view>
 
-#include <SDL3/SDL.h>
+#ifndef __EMSCRIPTEN__
+#include <SDL3/SDL.h>  // no SDL in the web build; assets resolve via MEMFS
+#endif
 
 namespace cairns {
 
@@ -23,7 +25,9 @@ inline std::string GetBasePathSafe() {
         }
         return s;
     }
-#if CAIRNS_APPLE
+#if defined(__EMSCRIPTEN__)
+    return "/";  // assets preloaded at the MEMFS root (--preload-file assets@/)
+#elif CAIRNS_APPLE
     const char* p = SDL_GetBasePath();
     return p ? std::string(p) : std::string();
 #else
@@ -36,6 +40,11 @@ inline bool GetStaticResourceFilepath(std::string_view file, std::filesystem::pa
     output = base.empty() ? std::filesystem::path(file)
                           : std::filesystem::path(base) / file;
 
+#if defined(__EMSCRIPTEN__)
+    // Web: assets live in the preloaded MEMFS; resolve via plain stdlib (no SDL).
+    std::error_code ec;
+    return std::filesystem::exists(output, ec) && !ec;
+#else
     // Android raw-binary tests (no SDL Activity) segfault inside
     // SDL_IOFromFile -- bypass via plain stdlib when CAIRNS_BASE_PATH is set
     // (the test harness opts in explicitly).
@@ -50,6 +59,7 @@ inline bool GetStaticResourceFilepath(std::string_view file, std::filesystem::pa
     }
     SDL_CloseIO(io);
     return true;
+#endif
 }
 
 } // namespace cairns

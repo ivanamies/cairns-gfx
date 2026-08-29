@@ -15,7 +15,9 @@
 #include <cstdio>
 
 #include <webgpu/webgpu.h>
-#include <webgpu/wgpu.h>
+#ifndef __EMSCRIPTEN__
+#include <webgpu/wgpu.h>  // wgpuDevicePoll: wgpu-native only, absent in the browser
+#endif
 
 namespace cairns::rhi {
 
@@ -62,8 +64,12 @@ void Frames::EndSubmit(const SwapResolveTarget& target, FrameCapture& frame_capt
         wgpuCommandEncoderRelease(ri.plat.cmd_);
         ri.plat.cmd_ = nullptr;
     }
+#ifndef __EMSCRIPTEN__
     wgpuDevicePoll(plat.device_, /*wait=*/true, nullptr);
-    // GPU is idle now -- safe to drop the per-draw bind groups the recorder held.
+#endif
+    // GPU is idle now (native) -- safe to drop the per-draw bind groups the
+    // recorder held. Browser: bind groups stay alive in the impl until the
+    // submitted command buffer executes, so releasing the handles now is safe.
     for (WGPUBindGroup bg : ri.plat.transient_bind_groups_) {
         wgpuBindGroupRelease(bg);
     }
