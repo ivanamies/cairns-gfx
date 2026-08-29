@@ -4061,6 +4061,8 @@ public:
 
         uint32_t total_actors = 0;
         uint32_t dropped_actors = 0;
+        entt::entity* kept_entities =
+            s.arena.AllocateArray<entt::entity>(kAnimActorsCap);
         for (auto e : view) {
             const cairns::SkinRef& sr = view.get<const cairns::SkinRef>(e);
             auto* sh = skins_.GetHot(sr.id);
@@ -4070,7 +4072,6 @@ public:
             if (sh->mesh.index >= kBucketCap) {
                 continue;
             }
-            // #222 Phase S.3: frustum cull. Skip when fully outside.
             const cairns::Mesh::Hot* mhot_c = meshes_.GetHot(sh->mesh);
             if (mhot_c) {
                 const cairns::WorldTransform& wt =
@@ -4081,12 +4082,11 @@ public:
                     continue;
                 }
             }
-            // Cap-hit: don't break -- keep counting drops so the report
-            // shows the real shortfall, not just "we stopped here."
             if (total_actors >= kAnimActorsCap) {
                 ++dropped_actors;
                 continue;
             }
+            kept_entities[total_actors] = e;
             ++mesh_actor_count[sh->mesh.index];
             ++total_actors;
         }
@@ -4120,13 +4120,11 @@ public:
         uint32_t bucket_count = 0;
         uint32_t meta_running = 0;
         uint32_t palette_running = 0;
-        for (auto e : view) {
+        for (uint32_t k = 0; k < total_actors; ++k) {
+            const entt::entity e = kept_entities[k];
             const cairns::SkinRef& sr = view.get<const cairns::SkinRef>(e);
             auto* sh = skins_.GetHot(sr.id);
             if (!sh) {
-                continue;
-            }
-            if (sh->mesh.index >= kBucketCap) {
                 continue;
             }
             if (bucket_remap[sh->mesh.index] != UINT32_MAX) {
@@ -4173,31 +4171,15 @@ public:
         // beyond any plausible camera-app session.
         const double anim_t_d =
             static_cast<double>(sim_frame_) * cairns::kFixedDt;
-        for (auto e : view) {
+        for (uint32_t k = 0; k < total_actors; ++k) {
+            const entt::entity e = kept_entities[k];
             const cairns::SkinRef& sr = view.get<const cairns::SkinRef>(e);
             auto* sh = skins_.GetHot(sr.id);
             if (!sh) {
                 continue;
             }
-            if (sh->mesh.index >= kBucketCap) {
-                continue;
-            }
             if (sh->gpu_prefab_header_idx == UINT32_MAX) {
                 continue;
-            }
-            // #222 Phase S.3: frustum cull (must match count-pass test).
-            {
-                const cairns::Mesh::Hot* mhot_c =
-                    meshes_.GetHot(sh->mesh);
-                if (mhot_c) {
-                    const cairns::WorldTransform& wt =
-                        view.get<const cairns::WorldTransform>(e);
-                    glm::vec3 wmn, wmx;
-                    actor_world_aabb(mhot_c, wt.world, &wmn, &wmx);
-                    if (aabb_outside(wmn, wmx)) {
-                        continue;
-                    }
-                }
             }
             const uint32_t bi = bucket_remap[sh->mesh.index];
             if (bi == UINT32_MAX) {
