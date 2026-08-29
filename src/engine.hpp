@@ -1908,38 +1908,15 @@ public:
                 return false;
             }
         }
-        if (anim_eval_tables_uploaded_) {
-            const rhi::Handle<rhi::Buffer> ae_ssbo[12] = {
-                scene_headers_buf_, ae_parent_buf_, ae_topo_buf_,
-                ae_bind_pose_buf_, ae_channels_buf_, ae_samplers_buf_,
-                ae_times_buf_, ae_values_buf_, ae_joint_nodes_buf_,
-                ae_inverse_binds_buf_, world_scratch_buf_, palette_out_buf_,
-            };
-            cairns::rhi::DynamicBinding ae_b[13]{};
-            for (uint32_t i = 0; i < 13; ++i) {
-                ae_b[i].stages = cairns::rhi::kStageCompute;
-            }
-            ae_b[0].slot = 0;
-            ae_b[0].kind = cairns::rhi::BufferKind::kUniform;
-            ae_b[0].max_range = 16384u;
-            ae_b[0].has_dynamic_offset = true;
-            for (uint32_t i = 0; i < 12; ++i) {
-                ae_b[1 + i].slot = 1 + i;
-                ae_b[1 + i].kind = cairns::rhi::BufferKind::kStorage;
-                ae_b[1 + i].max_range = 0;  // VK_WHOLE_SIZE
-                ae_b[1 + i].has_dynamic_offset = false;
-                ae_b[1 + i].backing = ae_ssbo[i];
-            }
-            cairns::rhi::DynamicBuffersDesc ae_d{};
-            ae_d.debug_name = "dyn_anim_eval";
-            ae_d.bindings =
-                std::span<const cairns::rhi::DynamicBinding>(ae_b, 13);
-            dyn_anim_eval_ =
-                rhi_.resources.CreateDynamicBuffers(rhi_.alloc, rhi_.frames, ae_d);
-            if (dyn_anim_eval_.IsNull()) {
-                CAIRNS_PRINT("GreaterInit: dyn_anim_eval create failed\n");
-                return false;
-            }
+        // #228 H4b: dyn_anim_eval_ creation moved into recreateAnimDynBindings()
+        // so the same path runs at GreaterInit AND after the first runtime
+        // load (anim_eval_tables_uploaded_ flips false->true) AND after any
+        // anim buffer is destroyed+recreated on growth. Post-L9 / H1, this
+        // call at GreaterInit is a no-op (anim_eval_tables_uploaded_ is
+        // false at boot); the helper is called from uploadAnimTablesGpu
+        // once buffers exist.
+        if (!recreateAnimDynBindings()) {
+            return false;
         }
         // #237 fix: globals + drawtmp DYNAMIC UBO descriptors point at
         // the master kDynamic buffer with sizeof(struct) range; per-pass
@@ -3952,6 +3929,56 @@ public:
     // shared kDefault SSBOs and stamp per-scene base offsets into the
     // scene_headers SSBO. Called ONCE after all scenes are loaded. Bumps
     // anim_eval_tables_uploaded_ = true on success.
+    // #228 H4b vk fix: (re)create dyn_anim_eval_ DynamicBuffers set using
+    // the current anim buffer handles. Idempotent and safe to call before
+    // anim_eval_tables_uploaded_ flips true (early-returns when buffers
+    // don't exist yet). vk needs this set; metal ignores dyn_set_0 in
+    // DispatchAnimEval.
+    bool recreateAnimDynBindings() {
+        if (!anim_eval_tables_uploaded_) {
+            return true;
+        }
+        const rhi::Handle<rhi::Buffer> ae_ssbo[12] = {
+            scene_headers_buf_, ae_parent_buf_, ae_topo_buf_,
+            ae_bind_pose_buf_, ae_channels_buf_, ae_samplers_buf_,
+            ae_times_buf_, ae_values_buf_, ae_joint_nodes_buf_,
+            ae_inverse_binds_buf_, world_scratch_buf_, palette_out_buf_,
+        };
+        cairns::rhi::DynamicBinding ae_b[13]{};
+        for (uint32_t i = 0; i < 13; ++i) {
+            ae_b[i].stages = cairns::rhi::kStageCompute;
+        }
+        ae_b[0].slot = 0;
+        ae_b[0].kind = cairns::rhi::BufferKind::kUniform;
+        ae_b[0].max_range = 16384u;
+        ae_b[0].has_dynamic_offset = true;
+        for (uint32_t i = 0; i < 12; ++i) {
+            ae_b[1 + i].slot = 1 + i;
+            ae_b[1 + i].kind = cairns::rhi::BufferKind::kStorage;
+            ae_b[1 + i].max_range = 0;  // VK_WHOLE_SIZE
+            ae_b[1 + i].has_dynamic_offset = false;
+            ae_b[1 + i].backing = ae_ssbo[i];
+        }
+        cairns::rhi::DynamicBuffersDesc ae_d{};
+        ae_d.debug_name = "dyn_anim_eval";
+        ae_d.bindings =
+            std::span<const cairns::rhi::DynamicBinding>(ae_b, 13);
+        // WaitIdle so any in-flight frame still using the old descriptor
+        // set is drained before we replace it. F1 fenced deferred deletion
+        // will eventually fold this in; for now WaitIdle (rare path).
+        if (!dyn_anim_eval_.IsNull()) {
+            rhi_.device.WaitIdle();
+            rhi_.resources.Destroy(dyn_anim_eval_);
+        }
+        dyn_anim_eval_ =
+            rhi_.resources.CreateDynamicBuffers(rhi_.alloc, rhi_.frames, ae_d);
+        if (dyn_anim_eval_.IsNull()) {
+            CAIRNS_PRINT("recreateAnimDynBindings: dyn_anim_eval create failed\n");
+            return false;
+        }
+        return true;
+    }
+
     void uploadAnimTablesGpu() {
         if (anim_eval_kernel_.IsNull()) {
             return;
@@ -3960,8 +3987,17 @@ public:
         if (prefab_ids.empty()) {
             return;
         }
+        // #228 H4b: Aaltonen delta path. Walk only the trailing window
+        // [anim_uploaded_prefab_count_..end) and upload the new data at
+        // an OFFSET into each buffer past what was uploaded previously.
+        // The steady-state cost is O(batch). Buffer growth is rare (only
+        // when a new batch's totals exceed the existing buffer capacity);
+        // when it happens, fall back to a full rebuild that re-uploads
+        // every prefab from scratch.
+        bool full_rebuild = (anim_uploaded_prefab_count_ == 0) ||
+                            (anim_uploaded_prefab_count_ > prefab_ids.size());
+        // Storage that survives retry (filled once per attempt).
         std::vector<cairns::GpuSceneHeader> headers;
-        headers.reserve(prefab_ids.size());
         std::vector<int32_t> parent_flat;
         std::vector<int32_t> topo_flat;
         std::vector<cairns::GpuTRS> bind_pose_flat;
@@ -3971,81 +4007,178 @@ public:
         std::vector<glm::vec4> values_flat;
         std::vector<int32_t> joint_nodes_flat;
         std::vector<glm::mat4> inverse_binds_flat;
-        for (cairns::PrefabId sid : prefab_ids) {
-            cairns::Prefab::Hot* hot = prefabs_.GetHot(sid);
-            cairns::Prefab::Cold* cold = prefabs_.GetCold(sid);
-            if (!hot || !cold) {
+        AnimCursors base{};
+        AnimCursors target{};
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            if (full_rebuild) {
+                anim_uploaded_prefab_count_ = 0;
+                anim_cur_ = {};
+            }
+            base = anim_cur_;
+            headers.clear();
+            parent_flat.clear();
+            topo_flat.clear();
+            bind_pose_flat.clear();
+            channels_flat.clear();
+            samplers_flat.clear();
+            times_flat.clear();
+            values_flat.clear();
+            joint_nodes_flat.clear();
+            inverse_binds_flat.clear();
+            const uint32_t start = anim_uploaded_prefab_count_;
+            headers.reserve(prefab_ids.size() - start);
+            for (uint32_t i = start; i < prefab_ids.size(); ++i) {
+                cairns::PrefabId sid = prefab_ids[i];
+                cairns::Prefab::Hot* hot = prefabs_.GetHot(sid);
+                cairns::Prefab::Cold* cold = prefabs_.GetCold(sid);
+                if (!hot || !cold) {
+                    continue;
+                }
+                if (cold->skins.empty() || cold->clips.empty() ||
+                    cold->nodes.empty()) {
+                    hot->gpu_prefab_header_idx = UINT32_MAX;
+                    continue;
+                }
+                cairns::GpuSceneHeader sh{};
+                sh.node_count = static_cast<uint32_t>(cold->nodes.size());
+                sh.joint_count =
+                    static_cast<uint32_t>(cold->gpu_joint_nodes.size());
+                sh.channel_count =
+                    static_cast<uint32_t>(cold->gpu_channels.size());
+                sh.sampler_count =
+                    static_cast<uint32_t>(cold->gpu_samplers.size());
+                // offsets absolute into the GPU buffer (base + delta-so-far).
+                sh.parent_off = base.parent +
+                                static_cast<uint32_t>(parent_flat.size());
+                sh.topo_off = base.topo +
+                              static_cast<uint32_t>(topo_flat.size());
+                sh.bind_pose_off =
+                    base.bind_pose +
+                    static_cast<uint32_t>(bind_pose_flat.size());
+                sh.channel_off = base.channels +
+                                 static_cast<uint32_t>(channels_flat.size());
+                sh.sampler_off = base.samplers +
+                                 static_cast<uint32_t>(samplers_flat.size());
+                sh.times_off = base.times +
+                               static_cast<uint32_t>(times_flat.size());
+                sh.values_off = base.values +
+                                static_cast<uint32_t>(values_flat.size());
+                sh.joint_nodes_off =
+                    base.joint_nodes +
+                    static_cast<uint32_t>(joint_nodes_flat.size());
+                sh.inverse_binds_off =
+                    base.inverse_binds +
+                    static_cast<uint32_t>(inverse_binds_flat.size());
+                sh.mesh_node = cold->gpu_mesh_node;
+                sh.duration = cold->gpu_clip_duration;
+                const uint32_t local_times_base = sh.times_off;
+                const uint32_t local_values_base = sh.values_off;
+                parent_flat.insert(parent_flat.end(),
+                                    cold->gpu_parent.begin(),
+                                    cold->gpu_parent.end());
+                topo_flat.insert(topo_flat.end(), cold->gpu_topo.begin(),
+                                  cold->gpu_topo.end());
+                bind_pose_flat.insert(bind_pose_flat.end(),
+                                        cold->gpu_bind_pose.begin(),
+                                        cold->gpu_bind_pose.end());
+                channels_flat.insert(channels_flat.end(),
+                                      cold->gpu_channels.begin(),
+                                      cold->gpu_channels.end());
+                for (cairns::GpuSampler gs : cold->gpu_samplers) {
+                    gs.times_off += local_times_base;
+                    gs.values_off += local_values_base;
+                    samplers_flat.push_back(gs);
+                }
+                times_flat.insert(times_flat.end(), cold->gpu_times.begin(),
+                                   cold->gpu_times.end());
+                values_flat.insert(values_flat.end(),
+                                    cold->gpu_values.begin(),
+                                    cold->gpu_values.end());
+                joint_nodes_flat.insert(joint_nodes_flat.end(),
+                                         cold->gpu_joint_nodes.begin(),
+                                         cold->gpu_joint_nodes.end());
+                inverse_binds_flat.insert(inverse_binds_flat.end(),
+                                           cold->gpu_inverse_binds.begin(),
+                                           cold->gpu_inverse_binds.end());
+                hot->gpu_prefab_header_idx =
+                    base.headers + static_cast<uint32_t>(headers.size());
+                headers.push_back(sh);
+            }
+            if (headers.empty()) {
+                // No new prefabs had anim data. Cursors unchanged; bump
+                // uploaded count so we don't re-walk these on the next
+                // call.
+                anim_uploaded_prefab_count_ =
+                    static_cast<uint32_t>(prefab_ids.size());
+                return;
+            }
+            target.headers =
+                base.headers + static_cast<uint32_t>(headers.size());
+            target.parent =
+                base.parent + static_cast<uint32_t>(parent_flat.size());
+            target.topo =
+                base.topo + static_cast<uint32_t>(topo_flat.size());
+            target.bind_pose =
+                base.bind_pose + static_cast<uint32_t>(bind_pose_flat.size());
+            target.channels =
+                base.channels + static_cast<uint32_t>(channels_flat.size());
+            target.samplers =
+                base.samplers + static_cast<uint32_t>(samplers_flat.size());
+            target.times =
+                base.times + static_cast<uint32_t>(times_flat.size());
+            target.values =
+                base.values + static_cast<uint32_t>(values_flat.size());
+            target.joint_nodes =
+                base.joint_nodes +
+                static_cast<uint32_t>(joint_nodes_flat.size());
+            target.inverse_binds =
+                base.inverse_binds +
+                static_cast<uint32_t>(inverse_binds_flat.size());
+            // For delta attempts: does every buffer already fit the new
+            // total? If not, retry as full rebuild (delta-only writes
+            // can't span a destroyed-and-recreated buffer).
+            auto fits = [&](const rhi::Handle<rhi::Buffer>& b,
+                            uint32_t target_entries,
+                            size_t entry_size) -> bool {
+                if (b.IsNull()) {
+                    return false;
+                }
+                const uint32_t have = rhi_.resources.GetBufferByteSize(b);
+                return have >= target_entries * entry_size;
+            };
+            if (!full_rebuild && (
+                    !fits(scene_headers_buf_, target.headers,
+                          sizeof(cairns::GpuSceneHeader)) ||
+                    !fits(ae_parent_buf_, target.parent, sizeof(int32_t)) ||
+                    !fits(ae_topo_buf_, target.topo, sizeof(int32_t)) ||
+                    !fits(ae_bind_pose_buf_, target.bind_pose,
+                          sizeof(cairns::GpuTRS)) ||
+                    !fits(ae_channels_buf_, target.channels,
+                          sizeof(cairns::GpuChannel)) ||
+                    !fits(ae_samplers_buf_, target.samplers,
+                          sizeof(cairns::GpuSampler)) ||
+                    !fits(ae_times_buf_, target.times, sizeof(float)) ||
+                    !fits(ae_values_buf_, target.values, sizeof(glm::vec4)) ||
+                    !fits(ae_joint_nodes_buf_, target.joint_nodes,
+                          sizeof(int32_t)) ||
+                    !fits(ae_inverse_binds_buf_, target.inverse_binds,
+                          sizeof(glm::mat4)))) {
+                full_rebuild = true;
                 continue;
             }
-            if (cold->skins.empty() || cold->clips.empty() ||
-                cold->nodes.empty()) {
-                hot->gpu_prefab_header_idx = UINT32_MAX;
-                continue;
-            }
-            cairns::GpuSceneHeader sh{};
-            sh.node_count = static_cast<uint32_t>(cold->nodes.size());
-            sh.joint_count = static_cast<uint32_t>(cold->gpu_joint_nodes.size());
-            sh.channel_count = static_cast<uint32_t>(cold->gpu_channels.size());
-            sh.sampler_count = static_cast<uint32_t>(cold->gpu_samplers.size());
-            sh.parent_off = static_cast<uint32_t>(parent_flat.size());
-            sh.topo_off = static_cast<uint32_t>(topo_flat.size());
-            sh.bind_pose_off = static_cast<uint32_t>(bind_pose_flat.size());
-            sh.channel_off = static_cast<uint32_t>(channels_flat.size());
-            sh.sampler_off = static_cast<uint32_t>(samplers_flat.size());
-            sh.times_off = static_cast<uint32_t>(times_flat.size());
-            sh.values_off = static_cast<uint32_t>(values_flat.size());
-            sh.joint_nodes_off = static_cast<uint32_t>(joint_nodes_flat.size());
-            sh.inverse_binds_off = static_cast<uint32_t>(inverse_binds_flat.size());
-            sh.mesh_node = cold->gpu_mesh_node;
-            sh.duration = cold->gpu_clip_duration;
-            const uint32_t local_times_base = sh.times_off;
-            const uint32_t local_values_base = sh.values_off;
-            parent_flat.insert(parent_flat.end(), cold->gpu_parent.begin(),
-                                cold->gpu_parent.end());
-            topo_flat.insert(topo_flat.end(), cold->gpu_topo.begin(),
-                              cold->gpu_topo.end());
-            bind_pose_flat.insert(bind_pose_flat.end(),
-                                    cold->gpu_bind_pose.begin(),
-                                    cold->gpu_bind_pose.end());
-            channels_flat.insert(channels_flat.end(),
-                                  cold->gpu_channels.begin(),
-                                  cold->gpu_channels.end());
-            for (cairns::GpuSampler gs : cold->gpu_samplers) {
-                gs.times_off += local_times_base;
-                gs.values_off += local_values_base;
-                samplers_flat.push_back(gs);
-            }
-            times_flat.insert(times_flat.end(), cold->gpu_times.begin(),
-                               cold->gpu_times.end());
-            values_flat.insert(values_flat.end(), cold->gpu_values.begin(),
-                                cold->gpu_values.end());
-            joint_nodes_flat.insert(joint_nodes_flat.end(),
-                                     cold->gpu_joint_nodes.begin(),
-                                     cold->gpu_joint_nodes.end());
-            inverse_binds_flat.insert(inverse_binds_flat.end(),
-                                       cold->gpu_inverse_binds.begin(),
-                                       cold->gpu_inverse_binds.end());
-            hot->gpu_prefab_header_idx = static_cast<uint32_t>(headers.size());
-            headers.push_back(sh);
+            break;
         }
-        if (headers.empty()) {
-            return;
-        }
-        // #228 H4a: recycle existing buffers when they're still large enough,
-        // instead of CreateBuffer every call. The old "always allocate fresh"
-        // path churned the GPU allocator between consecutive runtime loads
-        // (the 2nd uploadAnimTablesGpu's 10 new buffers got new offsets,
-        // and any non-determinism in the allocator's free-list selection
-        // surfaced across cairns_serve invocations -- #297). Recycling
-        // collapses the steady-state case to "UploadBuffer at offset 0"
-        // and only triggers Destroy + CreateBuffer when a buffer outgrows
-        // its current allocation.
-        auto upload = [&](const void* data, size_t bytes,
-                          rhi::Handle<rhi::Buffer>& out) -> bool {
-            if (bytes == 0) {
-                bytes = 16;
+        // Upload helper: writes `bytes` of `data` into `out` at byte
+        // offset `byte_off`. Allocates / grows `out` so it can hold at
+        // least `total_bytes`. Recycles the existing handle when its
+        // capacity is sufficient (H4a leak fix preserved).
+        auto upload_at = [&](const void* data, size_t bytes,
+                             size_t byte_off, size_t total_bytes,
+                             rhi::Handle<rhi::Buffer>& out) -> bool {
+            if (total_bytes == 0) {
+                total_bytes = 16;
             }
-            const uint32_t need = static_cast<uint32_t>(bytes);
+            const uint32_t need = static_cast<uint32_t>(total_bytes);
             uint32_t have = 0;
             if (!out.IsNull()) {
                 have = rhi_.resources.GetBufferByteSize(out);
@@ -4055,64 +4188,117 @@ public:
                     rhi_.device.WaitIdle();
                     rhi_.resources.Destroy(rhi_.alloc, out);
                 }
+                // #228 H4b: growth pad so subsequent appends don't immediately
+                // re-trigger growth. 4x current need (Aaltonen reserve-
+                // and-grow); clamp small allocations up to 4 KB. Covers
+                // typical hero-size variance so steady-state delta fires
+                // for most appends.
                 rhi::BufferDesc bd{};
-                bd.byte_size = need;
+                uint32_t alloc_size = need * 4;
+                if (alloc_size < 4096) {
+                    alloc_size = 4096;
+                }
+                bd.byte_size = alloc_size;
                 bd.usage = rhi::kUsageStorage;
                 bd.memory = rhi::Memory::kDefault;
                 out = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
                 if (out.IsNull()) {
                     return false;
                 }
+                // Handle changed -- vk's dyn_anim_eval_ descriptor set
+                // captures buffer handles at creation time, so it now
+                // points at a freed handle. Mark for recreation.
+                anim_dyn_dirty_ = true;
             }
-            if (data) {
+            if (data && bytes > 0) {
                 rhi_.resources.UploadBuffer(
-                    rhi_.alloc, out, 0,
+                    rhi_.alloc, out,
+                    static_cast<uint32_t>(byte_off),
                     std::span<const uint8_t>(
                         static_cast<const uint8_t*>(data), bytes));
             }
             return true;
         };
-        if (!upload(headers.data(),
-                    headers.size() * sizeof(cairns::GpuSceneHeader),
-                    scene_headers_buf_) ||
-            !upload(parent_flat.data(),
-                    parent_flat.size() * sizeof(int32_t),
-                    ae_parent_buf_) ||
-            !upload(topo_flat.data(),
-                    topo_flat.size() * sizeof(int32_t),
-                    ae_topo_buf_) ||
-            !upload(bind_pose_flat.data(),
-                    bind_pose_flat.size() * sizeof(cairns::GpuTRS),
-                    ae_bind_pose_buf_) ||
-            !upload(channels_flat.empty() ? nullptr : channels_flat.data(),
-                    channels_flat.size() * sizeof(cairns::GpuChannel),
-                    ae_channels_buf_) ||
-            !upload(samplers_flat.empty() ? nullptr : samplers_flat.data(),
-                    samplers_flat.size() * sizeof(cairns::GpuSampler),
-                    ae_samplers_buf_) ||
-            !upload(times_flat.empty() ? nullptr : times_flat.data(),
-                    times_flat.size() * sizeof(float),
-                    ae_times_buf_) ||
-            !upload(values_flat.empty() ? nullptr : values_flat.data(),
-                    values_flat.size() * sizeof(glm::vec4),
-                    ae_values_buf_) ||
-            !upload(joint_nodes_flat.data(),
-                    joint_nodes_flat.size() * sizeof(int32_t),
-                    ae_joint_nodes_buf_) ||
-            !upload(inverse_binds_flat.data(),
-                    inverse_binds_flat.size() * sizeof(glm::mat4),
-                    ae_inverse_binds_buf_)) {
+        if (!upload_at(headers.data(),
+                       headers.size() * sizeof(cairns::GpuSceneHeader),
+                       base.headers * sizeof(cairns::GpuSceneHeader),
+                       target.headers * sizeof(cairns::GpuSceneHeader),
+                       scene_headers_buf_) ||
+            !upload_at(parent_flat.data(),
+                       parent_flat.size() * sizeof(int32_t),
+                       base.parent * sizeof(int32_t),
+                       target.parent * sizeof(int32_t),
+                       ae_parent_buf_) ||
+            !upload_at(topo_flat.data(),
+                       topo_flat.size() * sizeof(int32_t),
+                       base.topo * sizeof(int32_t),
+                       target.topo * sizeof(int32_t),
+                       ae_topo_buf_) ||
+            !upload_at(bind_pose_flat.data(),
+                       bind_pose_flat.size() * sizeof(cairns::GpuTRS),
+                       base.bind_pose * sizeof(cairns::GpuTRS),
+                       target.bind_pose * sizeof(cairns::GpuTRS),
+                       ae_bind_pose_buf_) ||
+            !upload_at(channels_flat.empty() ? nullptr : channels_flat.data(),
+                       channels_flat.size() * sizeof(cairns::GpuChannel),
+                       base.channels * sizeof(cairns::GpuChannel),
+                       target.channels * sizeof(cairns::GpuChannel),
+                       ae_channels_buf_) ||
+            !upload_at(samplers_flat.empty() ? nullptr : samplers_flat.data(),
+                       samplers_flat.size() * sizeof(cairns::GpuSampler),
+                       base.samplers * sizeof(cairns::GpuSampler),
+                       target.samplers * sizeof(cairns::GpuSampler),
+                       ae_samplers_buf_) ||
+            !upload_at(times_flat.empty() ? nullptr : times_flat.data(),
+                       times_flat.size() * sizeof(float),
+                       base.times * sizeof(float),
+                       target.times * sizeof(float),
+                       ae_times_buf_) ||
+            !upload_at(values_flat.empty() ? nullptr : values_flat.data(),
+                       values_flat.size() * sizeof(glm::vec4),
+                       base.values * sizeof(glm::vec4),
+                       target.values * sizeof(glm::vec4),
+                       ae_values_buf_) ||
+            !upload_at(joint_nodes_flat.data(),
+                       joint_nodes_flat.size() * sizeof(int32_t),
+                       base.joint_nodes * sizeof(int32_t),
+                       target.joint_nodes * sizeof(int32_t),
+                       ae_joint_nodes_buf_) ||
+            !upload_at(inverse_binds_flat.data(),
+                       inverse_binds_flat.size() * sizeof(glm::mat4),
+                       base.inverse_binds * sizeof(glm::mat4),
+                       target.inverse_binds * sizeof(glm::mat4),
+                       ae_inverse_binds_buf_)) {
             return;
         }
+        anim_cur_ = target;
+        anim_uploaded_prefab_count_ =
+            static_cast<uint32_t>(prefab_ids.size());
         anim_eval_tables_uploaded_ = true;
-        CAIRNS_PRINT("uploadAnimTablesGpu: %zu scenes, parent=%zu topo=%zu "
-                     "bind_pose=%zu channels=%zu samplers=%zu times=%zu "
-                     "values=%zu joint_nodes=%zu inverse_binds=%zu\n",
-                     headers.size(), parent_flat.size(), topo_flat.size(),
-                     bind_pose_flat.size(), channels_flat.size(),
-                     samplers_flat.size(), times_flat.size(),
-                     values_flat.size(), joint_nodes_flat.size(),
-                     inverse_binds_flat.size());
+        // #228 H4b vk fix: if any buffer was destroyed-and-recreated this
+        // call, the dyn_anim_eval_ descriptor set holds stale handles --
+        // recreate it. Also recreates on first-ever upload because the
+        // GreaterInit gate left it Null post-L9.
+        if (anim_dyn_dirty_) {
+            recreateAnimDynBindings();
+            anim_dyn_dirty_ = false;
+        }
+        CAIRNS_PRINT("uploadAnimTablesGpu: %s | +%zu scenes -> %u total | "
+                     "parent +%zu/%u topo +%zu/%u bind_pose +%zu/%u "
+                     "channels +%zu/%u samplers +%zu/%u "
+                     "times +%zu/%u values +%zu/%u "
+                     "joint_nodes +%zu/%u inverse_binds +%zu/%u\n",
+                     full_rebuild ? "FULL" : "DELTA",
+                     headers.size(), target.headers,
+                     parent_flat.size(), target.parent,
+                     topo_flat.size(), target.topo,
+                     bind_pose_flat.size(), target.bind_pose,
+                     channels_flat.size(), target.channels,
+                     samplers_flat.size(), target.samplers,
+                     times_flat.size(), target.times,
+                     values_flat.size(), target.values,
+                     joint_nodes_flat.size(), target.joint_nodes,
+                     inverse_binds_flat.size(), target.inverse_binds);
     }
 
     // #221 Phase 4: best-effort load of skin compute kernel. Failing the
@@ -4495,6 +4681,35 @@ private:
     rhi::Handle<rhi::Buffer> world_scratch_buf_;
     rhi::Handle<rhi::Buffer> palette_out_buf_;
     bool anim_eval_tables_uploaded_ = false;
+    // #228 H4b: anim-table cursor state for the Aaltonen delta path.
+    // count == number of entries currently uploaded into each buffer.
+    // uploadAnimTablesGpu compares prefab_ids_.size() against
+    // anim_uploaded_prefab_count_ and uploads ONLY the trailing delta
+    // (new prefabs) when each buffer has spare capacity. Buffer growth
+    // forces a full rebuild for ALL buffers in one retry pass.
+    struct AnimCursors {
+        uint32_t headers = 0;
+        uint32_t parent = 0;
+        uint32_t topo = 0;
+        uint32_t bind_pose = 0;
+        uint32_t channels = 0;
+        uint32_t samplers = 0;
+        uint32_t times = 0;
+        uint32_t values = 0;
+        uint32_t joint_nodes = 0;
+        uint32_t inverse_binds = 0;
+    };
+    AnimCursors anim_cur_{};
+    uint32_t anim_uploaded_prefab_count_ = 0;
+    // #228 H4b vk fix: when uploadAnimTablesGpu Destroys+CreateBuffer's
+    // any anim buffer (first allocation or growth), the existing
+    // dyn_anim_eval_ descriptor set still references the freed handle.
+    // anim_dyn_dirty_ tells the next uploadAnimTablesGpu tail to
+    // recreate the descriptor set with the current handles. Also true
+    // before the first upload so we create the set on first use (post-L9
+    // GreaterInit no longer creates it because anim_eval_tables_uploaded_
+    // is false at boot).
+    bool anim_dyn_dirty_ = true;
     // #222 Phase 0.2: latched once-per-process warning when skinned-actor
     // count exceeded kAnimActorsCap in any frame.
     bool anim_actors_cap_warned_ = false;
