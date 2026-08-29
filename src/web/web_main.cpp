@@ -144,8 +144,6 @@ void Frame(void* arg) {
         reg.Dispatch(cairns::json{{"op", "cairns.prefab.unloadAll"}});
         reg.Dispatch(cairns::json{{"op", "cairns.render.nestedGraph"},
                                   {"args", {{"on", false}}}});
-        reg.Dispatch(cairns::json{{"op", "cairns.render.tinyTriangle"},
-                                  {"args", {{"on", false}}}});
         reg.Dispatch(cairns::json{{"op", "cairns.particles.enable"},
                                   {"args", {{"on", false}}}});
         std::ifstream f(app->launcher.scripts[idx].path);

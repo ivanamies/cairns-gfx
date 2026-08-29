@@ -1127,24 +1127,6 @@ bool Engine::initRenderPipeline() {
             depthviz_ = rhi_.pipelines.CreateGraphicsPipeline(
                 rhi_.resources, rhi_.frames, dvd);
 
-            // A.3: red_triangle. Drawn inside the forward pass so attachment
-            // shape must match unlit's (BGRA8 + D32F + sampleCount MSAA).
-            // depth_test/write off so we don't actually touch the depth
-            // buffer; cull=none because gl_VertexIndex winding is fixed.
-            rhi::GraphicsPipelineDesc rtd{};
-            rtd.logical_shader = "red_triangle";
-            rtd.debug_name = "red_triangle";
-            rtd.shader_dir = shader_dir.c_str();
-            rtd.topology = rhi::PrimitiveTopology::kTriangleList;
-            rtd.cull = rhi::CullMode::kNone;
-            rtd.depth_test = false;
-            rtd.depth_write = false;
-            rtd.color_format = rhi::Format::kBgra8Unorm;
-            rtd.depth_format = rhi::Format::kD32F;
-            rtd.sample_count = sampleCount;
-            red_triangle_pip_ = rhi_.pipelines.CreateGraphicsPipeline(
-                rhi_.resources, rhi_.frames, rtd);
-
             // #207 outline: same shape; samples color_off + id_off (2 textures
             // via the shared composite descriptor layout), renders into
             // outline_off (BGRA, same dims as color_off). Surfaceless: targets
@@ -1161,7 +1143,7 @@ bool Engine::initRenderPipeline() {
                 rhi_.resources, rhi_.frames, opd);
 
             if (composite_pip_.IsNull() || depthviz_.IsNull() ||
-                outline_pip_.IsNull() || red_triangle_pip_.IsNull()) {
+                outline_pip_.IsNull()) {
                 std::exit(0);
             }
 
@@ -1574,18 +1556,6 @@ void Engine::RecordFrame(FramePacket& pkt) {
                     if (particles_active && vp_particles) {
                         cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
                     }
-                    // A.3: L1 single red triangle. tiny_quad_test_ flips this
-                    // on; with no glbs loaded DrawMeshes is a no-op, so the
-                    // captured frame is pipeline + clear + this one draw.
-                    // Hard-coded NDC triangle from gl_VertexIndex; the shader
-                    // ignores its texture/sampler bindings but DrawFullscreen
-                    // unconditionally dereferences the sampler handle, so we
-                    // pass composite_sampler_ (already created).
-                    if (tiny_quad_test_) {
-                        cmd.DrawFullscreen(rhi_.resources, red_triangle_pip_,
-                            std::span<const rhi::Handle<rhi::Texture>>{},
-                            composite_sampler_);
-                    }
                 });
         }
 
@@ -1940,23 +1910,18 @@ bool Engine::draw() {
         sim_steps_this_frame_ = 0;
         while (accumulator_ >= cairns::kFixedDt &&
                sim_steps_this_frame_ < cairns::kMaxStepsPerFrame) {
-            sim_angle_deg_ += cairns::kRotDegPerSec * static_cast<float>(cairns::kFixedDt);
             ++sim_frame_;
             accumulator_ -= cairns::kFixedDt;
             ++sim_steps_this_frame_;
         }
         const float alpha = static_cast<float>(accumulator_ / cairns::kFixedDt);
-        render_angle_deg_ = sim_angle_deg_ +
-                            alpha * cairns::kRotDegPerSec *
-                                static_cast<float>(cairns::kFixedDt);
 
         if (frame_ <= 5) {
             fprintf(stderr,
                     "[FCLK] frame=%u wall_dt=%.4f acc=%.4f steps=%u alpha=%.3f "
-                    "sim_frame=%llu sim_deg=%.3f\n",
+                    "sim_frame=%llu\n",
                     frame_, wall_dt, accumulator_, sim_steps_this_frame_,
-                    alpha, static_cast<unsigned long long>(sim_frame_),
-                    sim_angle_deg_);
+                    alpha, static_cast<unsigned long long>(sim_frame_));
         }
 
 
@@ -2189,7 +2154,6 @@ bool Engine::draw() {
         if (golden_) {
             cairns::Fnv1a sim;
             sim.Write(s.arena.Resolve(0), s.arena.Used());
-            sim.WritePod(render_angle_deg_);
             sim.WritePod(accumulator_);
             sim.WritePod(sim_frame_);
             last_sim_hash_ = sim.Digest();
@@ -2477,11 +2441,9 @@ bool Engine::BuildMeshOpaqueDraws(uint32_t slot) {
         // EncodeDraws() on the render-thread side post-split. Stable-index
         // writes (resize + index assignment) so the output is independent of
         // walk/execution order.
-        // Rotation reads sim, not wall: render_angle_deg_ is sim_angle_deg_
-        // plus an interpolation in [0, kFixedDt) toward the next sim step.
-        const float angle_degs = render_angle_deg_;
-        const float angle_rads = angle_degs * std::numbers::pi / 180.0f;
-        const glm::mat4 rot_matrix = glm::rotate(glm::mat4(1.0f), angle_rads, glm::vec3(0, 1.0, 0));
+        // Sim-time for per-entity TransformAnim (deterministic; steps at 60Hz).
+        const float anim_t =
+            static_cast<float>(sim_frame_) * static_cast<float>(cairns::kFixedDt);
 
         // Per-viewport camera resolve. Each viewport gets its own
         // RenderPassGlobals (uploaded at a distinct bump offset by
@@ -2600,7 +2562,7 @@ bool Engine::BuildMeshOpaqueDraws(uint32_t slot) {
                 static_cast<uint32_t>(PerSlot::kMaxScenesPerSlot)) {
                 return -1;
             }
-            wh->root_transform = rot_matrix;
+            cairns::AnimateTransforms(*wc, anim_t);
             cairns::PropagateTransforms(*wc, glm::mat4(1.0f));
             const uint32_t mesh_lo =
                 static_cast<uint32_t>(s.proxies.meshes.size());
@@ -2766,8 +2728,7 @@ bool Engine::BuildMeshOpaqueDraws(uint32_t slot) {
                     draw.dynamic_buffer_offsets[0] = UINT32_MAX;
                     draw.dynamic_buffer_offsets[1] = UINT32_MAX;
                     assert(prim.index_count % 3 == 0);
-                    draw.triangle_count =
-                        tiny_quad_test_ ? 2 : prim.index_count / 3;
+                    draw.triangle_count = prim.index_count / 3;
 
                     // P2: depth_q dropped from the sort key (pass 0). Including
                     // it would make the sort camera-dependent and force a per-
@@ -2851,7 +2812,6 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
         // determinism without being killed.
         dump_and_exit_ = !engine_cfg_.dump_path.empty();
         golden_ = engine_cfg_.use_fixed_clock || dump_and_exit_;
-        tiny_quad_test_ = engine_cfg_.tiny_quad;
         // #229 C3: particles_enabled config -> emitter on the active scene,
         // installed after InitInitialViewport() below (the scene must exist).
 
@@ -4053,10 +4013,14 @@ bool Engine::SpawnFitted(const std::vector<std::string>& glbs, uint32_t instance
     }
 
     // Spawn one of each kind in a fitted grid (the "test all primitives"
-    // scenario). Reuses FitGridToViewport exactly like SpawnFitted.
+    // scenario). Reuses FitGridToViewport exactly like SpawnFitted. Each
+    // anims[i] (if present) is attached as a per-entity TransformAnim with the
+    // fitted pose captured as its rest base -- so the grid animates with a mix
+    // of transforms, not a global spin.
     bool Engine::SpawnPrimitivesGrid(
                 const std::vector<cairns::PrimitiveKind>& kinds,
-                const std::vector<glm::vec4>& colors) {
+                const std::vector<glm::vec4>& colors,
+                const std::vector<cairns::TransformAnim>& anims) {
         if (kinds.empty()) {
             return true;
         }
@@ -4081,9 +4045,27 @@ bool Engine::SpawnFitted(const std::vector<std::string>& glbs, uint32_t instance
             const glm::vec3 center = PrefabAabbCenter(pidx[i]);
             const glm::mat4 world =
                 worlds[i] * glm::translate(glm::mat4(1.0f), -center);
-            if (InstantiatePrefabNoSkin(pidx[i], world) == UINT32_MAX) {
+            const uint32_t out = InstantiatePrefabNoSkin(pidx[i], world);
+            if (out == UINT32_MAX) {
                 return false;
             }
+            if (i >= anims.size()) {
+                continue;
+            }
+            cairns::Scene::Cold* wc = scene_mgr_.pool.GetCold(scene_mgr_.active);
+            if (!wc) {
+                continue;
+            }
+            const entt::entity e = static_cast<entt::entity>(out);
+            if (!wc->registry.all_of<cairns::Transform>(e)) {
+                continue;
+            }
+            const cairns::Transform& tr = wc->registry.get<cairns::Transform>(e);
+            cairns::TransformAnim a = anims[i];
+            a.base_t = tr.t;
+            a.base_r = tr.r;
+            a.base_s = tr.s;
+            wc->registry.emplace<cairns::TransformAnim>(e, a);
         }
         return true;
     }

@@ -313,9 +313,11 @@ public:
                                                const glm::vec4& color);
     // Spawn one primitive fit to the active viewport (like SpawnFitted).
     bool SpawnPrimitive(cairns::PrimitiveKind kind, const glm::vec4& color);
-    // Spawn one of each kind in a fitted grid (the "test all primitives" scene).
+    // Spawn one of each kind in a fitted grid (the "test all primitives" scene),
+    // each with an optional per-entity TransformAnim (mix of motions).
     bool SpawnPrimitivesGrid(const std::vector<cairns::PrimitiveKind>& kinds,
-                             const std::vector<glm::vec4>& colors);
+                             const std::vector<glm::vec4>& colors,
+                             const std::vector<cairns::TransformAnim>& anims);
 
     // #224 L5: runtime entry point for cairns.prefab.loadBatch.
     //   (1) Device::WaitIdle so no in-flight frame reads pools being mutated
@@ -1064,8 +1066,6 @@ public:
         }
     }
     bool ParticlesEnabled() { return AnyBoundSceneHasEmitter(); }
-    // A.3 single red NDC triangle (no scene): pipeline + clear + one draw.
-    void SetTinyTriangle(bool on) { tiny_quad_test_ = on; }
     // G4 / #229 C3: install/clear the canonical composition -- the active
     // viewport's color fullscreen + its resolved depth in a bottom-right PIP.
     // (Was the nested_graph_mode_ bool; now data the composite pass iterates.)
@@ -1803,11 +1803,6 @@ private:
     rhi::Handle<rhi::DynamicBuffers> dyn_particle_parity_[2];
     ShaderHandle composite_pip_ = ShaderHandle::Null;
     ShaderHandle depthviz_ = ShaderHandle::Null;
-    // A.3: L1 single-red-triangle pipeline. Three NDC vertices from
-    // gl_VertexIndex, no vertex buffer, solid red frag. Drawn via
-    // DrawFullscreen (which takes 3 vertices regardless) only when
-    // tiny_quad_test_ is set.
-    ShaderHandle red_triangle_pip_ = ShaderHandle::Null;
     ShaderHandle outline_pip_ = ShaderHandle::Null;
     rhi::Handle<rhi::Sampler> composite_sampler_ = rhi::Handle<rhi::Sampler>::Null;
     // #207 nearest sampler for outline's id_off binding -- R32_UINT can't be
@@ -1848,8 +1843,6 @@ private:
     std::unique_ptr<cairns::FrameClock> clock_;
     double accumulator_ = 0.0;
     uint64_t sim_frame_ = 0;
-    float sim_angle_deg_ = 0.0f;
-    float render_angle_deg_ = 0.0f;
     uint32_t sim_steps_this_frame_ = 0;
     // #229 P7: last per-frame SIM determinism digest (FixedClock + static scene
     // => byte-identical every frame and run-to-run). Read by test_state_hash.
@@ -1883,10 +1876,6 @@ private:
 #endif
     // A.9: G6 opt-in; render imgui into the golden capture.
     bool imgui_in_golden_ = false;
-    // Diagnostic: pin every draw to 2 triangles. Draw count + submission
-    // identical, geometry throughput ~700x smaller. Isolates draw-submission
-    // overhead vs geometry-throughput in the forward pass cost.
-    bool tiny_quad_test_ = false;
     // Shell-lowered startup options (env-vars are read shell-side and
     // populated here). Engine never reads std::getenv.
     EngineConfig engine_cfg_;

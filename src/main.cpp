@@ -321,8 +321,6 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         reg.Dispatch(cairns::json{{"op", "cairns.prefab.unloadAll"}});
         reg.Dispatch(cairns::json{{"op", "cairns.render.nestedGraph"},
                                   {"args", {{"on", false}}}});
-        reg.Dispatch(cairns::json{{"op", "cairns.render.tinyTriangle"},
-                                  {"args", {{"on", false}}}});
         reg.Dispatch(cairns::json{{"op", "cairns.particles.enable"},
                                   {"args", {{"on", false}}}});
         // ReadAsset (SDL_LoadFile) reads APK assets on Android; std::ifstream

@@ -17,6 +17,8 @@
 #include "scene/components.hpp"
 #include "scene/world.hpp"
 
+#include <cmath>
+
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -30,6 +32,40 @@ inline glm::mat4 ComposeTRS(const Transform& t) {
     m[2] *= t.s.z;
     m[3] = glm::vec4(t.t, 1.0f);
     return m;
+}
+
+// Per-entity procedural animation: rewrite each animated entity's Transform
+// from its captured rest pose + sim time `t`, then dirty it so the following
+// PropagateTransforms recomposes WorldTransform. Deterministic in sim time.
+inline void AnimateTransforms(Scene::Cold& wc, float t) {
+    constexpr float kTau = 6.28318530717958647692f;
+    auto& reg = wc.registry;
+    auto view = reg.view<Transform, const TransformAnim>();
+    for (auto e : view) {
+        Transform& tr = view.get<Transform>(e);
+        const TransformAnim& a = view.get<const TransformAnim>(e);
+        switch (a.mode) {
+            case TransformAnim::Mode::kSpin:
+            case TransformAnim::Mode::kTumble:
+                tr.r = a.base_r *
+                       glm::angleAxis(a.rate * t, glm::normalize(a.axis));
+                break;
+            case TransformAnim::Mode::kBob:
+                tr.t = a.base_t +
+                       glm::vec3(0.0f, a.amp * std::sin(a.rate * kTau * t), 0.0f);
+                break;
+            case TransformAnim::Mode::kPulse:
+                tr.s = a.base_s *
+                       (1.0f + a.amp * 0.5f * (1.0f + std::sin(a.rate * kTau * t)));
+                break;
+            case TransformAnim::Mode::kOrbit:
+                tr.t = a.base_t +
+                       a.amp * glm::vec3(std::cos(a.rate * kTau * t), 0.0f,
+                                         std::sin(a.rate * kTau * t));
+                break;
+        }
+        reg.emplace_or_replace<DirtyTransform>(e);
+    }
 }
 
 inline void PropagateTransforms(Scene::Cold& wc, const glm::mat4& root) {

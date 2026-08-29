@@ -22,9 +22,6 @@ struct EngineConfig {
     // kGoldenDumpFrame to this path, then exit(0). Drives byte-gates.
     std::filesystem::path dump_path;
 
-    // CAIRNS_TINY_QUAD: tiny-quad parity render path.
-    bool tiny_quad = false;
-
     // CAIRNS_CAM_POSE: pin every viewport's fly controller to this fixed
     // (pos, yaw_rad, pitch_rad). Disables live fly input.
     struct CamPose {

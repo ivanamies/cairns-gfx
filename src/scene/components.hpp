@@ -57,6 +57,21 @@ struct Transform {
     glm::vec3 s{1.0f};
 };
 
+// Per-entity procedural animation, applied each frame before propagation
+// (AnimateTransforms). Rewrites Transform from a captured rest pose (base_*)
+// plus sim time -- so motion is a per-entity component, NOT a global scene
+// spin. Authored by the primitive spawners now; a JS component op later.
+struct TransformAnim {
+    enum class Mode : uint8_t { kSpin, kTumble, kBob, kPulse, kOrbit };
+    Mode mode = Mode::kSpin;
+    glm::vec3 axis{0.0f, 1.0f, 0.0f};  // spin/tumble rotation axis
+    float rate = 1.0f;   // spin/tumble rad/s; bob/pulse/orbit cycles/s
+    float amp = 1.0f;    // bob height / pulse depth / orbit radius (world units)
+    glm::vec3 base_t{0.0f};
+    glm::quat base_r{1.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec3 base_s{1.0f};
+};
+
 // Output of transform propagation; Extract reads THIS, not Transform.
 // In P4 (pre-hierarchy) this is populated directly at world build.
 struct WorldTransform {

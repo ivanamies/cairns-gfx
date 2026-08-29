@@ -14,7 +14,6 @@ EngineConfig LoadEngineConfigFromEnv() {
     if (const char* p = std::getenv("CAIRNS_DUMP")) {
         cfg.dump_path = p;
     }
-    cfg.tiny_quad = (std::getenv("CAIRNS_TINY_QUAD") != nullptr);
 
     if (const char* p = std::getenv("CAIRNS_CAM_POSE")) {
         EngineConfig::CamPose pose;

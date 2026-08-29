@@ -5,17 +5,16 @@
 //   WallClock   -- live mode (production). SDL_GetTicks-based seconds delta.
 //   FixedClock  -- golden mode (CAIRNS_DUMP). Returns kFixedDt every tick.
 //
-// The game thread feeds clock dt into a Fiedler accumulator. sim_frame_,
-// sim_angle_deg_, and the particle compute step count are advanced by the
-// accumulator in fixed kFixedDt increments; render_angle_deg_ interpolates
-// with alpha. Same sim code path in golden capture and production -- only
-// the clock source differs.
+// The game thread feeds clock dt into a Fiedler accumulator. sim_frame_ and
+// the particle compute step count are advanced by the accumulator in fixed
+// kFixedDt increments; alpha is the render interpolation fraction. Same sim
+// code path in golden capture and production -- only the clock source differs.
 //
 // Which sim/render state uses which clock:
 //
 //   FixedClock (deterministic)        | WallClock (real time)
 //   --------------------------------- | ---------------------------------
-//   scene rotation angle              | main-loop accumulator dt source
+//   sim_frame_ / step count          | main-loop accumulator dt source
 //   particle compute dt (UBO)         | render interpolation alpha source
 //   particle spawn / RNG (seed 42)    | cpu-ms / FPS HUD + frame-time graph
 //   future physics                    | ImGui overlay anims; vsync; logging
@@ -36,10 +35,6 @@ namespace cairns {
 inline constexpr double   kFixedDt          = 1.0 / 60.0;
 inline constexpr uint32_t kMaxStepsPerFrame = 5;
 inline constexpr double   kMaxFrameDt       = 0.250;
-// 0 = no turntable. A posable-scene editor doesn't auto-spin the scene; the
-// old demo spin (22.5 deg/s) fought placement/inspection. Re-enable per-entity
-// via a component if a spin is ever wanted, not as a global root rotation.
-inline constexpr float    kRotDegPerSec     = 0.0f;
 inline constexpr uint64_t kGoldenDumpFrame  = 60;
 // #221 Phase 9 (vk): budget for skin Group A bind groups (one per
 // skinned mesh in residence). Plan v7 § sizing -- 1024.

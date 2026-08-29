@@ -1,7 +1,7 @@
 // rhi/webgpu/pipelines.cpp -- WebGPU backend.
 //
-// W4: WGSL render pipelines for the fullscreen passes (red_triangle,
-// composite_pip). W5: the unlit forward pass (unlit_offscreen_noid) -- vertex
+// W4: WGSL render pipelines for the fullscreen passes (composite_pip).
+// W5: the unlit forward pass (unlit_offscreen_noid) -- vertex
 // streams + 3 bind groups (globals dyn-UBO @0, material tex+sampler @1, drawtmp
 // dyn-UBO @2). Other pipelines (the id MRT variant, particle, imgui) are still
 // stubbed; their consumers no-op. NEVER return Handle::Null (hangs GreaterInit).
@@ -87,9 +87,6 @@ struct ShaderInfo {
 };
 ShaderInfo Classify(const char* logical) {
     if (!logical) { return {}; }
-    if (std::strcmp(logical, "red_triangle") == 0) {
-        return {Kind::kFullscreen, "red_triangle", 0};
-    }
     if (std::strcmp(logical, "composite_pip") == 0) {
         return {Kind::kFullscreen, "composite_pip", 1};
     }
@@ -213,7 +210,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(Resources& resources, Frames& f
         pld.bindGroupLayouts = &bgl0;
         pl = wgpuDeviceCreatePipelineLayout(plat.device_, &pld);
     } else {
-        WGPUPipelineLayoutDescriptor pld = {};  // red_triangle: no bind groups
+        WGPUPipelineLayoutDescriptor pld = {};  // no bind groups
         pl = wgpuDeviceCreatePipelineLayout(plat.device_, &pld);
     }
 

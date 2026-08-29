@@ -27,10 +27,10 @@ namespace refs = cairns::test_refs;
 // ---- Rendered-subject goldens (formerly the escalating "ladder"): each is one
 // scene captured to a per-platform image ref at frame 9 + frame 55. Now flat
 // SCENARIOs; the 100-actor scale workload lives in test_golden_stress.cpp. ----
-SCENARIO("subject: red triangle (pipeline + clear + one draw)",
+SCENARIO("subject: red triangle (procedural mesh)",
          "[scenarios][golden][subject]") {
     cairns::golden::RunJsSubject("triangle", 512, 512, {}, R"JS(
-        cairns.dispatch("cairns.render.tinyTriangle", { on: true });
+        cairns.dispatch("cairns.primitive.create", { type: "triangle" });
     )JS");
 }
 SCENARIO("subject: one die (single static textured mesh)",

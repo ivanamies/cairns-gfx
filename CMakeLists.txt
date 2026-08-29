@@ -668,8 +668,6 @@ else()
     copy_helper("outline.frag.spv")
     copy_helper("skin.comp.spv")     # #221 Phase 9
     copy_helper("anim_eval.comp.spv") # #221 Phase 5b
-    copy_helper("red_triangle.vert.spv") # A.3 L1 single red triangle
-    copy_helper("red_triangle.frag.spv")
     # Scenario picker scripts -> assets/scripts. SDL_EnumerateDirectory finds
     # them via the AssetManager on Android (posix SDL_sysfsops -> AAssetDir).
     file(GLOB CAIRNS_SCENARIO_SCRIPTS CONFIGURE_DEPENDS

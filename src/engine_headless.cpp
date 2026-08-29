@@ -543,7 +543,15 @@ bool CreateAllPrimitives(Engine* engine) {
         glm::vec4(0.9f, 0.2f, 0.2f, 1.0f), glm::vec4(0.2f, 0.8f, 0.3f, 1.0f),
         glm::vec4(0.3f, 0.5f, 0.9f, 1.0f), glm::vec4(0.9f, 0.7f, 0.2f, 1.0f),
         glm::vec4(0.8f, 0.3f, 0.7f, 1.0f)};
-    return engine->SpawnPrimitivesGrid(kinds, colors);
+    // A mix, not all spins -- moving subjects for the lighting/shadows work.
+    using M = cairns::TransformAnim::Mode;
+    const std::vector<cairns::TransformAnim> anims = {
+        {M::kSpin,   glm::vec3(0.0f, 1.0f, 0.0f), 1.2f, 0.0f},   // triangle
+        {M::kTumble, glm::vec3(1.0f, 1.0f, 0.0f), 0.9f, 0.0f},   // pyramid
+        {M::kBob,    glm::vec3(0.0f, 1.0f, 0.0f), 0.35f, 1.2f},  // cylinder
+        {M::kPulse,  glm::vec3(0.0f, 1.0f, 0.0f), 0.5f, 0.4f},   // ellipse
+        {M::kOrbit,  glm::vec3(0.0f, 1.0f, 0.0f), 0.25f, 1.5f}}; // ellipsoid
+    return engine->SpawnPrimitivesGrid(kinds, colors, anims);
 }
 
 void UseScene(Engine* engine, uint32_t index) {
@@ -593,12 +601,6 @@ void SetInjectedHud(Engine* engine, float cpu_ms, float fps) {
     s.frame_ms.fill(cpu_ms);
     s.graph_head = 0;
     engine->SetInjectedHudStats(s);
-}
-
-void SetTinyTriangle(Engine* engine, bool on) {
-    if (engine) {
-        engine->SetTinyTriangle(on);
-    }
 }
 
 void SetNestedGraphMode(Engine* engine, bool on) {
