@@ -5,6 +5,27 @@ Newest first.
 
 ---
 
+## `c78ed77` (2026-06-15) — revert S.1 LDS palette; 500 actors / 100 distinct GLBs
+
+### macOS, M2 Max, 2560×1440, vsync, CAIRNS_AGENT_STDIN + spawnTotal(500)
+
+| Pass               | metal Release | vk Release |
+|--------------------|---------------|------------|
+| `frame`            | 20.84 ms      | 20.81 ms   |
+| `build_draws`      |  0.54 ms      |  0.59 ms   |
+| `record`           |  0.47 ms      |  0.21 ms   |
+| `skinning_compute` |  5.68 ms      |  5.04 ms   |
+| `particle_sim`     |  0.10 ms      |  0.01 ms   |
+| `forward_vp0`      |  1.78 ms      |  1.74 ms   |
+| `swap`             |  0.26 ms      |  0.14 ms   |
+| `present_pacing`   | 12.54 ms      | —          |
+| `skin_eval`        |  0.03 ms      |  0.03 ms   |
+| `present_wait`     |  0.00 ms      |  0.01 ms   |
+| `acquire_wait`     | —             |  0.01 ms   |
+| `fence_wait`       | —             |  0.00 ms   |
+
+---
+
 ## bisect (2026-06-15) — skinning_compute regression 2026-06-09 → 2026-06-11
 
 Bisect run today on `bisect/skinning-perf` to chase the bad animation GPU numbers.
