@@ -245,6 +245,16 @@ diagnosed source of drift:
 
 ## Active
 
+### wgpu_readback_smoke broken -> full spec-mac-metal builds stop early (2026-07-09)
+`tests/wgpu_readback_smoke.cpp:70/:89` fail to compile in spec-mac-metal
+(`td.size = {..}` / `ca.clearValue = {..}` "expected expression" -- the
+wgpu-native vs emdawnwebgpu header divergence bit the brace-inits). The W3
+de-risk target is long past its purpose. DANGER: a full `cmake --build` of
+spec-mac-metal aborts at this target BEFORE relinking cairns_golden_tests /
+cairns_serve -> stale binaries silently pass ctest (bit me twice on 2026-07-09;
+worked around with `--target cairns_golden_tests`). Either fix the inits per
+header or drop the target from the default build (CAIRNS_BUILD_WGPU_SMOKE off).
+
 ### Shadow-map visual correctness needs interactive verification
 M2b wired directional shadows on metal+vk (shadow_vp0 depth pass + 3x3 PCF);
 goldens PROVE shadows change pixels (lit_primitives != shadow_primitives) and
