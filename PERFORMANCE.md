@@ -45,19 +45,22 @@ Steady-state medians (last 3 of 9–10 timer reports, warmup window dropped).
 | GPU total             | ~10.14 ms | +0.94 |
 
 ### Android Vulkan Release — Samsung Galaxy S22 (SM-S901U, Adreno), 2115×1008
-| Pass                  | avg      |
-|-----------------------|----------|
+| Pass                  | avg (thermal-saturated) |
+|-----------------------|-------------------------|
 | `frame` (CPU)         |   7.96 ms |
 | `build_draws` (CPU)   |   6.97 ms |
 | `record` (CPU)        |  10.83 ms |
 | `particle_sim` (GPU)  |   0.000 ms |
-| `forward_vp0` (GPU)   | 109.4 ms |
-| `swap` (GPU)          |   0.88 ms |
-| GPU total             | ~110.3 ms |
+| `forward_vp0` (GPU)   | ~130 ms (sustained) |
+| `swap` (GPU)          |   ~1.0 ms |
+| GPU total             | ~131 ms |
 
-~9 fps. Native portrait-rotated landscape resolution is 2115×1008 ≈
-2.13 M pixels, **2.3×** the macOS 1280×720 workload. GPU forward is
-~110 ms (vs ~10 ms on M2 Max -- expected for a phone GPU).
+~7-9 fps. Native portrait-rotated landscape resolution is 2115×1008
+≈ 2.13 M pixels, **2.3×** the macOS 1280×720 workload. GPU forward
+sustained at ~130 ms after thermal saturation (cold-start runs come
+in at ~95–105 ms; second 120-frame window 110–123 ms; settles to
+~130 ms after a couple of minutes). GPU is ~10–13× the M2 Max at
+~2.3× the pixels -- the Adreno + thermal envelope is the cap.
 
 The earlier crash on this branch (`Engine::GreaterInit+1244` SIGSEGV
 in strlen) was: I removed `ambessa.glb` + `ambessa_chosen_of_the_wolf.
