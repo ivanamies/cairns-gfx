@@ -8,6 +8,7 @@
 
 #include <Metal/Metal.hpp>
 
+#include <cassert>
 #include <utility>
 
 namespace cairns::rhi::metal {
@@ -265,6 +266,7 @@ void MemoryAllocator::FreeImage(uint32_t heap_index,
 
 void* MemoryAllocator::BumpAllocate(uint32_t bytes, uint32_t align, Memory mem) {
     BumpRing& r = rings_[mem_index(mem)];
+    assert(r.block_bytes != 0 && "bump ring not initialized");
     if (r.block_bytes == 0) {
         return nullptr;
     }
@@ -277,18 +279,23 @@ void* MemoryAllocator::BumpAllocate(uint32_t bytes, uint32_t align, Memory mem) 
         blocks_[r.block_indices[slot]].mem_type != mem;
     if (needs_block) {
         uint32_t new_hi = kInvalidBlock;
-        if (!CreateBufferBlock(r.block_bytes, mem, &new_hi)) {
+        bool block_ok = CreateBufferBlock(r.block_bytes, mem, &new_hi);
+        assert(block_ok && "bump CreateBufferBlock failed");
+        if (!block_ok) {
             return nullptr;
         }
         r.block_indices[slot] = new_hi;
     }
 
     const uint32_t off = align_up(r.cursors[slot], align);
+    assert(off + bytes <= r.block_bytes && "bump ring overflow");
     if (off + bytes > r.block_bytes) {
         return nullptr;
     }
     r.cursors[slot] = off + bytes;
-    return static_cast<uint8_t*>(blocks_[r.block_indices[slot]].mapped_ptr) + off;
+    void* p = static_cast<uint8_t*>(blocks_[r.block_indices[slot]].mapped_ptr) + off;
+    assert(p && "bump allocate returned null");
+    return p;
 }
 
 uint32_t MemoryAllocator::BumpOffset(void* ptr) const {
@@ -311,7 +318,19 @@ uint32_t MemoryAllocator::BumpMasterHeapIndex(Memory mem) const {
     return r.block_indices[r.current_slot];
 }
 
+uint32_t MemoryAllocator::BumpSaveCursor(Memory mem) const {
+    const BumpRing& r = rings_[mem_index(mem)];
+    return r.cursors[r.current_slot];
+}
+
+void MemoryAllocator::BumpRestoreCursor(Memory mem, uint32_t cursor) {
+    BumpRing& r = rings_[mem_index(mem)];
+    r.cursors[r.current_slot] = cursor;
+}
+
 MTL::Buffer* MemoryAllocator::HeapMasterBuffer(uint32_t heap_index) const {
+    assert(heap_index < blocks_.size() && "heap_index out of range");
+    assert(blocks_[heap_index].master_buffer && "null master buffer");
     return blocks_[heap_index].master_buffer;
 }
 

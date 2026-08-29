@@ -62,11 +62,6 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
             enc->useResource(tex, MTL::ResourceUsageRead, MTL::RenderStageFragment);
         }
     }
-    uint32_t mesh_master_off = 0;
-    MTL::Buffer* mesh_master =
-        res.GetMtlBuffer(alloc,list.resident_buffers[0], &mesh_master_off);
-    enc->useResource(mesh_master, MTL::ResourceUsageRead, MTL::RenderStageVertex);
-    enc->setVertexBuffer(mesh_master, 0, 0);
     MTL::Buffer* dyn_master = res.GetBumpMasterBuffer(alloc, Memory::kDynamic);
     enc->setVertexBuffer(dyn_master, list.globals_offset, cairns::kRenderPassGlobalBindSlot);
     enc->setVertexBuffer(dyn_master, 0, cairns::kMaterialBindSlot);
@@ -77,9 +72,10 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
         const cairns::Draw& draw = list.draws[list.sorted_indices[i]];
         {
             uint32_t pos_off = 0;
-            res.GetMtlBuffer(alloc,draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot],
-                                    &pos_off);
-            enc->setVertexBufferOffset(pos_off, 0);
+            MTL::Buffer* pos_buf = res.GetMtlBuffer(
+                alloc, draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
+            enc->useResource(pos_buf, MTL::ResourceUsageRead, MTL::RenderStageVertex);
+            enc->setVertexBuffer(pos_buf, pos_off, 0);
         }
         {
             const uint32_t mat_off = draw.dynamic_buffer_offsets[0];

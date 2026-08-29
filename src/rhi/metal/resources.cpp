@@ -6,6 +6,7 @@
 
 #include <Metal/Metal.hpp>
 
+#include <cassert>
 #include <cstring>
 
 #include "rhi/resources.hpp"
@@ -193,6 +194,7 @@ uint32_t Resources::GetBufferByteSize(Handle<Buffer> h) {
 Handle<Buffer> Resources::CreateBuffer(Allocator& alloc, const BufferDesc& d) {
     metal::AllocResult r =
         alloc.memory_.AllocBuffer(d.byte_size, d.usage, d.memory, 16);
+    assert(r.ok && "AllocBuffer failed");
     if (!r.ok) {
         return Handle<Buffer>::Null;
     }
@@ -217,6 +219,7 @@ Handle<Buffer> Resources::CreateBuffer(Allocator& alloc, const BufferDesc& d) {
                 std::memcpy(dst, d.initial_data.data(), d.initial_data.size());
             }
         } else {
+            uint32_t saved_cursor = alloc.memory_.BumpSaveCursor(Memory::kUpload);
             void* staging = alloc.memory_.BumpAllocate(
                 static_cast<uint32_t>(d.initial_data.size()), 16,
                 Memory::kUpload);
@@ -239,6 +242,7 @@ Handle<Buffer> Resources::CreateBuffer(Allocator& alloc, const BufferDesc& d) {
                 cmd->commit();
                 cmd->waitUntilCompleted();
             }
+            alloc.memory_.BumpRestoreCursor(Memory::kUpload, saved_cursor);
         }
     }
     return h;
@@ -267,14 +271,17 @@ Handle<Texture> Resources::CreateTexture(Allocator& alloc, const TextureDesc& d)
         static_cast<uint32_t>(sa.size),
         static_cast<uint32_t>(sa.align),
         d.memory);
+    assert(r.ok && "AllocImage failed");
     if (!r.ok) {
         td->release();
         return Handle<Texture>::Null;
     }
 
     MTL::Heap* heap = alloc.memory_.HeapHandle(r.heap_index);
+    assert(heap && "null heap for image");
     MTL::Texture* tex = heap->newTexture(td, r.offset);
     td->release();
+    assert(tex && "heap newTexture failed");
     if (!tex) {
         alloc.memory_.FreeImage(r.heap_index, r.alloc, nullptr,
                                 frame_index_ + kFramesInFlight);
@@ -383,6 +390,7 @@ MTL::Buffer* Resources::GetMtlBuffer(Allocator& alloc, Handle<Buffer> h, uint32_
         return alloc.memory_.HeapMasterBuffer(h.index);
     }
     Buffer::Hot* hot = buffers.GetHot(h);
+    assert(hot && "GetMtlBuffer: invalid buffer handle");
     if (!hot) {
         if (out_offset) {
             *out_offset = 0;

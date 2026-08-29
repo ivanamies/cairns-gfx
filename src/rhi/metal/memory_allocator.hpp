@@ -98,6 +98,8 @@ public:
     void* BumpAllocate(uint32_t bytes, uint32_t align, Memory mem);
     uint32_t BumpOffset(void* ptr) const;
     uint32_t BumpMasterHeapIndex(Memory mem) const;
+    uint32_t BumpSaveCursor(Memory mem) const;
+    void BumpRestoreCursor(Memory mem, uint32_t cursor);
 
     // Backend access.
     MTL::Buffer* HeapMasterBuffer(uint32_t heap_index) const;

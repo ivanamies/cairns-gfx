@@ -163,7 +163,7 @@ public:
                     if (!cairns::GetStaticResourceFilepath(cairns::kDebugGlbs[glb_idx],
                                                            filepath)) {
                         printf("file missing %s\n", cairns::kDebugGlbs[glb_idx]);
-                        return false;
+                        continue;
                     }
                     glb_paths.push_back(filepath);
                 }
@@ -172,12 +172,18 @@ public:
             const int instance_count =
                 std::getenv("CAIRNS_N") ? std::atoi(std::getenv("CAIRNS_N"))
                                         : static_cast<int>(glb_paths.size());
+            const int grid_n = std::max(
+                1, static_cast<int>(std::ceil(std::sqrt(
+                       static_cast<float>(instance_count)))));
+            const float spacing = 4.0f / static_cast<float>(grid_n);
             const float scale =
                 std::getenv("CAIRNS_SCALE")
                     ? static_cast<float>(std::atof(std::getenv("CAIRNS_SCALE")))
-                    : 0.005f;
+                    : 0.013f / static_cast<float>(grid_n);
+            const float start = -spacing * static_cast<float>(grid_n - 1) * 0.5f;
             debugSceneXforms_ = cairns::GenerateDebugGridTransforms(
-                glm::vec3(-1, -1, -3), 3, 1, 1, 1, scale, instance_count);
+                glm::vec3(start, start, -3), grid_n, spacing, spacing, 1.0f, scale,
+                instance_count);
 
             for (const std::filesystem::path& filepath : glb_paths) {
                 scenes_.push_back(cairns::Scene(hot_arena_));
@@ -250,6 +256,7 @@ public:
             void* gptr = rhi_.alloc.BumpAllocate(
                 sizeof(cairns::rhi::RenderPassGlobals), rhi_.alloc.UboAlign(),
                 rhi::Memory::kDynamic);
+            assert(gptr && "bump alloc failed: render pass globals");
             memcpy(gptr, &render_pass_globals, sizeof(render_pass_globals));
             globals_offset_ = rhi_.alloc.BumpOffset(gptr);
             if (frame_ <= 6) {
@@ -305,6 +312,7 @@ public:
                     void* mptr = rhi_.alloc.BumpAllocate(
                         sizeof(cairns::rhi::MaterialGpu), rhi_.alloc.UboAlign(),
                         rhi::Memory::kDynamic);
+                    assert(mptr && "bump alloc failed: material");
                     memcpy(mptr, &material_gpu, sizeof(material_gpu));
                     const uint32_t material_offset = rhi_.alloc.BumpOffset(mptr);
 
@@ -318,6 +326,7 @@ public:
                     void* tptr = rhi_.alloc.BumpAllocate(
                         sizeof(cairns::rhi::DrawTmp), rhi_.alloc.UboAlign(),
                         rhi::Memory::kDynamic);
+                    assert(tptr && "bump alloc failed: draw tmp");
                     memcpy(tptr, &draw_tmp, sizeof(draw_tmp));
                     const uint32_t drawtmp_offset = rhi_.alloc.BumpOffset(tptr);
 
@@ -385,6 +394,7 @@ public:
         cairns::Timer t_record("record", 2);
         float* dt_ptr = static_cast<float*>(
             rhi_.alloc.BumpAllocate(sizeof(float), rhi_.alloc.UboAlign(), rhi::Memory::kDynamic));
+        assert(dt_ptr && "bump alloc failed: delta time");
         *dt_ptr = delta_time;
         const uint32_t dt_off = rhi_.alloc.BumpOffset(dt_ptr);
 
