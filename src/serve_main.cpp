@@ -24,6 +24,7 @@
 #include "control/handlers/render_ops.hpp"
 #include "control/handlers/scene_ops.hpp"
 #include "control/handlers/script_ops.hpp"
+#include "control/handlers/selection_ops.hpp"
 #include "control/transport_stdio.hpp"
 #include "engine.hpp"
 #include "rhi/init_config.hpp"
@@ -55,6 +56,7 @@ int main() {
     cairns::control::RegisterRenderOps(registry, engine_ok ? engine : nullptr);
     cairns::control::RegisterSceneOps(registry, engine_ok ? engine : nullptr);
     cairns::control::RegisterPerfOps(registry, engine_ok ? engine : nullptr);
+    cairns::control::RegisterSelectionOps(registry, engine_ok ? engine : nullptr);
     // Script ops must come LAST so tools.list inside script.eval reflects
     // every other op already registered.
     cairns::control::RegisterScriptOps(registry);

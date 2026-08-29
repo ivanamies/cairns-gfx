@@ -9,7 +9,11 @@
 
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
+#include <vector>
+
+#include "scene/selection.hpp"
 
 namespace cairns {
 
@@ -39,6 +43,20 @@ uint32_t GetFinalTargetHeight(Engine* engine);
 // Returns false if the engine is null (the request itself just queues the
 // path; the actual readback happens in the next Frames::End).
 bool RequestWindowDump(Engine* engine, const std::filesystem::path& path);
+
+// P4 selection / highlight / pick. Document-side state on Engine; this facade
+// just forwards through. revision counters tick on every mutation so the
+// protocol's cairns.selection.changed event has something to compare against.
+std::vector<SelectionTarget> GetSelection(Engine* engine);
+std::vector<SelectionTarget> GetHighlights(Engine* engine);
+uint32_t GetSelectionRevision(Engine* engine);
+void SetSelection(Engine* engine, std::vector<SelectionTarget>&& targets);
+void AddSelection(Engine* engine, const SelectionTarget& target);
+void RemoveSelection(Engine* engine, const SelectionTarget& target);
+void ClearSelection(Engine* engine);
+void SetHighlights(Engine* engine, std::vector<SelectionTarget>&& targets);
+void ClearHighlights(Engine* engine);
+void RequestPick(Engine* engine, int viewport, uint32_t x, uint32_t y);
 
 }  // namespace headless
 }  // namespace cairns

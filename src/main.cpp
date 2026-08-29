@@ -37,6 +37,7 @@
 #include "control/handlers/perf_ops.hpp"
 #include "control/handlers/render_ops.hpp"
 #include "control/handlers/scene_ops.hpp"
+#include "control/handlers/selection_ops.hpp"
 
 namespace cairns {
 
@@ -184,6 +185,7 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     // there's nothing to "render once" through the registry).
     cairns::control::RegisterRenderOps(registry, engine);
     cairns::control::RegisterSceneOps(registry, engine);
+    cairns::control::RegisterSelectionOps(registry, engine);
     app_ctx->agent_drain.Start();
     if (app_ctx->agent_drain.Enabled()) {
         std::fprintf(stderr,
@@ -220,9 +222,21 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event) {
             app->rmb_look = true;
         } else if (event->button.button == SDL_BUTTON_LEFT &&
                     !ImGui::GetIO().WantCaptureMouse && app->engine) {
-            // P2 click-to-focus: which half of the swap target did the
-            // click land in? Subsequent WASD/RMB-look drives that viewport.
+            // P2 click-to-focus + P4 click-to-pick. Plain LMB picks the
+            // viewport for input routing; LMB+Shift ALSO records a pick
+            // intent at the click coord in viewport-local pixels (engine
+            // resolves it once the GPU ID buffer + readback path lands).
             app->engine->SetActiveViewportFromClickX(event->button.x);
+            const SDL_Keymod mods = SDL_GetModState();
+            if (mods & SDL_KMOD_SHIFT) {
+                const int vp = app->engine->ActiveViewport();
+                const uint32_t vp_w = app->engine->FrameWidth() / 2;
+                const uint32_t local_x = static_cast<uint32_t>(
+                    event->button.x - static_cast<float>(vp) *
+                                       static_cast<float>(vp_w));
+                const uint32_t local_y = static_cast<uint32_t>(event->button.y);
+                app->engine->RequestPick(vp, local_x, local_y);
+            }
         }
     }
     else if (event->type == SDL_EVENT_MOUSE_BUTTON_UP) {

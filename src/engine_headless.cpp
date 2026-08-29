@@ -53,4 +53,74 @@ bool RequestWindowDump(Engine* engine, const std::filesystem::path& path) {
     return engine->RequestViewportDump(path);
 }
 
+std::vector<SelectionTarget> GetSelection(Engine* engine) {
+    if (!engine) {
+        return {};
+    }
+    return engine->Selection();
+}
+
+std::vector<SelectionTarget> GetHighlights(Engine* engine) {
+    if (!engine) {
+        return {};
+    }
+    return engine->Highlights();
+}
+
+uint32_t GetSelectionRevision(Engine* engine) {
+    if (!engine) {
+        return 0;
+    }
+    return engine->SelectionRevision();
+}
+
+void SetSelection(Engine* engine, std::vector<SelectionTarget>&& targets) {
+    if (!engine) {
+        return;
+    }
+    engine->SetSelection(std::move(targets));
+}
+
+void AddSelection(Engine* engine, const SelectionTarget& target) {
+    if (!engine) {
+        return;
+    }
+    engine->AddSelection(target);
+}
+
+void RemoveSelection(Engine* engine, const SelectionTarget& target) {
+    if (!engine) {
+        return;
+    }
+    engine->RemoveSelection(target);
+}
+
+void ClearSelection(Engine* engine) {
+    if (!engine) {
+        return;
+    }
+    engine->ClearSelection();
+}
+
+void SetHighlights(Engine* engine, std::vector<SelectionTarget>&& targets) {
+    if (!engine) {
+        return;
+    }
+    engine->SetHighlights(std::move(targets));
+}
+
+void ClearHighlights(Engine* engine) {
+    if (!engine) {
+        return;
+    }
+    engine->ClearHighlights();
+}
+
+void RequestPick(Engine* engine, int viewport, uint32_t x, uint32_t y) {
+    if (!engine) {
+        return;
+    }
+    engine->RequestPick(viewport, x, y);
+}
+
 }  // namespace cairns::headless

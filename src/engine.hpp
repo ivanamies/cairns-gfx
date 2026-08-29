@@ -41,6 +41,7 @@
 #include "scene/components.hpp"
 #include "scene/world.hpp"
 #include "scene/viewport.hpp"
+#include "scene/selection.hpp"
 #include "render/frame_packet.hpp"
 #include "render/render_extract.hpp"
 #include "render/render_graph.hpp"
@@ -191,6 +192,73 @@ public:
     }
 
     bool CamPoseOverridden() const { return cam_pose_override_; }
+
+    // ===== P4 selection / highlight / pick. Document-side state -- the
+    // selection set names "what the user (human or VLM) cares about right
+    // now"; the highlight set names "what should glow". Both live on Engine
+    // today; multi-world will move them onto World once #195 lands. The GPU
+    // ID buffer + outline shader + the actual pick readback are a separate
+    // follow-up (#204..#206); RequestPick just records the click coordinate
+    // so the handler can resolve it once the GPU side is wired.
+
+    const std::vector<cairns::SelectionTarget>& Selection() const { return selection_; }
+    const std::vector<cairns::SelectionTarget>& Highlights() const { return highlights_; }
+    uint32_t SelectionRevision() const { return selection_rev_; }
+
+    void ClearSelection() {
+        if (!selection_.empty()) {
+            selection_.clear();
+            ++selection_rev_;
+        }
+    }
+    void SetSelection(std::vector<cairns::SelectionTarget>&& targets) {
+        selection_ = std::move(targets);
+        ++selection_rev_;
+    }
+    void AddSelection(const cairns::SelectionTarget& t) {
+        for (const auto& s : selection_) {
+            if (s == t) {
+                return;
+            }
+        }
+        selection_.push_back(t);
+        ++selection_rev_;
+    }
+    void RemoveSelection(const cairns::SelectionTarget& t) {
+        for (size_t i = 0; i < selection_.size(); ++i) {
+            if (selection_[i] == t) {
+                selection_.erase(selection_.begin() + static_cast<long>(i));
+                ++selection_rev_;
+                return;
+            }
+        }
+    }
+
+    void ClearHighlights() {
+        if (!highlights_.empty()) {
+            highlights_.clear();
+            ++highlights_rev_;
+        }
+    }
+    void SetHighlights(std::vector<cairns::SelectionTarget>&& targets) {
+        highlights_ = std::move(targets);
+        ++highlights_rev_;
+    }
+
+    // Window-pixel coords. Engine doesn't resolve the pick yet -- the GPU
+    // ID buffer + readback land in a follow-up; this just records the
+    // request so a future RecordFrame can copy the texel out and a future
+    // tick can deliver the resolved entity.
+    void RequestPick(int viewport, uint32_t x, uint32_t y) {
+        pick_pending_ = true;
+        pick_viewport_ = viewport;
+        pick_x_ = x;
+        pick_y_ = y;
+    }
+    bool PickPending() const { return pick_pending_; }
+    int PendingPickViewport() const { return pick_viewport_; }
+    uint32_t PendingPickX() const { return pick_x_; }
+    uint32_t PendingPickY() const { return pick_y_; }
 
     // Click-to-focus: caller passes the window-x of the LMB click. Engine
     // picks the half of the swap target the click lands in. fly_/keyboard
@@ -1888,6 +1956,20 @@ private:
     rhi::Handle<rhi::Texture> final_target_ = rhi::Handle<rhi::Texture>::Null;
     uint32_t final_target_w_ = 0;
     uint32_t final_target_h_ = 0;
+
+    // P4 selection / highlight / pick. Selection + highlight are
+    // document-side state; rev counters let the protocol's
+    // cairns.selection.changed event know when to emit. Pick state holds
+    // the most recent unresolved (viewport, x, y) click intent until the
+    // GPU ID buffer + readback path lands.
+    std::vector<cairns::SelectionTarget> selection_;
+    std::vector<cairns::SelectionTarget> highlights_;
+    uint32_t selection_rev_ = 0;
+    uint32_t highlights_rev_ = 0;
+    bool pick_pending_ = false;
+    int pick_viewport_ = 0;
+    uint32_t pick_x_ = 0;
+    uint32_t pick_y_ = 0;
 
     // P3 resize lifecycle. SDL fires WINDOW_PIXEL_SIZE_CHANGED on the event
     // thread; we record intent + dims and settle on the next draw() call so
