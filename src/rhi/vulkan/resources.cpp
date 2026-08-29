@@ -619,15 +619,71 @@ Handle<Texture> Resources::CreateTexture(Allocator& alloc, const TextureDesc& d)
             transition_to_transfer_dst(plat.device_,
                                        plat.command_pool_,
                                        plat.queue_, image, d.mip_levels);
-            copy_buffer_to_image(plat.device_,
-                                 plat.command_pool_, plat.queue_,
-                                 src, src_off, image,
-                                 static_cast<uint32_t>(d.dimensions.x),
-                                 static_cast<uint32_t>(d.dimensions.y));
-            generate_mipmaps(plat.device_, plat.command_pool_,
-                             plat.queue_, plat.physical_, image,
-                             vk_format, d.dimensions.x, d.dimensions.y,
-                             d.mip_levels);
+            // initial_data covering >1 level = a pre-built CPU mip chain
+            // (texture_loader blob, level 0 first) -- copy every level and
+            // skip the blit mipgen. Level-0-only data (the GLB path) keeps
+            // generate_mipmaps.
+            const uint32_t bpp = d.format == Format::kR8Unorm ? 1u : 4u;
+            const size_t level0_size =
+                static_cast<size_t>(d.dimensions.x) * d.dimensions.y * bpp;
+            const bool cpu_chain =
+                d.mip_levels > 1 && d.initial_data.size() > level0_size;
+            if (cpu_chain) {
+                VkBufferImageCopy regions[16];
+                uint32_t n = 0;
+                size_t off = 0;
+                uint32_t lw = static_cast<uint32_t>(d.dimensions.x);
+                uint32_t lh = static_cast<uint32_t>(d.dimensions.y);
+                for (uint32_t level = 0; level < d.mip_levels && n < 16;
+                     ++level) {
+                    const size_t ls = static_cast<size_t>(lw) * lh * bpp;
+                    if (off + ls > d.initial_data.size()) {
+                        break;
+                    }
+                    VkBufferImageCopy& rg = regions[n++];
+                    rg = {};
+                    rg.bufferOffset = src_off + off;
+                    rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    rg.imageSubresource.mipLevel = level;
+                    rg.imageSubresource.layerCount = 1;
+                    rg.imageExtent = {lw, lh, 1};
+                    off += ls;
+                    lw = lw > 1 ? lw >> 1 : 1u;
+                    lh = lh > 1 ? lh >> 1 : 1u;
+                }
+                VkCommandBuffer cmd =
+                    begin_single_time(plat.device_, plat.command_pool_);
+                vkCmdCopyBufferToImage(cmd, src, image,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                       n, regions);
+                VkImageMemoryBarrier to_read{};
+                to_read.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                to_read.image = image;
+                to_read.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                to_read.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                to_read.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                to_read.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                to_read.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                to_read.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                to_read.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                to_read.subresourceRange.levelCount = d.mip_levels;
+                to_read.subresourceRange.layerCount = 1;
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                                     0, nullptr, 0, nullptr, 1, &to_read);
+                end_single_time(plat.device_, plat.command_pool_, plat.queue_,
+                                cmd);
+            } else {
+                copy_buffer_to_image(plat.device_,
+                                     plat.command_pool_, plat.queue_,
+                                     src, src_off, image,
+                                     static_cast<uint32_t>(d.dimensions.x),
+                                     static_cast<uint32_t>(d.dimensions.y));
+                generate_mipmaps(plat.device_, plat.command_pool_,
+                                 plat.queue_, plat.physical_, image,
+                                 vk_format, d.dimensions.x, d.dimensions.y,
+                                 d.mip_levels);
+            }
         }
         alloc.plat.memory_.BumpRestoreCursor(Memory::kUpload, saved_cursor);
     }

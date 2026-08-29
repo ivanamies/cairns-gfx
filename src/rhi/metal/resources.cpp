@@ -417,8 +417,16 @@ Handle<Texture> Resources::CreateTexture(Allocator& alloc, const TextureDesc& d)
     cold->debug_name = d.debug_name;
 
     if (!d.initial_data.empty()) {
-        uint32_t bytes_per_row = static_cast<uint32_t>(d.initial_data.size()) /
-                                 static_cast<uint32_t>(d.dimensions.y);
+        // initial_data covering >1 level = a pre-built CPU mip chain
+        // (texture_loader blob, level 0 first; the layout webgpu consumes) --
+        // upload each level and skip GPU mipgen. Level-0-only data (the GLB
+        // path) keeps generateMipmaps: flipping it would rebake every
+        // textured golden.
+        const uint32_t bpp = d.format == Format::kR8Unorm ? 1u : 4u;
+        const size_t level0_size =
+            static_cast<size_t>(d.dimensions.x) * d.dimensions.y * bpp;
+        const bool cpu_chain =
+            d.mip_levels > 1 && d.initial_data.size() > level0_size;
         MTL::Buffer* staging = plat.device_->newBuffer(
             d.initial_data.size(), MTL::ResourceStorageModeShared);
         if (staging) {
@@ -426,13 +434,34 @@ Handle<Texture> Resources::CreateTexture(Allocator& alloc, const TextureDesc& d)
                         d.initial_data.size());
             MTL::CommandBuffer* cmd = plat.queue_->commandBuffer();
             MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
-            blit->copyFromBuffer(
-                staging, 0, bytes_per_row, 0,
-                MTL::Size{static_cast<NS::UInteger>(d.dimensions.x),
-                          static_cast<NS::UInteger>(d.dimensions.y), 1},
-                tex, 0, 0, MTL::Origin{0, 0, 0});
-            if (d.mip_levels > 1) {
-                blit->generateMipmaps(tex);
+            if (cpu_chain) {
+                size_t off = 0;
+                uint32_t lw = static_cast<uint32_t>(d.dimensions.x);
+                uint32_t lh = static_cast<uint32_t>(d.dimensions.y);
+                for (uint32_t level = 0; level < d.mip_levels; ++level) {
+                    const size_t ls = static_cast<size_t>(lw) * lh * bpp;
+                    if (off + ls > d.initial_data.size()) {
+                        break;
+                    }
+                    blit->copyFromBuffer(staging, off, lw * bpp, 0,
+                                         MTL::Size{lw, lh, 1}, tex, 0, level,
+                                         MTL::Origin{0, 0, 0});
+                    off += ls;
+                    lw = lw > 1 ? lw >> 1 : 1u;
+                    lh = lh > 1 ? lh >> 1 : 1u;
+                }
+            } else {
+                const uint32_t bytes_per_row =
+                    static_cast<uint32_t>(d.initial_data.size()) /
+                    static_cast<uint32_t>(d.dimensions.y);
+                blit->copyFromBuffer(
+                    staging, 0, bytes_per_row, 0,
+                    MTL::Size{static_cast<NS::UInteger>(d.dimensions.x),
+                              static_cast<NS::UInteger>(d.dimensions.y), 1},
+                    tex, 0, 0, MTL::Origin{0, 0, 0});
+                if (d.mip_levels > 1) {
+                    blit->generateMipmaps(tex);
+                }
             }
             blit->endEncoding();
             cmd->commit();

@@ -55,6 +55,8 @@ add_executable(cairns_spec_tests
     test_transform.cpp
     # loader material->texture mapping (1:1 desync invariant)
     test_material_map.cpp
+    # CPU mip-chain math (the multi-level initial_data blob contract)
+    test_texture_mips.cpp
     # scene ECS PODs
     test_scene_ecs.cpp
     # render proxies

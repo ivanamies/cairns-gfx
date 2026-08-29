@@ -1621,6 +1621,15 @@ private:
     std::vector<cairns::MaterialDedupEntry,
                 cairns::ChunkStdAllocator<cairns::MaterialDedupEntry>>
         material_dedup_;
+    // Standalone effect textures (paper grain, noise, TAM chains): name ->
+    // handle, linear scan (a handful of entries), engine-owned -- no prefab
+    // lifetime. Loaded via util/texture_loader.hpp.
+    struct EffectTexture {
+        const char* name = nullptr;
+        rhi::Handle<rhi::Texture> tex;
+    };
+    std::vector<EffectTexture, cairns::ChunkStdAllocator<EffectTexture>>
+        effect_textures_;
     // APPEND-only debug snapshot stashed between two NDJSON op calls
     // (cairns.debug.snapshotPrefabHandles -> cairns.debug.assertAppendOnly).
     // Empty until first snapshot call.

@@ -3263,6 +3263,7 @@ bool Engine::initResourceManagers() {
         ReseatOnBlock(prefab_store_.prefab_ids, kPrefabResidencyCap);
         ReseatOnBlock(prefab_store_.per_prefab_asset, kPrefabResidencyCap);
         ReseatOnBlock(material_dedup_, 8192);
+        ReseatOnBlock(effect_textures_, 32);
         ReseatOnBlock(prefab_store_.resident_textures, kPrefabResidencyCap * 4);
         prefab_store_.glb_paths.reserve(kPrefabResidencyCap);  // path strings stay heap (not interned)
         prefab_store_.per_batch_shared_skin.reserve(64);
