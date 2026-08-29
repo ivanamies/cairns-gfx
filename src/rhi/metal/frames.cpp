@@ -130,21 +130,6 @@ void Frames::SetDumpPath(const std::filesystem::path& path) {
 // to flush.
 void Frames::OnSurfaceResize() {}
 
-void Frames::WriteSkinGroupBDescriptors(Resources& /*resources*/,
-                                          Allocator& /*alloc*/,
-                                          Handle<Buffer> /*output_pool*/,
-                                          Handle<Buffer> /*palette_buf*/) {
-    // Metal: compute path binds buffers directly per batch via
-    // setBuffer:offset:atIndex: in DispatchSkinBatches; no Group B set.
-}
-
-void Frames::WriteAnimEvalDescriptors(
-    Resources& /*resources*/, Allocator& /*alloc*/,
-    const CommandRecorder::AnimEvalArgs& /*args*/) {
-    // Metal: compute path binds buffers directly per dispatch via
-    // setBuffer:offset:atIndex: in DispatchAnimEval; no descriptor set.
-}
-
 void Frames::WriteUnlitDescriptors(Resources& /*resources*/,
                                      Allocator& /*alloc*/) {
     // Metal: no per-frame descriptor sets in the unlit path; render

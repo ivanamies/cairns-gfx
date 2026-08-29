@@ -72,28 +72,10 @@ public:
     // Request a one-shot swapchain dump on the next End(). CALLER: ENGINE.
     void SetDumpPath(const std::filesystem::path& path);
 
-    // #221 Phase 9 (vk): one-time descriptor write for every skin_group_b
-    // set (kFramesInFlight of them) once the kDynamic master buffer + the
-    // skin output pool are both real. Group B's three DYNAMIC bindings
-    // (Params/Palettes/InstanceMeta) are aliased onto the master kDynamic
-    // buffer with per-binding `range` set to a safe per-batch upper bound;
-    // the per-dispatch dynamic offset selects the active window. Group B
-    // binding 3 (OutputPool) is bound whole. Metal: no-op. CALLER: ENGINE
-    // (post initSkinKernel + skin_output_pool_buffer_ create).
-    void WriteSkinGroupBDescriptors(Resources& resources, Allocator& alloc,
-                                     rhi::Handle<rhi::Buffer> output_pool,
-                                     rhi::Handle<rhi::Buffer> palette_buf = {});
-
-    // #221 Phase 5b: write the anim_eval descriptor set (kFramesInFlight of
-    // them) ONCE the engine has allocated the persistent scene-table buffers
-    // + the persistent palette/world-scratch buffers. The actor-records
-    // binding 0 is DYNAMIC_UBO over the kDynamic master; offset is set
-    // per-dispatch by the recorder. Metal: no-op.
-    // #222 Phase F.5: take the AnimEvalArgs struct from R.1 instead of
-    // a 12-param sprawl. The records_byte_offset / actor_count fields are
-    // unused on this write path (they're per-dispatch state) -- leave at 0.
-    void WriteAnimEvalDescriptors(Resources& resources, Allocator& alloc,
-                                   const CommandRecorder::AnimEvalArgs& args);
+    // #222 Phase D.3 cleanup: WriteSkinGroupBDescriptors +
+    // WriteAnimEvalDescriptors retired -- skin Group B + anim_eval set 0
+    // now flow through dyn_skin_group_b_ / dyn_anim_eval_ DynamicBuffers
+    // created in engine.
 
     // #237 fix: write the per-frame globals_sets_ + drawtmp_sets_ ONCE
     // at engine init. Both bindings are UNIFORM_BUFFER_DYNAMIC pointing

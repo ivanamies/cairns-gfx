@@ -58,15 +58,8 @@ struct RenderPassDesc {
     std::span<const Handle<Texture>> input_textures;
 };
 
-struct BoundBuffer {
-    uint32_t slot = 0;
-    Handle<Buffer> buffer;
-    uint32_t offset = 0;
-};
-
 struct ComputeDispatch {
     Handle<Kernel> kernel;
-    std::span<const BoundBuffer> buffers;
     uint32_t groups_x = 1;
     uint32_t groups_y = 1;
     uint32_t groups_z = 1;
@@ -75,12 +68,10 @@ struct ComputeDispatch {
     uint32_t local_y = 1;
     uint32_t local_z = 1;
     uint32_t step_index = 0;
-    // #222 Phase D.4: when dyn_set_0 is non-null, recorder binds set 0
-    // from GetHot(dyn_set_0)->plat.vk_sets[frame_] with dyn_offset_0
-    // and SKIPS the per-dispatch vkUpdateDescriptorSets path (buffers
-    // span is ignored). Caller pre-built the parity BindGroup-equivalent
-    // via DynamicBuffers (binding 0 UBO_DYN dt, bindings 1..N SSBO over
-    // persistent backing). Metal ignores both fields (binds directly).
+    // #222 Phase D.4: recorder binds set 0 from
+    // GetHot(dyn_set_0)->plat.vk_sets[frame_] with dyn_offset_0. Caller
+    // pre-built the set via DynamicBuffers (binding 0 UBO_DYN dt,
+    // bindings 1..N SSBO over persistent backing).
     Handle<DynamicBuffers> dyn_set_0;
     uint32_t dyn_offset_0 = 0;
 };
@@ -171,8 +162,6 @@ public:
         Handle<Buffer> palette_out;
         // #222 Phase D.3: dyn_set_0 carries the per-FIF anim_eval set
         // (DynamicBuffers Hot owns the layout + 1 set per frame-in-flight).
-        // Non-null = recorder binds via DynamicBuffers; Null = legacy
-        // Frames::anim_eval_sets_ fallback.
         Handle<DynamicBuffers> dyn_set_0;
         uint32_t records_byte_offset = 0;
         uint32_t actor_count = 0;

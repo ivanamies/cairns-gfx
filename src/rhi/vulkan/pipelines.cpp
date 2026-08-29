@@ -562,10 +562,12 @@ Handle<Kernel> Pipelines::CreateComputePipeline(
     // in the bind-group pool, not in Frames.
     VkDescriptorSetLayout compute_layouts[2];
     uint32_t set_count = 1;
-    // #222 Phase D.3/D.4: when dyn_set_0 is non-null, set 0 layout comes
-    // from the DynamicBuffers Hot (the DynamicBuffers IS the source of
-    // truth for its layout post-D.3). Legacy frames layouts are the
-    // fallback transition path.
+    // #222 Phase D.3/D.4 cleanup:
+    // - kParticle: layout comes from dyn_set_0 (parity DynamicBuffers
+    //   built before the kernel by initParticles).
+    // - kSkin / kAnimEval: layout comes from frames.plat (DynamicBuffers
+    //   for these kernels are built post-uploadAnimTablesGpu, AFTER the
+    //   kernel. Sets are layout-compatible).
     VkDescriptorSetLayout dyn0 = VK_NULL_HANDLE;
     if (!desc.dyn_set_0.IsNull()) {
         DynamicBuffers::Hot* dh = resources.dynamic_buffers.GetHot(desc.dyn_set_0);
@@ -574,14 +576,13 @@ Handle<Kernel> Pipelines::CreateComputePipeline(
         }
     }
     if (desc.layout == ComputePipelineLayout::kSkin) {
-        compute_layouts[0] =
-            dyn0 ? dyn0 : frames.plat.skin_group_b_layout_;
+        compute_layouts[0] = frames.plat.skin_group_b_layout_;
         compute_layouts[1] = frames.plat.skin_group_a_layout_;
         set_count = 2;
     } else if (desc.layout == ComputePipelineLayout::kAnimEval) {
-        compute_layouts[0] = dyn0 ? dyn0 : frames.plat.anim_eval_layout_;
+        compute_layouts[0] = frames.plat.anim_eval_layout_;
     } else {
-        compute_layouts[0] = dyn0 ? dyn0 : frames.plat.compute_layout_;
+        compute_layouts[0] = dyn0;
     }
     VkPipelineLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;

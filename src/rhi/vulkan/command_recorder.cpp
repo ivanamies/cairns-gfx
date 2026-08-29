@@ -239,22 +239,17 @@ void CommandRecorder::DispatchSkinBatches(
     Handle<DynamicBuffers> dyn_set_0,
     std::span<const SkinDispatchBatch> batches) {
     // #222 Phase D.3: set 0 comes from dyn_set_0's DynamicBuffers Hot
-    // (per-FIF set). palette_buf wired in at DynamicBuffers create time as
-    // binding 1's backing. Legacy Frames::skin_group_b_set_ kept as a
-    // fallback during the conversion window; engine always passes a valid
-    // handle post-D.3 so the legacy branch never fires.
-    VkDescriptorSet group_b_set = plat.skin_group_b_set_;
-    if (!dyn_set_0.IsNull()) {
-        DynamicBuffers::Hot* dh = res.dynamic_buffers.GetHot(dyn_set_0);
-        if (dh && dh->plat.vk_sets[plat.frame_] != VK_NULL_HANDLE) {
-            group_b_set = dh->plat.vk_sets[plat.frame_];
-        }
-    }
+    // (per-FIF set). palette_buf is bound at DynamicBuffers create time
+    // as binding 1's backing.
     if (batches.empty() || kernel.IsNull() ||
-        output_pool_buffer.IsNull() ||
-        group_b_set == VK_NULL_HANDLE) {
+        output_pool_buffer.IsNull() || dyn_set_0.IsNull()) {
         return;
     }
+    DynamicBuffers::Hot* dh = res.dynamic_buffers.GetHot(dyn_set_0);
+    if (!dh || dh->plat.vk_sets[plat.frame_] == VK_NULL_HANDLE) {
+        return;
+    }
+    VkDescriptorSet group_b_set = dh->plat.vk_sets[plat.frame_];
     // Route onto plat.comp_ (free vertex-fetch sync via the existing
     // compute -> graphics semaphore @ VERTEX_INPUT in EndSubmit).
     if (plat.pending_pass_idx_ != UINT32_MAX &&
@@ -314,17 +309,14 @@ void CommandRecorder::DispatchAnimEval(
     // DynamicBuffers Hot. Scene-table SSBOs (bindings 1..12) are
     // backed via per-binding `backing` at create time; only binding 0
     // (records UBO) takes a dynamic offset per dispatch.
-    VkDescriptorSet ae_set = plat.anim_eval_set_;
-    if (!args.dyn_set_0.IsNull()) {
-        DynamicBuffers::Hot* dh = res.dynamic_buffers.GetHot(args.dyn_set_0);
-        if (dh && dh->plat.vk_sets[plat.frame_] != VK_NULL_HANDLE) {
-            ae_set = dh->plat.vk_sets[plat.frame_];
-        }
-    }
-    if (kernel.IsNull() || actor_count == 0 ||
-        ae_set == VK_NULL_HANDLE) {
+    if (kernel.IsNull() || actor_count == 0 || args.dyn_set_0.IsNull()) {
         return;
     }
+    DynamicBuffers::Hot* dh = res.dynamic_buffers.GetHot(args.dyn_set_0);
+    if (!dh || dh->plat.vk_sets[plat.frame_] == VK_NULL_HANDLE) {
+        return;
+    }
+    VkDescriptorSet ae_set = dh->plat.vk_sets[plat.frame_];
     if (plat.pending_pass_idx_ != UINT32_MAX &&
         plat.pass_cb_ == VK_NULL_HANDLE) {
         plat.pass_cb_ = plat.comp_;
@@ -374,59 +366,24 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb,
                              0, nullptr, 0, nullptr);
     }
-    // #222 Phase D.4: when dyn_set_0 non-null, set 0 comes from the
-    // DynamicBuffers Hot (prebuilt parity sets; one per FIF). Bind it
-    // with dyn_offset_0 (binding 0 = UBO_DYN dt). Skip the per-dispatch
-    // vkUpdateDescriptorSets + BoundBuffer write loop entirely.
-    if (!d.dyn_set_0.IsNull()) {
-        DynamicBuffers::Hot* dh = res.dynamic_buffers.GetHot(d.dyn_set_0);
-        if (!k || !dh || dh->plat.vk_sets[plat.frame_] == VK_NULL_HANDLE) {
-            return;
-        }
-        VkDescriptorSet ds = dh->plat.vk_sets[plat.frame_];
-        vkCmdBindPipeline(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE,
-                           k->plat.vk_pipeline);
-        vkCmdBindDescriptorSets(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                 k->plat.vk_layout, 0, 1, &ds,
-                                 1, &d.dyn_offset_0);
-        vkCmdDispatch(plat.comp_, d.groups_x, d.groups_y, d.groups_z);
+    // #222 Phase D.4: set 0 comes from dyn_set_0's DynamicBuffers Hot
+    // (prebuilt parity sets; one per FIF). Bind with dyn_offset_0
+    // (binding 0 = UBO_DYN dt). Legacy per-step vkUpdateDescriptorSets
+    // + BoundBuffer write loop retired.
+    if (d.dyn_set_0.IsNull()) {
         return;
     }
-    VkDescriptorSet set = plat.compute_sets_[d.step_index];
-
-    const size_t n = d.buffers.size();
-    // #219 Chunk E: per-Dispatch descriptor-write scratch moved off the heap
-    // onto the stack via fixed-cap arrays. Particle sim binds 3 buffers; cap
-    // 8 leaves headroom for future kernels without ever allocating.
-    assert(n <= kMaxBuffersPerDispatch &&
-           "Dispatch buffer count exceeds kMaxBuffersPerDispatch -- raise cap");
-    std::array<VkDescriptorBufferInfo, kMaxBuffersPerDispatch> infos{};
-    std::array<VkWriteDescriptorSet, kMaxBuffersPerDispatch> writes{};
-    for (size_t i = 0; i < n; ++i) {
-        const BoundBuffer& b = d.buffers[i];
-        uint32_t off = 0;
-        VkBuffer buf = res.plat.GetVkBuffer(alloc,b.buffer, &off);
-        const bool is_ubo = (b.slot == 0);
-        infos[i].buffer = buf;
-        infos[i].offset = off + b.offset;
-        infos[i].range = is_ubo ? static_cast<VkDeviceSize>(sizeof(float)) : VK_WHOLE_SIZE;
-        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = set;
-        writes[i].dstBinding = b.slot;
-        writes[i].dstArrayElement = 0;
-        writes[i].descriptorType = is_ubo ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
-                                          : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[i].descriptorCount = 1;
-        writes[i].pBufferInfo = &infos[i];
+    DynamicBuffers::Hot* dh = res.dynamic_buffers.GetHot(d.dyn_set_0);
+    if (!k || !dh || dh->plat.vk_sets[plat.frame_] == VK_NULL_HANDLE) {
+        return;
     }
-    if (n > 0) {
-        vkUpdateDescriptorSets(plat.device_, static_cast<uint32_t>(n), writes.data(), 0,
-                               nullptr);
-    }
-
-    vkCmdBindPipeline(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE, k->plat.vk_pipeline);
-    vkCmdBindDescriptorSets(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE, k->plat.vk_layout,
-                            0, 1, &set, 0, nullptr);
+    (void)alloc;
+    VkDescriptorSet ds = dh->plat.vk_sets[plat.frame_];
+    vkCmdBindPipeline(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE,
+                       k->plat.vk_pipeline);
+    vkCmdBindDescriptorSets(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE,
+                             k->plat.vk_layout, 0, 1, &ds,
+                             1, &d.dyn_offset_0);
     vkCmdDispatch(plat.comp_, d.groups_x, d.groups_y, d.groups_z);
 }
 

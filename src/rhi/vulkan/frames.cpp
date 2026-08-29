@@ -234,34 +234,16 @@ bool Frames::Init(Device& device) {
                 return false;
             }
         }
-        {  // compute layout: UBO(dt)@0, SSBO read@1, SSBO write@2
-            VkDescriptorSetLayoutBinding b[3]{};
-            b[0].binding = 0;
-            b[0].descriptorCount = 1;
-            b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            b[1].binding = 1;
-            b[1].descriptorCount = 1;
-            b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            b[2].binding = 2;
-            b[2].descriptorCount = 1;
-            b[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            b[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            VkDescriptorSetLayoutCreateInfo li{};
-            li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            li.bindingCount = 3;
-            li.pBindings = b;
-            if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &plat.compute_layout_) !=
-                VK_SUCCESS) {
-                return false;
-            }
-        }
-        {  // #221 Skinning Phase 4 -- Group B (frame-global). Set 0 of the
-           // skin kernel: dynUBO Params @ 0, dynSSBO palettes @ 1, dynSSBO
-           // InstanceMeta @ 2, SSBO output pool whole @ 3. Dynamic offsets
-           // give us per-batch slicing of the kDynamic ring without
-           // re-writing the descriptor set each frame.
+        // #222 Phase D.3/D.4 cleanup: compute_layout_ (particle) retired
+        // -- engine creates dyn_particle_parity_ before the kernel so the
+        // PSO sources its layout from there. skin_group_b_layout_ +
+        // anim_eval_layout_ kept: their consumer kernels are built BEFORE
+        // the matching DynamicBuffers exist (uploadAnimTablesGpu hasn't
+        // run yet). The DynamicBuffers sets allocated post-scene-load are
+        // layout-compatible with these.
+        {  // skin Group B (frame-global skin kernel set 0): dynUBO Params
+           // @0, dynSSBO palettes @1, dynSSBO InstanceMeta @2, SSBO output
+           // pool whole @3.
             VkDescriptorSetLayoutBinding b[4]{};
             b[0].binding = 0;
             b[0].descriptorCount = 1;
@@ -289,9 +271,8 @@ bool Frames::Init(Device& device) {
                 return false;
             }
         }
-        {  // #221 Phase 5b -- anim_eval set layout (13 bindings; see
-           // assets/anim_eval.comp.glsl). One DYNAMIC_UBO for actor records,
-           // 12 SSBOs for scene tables + scratch + palette out.
+        {  // anim_eval set layout (13 bindings; DYNAMIC_UBO records @0,
+           // 12 SSBO scene tables + scratch + palette out @1..12).
             VkDescriptorSetLayoutBinding b[13]{};
             b[0].binding = 0;
             b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
@@ -387,51 +368,38 @@ bool Frames::Init(Device& device) {
             }
         }
 
-        // Compute uses kMaxStepsPerFrame sets per slot (Fiedler N-step sim).
-        // Composite uses kCompositeRingSize sets per slot (PIP multi-draw fix).
-        // UBO count: point(n) + compute(n * kMaxStepsPerFrame).
-        // SSBO count: compute (2 * n * kMaxStepsPerFrame) + skin Group B (n,
-        //   1 SSBO @ binding 3 = output pool whole).
-        // DYNAMIC UBO: globals(n) + drawtmp(n) + skin Group B Params (n).
-        // DYNAMIC SSBO: skin Group B palettes (n) + InstanceMeta (n).
-        // COMBINED_IMAGE_SAMPLER: composite (n * kCompositeRingSize).
-        // maxSets: 3 single-set + compute + composite + skin_group_b (n).
+        // Pool sizing post-D cleanup:
+        //   UBO: point_sets_ (n).
+        //   SSBO: skin Group A (2 per skinned mesh, kMaxSkinnedMeshes
+        //     budget) + dyn_skin_group_b_ binding 3 (n) + dyn_anim_eval_
+        //     bindings 1..12 (12n) + dyn_particle_parity_[2] (4n).
+        //   UBO_DYN: globals (n) + drawtmp (n) + dyn_globals_/drawtmp_
+        //     (2n) + dyn_skin_group_b_ params (n) + dyn_anim_eval_ records
+        //     (n) + dyn_particle_parity_[2] dt (2n).
+        //   SSBO_DYN: dyn_skin_group_b_ palettes + meta (2n).
+        //   COMBINED_IMAGE_SAMPLER: composite (3 * n * kCompositeRingSize).
+        //   maxSets: point (n) + globals (n) + drawtmp (n) + composite
+        //     (n * kCompositeRingSize) + skin Group A (kMaxSkinnedMeshes)
+        //     + dyn_globals_ + dyn_drawtmp_ (2n) + dyn_skin_group_b_ (n)
+        //     + dyn_anim_eval_ (n) + dyn_particle_parity_[2] (2n).
         VkDescriptorPoolSize sizes[5]{};
         sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        sizes[0].descriptorCount = n + n * kMaxStepsPerFrame;
+        sizes[0].descriptorCount = n;
         sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        // #221 Phase 9 (vk): + skin Group A (2 SSBO per skinned mesh,
-        // independent of frame-in-flight count; 1024 budget per plan v7).
-        // #221 Phase 5b (vk): + anim_eval (12 SSBO per frame-in-flight).
-        // #222 Phase D.4: + dyn_particle_parity_[2] (4 SSBO per FIF: 2
-        // parity * 2 SSBO bindings each).
         sizes[1].descriptorCount =
-            2 * n * kMaxStepsPerFrame + n + 2 * kMaxSkinnedMeshes + 12 * n +
-            4 * n;
+            n + 2 * kMaxSkinnedMeshes + 12 * n + 4 * n;
         sizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        // #221 Phase 5b: + anim_eval ActorRecord (1 dynUBO per frame-in-flight).
-        // #222 Phase D.2: + dyn_globals_ + dyn_drawtmp_ (2 * n).
-        // #222 Phase D.4: + dyn_particle_parity_[2] (2 * n UBO_DYN).
-        sizes[2].descriptorCount = 2 * n + n + n + 2 * n + 2 * n;
+        sizes[2].descriptorCount = n + n + 2 * n + n + n + 2 * n;
         sizes[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        // 3 bindings per composite set (#207 outline shares the layout:
-        // color + id + highlights).
         sizes[3].descriptorCount = 3 * n * kCompositeRingSize;
-        // #221 Phase 4: skin Group B uses 2 SSBO_DYNAMIC (palettes + InstanceMeta).
         sizes[4].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
         sizes[4].descriptorCount = 2 * n;
         VkDescriptorPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pci.poolSizeCount = 5;
         pci.pPoolSizes = sizes;
-        // 3 single-set layouts + compute (kMaxStepsPerFrame) + composite
-        // (kCompositeRingSize) + skin_group_b (1) per slot. Plus skin
-        // Group A: one set per loaded skinned mesh (1024 budget).
-        // #222 Phase D.2: + 2*n for dyn_globals_ + dyn_drawtmp_.
-        // #222 Phase D.4: + 2*n for dyn_particle_parity_[2].
-        pci.maxSets = 3 * n + n * kMaxStepsPerFrame +
-                       n * kCompositeRingSize + n + kMaxSkinnedMeshes + n +
-                       2 * n + 2 * n;
+        pci.maxSets = 3 * n + n * kCompositeRingSize + kMaxSkinnedMeshes +
+                       2 * n + n + n + 2 * n;
         if (vkCreateDescriptorPool(dev, &pci, nullptr, &plat.descriptor_pool_) !=
             VK_SUCCESS) {
             return false;
@@ -453,31 +421,9 @@ bool Frames::Init(Device& device) {
             !alloc_sets(plat.drawtmp_set_layout_, plat.drawtmp_sets_)) {
             return false;
         }
-        // #222 Phase D.3: skin_group_b_sets_ + anim_eval_sets_ no longer
-        // allocated here -- engine creates dyn_skin_group_b_ + dyn_anim_eval_
-        // DynamicBuffers post-scene-load (matching layouts; layout-compatible
-        // with the pipeline built from frames.plat.*_layout_). Pool budget
-        // unchanged (same total set + descriptor consumption shifts to the
-        // DynamicBuffers create path).
-        plat.compute_sets_.resize(n);
-        {
-            const uint32_t total = n * kMaxStepsPerFrame;
-            std::vector<VkDescriptorSetLayout> layouts(total, plat.compute_layout_);
-            std::vector<VkDescriptorSet> flat(total);
-            VkDescriptorSetAllocateInfo ai{};
-            ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            ai.descriptorPool = plat.descriptor_pool_;
-            ai.descriptorSetCount = total;
-            ai.pSetLayouts = layouts.data();
-            if (vkAllocateDescriptorSets(dev, &ai, flat.data()) != VK_SUCCESS) {
-                return false;
-            }
-            for (uint32_t f = 0; f < n; ++f) {
-                for (uint32_t k = 0; k < kMaxStepsPerFrame; ++k) {
-                    plat.compute_sets_[f][k] = flat[f * kMaxStepsPerFrame + k];
-                }
-            }
-        }
+        // #222 Phase D.3/D.4 cleanup: per-step compute_sets_ + per-FIF
+        // skin_group_b_sets_ + anim_eval_sets_ retired. Particle / skin
+        // Group B / anim_eval all use DynamicBuffers created in engine.
         plat.composite_sets_.resize(n);
         {
             const uint32_t total = n * kCompositeRingSize;
@@ -529,17 +475,14 @@ void Frames::Deinit() {
     if (plat.drawtmp_set_layout_) {
         vkDestroyDescriptorSetLayout(dev, plat.drawtmp_set_layout_, nullptr);
     }
-    if (plat.compute_layout_) {
-        vkDestroyDescriptorSetLayout(dev, plat.compute_layout_, nullptr);
-    }
     if (plat.skin_group_b_layout_) {
         vkDestroyDescriptorSetLayout(dev, plat.skin_group_b_layout_, nullptr);
     }
-    if (plat.skin_group_a_layout_) {
-        vkDestroyDescriptorSetLayout(dev, plat.skin_group_a_layout_, nullptr);
-    }
     if (plat.anim_eval_layout_) {
         vkDestroyDescriptorSetLayout(dev, plat.anim_eval_layout_, nullptr);
+    }
+    if (plat.skin_group_a_layout_) {
+        vkDestroyDescriptorSetLayout(dev, plat.skin_group_a_layout_, nullptr);
     }
     if (plat.point_layout_) {
         vkDestroyDescriptorSetLayout(dev, plat.point_layout_, nullptr);
@@ -599,140 +542,6 @@ void Frames::WriteUnlitDescriptors(Resources& resources, Allocator& alloc) {
         w[0].dstSet = plat.globals_sets_[i];
         w[1].dstSet = plat.drawtmp_sets_[i];
         vkUpdateDescriptorSets(plat.device_, 2, w, 0, nullptr);
-    }
-}
-
-void Frames::WriteSkinGroupBDescriptors(Resources& resources,
-                                          Allocator& alloc,
-                                          Handle<Buffer> output_pool,
-                                          Handle<Buffer> palette_buf) {
-    if (plat.skin_group_b_sets_.empty() || output_pool.IsNull()) {
-        return;
-    }
-    VkBuffer dyn_master =
-        resources.plat.GetVkBumpMasterBuffer(alloc, Memory::kDynamic);
-    uint32_t pool_master_off = 0;
-    VkBuffer pool_buf = resources.plat.GetVkBuffer(alloc, output_pool,
-                                                    &pool_master_off);
-    if (dyn_master == VK_NULL_HANDLE || pool_buf == VK_NULL_HANDLE) {
-        return;
-    }
-    // #221 Phase 5b: when palette_buf is non-null, binding 1 (palettes) points
-    // at the persistent palette_out_buf_ (written by anim_eval) instead of
-    // the kDynamic ring; the per-batch dynamic offset still selects the
-    // bucket-relative palette window in mat4 stride.
-    VkBuffer palette_target = dyn_master;
-    uint32_t palette_master_off = 0;
-    if (!palette_buf.IsNull()) {
-        VkBuffer pal = resources.plat.GetVkBuffer(alloc, palette_buf,
-                                                    &palette_master_off);
-        if (pal != VK_NULL_HANDLE) {
-            palette_target = pal;
-        }
-    }
-    for (VkDescriptorSet set : plat.skin_group_b_sets_) {
-        if (set == VK_NULL_HANDLE) {
-            continue;
-        }
-        VkDescriptorBufferInfo bi[4]{};
-        VkWriteDescriptorSet w[4]{};
-        bi[0].buffer = dyn_master;
-        bi[0].offset = 0;
-        bi[0].range = 64u;
-        bi[1].buffer = palette_target;
-        bi[1].offset = palette_master_off;
-        // #222 Phase 0.4 audit: original 65536 covers only 4 instances at
-        // kAnimMaxJoints=256 (4*256*64). LoL fan-out at 500 actors / 100
-        // distinct meshes hits 5/bucket -- 81920 bytes -- latently
-        // overrunning this descriptor's bound view. VK_WHOLE_SIZE fixes the
-        // bound size but VUID-06715 forbids any nonzero dynamic offset
-        // alongside, breaking the per-batch dispatch model entirely.
-        // Bumping to 1 MB covers 64-instance buckets comfortably; the
-        // matching `dyn_off + range <= buffer_size` constraint is satisfied
-        // because palette_out_buf_ keeps a >= range tail past the last
-        // batch's start (16 MB buffer; max packed batches at 1024 actors *
-        // 256 joints * 64 B = 16 MB; one slot's worth of overshoot fits
-        // because we never fill the buffer to the brim AND have not raised
-        // kAnimActorsCap past 1024). Phase D.3 retires this binding by
-        // collapsing skin Group B into DynamicBuffers; do NOT inflate
-        // further without growing palette_out_buf_ to match.
-        bi[1].range = 1u << 20;
-        bi[2].buffer = dyn_master;
-        bi[2].offset = 0;
-        bi[2].range = 16384u;
-        bi[3].buffer = pool_buf;
-        bi[3].offset = pool_master_off;
-        bi[3].range = VK_WHOLE_SIZE;
-        for (uint32_t i = 0; i < 4; ++i) {
-            w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[i].dstSet = set;
-            w[i].dstBinding = i;
-            w[i].descriptorCount = 1;
-            w[i].pBufferInfo = &bi[i];
-        }
-        w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
-        w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
-        w[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        vkUpdateDescriptorSets(plat.device_, 4, w, 0, nullptr);
-    }
-}
-
-void Frames::WriteAnimEvalDescriptors(
-    Resources& resources, Allocator& alloc,
-    const CommandRecorder::AnimEvalArgs& args) {
-    if (plat.anim_eval_sets_.empty()) {
-        return;
-    }
-    VkBuffer dyn_master =
-        resources.plat.GetVkBumpMasterBuffer(alloc, Memory::kDynamic);
-    if (dyn_master == VK_NULL_HANDLE) {
-        return;
-    }
-    Handle<Buffer> ssbo_handles[12] = {
-        args.scene_headers, args.parent_buf, args.topo_buf, args.bind_pose_buf,
-        args.channels_buf, args.samplers_buf, args.times_buf, args.values_buf,
-        args.joint_nodes_buf, args.inverse_binds_buf, args.world_scratch,
-        args.palette_out,
-    };
-    uint32_t ssbo_offs[12]{};
-    VkBuffer ssbo_bufs[12]{};
-    for (uint32_t i = 0; i < 12; ++i) {
-        if (ssbo_handles[i].IsNull()) {
-            return;
-        }
-        ssbo_bufs[i] =
-            resources.plat.GetVkBuffer(alloc, ssbo_handles[i], &ssbo_offs[i]);
-        if (ssbo_bufs[i] == VK_NULL_HANDLE) {
-            return;
-        }
-    }
-    for (VkDescriptorSet set : plat.anim_eval_sets_) {
-        if (set == VK_NULL_HANDLE) {
-            continue;
-        }
-        VkDescriptorBufferInfo bi[13]{};
-        VkWriteDescriptorSet w[13]{};
-        bi[0].buffer = dyn_master;
-        bi[0].offset = 0;
-        // ActorRecord size 16 B; max kAnimActorsCap = 1024 records => 16 KB.
-        bi[0].range = 16384u;
-        for (uint32_t i = 0; i < 12; ++i) {
-            bi[1 + i].buffer = ssbo_bufs[i];
-            bi[1 + i].offset = ssbo_offs[i];
-            bi[1 + i].range = VK_WHOLE_SIZE;
-        }
-        for (uint32_t i = 0; i < 13; ++i) {
-            w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[i].dstSet = set;
-            w[i].dstBinding = i;
-            w[i].descriptorCount = 1;
-            w[i].pBufferInfo = &bi[i];
-            w[i].descriptorType = (i == 0)
-                ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
-                : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        }
-        vkUpdateDescriptorSets(plat.device_, 13, w, 0, nullptr);
     }
 }
 
@@ -839,11 +648,6 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     fc.cmd.plat.device_ = dev;
     fc.cmd.plat.globals_set_ = plat.globals_sets_[cf];
     fc.cmd.plat.drawtmp_set_ = plat.drawtmp_sets_[cf];
-    fc.cmd.plat.compute_sets_ = plat.compute_sets_[cf];
-    // #222 Phase D.3: skin_group_b_set_ + anim_eval_set_ retired -- recorder
-    // resolves set 0 via the DynamicBuffers handle passed at dispatch time.
-    fc.cmd.plat.skin_group_b_set_ = VK_NULL_HANDLE;
-    fc.cmd.plat.anim_eval_set_ = VK_NULL_HANDLE;
     fc.cmd.plat.point_set_ = plat.point_sets_[cf];
     fc.cmd.plat.composite_sets_ = plat.composite_sets_[cf];
     fc.cmd.plat.composite_next_idx_ = 0;

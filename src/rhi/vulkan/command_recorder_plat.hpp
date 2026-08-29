@@ -18,12 +18,6 @@ inline constexpr uint32_t kMaxComputePasses = 4;
 // multiple DrawFullscreen calls with different texture bindings without
 // last-bound-wins aliasing (the 997af20 fix).
 inline constexpr uint32_t kCompositeRingSize = 4;
-// #219 Chunk E: hard upper bound on BoundBuffer count per compute Dispatch.
-// Today's only consumer is the particle sim (3 buffers). 8 leaves slack and
-// fits a single VkDescriptorBufferInfo array on the stack so Dispatch's
-// per-call descriptor-write scratch never touches the heap.
-inline constexpr uint32_t kMaxBuffersPerDispatch = 8;
-
 // Persistent (owned by Frames) cache of offscreen VkRenderPass + VkFramebuffer
 // objects keyed by attachment formats/load-ops and image views. Swapchain
 // passes keep using sc.renderPass; only graph-created offscreen targets land
@@ -84,14 +78,9 @@ struct CommandRecorderPlat {
     VkDevice device_ = VK_NULL_HANDLE;
     VkDescriptorSet globals_set_ = VK_NULL_HANDLE;
     VkDescriptorSet drawtmp_set_ = VK_NULL_HANDLE;
-    std::array<VkDescriptorSet, kMaxStepsPerFrame> compute_sets_{};
-    // #221 Phase 9 (vk): per-frame skin Group B set (Params/Palettes/
-    // InstanceMeta as DYNAMIC + OutputPool whole). Frames::Begin publishes
-    // this from FramesPlat::skin_group_b_sets_[current_frame_].
-    VkDescriptorSet skin_group_b_set_ = VK_NULL_HANDLE;
-    // #221 Phase 5b: per-frame anim_eval set (13 bindings; see
-    // assets/anim_eval.comp.glsl). Published from FramesPlat::anim_eval_sets_.
-    VkDescriptorSet anim_eval_set_ = VK_NULL_HANDLE;
+    // #222 Phase D.3/D.4 cleanup: compute_sets_ + skin_group_b_set_ +
+    // anim_eval_set_ retired. Particle, skin Group B, anim_eval all read
+    // set 0 from a DynamicBuffers handle passed at dispatch time.
     VkDescriptorSet point_set_ = VK_NULL_HANDLE;
     // Composite descriptor ring for DrawFullscreen (multiple per-pass draws
     // with distinct textures). Advanced by composite_next_idx_ on each

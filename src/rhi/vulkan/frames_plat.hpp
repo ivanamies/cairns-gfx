@@ -35,29 +35,23 @@ struct FramesPlat {
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout globals_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout drawtmp_set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout compute_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout point_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout composite_set_layout_ = VK_NULL_HANDLE;
-    // #221 Skinning Phase 4: two layouts for the skin kernel. Group B is
-    // frame-global (dynUBO Params @ 0, dynSSBO palettes @ 1, dynSSBO
-    // InstanceMeta @ 2, SSBO output pool whole @ 3). Group A is per-mesh
-    // (SSBO positions slice @ 0, SSBO skin-attrs slice @ 1). Group B sets
-    // are allocated per frame-in-flight; Group A sets are allocated at
-    // load via Resources::CreateBindGroup and stored on Mesh::Hot.
+    // #222 Phase D.3 cleanup: skin Group B + anim_eval layouts kept here
+    // because initSkinKernel + initAnimEvalKernel build their pipelines
+    // BEFORE uploadAnimTablesGpu creates the backing buffers for
+    // dyn_skin_group_b_ / dyn_anim_eval_. The DynamicBuffers descriptor
+    // sets allocated post-scene-load are layout-compatible. compute_layout_
+    // (particle) IS retired: initParticles creates dyn_particle_parity_
+    // before the kernel, so the kernel sources its layout from there.
     VkDescriptorSetLayout skin_group_b_layout_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout skin_group_a_layout_ = VK_NULL_HANDLE;
-    std::vector<VkDescriptorSet> skin_group_b_sets_;
-    // #221 Phase 5b: anim_eval set layout has 13 bindings (see
-    // assets/anim_eval.comp.glsl). One set per frame-in-flight; bound by
-    // CommandRecorder::DispatchAnimEval before each anim_eval dispatch.
     VkDescriptorSetLayout anim_eval_layout_ = VK_NULL_HANDLE;
-    std::vector<VkDescriptorSet> anim_eval_sets_;
+    // Group A is per-mesh (SSBO positions @0, SSBO skin-attrs @1) -- one
+    // set per skinned mesh, allocated at load via Resources::CreateBindGroup
+    // and stored on Mesh::Hot.
+    VkDescriptorSetLayout skin_group_a_layout_ = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> globals_sets_;
     std::vector<VkDescriptorSet> drawtmp_sets_;
-    // One DescriptorSet per in-flight slot per sim step. Indexed
-    // [frame_in_flight][step_index]. Multi-step compute needs distinct sets
-    // because vkUpdateDescriptorSets on an in-use set is UB.
-    std::vector<std::array<VkDescriptorSet, kMaxStepsPerFrame>> compute_sets_;
     std::vector<VkDescriptorSet> point_sets_;
     // Per-frame ring of composite descriptor sets for DrawFullscreen. Lets one
     // pass issue multiple fullscreen draws with distinct textures (the 997af20
