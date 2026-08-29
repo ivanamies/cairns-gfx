@@ -6,3 +6,6 @@ glslc composite.vert -o composite.vert.spv
 glslc composite.frag -o composite.frag.spv
 glslc imgui.vert -o imgui.vert.spv
 glslc imgui.frag -o imgui.frag.spv
+glslc blur.frag -o blur.frag.spv
+glslc depthviz.frag -o depthviz.frag.spv
+glslc composite3.frag -o composite3.frag.spv

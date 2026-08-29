@@ -184,6 +184,15 @@ VkShaderFiles resolve_vk_shader(const char* logical) {
     if (std::strcmp(logical, "composite") == 0) {
         return {"composite.vert.spv", "composite.frag.spv", nullptr};
     }
+    if (std::strcmp(logical, "blur") == 0) {
+        return {"composite.vert.spv", "blur.frag.spv", nullptr};
+    }
+    if (std::strcmp(logical, "depthviz") == 0) {
+        return {"composite.vert.spv", "depthviz.frag.spv", nullptr};
+    }
+    if (std::strcmp(logical, "composite3") == 0) {
+        return {"composite.vert.spv", "composite3.frag.spv", nullptr};
+    }
     if (std::strcmp(logical, "imgui") == 0) {
         return {"imgui.vert.spv", "imgui.frag.spv", nullptr};
     }
@@ -381,7 +390,8 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
         set_layouts = {frames.globals_set_layout_,      // set 0: globals (once/frame)
                        resources.MaterialSetLayout(),   // set 1: per-material
                        frames.drawtmp_set_layout_};     // set 2: drawtmp (per draw)
-    } else if (ls == "composite") {
+    } else if (ls == "composite" || ls == "blur" || ls == "depthviz" ||
+               ls == "composite3") {
         set_layouts = {frames.composite_set_layout_};
     } else if (ls == "imgui") {
         set_layouts = {frames.imgui_set_layout_};

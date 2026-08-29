@@ -436,6 +436,10 @@ void CommandRecorder::DrawFullscreen(Resources& res, Handle<Shader> pipeline,
                                      Handle<Sampler> sampler) {
     Shader::Hot* sh = res.GetHot(pipeline);
     VkSampler samp = reinterpret_cast<VkSampler>(res.GetHot(sampler)->api_sampler);
+    // Take the next set from the per-frame ring so multiple fullscreen passes in
+    // one frame don't clobber each other's bindings.
+    VkDescriptorSet set = composite_set_ring_[composite_set_cursor_];
+    composite_set_cursor_ = (composite_set_cursor_ + 1) % kCompositeRing;
     std::vector<VkDescriptorImageInfo> infos(tex_count);
     std::vector<VkWriteDescriptorSet> writes(tex_count);
     for (uint32_t i = 0; i < tex_count; ++i) {
@@ -444,7 +448,7 @@ void CommandRecorder::DrawFullscreen(Resources& res, Handle<Shader> pipeline,
             reinterpret_cast<VkImageView>(res.GetHot(textures[i])->api_view);
         infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = composite_set_;
+        writes[i].dstSet = set;
         writes[i].dstBinding = i;
         writes[i].dstArrayElement = 0;
         writes[i].descriptorCount = 1;
@@ -454,7 +458,7 @@ void CommandRecorder::DrawFullscreen(Resources& res, Handle<Shader> pipeline,
     vkUpdateDescriptorSets(device_, tex_count, writes.data(), 0, nullptr);
     vkCmdBindPipeline(gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->vk_pipeline);
     vkCmdBindDescriptorSets(gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->vk_layout, 0, 1,
-                            &composite_set_, 0, nullptr);
+                            &set, 0, nullptr);
     vkCmdDraw(gfx_, 3, 1, 0, 0);
 }
 

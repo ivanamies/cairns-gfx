@@ -27,6 +27,11 @@ class Resources;
 class Allocator;
 struct SwapChain;
 
+// Per-frame ring of fullscreen-sampling descriptor sets: each DrawFullscreen in a
+// frame needs its own set, since a set is referenced by recorded draws but
+// updated in place (reusing one set => all draws sample the last write).
+inline constexpr uint32_t kCompositeRing = 4;
+
 enum class LoadOp : uint8_t { kClear, kLoad, kDontCare };
 enum class StoreOp : uint8_t { kStore, kDontCare };
 
@@ -151,7 +156,8 @@ public:
     VkDescriptorSet drawtmp_set_ = VK_NULL_HANDLE;
     VkDescriptorSet compute_set_ = VK_NULL_HANDLE;
     VkDescriptorSet point_set_ = VK_NULL_HANDLE;
-    VkDescriptorSet composite_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet composite_set_ring_[kCompositeRing] = {};
+    uint32_t composite_set_cursor_ = 0;
     VkDescriptorSet imgui_set_ = VK_NULL_HANDLE;
     OffscreenTargetCache* offscreen_ = nullptr;  // owned by Frames
 #elif CAIRNS_METAL

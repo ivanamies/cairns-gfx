@@ -133,6 +133,17 @@ MetalShaderInfo resolve_metal_shader(const char* logical) {
         return {"composite.metal", "composite::composite_vertex",
                 "composite::composite_fragment", nullptr};
     }
+    if (std::strcmp(logical, "blur") == 0) {
+        return {"blur.metal", "blurfx::blur_vertex", "blurfx::blur_fragment", nullptr};
+    }
+    if (std::strcmp(logical, "depthviz") == 0) {
+        return {"depthviz.metal", "depthvizfx::depthviz_vertex",
+                "depthvizfx::depthviz_fragment", nullptr};
+    }
+    if (std::strcmp(logical, "composite3") == 0) {
+        return {"composite3.metal", "composite3fx::composite3_vertex",
+                "composite3fx::composite3_fragment", nullptr};
+    }
     if (std::strcmp(logical, "imgui") == 0) {
         return {"imgui.metal", "imguicairns::imgui_vertex", "imguicairns::imgui_fragment",
                 nullptr};

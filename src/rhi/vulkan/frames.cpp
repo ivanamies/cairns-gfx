@@ -257,9 +257,10 @@ bool Frames::Init(Device& device) {
             !make_dyn_ubo_layout(&drawtmp_set_layout_)) {
             return false;
         }
-        {  // composite: 2 combined image samplers (color + depth), fragment.
-            VkDescriptorSetLayoutBinding b[2]{};
-            for (uint32_t i = 0; i < 2; ++i) {
+        {  // composite/fullscreen: 3 combined image samplers, fragment. Shaders
+           // that need fewer (blur/depthviz=1, composite=2) just bind a prefix.
+            VkDescriptorSetLayoutBinding b[3]{};
+            for (uint32_t i = 0; i < 3; ++i) {
                 b[i].binding = i;
                 b[i].descriptorCount = 1;
                 b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -267,7 +268,7 @@ bool Frames::Init(Device& device) {
             }
             VkDescriptorSetLayoutCreateInfo li{};
             li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            li.bindingCount = 2;
+            li.bindingCount = 3;
             li.pBindings = b;
             if (vkCreateDescriptorSetLayout(dev, &li, nullptr,
                                             &composite_set_layout_) != VK_SUCCESS) {
@@ -298,12 +299,13 @@ bool Frames::Init(Device& device) {
         sizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         sizes[2].descriptorCount = 2 * n;
         sizes[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[3].descriptorCount = 3 * n;  // composite (2) + imgui (1) per frame
+        // composite ring (kCompositeRing sets * 3 bindings) + imgui (1) per frame.
+        sizes[3].descriptorCount = (3 * kCompositeRing + 1) * n;
         VkDescriptorPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pci.poolSizeCount = 4;
         pci.pPoolSizes = sizes;
-        pci.maxSets = 6 * n;
+        pci.maxSets = (4 + kCompositeRing + 1) * n;
         if (vkCreateDescriptorPool(dev, &pci, nullptr, &descriptor_pool_) !=
             VK_SUCCESS) {
             return false;
@@ -324,9 +326,21 @@ bool Frames::Init(Device& device) {
             !alloc_sets(compute_layout_, compute_sets_) ||
             !alloc_sets(globals_set_layout_, globals_sets_) ||
             !alloc_sets(drawtmp_set_layout_, drawtmp_sets_) ||
-            !alloc_sets(composite_set_layout_, composite_sets_) ||
             !alloc_sets(imgui_set_layout_, imgui_sets_)) {
             return false;
+        }
+        {  // composite ring: kCompositeRing sets per frame.
+            const uint32_t total = kCompositeRing * n;
+            std::vector<VkDescriptorSetLayout> layouts(total, composite_set_layout_);
+            VkDescriptorSetAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            ai.descriptorPool = descriptor_pool_;
+            ai.descriptorSetCount = total;
+            ai.pSetLayouts = layouts.data();
+            composite_sets_.resize(total);
+            if (vkAllocateDescriptorSets(dev, &ai, composite_sets_.data()) != VK_SUCCESS) {
+                return false;
+            }
         }
     }
     inited_ = true;
@@ -419,7 +433,10 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
     fc.cmd.drawtmp_set_ = drawtmp_sets_[cf];
     fc.cmd.compute_set_ = compute_sets_[cf];
     fc.cmd.point_set_ = point_sets_[cf];
-    fc.cmd.composite_set_ = composite_sets_[cf];
+    for (uint32_t i = 0; i < kCompositeRing; ++i) {
+        fc.cmd.composite_set_ring_[i] = composite_sets_[cf * kCompositeRing + i];
+    }
+    fc.cmd.composite_set_cursor_ = 0;
     fc.cmd.imgui_set_ = imgui_sets_[cf];
     offscreen_cache_.device = dev;
     fc.cmd.offscreen_ = &offscreen_cache_;

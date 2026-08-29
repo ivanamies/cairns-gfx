@@ -373,7 +373,281 @@ public:
 
         return true;
     }
-    
+
+    // Bump a RenderPassGlobals for one camera; return its dynamic offset.
+    uint32_t UploadGlobals(const glm::mat4& view_proj, const glm::vec3& cam_pos,
+                           float near_z, float w, float h) {
+        cairns::rhi::RenderPassGlobals g{
+            .view_proj = view_proj,
+            .inv_view_proj = glm::inverse(view_proj),
+            .camera_pos = glm::vec4(cam_pos, 1.0f),
+            .camera_dir = glm::vec4(0.0f, 0.0f, -1.0f, near_z),
+            .screen_params = glm::vec4(w, h, 1.0f / w, 1.0f / h)};
+        uint32_t off = 0;
+        void* p = rhi_.alloc.BumpAllocate(sizeof(g), rhi_.alloc.UboAlign(),
+                                          rhi::Memory::kDynamic, &off);
+        assert(p && "bump alloc failed: parallel globals");
+        memcpy(p, &g, sizeof(g));
+        return off;
+    }
+
+    // Build a draw list for a subset of world entities, depth-sorted for the
+    // given camera. Mirrors BuildMeshOpaqueDraws over a filtered SceneWorld.
+    void BuildSubsetDraws(const std::vector<uint32_t>& entity_indices,
+                          const glm::mat4& view_matrix, const glm::mat4& root,
+                          std::vector<cairns::Draw>& out_draws,
+                          std::vector<std::pair<cairns::DrawKey, uint32_t>>& out_sorted) {
+        out_draws.clear();
+        out_sorted.clear();
+        cairns::SceneWorld w;
+        w.scenes = world_.scenes;
+        w.scene_count = world_.scene_count;
+        w.root_transform = root;
+        for (uint32_t ei : entity_indices) {
+            if (ei < world_.entities.size()) {
+                w.entities.push_back(world_.entities[ei]);
+            }
+        }
+        cairns::Extract(w, subset_proxies_);
+        const float near_z = 0.1f;
+        const float far_z = 100.0f;
+        for (const cairns::MeshProxy& mp : subset_proxies_.meshes.data) {
+            const BufHandle pos = mp.pos;
+            const BufHandle attr = mp.attr;
+            const BufHandle index = mp.index;
+            const glm::mat4& world_mat = mp.world_matrix;
+            const uint32_t index_base_off = rhi_.resources.BufferBaseOffset(rhi_.alloc, index);
+            for (uint32_t p = 0; p < mp.primitive_count; ++p) {
+                const cairns::PrimitiveProxy& prim = subset_proxies_.primitives[mp.first_primitive + p];
+                const MatId mat_id = prim.material_id;
+                const cairns::rhi::MaterialGpu material_gpu{};
+                uint32_t material_offset = 0;
+                void* mptr = rhi_.alloc.BumpAllocate(
+                    sizeof(cairns::rhi::MaterialGpu), rhi_.alloc.UboAlign(),
+                    rhi::Memory::kDynamic, &material_offset);
+                assert(mptr && "bump alloc failed: subset material");
+                memcpy(mptr, &material_gpu, sizeof(material_gpu));
+
+                const cairns::rhi::DrawTmp draw_tmp{.model_matrix = world_mat};
+                uint32_t drawtmp_offset = 0;
+                void* tptr = rhi_.alloc.BumpAllocate(
+                    sizeof(cairns::rhi::DrawTmp), rhi_.alloc.UboAlign(),
+                    rhi::Memory::kDynamic, &drawtmp_offset);
+                assert(tptr && "bump alloc failed: subset draw tmp");
+                memcpy(tptr, &draw_tmp, sizeof(draw_tmp));
+
+                cairns::Draw draw{};
+                draw.bind_groups[1] = material_bind_groups_[mat_id];
+                draw.index_buffer = index;
+                draw.index_offset = index_base_off + (prim.first_index * sizeof(uint32_t));
+                draw.vertex_offset = prim.vertex_offset;
+                draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot] = pos;
+                draw.vertex_buffers[cairns::Draw::kVertexBufferAttrSlot] = attr;
+                draw.instance_offset = 0;
+                draw.instance_count = 1;
+                draw.dynamic_buffer_offsets[0] = material_offset;
+                draw.dynamic_buffer_offsets[1] = drawtmp_offset;
+                draw.triangle_count = prim.index_count / 3;
+
+                const glm::vec4 view_pos = view_matrix * world_mat[3];
+                const float view_depth = -view_pos.z;
+                const float d01 = glm::clamp((view_depth - near_z) / (far_z - near_z),
+                                             0.0f, 1.0f);
+                const uint32_t depth_q = static_cast<uint32_t>(d01 * float((1u << 24) - 1));
+                out_sorted.emplace_back(
+                    cairns::BuildDrawKey(mat_id & 0x3FFFFFFFu, depth_q, kMockTranslucency,
+                                         kMockViewport, kMockViewportLayer,
+                                         kMockFullscreenLayer),
+                    out_draws.size());
+                out_draws.push_back(draw);
+            }
+        }
+        std::sort(out_sorted.begin(), out_sorted.end());
+    }
+
+    // CAIRNS_RG_PARALLEL test: 3 cameras render disjoint GLB subsets into 3 frame
+    // targets via independent graph branches (blur / depth / plain), composited
+    // big-FT3 + PIP insets, UI on top. No threading -- the graph topo-sorts them.
+    bool drawParallel(rhi::FrameContext& fc, bool draw_imgui) {
+        const float fb_w = static_cast<float>(swapchain_.Width());
+        const float fb_h = static_cast<float>(swapchain_.Height());
+        const uint32_t w = swapchain_.Width();
+        const uint32_t h = swapchain_.Height();
+        const float aspect = fb_w / fb_h;
+        const float near_z = 0.1f;
+        const float far_z = 100.0f;
+        const glm::vec3 eye(0, 0, 0);
+        const glm::vec3 up(0, 1, 0);
+
+        const char* freeze = std::getenv("CAIRNS_FREEZE_ROT");
+        const float deg = freeze ? static_cast<float>(std::atof(freeze))
+                                 : static_cast<float>(SDL_GetTicks() / 1000.0 / 2.0 * 45);
+        const glm::mat4 root =
+            glm::rotate(glm::mat4(1.0f), glm::radians(deg), glm::vec3(0, 1, 0));
+
+        // Models are placed as (entity.transform * root) -> they spin in place at
+        // the fixed grid position, so the camera target is the entity translation.
+        auto entity_center = [&](uint32_t i) -> glm::vec3 {
+            return glm::vec3(world_.entities[i].transform[3]);
+        };
+        const glm::vec3 t0 =
+            world_.entities.size() > 0 ? entity_center(0) : glm::vec3(0, 0, -3);
+        const glm::vec3 t1 =
+            world_.entities.size() > 1 ? entity_center(1) : glm::vec3(0, 0, -3);
+
+        const glm::mat4 proj_wide = glm::perspectiveRH_ZO(glm::radians(90.0f), aspect, near_z, far_z);
+        const glm::mat4 proj_narrow = glm::perspectiveRH_ZO(glm::radians(22.0f), aspect, near_z, far_z);
+        const glm::mat4 view_c = glm::lookAtRH(eye, eye + glm::vec3(0, 0, -1), up);
+        const glm::mat4 view_a = glm::lookAtRH(eye, t0, up);
+        const glm::mat4 view_b = glm::lookAtRH(eye, t1, up);
+        const glm::mat4 vp_a = proj_narrow * view_a;
+        const glm::mat4 vp_b = proj_narrow * view_b;
+        const glm::mat4 vp_c = proj_wide * view_c;
+        const uint32_t off_a = UploadGlobals(vp_a, eye, near_z, fb_w, fb_h);
+        const uint32_t off_b = UploadGlobals(vp_b, eye, near_z, fb_w, fb_h);
+        const uint32_t off_c = UploadGlobals(vp_c, eye, near_z, fb_w, fb_h);
+
+        std::vector<uint32_t> e_all;
+        for (uint32_t i = 0; i < world_.entities.size(); ++i) {
+            e_all.push_back(i);
+        }
+        BuildSubsetDraws({0}, view_a, root, glb1_draws_, glb1_sorted_);
+        BuildSubsetDraws({1}, view_b, root, glb2_draws_, glb2_sorted_);
+        BuildSubsetDraws(e_all, view_c, root, all5_draws_, all5_sorted_);
+
+        auto make_ml = [&](std::vector<cairns::Draw>& d,
+                           std::vector<std::pair<cairns::DrawKey, uint32_t>>& s,
+                           ShaderHandle pipe, uint32_t goff) {
+            rhi::MeshDrawList ml{};
+            ml.draws = std::span<const cairns::Draw>(d.data(), d.size());
+            ml.sorted_draws =
+                std::span<const std::pair<cairns::DrawKey, uint32_t>>(s.data(), s.size());
+            ml.pipeline = pipe;
+            ml.globals_offset = goff;
+            ml.resident_textures = std::span<const rhi::Handle<rhi::Texture>>(
+                resident_textures_.data(), resident_textures_.size());
+            ml.resident_buffers =
+                std::span<const rhi::Handle<rhi::Buffer>>(&mesh_master_handle_, 1);
+            return ml;
+        };
+
+        const float clear[4] = {41.0f / 255.0f, 42.0f / 255.0f, 48.0f / 255.0f, 1.0f};
+        auto color_desc = [&]() {
+            rhi::GraphTextureDesc d{};
+            d.width = w;
+            d.height = h;
+            d.format = rhi::Format::kBgra8Unorm;
+            d.usage = rhi::kTexUsageColorTarget | rhi::kTexUsageSampled;
+            return d;
+        };
+        auto depth_desc = [&](bool sampled) {
+            rhi::GraphTextureDesc d{};
+            d.width = w;
+            d.height = h;
+            d.format = rhi::Format::kD32F;
+            d.usage = sampled ? (rhi::kTexUsageDepthTarget | rhi::kTexUsageSampled)
+                              : rhi::kTexUsageDepthTarget;
+            return d;
+        };
+
+        graph_.Reset();
+        rhi::GraphTexture texA;
+        rhi::GraphTexture texA_depth;
+        rhi::GraphTexture ft1;
+        rhi::GraphTexture depthB;
+        rhi::GraphTexture ft2;
+        rhi::GraphTexture ft3;
+        rhi::GraphTexture ft3_depth;
+        rhi::GraphTexture swap_tex;
+
+        // Branch 1: cam A -> glb1 color (texA) -> blur -> FT1.
+        graph_.AddPass(
+            "geo_glb1", rhi::PassType::kGraphics,
+            [&](rhi::PassBuilder& b) {
+                texA = b.CreateColorTarget(color_desc());
+                texA_depth = b.CreateDepthTarget(depth_desc(false));
+                b.AddColorOutput("texA", texA, rhi::LoadOp::kClear, clear);
+                b.AddDepthOutput("texA_depth", texA_depth, rhi::LoadOp::kClear, 1.0f);
+            },
+            [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
+                cmd.DrawMeshes(rhi_.resources, rhi_.alloc,
+                               make_ml(glb1_draws_, glb1_sorted_, unlit_offscreen_, off_a));
+            });
+        graph_.AddPass(
+            "blur", rhi::PassType::kGraphics,
+            [&](rhi::PassBuilder& b) {
+                ft1 = b.CreateColorTarget(color_desc());
+                b.AddColorOutput("ft1", ft1, rhi::LoadOp::kClear, clear);
+                b.AddAttachmentInput(texA);
+            },
+            [&](rhi::CommandRecorder& cmd, const rhi::PassResources& res) {
+                const rhi::Handle<rhi::Texture> t = res.Resolve(texA);
+                cmd.DrawFullscreen(rhi_.resources, blur_, &t, 1, composite_sampler_);
+            });
+
+        // Branch 2: cam B -> glb2 depth-only (depthB) -> depthviz -> FT2.
+        graph_.AddPass(
+            "geo_glb2", rhi::PassType::kGraphics,
+            [&](rhi::PassBuilder& b) {
+                depthB = b.CreateDepthTarget(depth_desc(true));
+                b.AddDepthOutput("depthB", depthB, rhi::LoadOp::kClear, 1.0f);
+            },
+            [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
+                cmd.DrawMeshes(rhi_.resources, rhi_.alloc,
+                               make_ml(glb2_draws_, glb2_sorted_, depth_only_, off_b));
+            });
+        graph_.AddPass(
+            "depthviz", rhi::PassType::kGraphics,
+            [&](rhi::PassBuilder& b) {
+                ft2 = b.CreateColorTarget(color_desc());
+                b.AddColorOutput("ft2", ft2, rhi::LoadOp::kClear, clear);
+                b.AddAttachmentInput(depthB);
+            },
+            [&](rhi::CommandRecorder& cmd, const rhi::PassResources& res) {
+                const rhi::Handle<rhi::Texture> t = res.Resolve(depthB);
+                cmd.DrawFullscreen(rhi_.resources, depthviz_, &t, 1, composite_sampler_);
+            });
+
+        // Branch 3: cam C -> all 5 glbs -> FT3.
+        graph_.AddPass(
+            "geo_5glb", rhi::PassType::kGraphics,
+            [&](rhi::PassBuilder& b) {
+                ft3 = b.CreateColorTarget(color_desc());
+                ft3_depth = b.CreateDepthTarget(depth_desc(false));
+                b.AddColorOutput("ft3", ft3, rhi::LoadOp::kClear, clear);
+                b.AddDepthOutput("ft3_depth", ft3_depth, rhi::LoadOp::kClear, 1.0f);
+            },
+            [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
+                cmd.DrawMeshes(rhi_.resources, rhi_.alloc,
+                               make_ml(all5_draws_, all5_sorted_, unlit_offscreen_, off_c));
+            });
+
+        // Converge: composite FT3 (full) + FT1/FT2 (PIP) + UI -> swapchain.
+        graph_.AddPass(
+            "composite3", rhi::PassType::kGraphics,
+            [&](rhi::PassBuilder& b) {
+                rhi::GraphTextureDesc td{};
+                td.width = w;
+                td.height = h;
+                swap_tex = b.ImportTexture(rhi::Handle<rhi::Texture>::Null, td);
+                b.AddColorOutput("swapchain", swap_tex, rhi::LoadOp::kClear, clear);
+                b.AddAttachmentInput(ft3);
+                b.AddAttachmentInput(ft1);
+                b.AddAttachmentInput(ft2);
+            },
+            [&](rhi::CommandRecorder& cmd, const rhi::PassResources& res) {
+                const rhi::Handle<rhi::Texture> texs[3] = {
+                    res.Resolve(ft3), res.Resolve(ft1), res.Resolve(ft2)};
+                cmd.DrawFullscreen(rhi_.resources, composite3_, texs, 3, composite_sampler_);
+                if (draw_imgui) {
+                    cmd.DrawImGui(rhi_.resources, rhi_.alloc, imgui_, imgui_font_,
+                                  composite_sampler_, ImGui::GetDrawData());
+                }
+            });
+        graph_.SetOutput(swap_tex);
+        return graph_.Bake() && graph_.Execute(fc, swapchain_);
+    }
+
     bool draw() {
         frame_++;
         const uint64_t cpu_now_ns = cairns::timestamp_ns();
@@ -439,11 +713,18 @@ public:
 
         // Overlay is non-deterministic (fps text changes per frame) -> skip it
         // under CAIRNS_FREEZE_ROT so the byte-gate dump stays reproducible.
+        const bool parallel = std::getenv("CAIRNS_RG_PARALLEL") != nullptr;
         const bool draw_imgui = std::getenv("CAIRNS_FREEZE_ROT") == nullptr;
         if (draw_imgui) {
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
-            ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_FirstUseEver);
+            // Parallel test has insets in the top corners -> park the overlay low.
+            if (parallel) {
+                const float disp_h = ImGui::GetIO().DisplaySize.y;
+                ImGui::SetNextWindowPos(ImVec2(20.0f, disp_h - 150.0f), ImGuiCond_Always);
+            } else {
+                ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_FirstUseEver);
+            }
             ImGui::Begin("cairns", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
             const float fps = cpu_ms_last_ > 0.0f ? 1000.0f / cpu_ms_last_ : 0.0f;
             float ms_max = 1.0f;
@@ -461,6 +742,16 @@ public:
                              overlay, 0.0f, ms_max * 1.15f, ImVec2(300.0f, 110.0f));
             ImGui::End();
             ImGui::Render();
+        }
+
+        if (parallel) {
+            if (!drawParallel(fc, draw_imgui)) {
+                return false;
+            }
+            t_record.End();
+            rhi_.frames.End(swapchain_, fc);
+            t_frame.End();
+            return true;
         }
 
         graph_.Reset();
@@ -637,8 +928,44 @@ public:
             composite_ =
                 rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources, rhi_.frames, cpd);
 
+            // Fullscreen post pipelines for the parallel test: blur + depthviz are
+            // offscreen single-sample; composite3 targets the swapchain (MSAA).
+            rhi::GraphicsPipelineDesc fd{};
+            fd.shader_dir = shader_dir.c_str();
+            fd.topology = rhi::PrimitiveTopology::kTriangleList;
+            fd.cull = rhi::CullMode::kNone;
+            fd.depth_test = false;
+            fd.depth_write = false;
+            fd.color_format = rhi::Format::kBgra8Unorm;
+            fd.depth_format = rhi::Format::kUndefined;
+            fd.sample_count = 1;
+            fd.swap_chain = nullptr;
+            fd.logical_shader = "blur";
+            fd.debug_name = "blur";
+            blur_ = rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources, rhi_.frames, fd);
+            fd.logical_shader = "depthviz";
+            fd.debug_name = "depthviz";
+            depthviz_ =
+                rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources, rhi_.frames, fd);
+
+            rhi::GraphicsPipelineDesc c3d{};
+            c3d.logical_shader = "composite3";
+            c3d.shader_dir = shader_dir.c_str();
+            c3d.topology = rhi::PrimitiveTopology::kTriangleList;
+            c3d.cull = rhi::CullMode::kNone;
+            c3d.depth_test = false;
+            c3d.depth_write = false;
+            c3d.color_format = rhi::Format::kBgra8Unorm;
+            c3d.depth_format = rhi::Format::kD32F;
+            c3d.sample_count = sampleCount;
+            c3d.debug_name = "composite3";
+            c3d.swap_chain = &swapchain_;
+            composite3_ =
+                rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources, rhi_.frames, c3d);
+
             if (depth_only_.IsNull() || unlit_offscreen_.IsNull() ||
-                composite_.IsNull()) {
+                composite_.IsNull() || blur_.IsNull() || depthviz_.IsNull() ||
+                composite3_.IsNull()) {
                 std::exit(0);
             }
 
@@ -830,6 +1157,14 @@ private:
 
     cairns::SceneWorld world_;
     cairns::RenderProxyArrays proxies_;
+    // CAIRNS_RG_PARALLEL: scratch + per-branch subset draw lists.
+    cairns::RenderProxyArrays subset_proxies_;
+    std::vector<cairns::Draw> glb1_draws_;
+    std::vector<cairns::Draw> glb2_draws_;
+    std::vector<cairns::Draw> all5_draws_;
+    std::vector<std::pair<cairns::DrawKey, uint32_t>> glb1_sorted_;
+    std::vector<std::pair<cairns::DrawKey, uint32_t>> glb2_sorted_;
+    std::vector<std::pair<cairns::DrawKey, uint32_t>> all5_sorted_;
 
     rhi::Rhi rhi_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
@@ -841,6 +1176,9 @@ private:
     ShaderHandle depth_only_ = ShaderHandle::Null;
     ShaderHandle unlit_offscreen_ = ShaderHandle::Null;
     ShaderHandle composite_ = ShaderHandle::Null;
+    ShaderHandle blur_ = ShaderHandle::Null;
+    ShaderHandle depthviz_ = ShaderHandle::Null;
+    ShaderHandle composite3_ = ShaderHandle::Null;
     ShaderHandle imgui_ = ShaderHandle::Null;
     rhi::Handle<rhi::Sampler> composite_sampler_ = rhi::Handle<rhi::Sampler>::Null;
     rhi::Handle<rhi::Texture> imgui_font_ = rhi::Handle<rhi::Texture>::Null;
