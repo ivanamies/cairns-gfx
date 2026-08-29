@@ -5,6 +5,75 @@ Newest first.
 
 ---
 
+## `042ebec` (2026-06-04) — RecordFrame routed through render graph (forward → swap)
+
+Frame is now graph-routed: `particle_sim` (kCompute) → `forward` (offscreen
+single-sample color + depth) → `swap` (composite full-screen color +
+bottom-right depth-silhouette PIP + ImGui, all in one MSAA swap encoder).
+`forward` is no longer the swap pass — it writes to an offscreen color +
+depth pair that `swap` samples. Adds one full-screen write + sample-back
+vs the pre-graph single-pass shape.
+
+Workload: `100 GLBs × 33 slices = 3300 entities`, 11517 draws. Release. All
+three readouts are steady-state medians over many 120-frame windows
+(post-thermal-warmup).
+
+### macOS Metal Release — M2 Max, 1280×720
+| Pass            | avg     |
+|-----------------|---------|
+| `frame`         |  3.56 ms (game thread CPU post-Acquire) |
+| `build_draws`   |  2.84 ms |
+| `record`        |  1.73 ms (render thread CPU) |
+| `particle_sim`  |  0.011 ms (GPU) |
+| `forward`       | 10.5 ms (GPU, offscreen) |
+| `swap`          |  0.32 ms (GPU, composite + PIP + ImGui) |
+| GPU total       | ~10.85 ms |
+
+### macOS Vulkan (MoltenVK) Release — M2 Max, 1280×720
+| Pass            | avg     |
+|-----------------|---------|
+| `frame`         |  3.07 ms |
+| `build_draws`   |  2.45 ms |
+| `record`        |  0.67 ms |
+| `particle_sim`  |  0.013 ms |
+| `forward`       |  8.82 ms |
+| `swap`          |  0.039 ms |
+| GPU total       | ~8.87 ms |
+
+MoltenVK is faster than native Metal here: slimmer recorder path
+(`record` 0.67 vs 1.73 ms) and tighter MSAA-resolve-into-tile lowering
+(`swap` 0.04 vs 0.32 ms). Forward edge (8.82 vs 10.5 ms) is roughly
+within thermals.
+
+### Samsung S22 Vulkan Release — on-device, 2115×1008
+| Pass            | avg     |
+|-----------------|---------|
+| `frame`         |  8.7 ms |
+| `build_draws`   |  7.6 ms |
+| `record`        | 11.5 ms |
+| `particle_sim`  |  n/a (Android Vulkan timestamps disabled, see f2625d1) |
+| `forward`       | 60 ms (offscreen, geometry-bound per 6386768 diagnosis) |
+| `swap`          |  0.46 ms |
+| GPU total       | ~60.5 ms |
+
+Forward stays ~60 ms — same per-triangle binner cost the tiny-quad
+diagnostic isolated at `6386768`. The graph's extra offscreen write +
+sample-back is hidden under that. Swap is tiny (~0.5 ms) — the
+composite+PIP+ImGui content fits cleanly in tile residency.
+
+### Observations
+- New GPU rows (`particle_sim`, `forward`, `swap`) replace the
+  pre-graph single `forward` pass that did everything. Splitting forward
+  out makes the next levers (LOD for the binner term, alternate composite
+  shapes) targetable independently.
+- ImGui no longer has its own `ui` row — it's a tail draw inside `swap`
+  for MSAA swap-renderpass reasons (see commit message for the
+  storeOp=DONT_CARE / StoreActionMultisampleResolve constraint). The
+  graph still expresses it as the read-from-`color_off`/`depth_off`
+  consumer; the encoder boundary is the merge point.
+
+---
+
 ## `6386768` (2026-06-04) — tiny-quad diagnostic isolates geometry vs draw-submission
 
 S22 Android Vulkan Release. CAIRNS_TINY_QUAD=1 pins every draw's
