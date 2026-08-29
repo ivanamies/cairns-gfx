@@ -254,6 +254,61 @@ bool Frames::Init(Device& device) {
                 return false;
             }
         }
+        {  // #221 Skinning Phase 4 -- Group B (frame-global). Set 0 of the
+           // skin kernel: dynUBO Params @ 0, dynSSBO palettes @ 1, dynSSBO
+           // InstanceMeta @ 2, SSBO output pool whole @ 3. Dynamic offsets
+           // give us per-batch slicing of the kDynamic ring without
+           // re-writing the descriptor set each frame.
+            VkDescriptorSetLayoutBinding b[4]{};
+            b[0].binding = 0;
+            b[0].descriptorCount = 1;
+            b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+            b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[1].binding = 1;
+            b[1].descriptorCount = 1;
+            b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+            b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[2].binding = 2;
+            b[2].descriptorCount = 1;
+            b[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+            b[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[3].binding = 3;
+            b[3].descriptorCount = 1;
+            b[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            b[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            VkDescriptorSetLayoutCreateInfo li{};
+            li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            li.bindingCount = 4;
+            li.pBindings = b;
+            if (vkCreateDescriptorSetLayout(dev, &li, nullptr,
+                                            &plat.skin_group_b_layout_) !=
+                VK_SUCCESS) {
+                return false;
+            }
+        }
+        {  // #221 Skinning Phase 4 -- Group A (per-mesh). Set 1 of the
+           // skin kernel: SSBO positions slice @ 0, SSBO skin-attrs slice
+           // @ 1. Built at load via Resources::CreateBindGroup; one set
+           // per skinned mesh.
+            VkDescriptorSetLayoutBinding b[2]{};
+            b[0].binding = 0;
+            b[0].descriptorCount = 1;
+            b[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[1].binding = 1;
+            b[1].descriptorCount = 1;
+            b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            VkDescriptorSetLayoutCreateInfo li{};
+            li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            li.bindingCount = 2;
+            li.pBindings = b;
+            if (vkCreateDescriptorSetLayout(dev, &li, nullptr,
+                                            &plat.skin_group_a_layout_) !=
+                VK_SUCCESS) {
+                return false;
+            }
+        }
         // Per-frequency single dynamic-UBO layouts (Aaltonen split): set 0 globals
         // (once/frame), set 2 drawtmp (per draw). Structurally identical but kept as
         // distinct named layouts.
@@ -308,27 +363,33 @@ bool Frames::Init(Device& device) {
         // Compute uses kMaxStepsPerFrame sets per slot (Fiedler N-step sim).
         // Composite uses kCompositeRingSize sets per slot (PIP multi-draw fix).
         // UBO count: point(n) + compute(n * kMaxStepsPerFrame).
-        // SSBO count: compute (2 * n * kMaxStepsPerFrame).
-        // DYNAMIC UBO: globals(n) + drawtmp(n).
+        // SSBO count: compute (2 * n * kMaxStepsPerFrame) + skin Group B (n,
+        //   1 SSBO @ binding 3 = output pool whole).
+        // DYNAMIC UBO: globals(n) + drawtmp(n) + skin Group B Params (n).
+        // DYNAMIC SSBO: skin Group B palettes (n) + InstanceMeta (n).
         // COMBINED_IMAGE_SAMPLER: composite (n * kCompositeRingSize).
-        VkDescriptorPoolSize sizes[4]{};
+        // maxSets: 3 single-set + compute + composite + skin_group_b (n).
+        VkDescriptorPoolSize sizes[5]{};
         sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = n + n * kMaxStepsPerFrame;
         sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        sizes[1].descriptorCount = 2 * n * kMaxStepsPerFrame;
+        sizes[1].descriptorCount = 2 * n * kMaxStepsPerFrame + n;
         sizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        sizes[2].descriptorCount = 2 * n;
+        sizes[2].descriptorCount = 2 * n + n;
         sizes[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         // 3 bindings per composite set (#207 outline shares the layout:
         // color + id + highlights).
         sizes[3].descriptorCount = 3 * n * kCompositeRingSize;
+        // #221 Phase 4: skin Group B uses 2 SSBO_DYNAMIC (palettes + InstanceMeta).
+        sizes[4].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+        sizes[4].descriptorCount = 2 * n;
         VkDescriptorPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pci.poolSizeCount = 4;
+        pci.poolSizeCount = 5;
         pci.pPoolSizes = sizes;
         // 3 single-set layouts + compute (kMaxStepsPerFrame) + composite
-        // (kCompositeRingSize) per slot.
-        pci.maxSets = 3 * n + n * kMaxStepsPerFrame + n * kCompositeRingSize;
+        // (kCompositeRingSize) + skin_group_b (1) per slot.
+        pci.maxSets = 3 * n + n * kMaxStepsPerFrame + n * kCompositeRingSize + n;
         if (vkCreateDescriptorPool(dev, &pci, nullptr, &plat.descriptor_pool_) !=
             VK_SUCCESS) {
             return false;
@@ -347,7 +408,8 @@ bool Frames::Init(Device& device) {
         };
         if (!alloc_sets(plat.point_layout_, plat.point_sets_) ||
             !alloc_sets(plat.globals_set_layout_, plat.globals_sets_) ||
-            !alloc_sets(plat.drawtmp_set_layout_, plat.drawtmp_sets_)) {
+            !alloc_sets(plat.drawtmp_set_layout_, plat.drawtmp_sets_) ||
+            !alloc_sets(plat.skin_group_b_layout_, plat.skin_group_b_sets_)) {
             return false;
         }
         plat.compute_sets_.resize(n);
@@ -422,6 +484,12 @@ void Frames::Deinit() {
     }
     if (plat.compute_layout_) {
         vkDestroyDescriptorSetLayout(dev, plat.compute_layout_, nullptr);
+    }
+    if (plat.skin_group_b_layout_) {
+        vkDestroyDescriptorSetLayout(dev, plat.skin_group_b_layout_, nullptr);
+    }
+    if (plat.skin_group_a_layout_) {
+        vkDestroyDescriptorSetLayout(dev, plat.skin_group_a_layout_, nullptr);
     }
     if (plat.point_layout_) {
         vkDestroyDescriptorSetLayout(dev, plat.point_layout_, nullptr);

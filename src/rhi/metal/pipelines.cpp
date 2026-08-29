@@ -144,6 +144,10 @@ MetalShaderInfo resolve_metal_shader(const char* logical) {
         return {"outline.metal", "cube::vertexShader", "cube::fragmentShader",
                 nullptr};
     }
+    if (std::strcmp(logical, "skin") == 0) {
+        // #221 Phase 4: skin compute kernel (no vert/frag).
+        return {"skin.metal", nullptr, nullptr, "skin_compute"};
+    }
     return {"particle.metal", "particle_vertex", "particle_fragment", "particle_compute"};
 }
 

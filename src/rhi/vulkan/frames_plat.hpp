@@ -34,6 +34,15 @@ struct FramesPlat {
     VkDescriptorSetLayout compute_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout point_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout composite_set_layout_ = VK_NULL_HANDLE;
+    // #221 Skinning Phase 4: two layouts for the skin kernel. Group B is
+    // frame-global (dynUBO Params @ 0, dynSSBO palettes @ 1, dynSSBO
+    // InstanceMeta @ 2, SSBO output pool whole @ 3). Group A is per-mesh
+    // (SSBO positions slice @ 0, SSBO skin-attrs slice @ 1). Group B sets
+    // are allocated per frame-in-flight; Group A sets are allocated at
+    // load via Resources::CreateBindGroup and stored on Mesh::Hot.
+    VkDescriptorSetLayout skin_group_b_layout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout skin_group_a_layout_ = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> skin_group_b_sets_;
     std::vector<VkDescriptorSet> globals_sets_;
     std::vector<VkDescriptorSet> drawtmp_sets_;
     // One DescriptorSet per in-flight slot per sim step. Indexed

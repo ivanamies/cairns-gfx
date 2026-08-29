@@ -203,6 +203,10 @@ VkShaderFiles resolve_vk_shader(const char* logical) {
         // #207 outline post-process fullscreen tri.
         return {"outline.vert.spv", "outline.frag.spv", nullptr};
     }
+    if (std::strcmp(logical, "skin") == 0) {
+        // #221 Phase 4: skin compute kernel (no vert/frag).
+        return {nullptr, nullptr, "skin.comp.spv"};
+    }
     return {"particle.vert.spv", "particle.frag.spv", "particle.comp.spv"};
 }
 
@@ -544,10 +548,22 @@ Handle<Kernel> Pipelines::CreateComputePipeline(
     stage.module = comp_mod;
     stage.pName = "main";
 
-    const VkDescriptorSetLayout compute_layouts[1] = {frames.plat.compute_layout_};
+    // #221 Phase 4: layout selection via ComputePipelineDesc::layout. Skin
+    // uses two sets (Group B frame-global + Group A per-mesh); particle
+    // stays single-set. The skin path's Group A set is per-mesh and lives
+    // in the bind-group pool, not in Frames.
+    VkDescriptorSetLayout compute_layouts[2];
+    uint32_t set_count = 1;
+    if (desc.layout == ComputePipelineLayout::kSkin) {
+        compute_layouts[0] = frames.plat.skin_group_b_layout_;
+        compute_layouts[1] = frames.plat.skin_group_a_layout_;
+        set_count = 2;
+    } else {
+        compute_layouts[0] = frames.plat.compute_layout_;
+    }
     VkPipelineLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layout_info.setLayoutCount = 1;
+    layout_info.setLayoutCount = set_count;
     layout_info.pSetLayouts = compute_layouts;
 
     VkPipelineLayout layout = VK_NULL_HANDLE;

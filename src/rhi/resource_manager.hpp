@@ -388,10 +388,21 @@ struct GraphicsPipelineDesc {
     SwapChain* swap_chain = nullptr;
 };
 
+// #221 Skinning Phase 4: descriptor-layout discriminator. Particle (single
+// set: dynUBO + 2 SSBO) was the only computer kernel until skin landed;
+// skinning needs two sets (Group B frame-global + Group A per-mesh slices).
+// The discriminator lets CreateComputePipeline pick the right layouts from
+// Frames without conditional code in shader resolution.
+enum class ComputePipelineLayout : uint8_t {
+    kParticle = 0,
+    kSkin = 1,
+};
+
 struct ComputePipelineDesc {
-    const char* logical_shader = nullptr;  // "particle"
+    const char* logical_shader = nullptr;  // "particle" or "skin"
     const char* shader_dir = nullptr;
     const char* debug_name = nullptr;
+    ComputePipelineLayout layout = ComputePipelineLayout::kParticle;
 };
 
 // --- Bindless registry -----------------------------------------------------

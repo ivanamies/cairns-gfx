@@ -996,6 +996,7 @@ public:
             CAIRNS_PRINT("GreaterInit: frames.InitTargets failed\n");
             return false;
         }
+        initSkinKernel();  // best-effort; missing shader doesn't fail GreaterInit.
         if ( !initParticles() ) {
             CAIRNS_PRINT("GreaterInit: initParticles failed\n");
             return false;
@@ -2203,6 +2204,25 @@ public:
         float color[4];
     };
 
+    // #221 Phase 4: best-effort load of skin compute kernel. Failing the
+    // load (missing skin.comp.spv / skin.metal) leaves skin_kernel_ Null;
+    // Phase 5's dispatch checks IsNull() and degenerates to "no skinning
+    // this frame", preserving the static path bit-for-bit.
+    void initSkinKernel() {
+        const char* base = SDL_GetBasePath();
+        const std::string shader_dir = base ? base : "";
+        rhi::ComputePipelineDesc desc{};
+        desc.logical_shader = "skin";
+        desc.shader_dir = shader_dir.c_str();
+        desc.debug_name = "skin_compute";
+        desc.layout = rhi::ComputePipelineLayout::kSkin;
+        skin_kernel_ = rhi_.pipelines.CreateComputePipeline(rhi_.resources,
+                                                              rhi_.frames, desc);
+        if (skin_kernel_.IsNull()) {
+            CAIRNS_PRINT("initSkinKernel: skin kernel load failed (skin.comp.spv / skin.metal missing?) -- skinning disabled\n");
+        }
+    }
+
     bool initParticles() {
         const char* base = SDL_GetBasePath();
         const std::string shader_dir = base ? base : "";
@@ -2211,6 +2231,7 @@ public:
             desc.logical_shader = "particle";
             desc.shader_dir = shader_dir.c_str();
             desc.debug_name = "particle_compute";
+            desc.layout = rhi::ComputePipelineLayout::kParticle;
             particle_kernel_ = rhi_.pipelines.CreateComputePipeline(rhi_.resources, rhi_.frames, desc);
             if (particle_kernel_.IsNull()) {
                 return false;
@@ -2541,6 +2562,10 @@ private:
     // particles
     static constexpr uint32_t kParticleCount = 512;
     rhi::Handle<rhi::Kernel> particle_kernel_;
+    // #221 Phase 4: skin pre-skin compute kernel. Best-effort load -- if
+    // shader assets aren't present (skin.comp.spv / skin.metal) the handle
+    // stays Null and Phase 5's BuildSkinFrame / DispatchSkinBatches skip.
+    rhi::Handle<rhi::Kernel> skin_kernel_;
     rhi::Handle<rhi::Shader> particle_render_shader_;
     rhi::Handle<rhi::Shader> particle_render_offscreen_;
     rhi::Handle<rhi::Buffer> particle_ssbo_[2];
