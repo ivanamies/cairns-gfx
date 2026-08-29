@@ -494,9 +494,10 @@ private:
             }
 
             for ( size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
+                uint32_t uboOffset = 0;
                 VkDescriptorBufferInfo bufferInfo{};
-                bufferInfo.buffer = uniformBuffers[i];
-                bufferInfo.offset = 0;
+                bufferInfo.buffer = rm_.GetVkBuffer(uniform_buffers_[i], &uboOffset);
+                bufferInfo.offset = uboOffset;
                 bufferInfo.range = sizeof(UniformBufferObject);
 
                 VkDescriptorImageInfo imageInfo{};
@@ -555,9 +556,10 @@ private:
             }
 
             for ( size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                uint32_t computeUboOffset = 0;
                 VkDescriptorBufferInfo uniformBufferInfo{};
-                uniformBufferInfo.buffer = computeUniformBuffers[i];
-                uniformBufferInfo.offset = 0;
+                uniformBufferInfo.buffer = rm_.GetVkBuffer(compute_uniform_buffers_[i], &computeUboOffset);
+                uniformBufferInfo.offset = computeUboOffset;
                 uniformBufferInfo.range = sizeof(ParameterUBO);
 
                 std::array<VkWriteDescriptorSet, 3> descriptorWrites{};
@@ -641,22 +643,32 @@ private:
     bool createUniformBuffers() {
         {
             VkDeviceSize bufferSize = sizeof(UniformBufferObject);
-            uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-            uniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
-            uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
             for ( size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
-                createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, uniformBuffers[i], uniformBuffersMemory[i]);
-                vkMapMemory(device, uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
+                rhi2::BufferDesc desc{};
+                desc.debug_name = "ubo";
+                desc.byte_size = static_cast<uint32_t>(bufferSize);
+                desc.usage = rhi2::kUsageUniform;
+                desc.memory = rhi2::Memory::kUpload;
+                uniform_buffers_[i] = rm_.CreateBuffer(desc);
+                if (uniform_buffers_[i].IsNull()) {
+                    return false;
+                }
+                uniformBuffersMapped[i] = rm_.MappedPtr(uniform_buffers_[i]);
             }
         }
         {
             VkDeviceSize bufferSize = sizeof(ParameterUBO);
-            computeUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-            computeUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
-            computeUniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
             for ( size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
-                createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, computeUniformBuffers[i], computeUniformBuffersMemory[i]);
-                vkMapMemory(device, computeUniformBuffersMemory[i], 0, bufferSize, 0, &computeUniformBuffersMapped[i]);
+                rhi2::BufferDesc desc{};
+                desc.debug_name = "compute_ubo";
+                desc.byte_size = static_cast<uint32_t>(bufferSize);
+                desc.usage = rhi2::kUsageUniform;
+                desc.memory = rhi2::Memory::kUpload;
+                compute_uniform_buffers_[i] = rm_.CreateBuffer(desc);
+                if (compute_uniform_buffers_[i].IsNull()) {
+                    return false;
+                }
+                computeUniformBuffersMapped[i] = rm_.MappedPtr(compute_uniform_buffers_[i]);
             }
         }
         return true;
@@ -2368,16 +2380,6 @@ private:
 
         cleanupSwapChain();
 
-        for ( size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
-            vkDestroyBuffer(device, uniformBuffers[i], nullptr);
-            vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
-        }
-
-        for ( size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
-            vkDestroyBuffer(device, computeUniformBuffers[i], nullptr);
-            vkFreeMemory(device, computeUniformBuffersMemory[i], nullptr);
-        }
-
         vkDestroyDescriptorPool(device, descriptorPool, nullptr);
 
         vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
@@ -2580,13 +2582,11 @@ private:
     rhi2::Handle<rhi2::Buffer> vertex_buffer_;
     rhi2::Handle<rhi2::Buffer> index_buffer_;
 
-    std::vector<VkBuffer> uniformBuffers;
-    std::vector<VkDeviceMemory> uniformBuffersMemory;
-    std::vector<void*> uniformBuffersMapped;
+    std::array<rhi2::Handle<rhi2::Buffer>, MAX_FRAMES_IN_FLIGHT> uniform_buffers_;
+    std::array<void*, MAX_FRAMES_IN_FLIGHT> uniformBuffersMapped{};
 
-    std::vector<VkBuffer> computeUniformBuffers;
-    std::vector<VkDeviceMemory> computeUniformBuffersMemory;
-    std::vector<void*> computeUniformBuffersMapped;
+    std::array<rhi2::Handle<rhi2::Buffer>, MAX_FRAMES_IN_FLIGHT> compute_uniform_buffers_;
+    std::array<void*, MAX_FRAMES_IN_FLIGHT> computeUniformBuffersMapped{};
 
     std::array<rhi2::Handle<rhi2::Buffer>, MAX_FRAMES_IN_FLIGHT> ssbo_;
 
