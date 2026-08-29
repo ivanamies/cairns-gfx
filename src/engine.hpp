@@ -2104,7 +2104,17 @@ public:
     bool initResourceManagers() {
         using namespace cairns;
         using namespace cairns::rhi;
-        // 4 because we're only pretending to be a real UGC engine at this point
+        // #229 M4: reserve the engine's order-stable parallel lists to the
+        // 500-GLB residency target up front, so the boot batch load doesn't
+        // walk a vector-doubling chain. (Caps centralize into MemoryBudget at
+        // M0b.) The ResourceManager hot/cold pools are Aaltonen-canon and have
+        // no Reserve() -- not pre-sized here (would need permission to add one).
+        constexpr size_t kPrefabResidencyCap = 600;
+        prefab_ids_.reserve(kPrefabResidencyCap);
+        glb_paths_.reserve(kPrefabResidencyCap);
+        per_prefab_asset_.reserve(kPrefabResidencyCap);
+        resident_textures_.reserve(kPrefabResidencyCap * 4);
+        per_batch_shared_skin_.reserve(64);
         return true;
     }
     

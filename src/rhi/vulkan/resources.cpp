@@ -283,6 +283,7 @@ bool Resources::Init(Device& device) {
     plat.queue_ = device.plat.graphics_queue_;
     plat.physical_ = device.plat.physical_;
     plat.resources_ = this;
+    deferred_.reserve(64);  // #229 M4: cap the fenced-delete ring up front.
     inited_ = true;
     return true;
 }

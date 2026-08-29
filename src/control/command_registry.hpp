@@ -85,7 +85,12 @@ public:
     std::vector<json> DrainEvents();
 
 private:
-    CommandRegistry() = default;
+    // #229 M4: reserve to the ~60-op surface (+headroom) so Register doesn't
+    // doubling-grow the flat command vectors during boot registration.
+    CommandRegistry() {
+        commands_.reserve(128);
+        sorted_names_.reserve(128);
+    }
     // #215 flat array indexed by OpId + sorted name lookup table. Replaces
     // std::unordered_map<std::string, Command>. Dispatch: binary search
     // the sorted_names_ vector to resolve name -> op_id, then commands_

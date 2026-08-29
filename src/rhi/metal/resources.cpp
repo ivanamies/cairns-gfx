@@ -94,6 +94,7 @@ bool Resources::Init(Device& device) {
     plat.device_ = device.plat.device_;
     plat.queue_ = device.plat.queue_;
     plat.resources_ = this;
+    deferred_.reserve(64);  // #229 M4: cap the fenced-delete ring up front.
     inited_ = true;
     return true;
 }

@@ -180,3 +180,17 @@ the absolute win is small. The bulk per-GLB residual (~1900) is fastgltf-interna
 allocation + many small load vectors (nodes/clips/channels/textures); those are
 **M0b's arena target** (carve from one reservation → bump, not malloc). M3's
 pre-sizing makes those arena carves correctly-sized.
+
+---
+
+## M4 — reserve-to-cap at init (commit pending)
+
+Reserve the NON-canon growing containers up front so boot doesn't doubling-grow
+them: engine parallel lists (`prefab_ids_`/`glb_paths_`/`per_prefab_asset_`/
+`resident_textures_`/`per_batch_shared_skin_`) in `initResourceManagers`,
+`CommandRegistry` `commands_`/`sorted_names_` in its ctor, and `Resources`
+`deferred_` ring in `Resources::Init` (metal + vk). Byte-identical (spec 105/105,
+stress 8/8, jsmoke 4/4). Marginal alloc win (tens of allocs — these grow to
+hundreds, ~log2 reallocs each); mostly tidiness. **The big pool target
+(`ResourceManager` hot/cold) is Aaltonen-canon with no `Reserve()` — NOT touched
+(needs permission to add one).** Caps will centralize into M0b's `MemoryBudget`.
