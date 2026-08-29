@@ -154,6 +154,7 @@ void EnableParticles(Engine* engine, bool on);
 void SetImguiInGolden(Engine* engine, bool on);
 void SetInjectedHud(Engine* engine, float cpu_ms, float fps);
 void SetTinyTriangle(Engine* engine, bool on);
+void SetNestedGraphMode(Engine* engine, bool on);
 
 // #224 L5: instantiate `prefab_count` prefabs starting at `first_prefab_idx`
 // into active scene + slide all existing actors to the new fitted grid.

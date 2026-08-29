@@ -443,4 +443,10 @@ void SetTinyTriangle(Engine* engine, bool on) {
     }
 }
 
+void SetNestedGraphMode(Engine* engine, bool on) {
+    if (engine) {
+        engine->SetNestedGraphMode(on);
+    }
+}
+
 }  // namespace cairns::headless

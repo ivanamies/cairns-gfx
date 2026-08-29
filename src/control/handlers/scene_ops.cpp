@@ -563,6 +563,16 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         });
 
     registry.Register(
+        "cairns.render.nestedGraph",
+        json::object(),
+        "Compose color + resolved-depth + extra-camera passes: {on}. Open and "
+        "aim the extra-camera viewports separately (viewport.open/setCamera).",
+        [engine = &engine](const json& args) -> json {
+            cairns::headless::SetNestedGraphMode(engine, args.value("on", true));
+            return json::object();
+        });
+
+    registry.Register(
         "cairns.imgui.golden",
         json::object(),
         "Draw the imgui overlay in golden/headless mode: {on}. Pair with "

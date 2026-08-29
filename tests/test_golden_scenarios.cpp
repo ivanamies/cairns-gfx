@@ -133,8 +133,17 @@ SCENARIO("hot reload: spawn, replace, and clear stay correct",
         SKIP("hot-reload assets absent");
     }
 
+    seam::EnsureImguiContext();
+    cairns::rhi::InitConfig icfg{};
+    icfg.surfaceless = true;
+    icfg.width = 512;
+    icfg.height = 512;
+    cairns::EngineConfig ecfg{};
+    ecfg.use_fixed_clock = true;
     cairns::Engine e;
-    REQUIRE(seam::BootHeadless(e, 512, 512));
+    REQUIRE(e.GreaterInit(icfg, ecfg));
+    // Each phase is a JS dispatch; the test captures between phases.
+    auto& reg = cairns::golden::SetupJs(e);
 
     auto checkpoint = [&](const char* tag) {
         REQUIRE(seam::AdvanceToGoldenFrame(e));
@@ -151,12 +160,12 @@ SCENARIO("hot reload: spawn, replace, and clear stay correct",
         REQUIRE(observed == ref);
     };
 
-    REQUIRE(seam::SpawnGlbs(e, first, false));
+    cairns::golden::EvalJs(reg, cairns::golden::SpawnFittedJs(first, 4, false));
     checkpoint("hot_reload.four");
-    REQUIRE(seam::ClearSpawned(e));
-    REQUIRE(seam::SpawnGlbs(e, second, false));
+    cairns::golden::EvalJs(reg, R"JS(cairns.dispatch("cairns.scene.clear", {});)JS");
+    cairns::golden::EvalJs(reg, cairns::golden::SpawnFittedJs(second, 5, false));
     checkpoint("hot_reload.five");
-    REQUIRE(seam::ClearSpawned(e));
+    cairns::golden::EvalJs(reg, R"JS(cairns.dispatch("cairns.scene.clear", {});)JS");
     checkpoint("hot_reload.empty");
 }
 
@@ -221,10 +230,31 @@ SCENARIO("nested graph: color + resolved depth + third camera",
     if (!seam::AssetsPresent({"ahri.glb","akali.glb","alistar.glb"})) {
         SKIP("assets absent");
     }
+    seam::EnsureImguiContext();
+    cairns::rhi::InitConfig icfg{};
+    icfg.surfaceless = true;
+    icfg.width = 512;
+    icfg.height = 512;
+    cairns::EngineConfig ecfg{};
+    ecfg.use_fixed_clock = true;
     cairns::Engine e;
-    REQUIRE(seam::BootHeadless(e, 512, 512));
-    REQUIRE(seam::SpawnGlbs(e, {"ahri.glb","akali.glb","alistar.glb"}, true));
-    REQUIRE(seam::ConfigureNestedGraph(e));
+    REQUIRE(e.GreaterInit(icfg, ecfg));
+    // 3 animated champions + two extra-camera viewports at +-60 deg yaw + the
+    // nested (color + resolved-depth + extra-camera) graph -- all JS.
+    cairns::golden::DriveJs(e, R"JS(
+        cairns.dispatch("cairns.scene.spawnFitted",
+            { glbs: ["ahri.glb","akali.glb","alistar.glb"], instances: 3,
+              animated: true });
+        cairns.dispatch("cairns.viewport.open", {});
+        cairns.dispatch("cairns.viewport.setCamera",
+                        { viewport: 1, yaw: 1.0471975511965976 });
+        cairns.dispatch("cairns.viewport.particles", { viewport: 1, on: false });
+        cairns.dispatch("cairns.viewport.open", {});
+        cairns.dispatch("cairns.viewport.setCamera",
+                        { viewport: 2, yaw: -1.0471975511965976 });
+        cairns.dispatch("cairns.viewport.particles", { viewport: 2, on: false });
+        cairns.dispatch("cairns.render.nestedGraph", { on: true });
+    )JS");
     REQUIRE(seam::AdvanceToGoldenFrame(e));
 
     SECTION("main color (per-platform image)") {
@@ -261,11 +291,34 @@ SCENARIO("actors outside the frustum are culled from the counters",
     if (!seam::AssetsPresent({"aatrox.glb"})) {
         SKIP("assets absent");
     }
+    seam::EnsureImguiContext();
+    cairns::rhi::InitConfig icfg{};
+    icfg.surfaceless = true;
+    icfg.width = 512;
+    icfg.height = 512;
+    cairns::EngineConfig ecfg{};
+    ecfg.use_fixed_clock = true;
     cairns::Engine e;
-    REQUIRE(seam::BootHeadless(e, 512, 512));
+    REQUIRE(e.GreaterInit(icfg, ecfg));
     constexpr uint32_t kInside = 3;
     constexpr uint32_t kOutside = 5;
-    REQUIRE(seam::SpawnInsideOutsideSplit(e, "aatrox.glb", kInside, kOutside));
+    // 3 actors inside the frustum + 5 off-frustum (+99 axis offsets), composed
+    // in JS via prefab.load + scene.instantiate at explicit positions.
+    cairns::golden::DriveJs(e, R"JS(
+        const idx = cairns.dispatch("cairns.prefab.load",
+                                    { path: "aatrox.glb" }).result.prefab;
+        for (let i = 0; i < 3; ++i) {
+            cairns.dispatch("cairns.scene.instantiate",
+                { prefab: idx, x: i * 1.5 - 1.5, y: 0, z: -4, scale: 1 });
+        }
+        const offs = [[99, 0, 0], [0, 99, 0], [0, 0, 50]];
+        for (let i = 0; i < 5; ++i) {
+            const o = offs[i % 3];
+            const s = 1 + Math.floor(i / 3);
+            cairns.dispatch("cairns.scene.instantiate",
+                { prefab: idx, x: o[0] * s, y: o[1] * s, z: o[2] * s, scale: 1 });
+        }
+    )JS");
     REQUIRE(seam::AdvanceToGoldenFrame(e));
 
     seam::FrameStats s{};

@@ -1514,6 +1514,9 @@ public:
     void EnableParticles(bool on) { particles_enabled_ = on; }
     // A.3 single red NDC triangle (no scene): pipeline + clear + one draw.
     void SetTinyTriangle(bool on) { tiny_quad_test_ = on; }
+    // G4: compose color + resolved-depth + extra-camera passes (the viewports
+    // supplying the extra cameras are opened/aimed by the caller in JS).
+    void SetNestedGraphMode(bool on) { nested_graph_mode_ = on; }
     bool ParticlesEnabled() const { return particles_enabled_; }
 
     // A.9: drop the implicit "no imgui in golden" gate. G6 imgui stability

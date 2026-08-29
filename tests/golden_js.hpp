@@ -34,7 +34,7 @@ namespace cairns::golden {
 // engine, install a fresh JS context, then eval the composition `js`. (The
 // registry singleton is a known wart -- TODO "delete all singletons" -- so we
 // Clear()+re-register per scenario to rebind the captured Engine&.)
-inline void DriveJs(cairns::Engine& engine, const std::string& js) {
+inline cairns::control::CommandRegistry& SetupJs(cairns::Engine& engine) {
     auto& reg = cairns::control::CommandRegistry::Instance();
     reg.Clear();
     static bool quit = false;
@@ -45,10 +45,36 @@ inline void DriveJs(cairns::Engine& engine, const std::string& js) {
     cairns::control::RegisterSelectionOps(reg, engine);
     cairns::control::RegisterScriptOps(reg);  // last; binds cairns.dispatch
     reg.Dispatch({{"op", "cairns.script.reload"}});  // fresh JS globals
+    return reg;
+}
+
+inline void EvalJs(cairns::control::CommandRegistry& reg,
+                   const std::string& js) {
     const json resp = reg.Dispatch(
         {{"op", "cairns.script.eval"}, {"args", {{"code", js}}}});
     INFO("scenario JS response: " << resp.dump());
     REQUIRE(resp.value("ok", false) == true);
+}
+
+inline void DriveJs(cairns::Engine& engine, const std::string& js) {
+    EvalJs(SetupJs(engine), js);
+}
+
+// Compose a cairns.scene.spawnFitted dispatch from a glb-name list.
+inline std::string SpawnFittedJs(const std::vector<std::string>& glbs,
+                                 uint32_t instances, bool animated) {
+    std::string js = "cairns.dispatch(\"cairns.scene.spawnFitted\", { glbs: [";
+    for (const std::string& g : glbs) {
+        js += "\"";
+        js += g;
+        js += "\", ";
+    }
+    js += "], instances: ";
+    js += std::to_string(instances);
+    js += ", animated: ";
+    js += (animated ? "true" : "false");
+    js += " });";
+    return js;
 }
 
 // Boot a w x h headless engine, run the JS composition `setup_js`, then capture
