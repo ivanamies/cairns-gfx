@@ -29,3 +29,11 @@ casing.
 - **`std::map` / `std::unordered_map`.** Use a flat sorted `std::vector` +
   `std::lower_bound`, or an array indexed by id. ALWAYS ask before adding any
   hash map (see MISTAKES.md).
+- **Global mutable state — no globals, no singletons, no thread-locals.** No
+  file-scope mutable `static`, no function-local `static`, no `static X&
+  Instance()`, no `thread_local`. Construct the object and pass it explicitly
+  (by reference); per-instance state lives as a member. Global state bleeds
+  across instances and blocks per-context construction (a fresh
+  registry/engine per test SCENARIO). ONLY exceptions: state the language/ABI
+  forces global (the replaceable global `operator new`/`delete`), or a
+  3rd-party dependency forces it.

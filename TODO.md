@@ -69,11 +69,13 @@ byte-gated; the fixed interval pins sim/particle state to the same frame every
 run. (The 2026-06-19 G1 particle flake is the symptom of getting the *timing*
 wrong even on the correct CPU-side path — see modularization-notes #9b.)
 
-### Delete all singletons (unless dragged in by a 3rd-party dependency)
-Every process singleton / Meyer's `static X& Instance()` / file-scope mutable
-`static` must be deleted — construct the thing and pass it explicitly. The ONLY
-allowed exception is a singleton forced on us by a 3rd-party dependency. Known
-offenders:
+### No global mutable state (no globals, no singletons, no thread-locals)
+Delete every global, singleton (`static X& Instance()`), file-scope mutable
+`static`, function-local `static`, and `thread_local` — construct the thing and
+pass it explicitly; per-instance state lives as a member. ONLY exceptions: state
+the language/ABI forces global (the replaceable global `operator new`/`delete`,
+e.g. `src/util/alloc_count.cpp`'s counters) or a 3rd-party dependency forces it.
+Known offenders:
 - `CommandRegistry::Instance()` (src/control/command_registry.{hpp,cpp}) — the
   whole dispatch surface routes through one global. Blocks per-test registries
   (a fresh registry per SCENARIO bound to that SCENARIO's Engine). Make it
@@ -87,7 +89,8 @@ offenders:
 - `cairns::Timer` static accumulators (accum_times_/accum_itrs_/slot_names_) —
   shared across Engine instances; perf.last + the imgui overlay read them. A
   source of cross-Engine state bleed (modularization-notes #9b territory).
-- Audit for more: grep `Instance()`, `static .*&`, file-scope `static` mutable.
+- Audit for more: grep `Instance()`, `static .*&`, file-scope `static` mutable,
+  function-local `static`, `thread_local`.
 
 ### Over-specialized test seams -> JS snippets / primitives
 `Engine::SetupTwoSceneViewports(left, right, particles)`, `Engine::SpawnHeroFramed
