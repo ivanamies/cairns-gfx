@@ -1931,7 +1931,9 @@ public:
         // belt-and-braces check that survives a desktop-pool slip onto a
         // mobile device.
         {
-#ifdef __ANDROID__
+// Mobile + iOS (incl. sim) report a 256 MB MTLDevice maxBufferLength /
+// Adreno 730 reports 256 MB maxStorageBufferRange. Desktop reports >= 2 GB.
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
             constexpr uint32_t kSkinOutputBytesCheck = 256u * 1024u * 1024u;
 #else
             constexpr uint32_t kSkinOutputBytesCheck = 1024u * 1024u * 1024u;
@@ -1964,7 +1966,7 @@ public:
         // MB) drops into the dedicated-block path in
         // MemoryAllocator::AllocBuffer, so we land in our own VkDeviceMemory.
         {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
             static constexpr uint32_t kSkinOutputBytes =
                 256u * 1024u * 1024u;
 #else

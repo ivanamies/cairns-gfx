@@ -119,6 +119,16 @@ TEST_CASE("golden ladder", "[golden][ladder]") {
     REQUIRE(cairns::test_seams::AdvanceToGoldenFrame(engine));
 
     SECTION("golden image matches the per-platform reference") {
+        // Particle compute runs every frame in production engine code (see
+        // src/engine.hpp's initParticles + particle_parity ping-pong) and
+        // uses std::rand-seeded state that varies run-to-run. The triangle
+        // and small ladder rungs are particle-noise-dominated so their
+        // hashes flake intermittently. The middle/large rungs (3..100
+        // animated champs) are dominated by mesh rendering and tend to be
+        // stable. Until initParticles switches to ParticleRng
+        // (src/render/particle_emitter.hpp), the image hash isn't a true
+        // regression check -- but the framework, the bake, and the per-
+        // platform divergence-detection all still work.
         std::vector<uint8_t> rgba;
         uint32_t w = 0;
         uint32_t h = 0;
