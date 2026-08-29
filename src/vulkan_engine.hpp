@@ -866,6 +866,29 @@ private:
             }
         }
 
+        {
+            VkDescriptorSetLayoutBinding dyn_bindings[3]{};
+            dyn_bindings[0].binding = 0;
+            dyn_bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+            dyn_bindings[0].descriptorCount = 1;
+            dyn_bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+            dyn_bindings[1].binding = 1;
+            dyn_bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+            dyn_bindings[1].descriptorCount = 1;
+            dyn_bindings[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+            dyn_bindings[2].binding = 2;
+            dyn_bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+            dyn_bindings[2].descriptorCount = 1;
+            dyn_bindings[2].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+            VkDescriptorSetLayoutCreateInfo dyn_layout_info{};
+            dyn_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            dyn_layout_info.bindingCount = 3;
+            dyn_layout_info.pBindings = dyn_bindings;
+            if (vkCreateDescriptorSetLayout(device, &dyn_layout_info, nullptr, &dynamicUboLayout_) != VK_SUCCESS) {
+                return false;
+            }
+        }
+
         return true;
     }
 
@@ -1454,10 +1477,12 @@ private:
 
     bool createGraphicsPipeline() {
         { // create graphics pipeline1
+            const char* sdl_base = SDL_GetBasePath();
+            const std::filesystem::path base_path = sdl_base ? sdl_base : "";
             std::vector<char> vertShaderCode;
-            if (!readFile("/Users/ivanamies/dev/gfx/Vulkan/vulkan-tutorial-dot-com/src/VulkanTesting/VulkanTesting/vert.spv", vertShaderCode)) return false;
+            if (!readFile((base_path / "unlit.vert.spv").string(), vertShaderCode)) return false;
             std::vector<char> fragShaderCode;
-            if (!readFile("/Users/ivanamies/dev/gfx/Vulkan/vulkan-tutorial-dot-com/src/VulkanTesting/VulkanTesting/frag.spv", fragShaderCode)) return false;
+            if (!readFile((base_path / "unlit.frag.spv").string(), fragShaderCode)) return false;
 
             VkShaderModule vertShaderModule;
             if (!createShaderModule(vertShaderCode, vertShaderModule)) return false;
@@ -1488,16 +1513,21 @@ private:
             dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
             dynamicState.pDynamicStates = dynamicStates.data();
 
+            VkVertexInputBindingDescription pos_binding{};
+            pos_binding.binding = 0;
+            pos_binding.stride = sizeof(glm::vec4);
+            pos_binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            VkVertexInputAttributeDescription pos_attr{};
+            pos_attr.binding = 0;
+            pos_attr.location = 0;
+            pos_attr.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+            pos_attr.offset = 0;
             VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
-
-            auto bindingDescription = Vertex::getBindingDescription();
-            auto attributeDescriptions = Vertex::getAttributeDescriptions();
-
             vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
             vertexInputInfo.vertexBindingDescriptionCount = 1;
-            vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
-            vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
-            vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
+            vertexInputInfo.pVertexBindingDescriptions = &pos_binding;
+            vertexInputInfo.vertexAttributeDescriptionCount = 1;
+            vertexInputInfo.pVertexAttributeDescriptions = &pos_attr;
 
             VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
             inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -1579,10 +1609,11 @@ private:
             depthStencil.front = {};
             depthStencil.back = {};
 
+            VkDescriptorSetLayout unlit_layouts[2] = {bindlessLayout_, dynamicUboLayout_};
             VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
             pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            pipelineLayoutInfo.setLayoutCount = 1;
-            pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
+            pipelineLayoutInfo.setLayoutCount = 2;
+            pipelineLayoutInfo.pSetLayouts = unlit_layouts;
             pipelineLayoutInfo.pushConstantRangeCount = 0;
             pipelineLayoutInfo.pPushConstantRanges = nullptr;
 
@@ -2496,6 +2527,7 @@ private:
         vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
         vkDestroyDescriptorSetLayout(device, descriptorSetLayout2, nullptr);
         vkDestroyDescriptorSetLayout(device, computeDescriptorSetLayout, nullptr);
+        vkDestroyDescriptorSetLayout(device, dynamicUboLayout_, nullptr);
 
         vkDestroyPipeline(device, graphicsPipeline, nullptr);
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
@@ -2713,6 +2745,7 @@ private:
     VkDescriptorSetLayout bindlessLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool bindlessPool_ = VK_NULL_HANDLE;
     VkDescriptorSet bindlessSet_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout dynamicUboLayout_ = VK_NULL_HANDLE;
 
     VkDescriptorPool descriptorPool;
     std::vector<VkDescriptorSet> descriptorSets;

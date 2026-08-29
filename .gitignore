@@ -16,3 +16,4 @@ assets/a.out.dSYM/
 *~
 *swp
 *spv
+!assets/*.spv
