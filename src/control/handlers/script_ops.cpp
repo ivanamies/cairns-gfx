@@ -1,10 +1,14 @@
 #include "control/handlers/script_ops.hpp"
 
+#include <cstring>
 #include <string>
 #include <vector>
 
 #include "control/command_registry.hpp"
+#include "control/handlers/studio_js.hpp"
 #include "util/json.hpp"
+
+#include <cstdio>
 
 extern "C" {
 #include "quickjs.h"
@@ -22,6 +26,17 @@ struct JsState {
     JSContext* ctx = nullptr;
     CommandRegistry* registry = nullptr;
     ~JsState() {
+        if (rt) {
+            // Drain any pending microtasks before tearing down. Without
+            // this, an async eval that left state in the job queue trips
+            // a clean-shutdown assert inside JS_FreeRuntime (process exits
+            // with SIGABRT after the last response is flushed).
+            for (int i = 0; i < 10000; ++i) {
+                JSContext* job_ctx = nullptr;
+                const int r = JS_ExecutePendingJob(rt, &job_ctx);
+                if (r <= 0) break;
+            }
+        }
         if (ctx) {
             JS_FreeContext(ctx);
         }
@@ -62,11 +77,17 @@ JSValue JsDispatch(JSContext* ctx, JSValueConst /*this_val*/, int argc,
     JS_FreeCString(ctx, op);
     if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
         // Stringify argv[1] via JS itself, then parse back into json.
-        JSValue stringify = JS_GetPropertyStr(
-            ctx, JS_GetPropertyStr(ctx, JS_GetGlobalObject(ctx), "JSON"),
-            "stringify");
+        // Each intermediate value gets explicitly freed; previously the
+        // global + JSON object refs leaked once per call, which built up
+        // into a shutdown-time refcount assert when scripts called
+        // cairns.dispatch even once (reproduced 2026-06-05).
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue json_obj = JS_GetPropertyStr(ctx, global, "JSON");
+        JSValue stringify = JS_GetPropertyStr(ctx, json_obj, "stringify");
         JSValue js_str = JS_Call(ctx, stringify, JS_UNDEFINED, 1, &argv[1]);
         JS_FreeValue(ctx, stringify);
+        JS_FreeValue(ctx, json_obj);
+        JS_FreeValue(ctx, global);
         if (JS_IsException(js_str)) {
             return js_str;
         }
@@ -99,6 +120,26 @@ void RegisterScriptOps(CommandRegistry& registry) {
     JS_SetPropertyStr(s.ctx, global, "cairns", cairns_obj);
     JS_FreeValue(s.ctx, global);
 
+    // Autoload the studio.* surface. Any syntax error in the embedded JS
+    // string fails LOUD here at engine init -- the failure is on stderr +
+    // RegisterScriptOps still returns (so the registry comes up; just
+    // without the studio classes). A working JS run is silent.
+    {
+        const char* src = kStudioJsSource;
+        const size_t src_len = std::strlen(src);
+        JSValue v = JS_Eval(s.ctx, src, src_len, "<studio.js>",
+                            JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(v)) {
+            JSValue err = JS_GetException(s.ctx);
+            const char* msg = JS_ToCString(s.ctx, err);
+            std::fprintf(stderr, "[Studio] autoload FAILED: %s\n",
+                         msg ? msg : "?");
+            if (msg) JS_FreeCString(s.ctx, msg);
+            JS_FreeValue(s.ctx, err);
+        }
+        JS_FreeValue(s.ctx, v);
+    }
+
     registry.Register(
         "cairns.script.eval",
         /*schema=*/json::object(),
@@ -122,6 +163,22 @@ void RegisterScriptOps(CommandRegistry& registry) {
                 JS_FreeValue(s2.ctx, err);
                 JS_FreeValue(s2.ctx, v);
                 throw std::runtime_error(out["error"].get<std::string>());
+            }
+            // Drain microtasks so any then-callbacks resolve before we
+            // stringify. Bounded so a misbehaving script can't wedge the
+            // dispatch loop. NOTE: studio.js InstantiateAsync deliberately
+            // returns its value directly (not wrapped in a Promise) -- the
+            // caller's `await` still works (await on a non-Promise resolves
+            // immediately) so the syntactic divergence stays, but QuickJS's
+            // promise machinery doesn't leak shutdown state. See
+            // docs/studio_notes.md "QuickJS async limitation."
+            for (int i = 0; i < 1000; ++i) {
+                JSContext* job_ctx = nullptr;
+                const int r = JS_ExecutePendingJob(
+                    JS_GetRuntime(s2.ctx), &job_ctx);
+                if (r <= 0) {
+                    break;
+                }
             }
             // Stringify result via JSON.stringify for round-trip back into
             // our json type.
