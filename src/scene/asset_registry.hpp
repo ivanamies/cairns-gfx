@@ -18,15 +18,17 @@
 
 #include "core/handle.hpp"
 #include "rhi/resource_manager.hpp"
-#include "util/gltf_loader.hpp"
 #include "util/offset_allocator.hpp"
 
 #include <cstdint>
-#include <memory>
 #include <string>
 #include <unordered_map>
 
 namespace cairns {
+
+// Forward-declared to avoid pulling util/gltf_loader.hpp (which pulls
+// stb_image's impl) into every TU that just needs AssetId.
+struct Scene;
 
 struct Asset {
     struct Hot {
@@ -39,12 +41,14 @@ struct Asset {
     };
 
     struct Cold {
-        // Immutable glTF graph (node tree + meshes + materialIds). Held
-        // by unique_ptr because Scene has a non-default ctor (takes
-        // Arena&) and ResourceManager default-constructs cells.
-        std::unique_ptr<Scene> cpu_graph;
-        // Suballoc slices into the shared packed buffers (P3 stubs the
-        // bodies; P4 wires actual suballoc).
+        // Non-owning pointer into Engine::scenes_ during the P4 parity
+        // window; later commits move ownership into AssetRegistry as
+        // unique_ptr<Scene> once AssetRegistry::Load is the real load
+        // path. Forward-declared so this header doesn't pull stb_image.
+        const Scene* cpu_graph = nullptr;
+        // Suballoc slices into the shared packed buffers (deferred; the
+        // existing scene_gpu.hpp packs all GLBs into one shared
+        // buffer-set today, no per-asset suballoc).
         OffsetAllocator::Allocation pos_alloc{};
         OffsetAllocator::Allocation attr_alloc{};
         OffsetAllocator::Allocation idx_alloc{};
@@ -59,14 +63,47 @@ public:
     // Dedup-before-allocate: by_key lookup first; on hit, refcount++ and
     // return the existing AssetId. On miss: pool.Acquire(), re-init
     // Cold (per the reused-slot trap), parse glTF, suballoc, register
-    // MatIds globally, refcount = 1, by_key[key] = id. Body deferred to
-    // P4; signature locked in now.
-    AssetId Load(const std::string& path);
+    // MatIds globally, refcount = 1, by_key[key] = id. P4 wires the
+    // real body; P3-P4 uses RegisterExistingScene below as the seam.
+    inline AssetId Load(const std::string& path) { (void)path; return AssetId::Null; }
 
     // refcount--; at 0, free suballocs + by_key erase + pool.Release().
     // Actual GPU buffer recycle deferred to a later commit (per plan's
     // out-of-scope).
-    void Release(AssetId id);
+    inline void Release(AssetId id) { (void)id; }
+
+    // P4-only seam: register an already-loaded Scene (still owned by
+    // Engine::scenes_) plus its shared GPU buffer handles. Dedup-keyed
+    // by scene_index. Later commits replace this with a real Load(path)
+    // that owns parsing + suballoc + dedup-by-content-hash.
+    inline AssetId RegisterExistingScene(uint32_t scene_idx,
+                                         const Scene* scene,
+                                         rhi::Handle<rhi::Buffer> pos,
+                                         rhi::Handle<rhi::Buffer> attr,
+                                         rhi::Handle<rhi::Buffer> index) {
+        const uint64_t key = static_cast<uint64_t>(scene_idx);
+        if (auto it = by_key_.find(key); it != by_key_.end()) {
+            if (auto* c = pool_.GetCold(it->second)) {
+                ++c->ref_count;
+            }
+            return it->second;
+        }
+        AssetId id = pool_.Acquire();
+        // Reused-slot trap (spec §3): freshly re-initialize Cold every
+        // Acquire so a previously-released slot doesn't carry over.
+        if (auto* cold = pool_.GetCold(id)) {
+            *cold = Asset::Cold{};
+            cold->cpu_graph = scene;
+            cold->ref_count = 1;
+        }
+        if (auto* hot = pool_.GetHot(id)) {
+            hot->pos = pos;
+            hot->attr = attr;
+            hot->index = index;
+        }
+        by_key_[key] = id;
+        return id;
+    }
 
     ResourceManager<Asset>& Pool() { return pool_; }
     const ResourceManager<Asset>& Pool() const { return pool_; }

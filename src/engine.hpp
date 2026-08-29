@@ -35,7 +35,10 @@
 #include "util/imgui_snapshot.hpp"
 #include "util/frame_clock.hpp"
 #include "util/log.hpp"
+#include "scene/asset_registry.hpp"
+#include "scene/components.hpp"
 #include "scene/scene_world.hpp"
+#include "scene/world.hpp"
 #include "render/frame_packet.hpp"
 #include "render/render_extract.hpp"
 #include "render/render_graph.hpp"
@@ -290,6 +293,66 @@ public:
                 world_.entities.push_back(e);
             }
         }
+
+        // P4 EnTT path: register each scene with the AssetRegistry, then
+        // populate the active world's registry with one entity per
+        // debug-grid instance. Lives in parallel to world_ until P5
+        // deletes the old path. CAIRNS_PARITY=1 turns on the comparison.
+        parity_mode_ = (std::getenv("CAIRNS_PARITY") != nullptr);
+        if (!scenes_.empty()) {
+            // Pre-allocate hot/cold cells up to kMaxWorlds so Acquire
+            // doesn't trigger a vector growth that would move
+            // World::Cold and invalidate any cached pointers. The
+            // unique_ptr<entt::registry> inside Cold is the second
+            // safety layer.
+            for (uint32_t w = 0; w < kMaxWorlds; ++w) {
+                cairns::WorldId tmp = worlds_.Acquire();
+                worlds_.Release(tmp);
+            }
+
+            // Shared GPU buffer handles -- all GLBs alias the same
+            // packed buffer-set (see scene_gpu.hpp).
+            const auto pos_handle = scenes_[0].meshes[0].posHandle;
+            const auto attr_handle = scenes_[0].meshes[0].attrHandle;
+            const auto idx_handle = scenes_[0].meshes[0].indexHandle;
+
+            std::vector<cairns::AssetId> per_scene_asset;
+            per_scene_asset.reserve(scenes_.size());
+            for (size_t s_idx = 0; s_idx < scenes_.size(); ++s_idx) {
+                per_scene_asset.push_back(
+                    assets_.RegisterExistingScene(
+                        static_cast<uint32_t>(s_idx), &scenes_[s_idx],
+                        pos_handle, attr_handle, idx_handle));
+            }
+
+            active_world_ = worlds_.Acquire();
+            cairns::World::Hot* wh = worlds_.GetHot(active_world_);
+            cairns::World::Cold* wc = worlds_.GetCold(active_world_);
+            if (wh && wc) {
+                // Reused-slot trap: fresh re-init in case this slot was
+                // recycled. unique_ptr<registry> + dirty get reset.
+                *wc = cairns::World::Cold{};
+                wh->proxy_slot = 0;
+                wh->dirty = true;
+
+                auto& reg = *wc->registry;
+                for (size_t i = 0; i < world_.entities.size(); ++i) {
+                    const cairns::SceneEntity& se = world_.entities[i];
+                    const entt::entity e = reg.create();
+                    cairns::WorldTransform wt;
+                    wt.world = se.transform;
+                    reg.emplace<cairns::WorldTransform>(e, wt);
+                    cairns::AssetRef ar;
+                    ar.asset = per_scene_asset[se.scene_index];
+                    reg.emplace<cairns::AssetRef>(e, ar);
+                    cairns::Renderable rdr;
+                    rdr.layer_mask = se.layer_mask;
+                    rdr.flags = se.flags;
+                    reg.emplace<cairns::Renderable>(e, rdr);
+                }
+            }
+            world_proxies_.resize(1);  // active_world_ uses slot 0
+        }
         if ( !initRenderPipeline() ) {
             CAIRNS_PRINT("GreaterInit: initRenderPipeline failed\n");
             return false;
@@ -533,6 +596,71 @@ public:
         }
         t_build.End();
         std::sort(s.drawListSorted.begin(), s.drawListSorted.end());
+
+        // P4 parity check (CAIRNS_PARITY=1). Run ExtractFromWorld in
+        // parallel and compare multi-axis: proxy count, primitive count,
+        // sum of material ids, sum of triangle counts, sum of
+        // floor(world_matrix[3].x*1000). EnTT view order != vector
+        // order so we explicitly compare order-INDEPENDENT aggregates;
+        // the byte-gate at end-of-frame catches any actual rendering
+        // divergence the aggregates don't.
+        if (parity_mode_ && frame_ <= 2) {
+            cairns::World::Cold* wc = worlds_.GetCold(active_world_);
+            cairns::World::Hot* wh = worlds_.GetHot(active_world_);
+            if (wc && wh) {
+                cairns::ExtractFromWorld(*wc, wh->root_transform, assets_,
+                                         parity_proxies_);
+                uint64_t old_mat_sum = 0, new_mat_sum = 0;
+                uint64_t old_tri_sum = 0, new_tri_sum = 0;
+                int64_t old_x_sum = 0, new_x_sum = 0;
+                for (const cairns::MeshProxy& mp : s.proxies.meshes.data) {
+                    old_x_sum += static_cast<int64_t>(mp.world_matrix[3].x * 1000.0f);
+                    for (uint32_t k = 0; k < mp.primitive_count; ++k) {
+                        const auto& prim = s.proxies.primitives[mp.first_primitive + k];
+                        old_mat_sum += prim.material_id;
+                        old_tri_sum += prim.index_count / 3;
+                    }
+                }
+                for (const cairns::MeshProxy& mp : parity_proxies_.meshes.data) {
+                    new_x_sum += static_cast<int64_t>(mp.world_matrix[3].x * 1000.0f);
+                    for (uint32_t k = 0; k < mp.primitive_count; ++k) {
+                        const auto& prim = parity_proxies_.primitives[mp.first_primitive + k];
+                        new_mat_sum += prim.material_id;
+                        new_tri_sum += prim.index_count / 3;
+                    }
+                }
+                if (s.proxies.meshes.size() != parity_proxies_.meshes.size() ||
+                    s.proxies.primitives.size() != parity_proxies_.primitives.size() ||
+                    old_mat_sum != new_mat_sum ||
+                    old_tri_sum != new_tri_sum ||
+                    old_x_sum != new_x_sum) {
+                    fprintf(stderr,
+                            "[PARITY] MISMATCH frame=%u "
+                            "old meshes=%zu prims=%zu mat=%llu tri=%llu x=%lld | "
+                            "new meshes=%zu prims=%zu mat=%llu tri=%llu x=%lld\n",
+                            frame_,
+                            s.proxies.meshes.size(), s.proxies.primitives.size(),
+                            (unsigned long long)old_mat_sum,
+                            (unsigned long long)old_tri_sum,
+                            (long long)old_x_sum,
+                            parity_proxies_.meshes.size(),
+                            parity_proxies_.primitives.size(),
+                            (unsigned long long)new_mat_sum,
+                            (unsigned long long)new_tri_sum,
+                            (long long)new_x_sum);
+                    std::abort();
+                } else {
+                    fprintf(stderr,
+                            "[PARITY] ok frame=%u meshes=%zu prims=%zu "
+                            "mat=%llu tri=%llu x=%lld\n",
+                            frame_,
+                            s.proxies.meshes.size(), s.proxies.primitives.size(),
+                            (unsigned long long)old_mat_sum,
+                            (unsigned long long)old_tri_sum,
+                            (long long)old_x_sum);
+                }
+            }
+        }
         s.resident_textures.clear();
         for (auto& scene : scenes_) {
             for (const auto th : scene.textureHandles) {
@@ -1168,6 +1296,17 @@ private:
     std::vector<PerSlot> slots_;
 
     cairns::SceneWorld world_;
+
+    // P4 EnTT scene-layer path (parallel to world_ during the parity
+    // window; world_ is the source of truth pre-P5). worlds_ pre-
+    // reserved at startup to keep World::Cold* pointer-stable.
+    static constexpr uint32_t kMaxWorlds = 8;
+    cairns::AssetRegistry assets_;
+    cairns::ResourceManager<cairns::World> worlds_;
+    std::vector<cairns::RenderProxyArrays> world_proxies_;
+    cairns::WorldId active_world_;
+    cairns::RenderProxyArrays parity_proxies_;  // scratch under CAIRNS_PARITY
+    bool parity_mode_ = false;
 
     rhi::Rhi rhi_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
