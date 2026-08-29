@@ -115,7 +115,7 @@ indexed by id?"** If not, the SECOND question is **"have I asked?"**
 There is no third question. Either the user explicitly approves the
 map, or I do not write it.
 
-## Committed without verifying (counter: 2)
+## Committed without verifying (counter: 3)
 
 > ❯ wait, did you do any verification of the thing you just completed?
 >

@@ -86,4 +86,36 @@ run("step 5: first 3 prefabs' Mesh::Hot handles unchanged (APPEND-only)", () => 
     }
 });
 
+run("step 6: instantiate each prefab; listEntities.count goes up", () => {
+    const n_total = BATCH_A.length + BATCH_B.length;
+    for (let i = 0; i < n_total; i++) {
+        _call("cairns.scene.instantiate", {
+            prefab: i,
+            x: -2.0 + i * 0.7, y: 0, z: -3,
+            scale: 0.004,
+            time_phase: i * 0.137,
+        });
+        // (entity:0 is just the first entt id, NOT a fail sentinel --
+        // mistake from a previous turn. The truth check is listEntities.)
+    }
+    const r = _call("cairns.scene.listEntities");
+    if (r.count !== n_total) {
+        throw new Error("expected " + n_total +
+                        " entities after instantiate, got " + r.count);
+    }
+});
+
+run("step 7: tick frames + dump target=final; PNG written", () => {
+    for (let i = 0; i < 5; i++) {
+        cairns.dispatch("cairns.render.frame", {});
+    }
+    const r = _call("cairns.io.dumpTexture", {
+        target: "final",
+        path:   "tmp/_load_flow_dump.png",
+    });
+    if (!r || r.path !== "tmp/_load_flow_dump.png") {
+        throw new Error("dumpTexture failed: " + JSON.stringify(r));
+    }
+});
+
 JSON.stringify(results);

@@ -222,11 +222,11 @@ public:
                         float time_phase) {
         if (scene_idx >= prefab_ids_.size() ||
             scene_idx >= per_prefab_asset_.size()) {
-            return 0;
+            return UINT32_MAX;
         }
         cairns::Scene::Cold* wc = scenes_.GetCold(active_scene_);
         if (!wc) {
-            return 0;
+            return UINT32_MAX;
         }
         auto& reg = wc->registry;
         const entt::entity e = reg.create();
@@ -504,6 +504,46 @@ public:
         trace.Add("cleanup_tmps",
                    std::chrono::duration<double, std::milli>(
                        std::chrono::steady_clock::now() - t_cleanup).count());
+
+        // ── append the new prefabs' textureHandles to resident_textures_
+        //     so DrawMeshes' bindless sampler array sees them. (Pre-#224
+        //     this was rebuilt from scratch in GreaterInit post-load;
+        //     L9's empty boot stranded it.) ──
+        for (cairns::PrefabId sid : new_span) {
+            cairns::Prefab::Cold* scold = prefabs_.GetCold(sid);
+            if (!scold) {
+                continue;
+            }
+            for (rhi::Handle<rhi::Texture> th : scold->textureHandles) {
+                resident_textures_.push_back(th);
+            }
+        }
+
+        // ── stamp per_prefab_asset_ for the new prefabs ──
+        // InstantiatePrefab indexes per_prefab_asset_[prefab_idx]; without
+        // this the bounds check in InstantiatePrefab rejects every runtime-
+        // loaded prefab and returns the entity:0 fail sentinel. (The pre-
+        // L9 GreaterInit post-load block did this; L9 stranded it because
+        // GreaterInit now hits an empty prefab_ids_.)
+        per_prefab_asset_.reserve(prefab_ids_.size());
+        for (cairns::PrefabId sid : new_span) {
+            cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
+            if (!shot || shot->meshes.empty()) {
+                per_prefab_asset_.push_back(cairns::AssetId{});
+                continue;
+            }
+            const cairns::Mesh::Hot* m0 =
+                meshes_.GetHot(shot->meshes[0]);
+            if (!m0) {
+                per_prefab_asset_.push_back(cairns::AssetId{});
+                continue;
+            }
+            const uint32_t prefab_idx =
+                static_cast<uint32_t>(per_prefab_asset_.size());
+            per_prefab_asset_.push_back(assets_.RegisterExistingScene(
+                prefab_idx, sid,
+                m0->posHandle, m0->attrHandle, m0->indexHandle));
+        }
 
         // ── finalize trace + bump counters ──
         trace.total_ms = std::chrono::duration<double, std::milli>(
@@ -1545,73 +1585,42 @@ public:
             }
         }
 
-        // EnTT scene-layer path. Register each loaded Scene with the
-        // AssetRegistry, then create one entity per debug-grid xform in
-        // the active scene's registry. SceneEntity / SceneWorld are
-        // gone -- the entt::registry IS the source of truth.
-        if (!prefab_ids_.empty()) {
-            // Pre-allocate hot/cold cells up to kMaxScenes so Acquire
-            // doesn't trigger a vector growth that would move
-            // Scene::Cold and invalidate any cached pointers. The
-            // unique_ptr<entt::registry> inside Cold is the second
-            // safety layer.
-            for (uint32_t w = 0; w < kMaxScenes; ++w) {
-                cairns::SceneId tmp = scenes_.Acquire();
-                scenes_.Release(tmp);
-            }
-
-            // Shared GPU buffer handles -- all GLBs alias the same
-            // packed buffer-set (see scene_gpu.hpp).
-            // #220 Step 3: resolve through prefab_ids_[0] -> Prefab::Hot.
-            cairns::Prefab::Hot* s0_hot_b =
-                prefabs_.GetHot(prefab_ids_[0]);
-            const cairns::Mesh::Hot* m0_hot =
-                meshes_.GetHot(s0_hot_b->meshes[0]);
-            const auto pos_handle = m0_hot->posHandle;
-            const auto attr_handle = m0_hot->attrHandle;
-            const auto idx_handle = m0_hot->indexHandle;
-
-            // #269: per_prefab_asset_ promoted to engine member so
-            // InstantiatePrefab can resolve AssetRef post-init without
-            // reconstructing.
-            per_prefab_asset_.clear();
-            per_prefab_asset_.reserve(prefab_ids_.size());
-            for (size_t s_idx = 0; s_idx < prefab_ids_.size(); ++s_idx) {
-                // #220 Step 3: AssetRegistry registers by PrefabId.
-                per_prefab_asset_.push_back(
-                    assets_.RegisterExistingScene(
-                        static_cast<uint32_t>(s_idx), prefab_ids_[s_idx],
-                        pos_handle, attr_handle, idx_handle));
-            }
-
-            // #269: entity creation moved off engine init. Worlds are
-            // empty after Acquire; spawn entities via the
-            // cairns.world.spawnHero NDJSON op (cairns_serve) or any
-            // in-process caller of Engine::InstantiatePrefab.
-            active_scene_ = scenes_.Acquire();
-            if (cairns::Scene::Hot* wh = scenes_.GetHot(active_scene_)) {
-                if (cairns::Scene::Cold* wc =
-                        scenes_.GetCold(active_scene_)) {
-                    *wc = cairns::Scene::Cold{};
-                    wh->proxy_slot = 0;
-                    wh->dirty = true;
-                }
-            }
-            scene_proxies_.resize(1);
-
-            // P6 multi-scene coexistence: secondary slot is acquired but
-            // left empty. Pre-#269 it received half of the debug-grid.
-            secondary_scene_ = scenes_.Acquire();
-            if (cairns::Scene::Hot* wh2 = scenes_.GetHot(secondary_scene_)) {
-                if (cairns::Scene::Cold* wc2 =
-                        scenes_.GetCold(secondary_scene_)) {
-                    *wc2 = cairns::Scene::Cold{};
-                    wh2->proxy_slot = 1;
-                    wh2->dirty = true;
-                }
-            }
-            scene_proxies_.resize(2);
+        // EnTT scene-layer path. Acquire active_scene_ + secondary_scene_
+        // ALWAYS (regardless of prefab count), because InstantiatePrefab
+        // looks up scenes_.GetCold(active_scene_) and bails to entity:0
+        // if it's null. #224 L9 follow-up: was gated by
+        // `if (!prefab_ids_.empty())` which is now false at boot.
+        // Pre-allocate hot/cold cells up to kMaxScenes so Acquire doesn't
+        // trigger a vector growth that would move Scene::Cold and
+        // invalidate any cached pointers. The unique_ptr<entt::registry>
+        // inside Cold is the second safety layer.
+        for (uint32_t w = 0; w < kMaxScenes; ++w) {
+            cairns::SceneId tmp = scenes_.Acquire();
+            scenes_.Release(tmp);
         }
+        active_scene_ = scenes_.Acquire();
+        if (cairns::Scene::Hot* wh = scenes_.GetHot(active_scene_)) {
+            if (cairns::Scene::Cold* wc =
+                    scenes_.GetCold(active_scene_)) {
+                *wc = cairns::Scene::Cold{};
+                wh->proxy_slot = 0;
+                wh->dirty = true;
+            }
+        }
+        scene_proxies_.resize(1);
+
+        // P6 multi-scene coexistence: secondary slot is acquired but
+        // left empty. Pre-#269 it received half of the debug-grid.
+        secondary_scene_ = scenes_.Acquire();
+        if (cairns::Scene::Hot* wh2 = scenes_.GetHot(secondary_scene_)) {
+            if (cairns::Scene::Cold* wc2 =
+                    scenes_.GetCold(secondary_scene_)) {
+                *wc2 = cairns::Scene::Cold{};
+                wh2->proxy_slot = 1;
+                wh2->dirty = true;
+            }
+        }
+        scene_proxies_.resize(2);
         // Surfaceless mode: allocate the offscreen final_target_ and CONTINUE
         // through normal init. The engine -- not the RHI -- is the one that
         // decides which texture the swap pass writes into each frame: in

@@ -29,7 +29,10 @@ run_backend() {
         'import json,sys;print(json.dumps({"op":"cairns.script.eval","args":{"code":open(sys.argv[1]).read()}}))' \
         scripts/_load_flow_test.js)
     local out
-    out=$(printf '%s\n' "$spawn_op" | "$serve" 2>/dev/null \
+    # CAIRNS_DUMP triggers FixedClock so render.frame ticks deterministically.
+    /bin/rm -f tmp/_load_flow_dump.png
+    out=$(printf '%s\n' "$spawn_op" | CAIRNS_DUMP=tmp/_load_flow_unused.png \
+            "$serve" 2>/dev/null \
             | /usr/bin/grep '^{"ok":true' | tail -1)
     if [ -z "$out" ]; then
         echo "$bk: load-flow: no ok response from cairns_serve" >&2
