@@ -1744,21 +1744,32 @@ public:
             const float fps = cpu_ms_last_ > 0.0f ? 1000.0f / cpu_ms_last_ : 0.0f;
             float ms_max = 1.0f;
             float ms_avg = 0.0f;
+            int ms_n = 0;
             for (int i = 0; i < kCpuMsHistory; ++i) {
-                ms_max = cpu_ms_history_[i] > ms_max ? cpu_ms_history_[i] : ms_max;
-                ms_avg += cpu_ms_history_[i];
+                const float v = cpu_ms_history_[i];
+                if (!std::isfinite(v) || v < 0.0f || v > 1.0e6f) {
+                    continue;
+                }
+                ms_max = v > ms_max ? v : ms_max;
+                ms_avg += v;
+                ++ms_n;
             }
-            ms_avg /= static_cast<float>(kCpuMsHistory);
-            ImGui::Text("CPU %.2f ms   |   %.0f FPS", cpu_ms_last_, fps);
-            ImGui::Text("avg %.2f ms   |   peak %.2f ms", ms_avg, ms_max);
-            auto slot_avg_ms = [](int s) -> float {
+            ms_avg /= static_cast<float>(ms_n > 0 ? ms_n : 1);
+            ImGui::Text("CPU %6.2f ms   |   %3.0f FPS", cpu_ms_last_, fps);
+            ImGui::Text("avg %6.2f ms   |   peak %6.2f ms", ms_avg, ms_max);
+            auto slot_avg_ms = [this](int s) -> float {
                 const uint64_t n = cairns::Timer::accum_itrs_[s];
                 if (n == 0) {
-                    return 0.0f;
+                    return slot_ms_cache_[s];
                 }
-                return static_cast<float>(
-                    cairns::Timer::accum_times_[s] / static_cast<double>(n) /
-                    1000.0);
+                const double v =
+                    cairns::Timer::accum_times_[s] /
+                    static_cast<double>(n) / 1000.0;
+                if (!std::isfinite(v) || v < 0.0 || v > 1.0e6) {
+                    return slot_ms_cache_[s];
+                }
+                slot_ms_cache_[s] = static_cast<float>(v);
+                return slot_ms_cache_[s];
             };
             const uint32_t gpu_mask = cairns::TimerStorage::GpuSlotMask();
             float gpu_frame_ms = 0.0f;
@@ -1769,19 +1780,21 @@ public:
             }
             ImGui::Text("%-12s %5.2f ms", "gpu_frame", gpu_frame_ms);
             for (uint32_t s = 0; s < cairns::Timer::kMaxSlots; ++s) {
-                if (cairns::Timer::accum_itrs_[s] == 0) {
+                const char* nm = cairns::Timer::slot_names_[s];
+                if (!nm) {
                     continue;
                 }
-                const char* nm = cairns::Timer::slot_names_[s]
-                                     ? cairns::Timer::slot_names_[s]
-                                     : "?";
+                if (cairns::Timer::accum_itrs_[s] == 0 &&
+                    slot_ms_cache_[s] == 0.0f) {
+                    continue;
+                }
                 if (std::strcmp(nm, "set up render pass globals") == 0 ||
                     std::strcmp(nm, "build opaque draw list") == 0 ||
                     std::strcmp(nm, "particle_sim") == 0 ||
                     std::strcmp(nm, "forward") == 0) {
                     continue;
                 }
-                ImGui::Text("%-12s %5.2f ms", nm, slot_avg_ms(s));
+                ImGui::Text("%-12s %6.2f ms", nm, slot_avg_ms(s));
             }
             char overlay[32];
             std::snprintf(overlay, sizeof(overlay), "%.2f ms", cpu_ms_last_);
@@ -1791,14 +1804,34 @@ public:
             ImGui::End();
             ImGui::PopStyleColor(4);
             ImGui::Render();
-            // #213 live pointer through the slot mutex (no CloneOutput).
-            // 24 MB / profile of ImGui::MemAlloc gone. Multi-threaded
-            // pkt-build + draw-record lands later -- when it does, swap
-            // back to a per-slot copy or route ImGui's allocator to the
-            // slot arena.
-            s.pkt.imgui_snapshot = ImGui::GetDrawData();
+            auto free_snapshot = [](ImDrawData* d) {
+                if (!d) return;
+                for (int i = 0; i < d->CmdLists.Size; ++i) {
+                    IM_DELETE(d->CmdLists[i]);
+                }
+                IM_DELETE(d);
+            };
+            free_snapshot(s.pkt.imgui_snapshot);
+            ImDrawData* src = ImGui::GetDrawData();
+            ImDrawData* dst = IM_NEW(ImDrawData)();
+            dst->Valid = src->Valid;
+            dst->DisplayPos = src->DisplayPos;
+            dst->DisplaySize = src->DisplaySize;
+            dst->FramebufferScale = src->FramebufferScale;
+            dst->OwnerViewport = src->OwnerViewport;
+            dst->Textures = src->Textures;
+            for (int i = 0; i < src->CmdLists.Size; ++i) {
+                dst->AddDrawList(src->CmdLists[i]->CloneOutput());
+            }
+            s.pkt.imgui_snapshot = dst;
         } else {
-            s.pkt.imgui_snapshot = nullptr;
+            if (s.pkt.imgui_snapshot != nullptr) {
+                for (int i = 0; i < s.pkt.imgui_snapshot->CmdLists.Size; ++i) {
+                    IM_DELETE(s.pkt.imgui_snapshot->CmdLists[i]);
+                }
+                IM_DELETE(s.pkt.imgui_snapshot);
+                s.pkt.imgui_snapshot = nullptr;
+            }
         }
 
         // Hand the slot to the render thread BEFORE main-thread Submit.
@@ -3420,6 +3453,7 @@ private:
     static constexpr int kCpuMsHistory = 128;
     float cpu_ms_history_[kCpuMsHistory] = {};
     int cpu_ms_head_ = 0;
+    float slot_ms_cache_[cairns::Timer::kMaxSlots] = {};
     float cpu_ms_last_ = 0.0f;
     uint64_t cpu_last_frame_ns_ = 0;
     // render pass

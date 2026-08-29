@@ -32,9 +32,8 @@ static inline uint64_t timestamp_ns() {
     if ( freq == 1'000'000'000 ) {
         return count;
     }
-    else {
-        return count * 1'000'000'000/ freq;
-    }
+    return static_cast<uint64_t>(
+        (static_cast<__uint128_t>(count) * 1'000'000'000u) / freq);
 }
 
 class Timer {
