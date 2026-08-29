@@ -495,3 +495,35 @@ editor-only `Name` ECS component (excluded from the hash; leave).
 - Counting-`new` Q2 verifier: deferred — a per-frame measurement via the JS-driven
   advance is confounded by QuickJS-dispatch heap traffic; needs a JS-free frame seam.
 - fastgltf pool → `cpu_block_` slice (P5 delta above).
+
+---
+
+## GPU-execution determinism phase (2026-06-21)
+
+CPU is ruled out (sim+render hashes byte-stable run-to-run). Started the GPU
+ladder:
+
+1. **Transient render-graph aliasing OFF in golden mode** (`SetDisableTransient
+   Aliasing`) — the top suspect. Each created transient gets its own physical
+   texture instead of intra-frame aliasing a slot whose lifetime ended (aliased
+   memory is undefined until written → read-before-write is bistable). Behaviour-
+   preserving: golden 97/97 metal + 178 statehash both backends UNCHANGED with
+   aliasing off (pure layout). Production still aliases. Candidate fix.
+
+2. **Vulkan synchronization validation** wired (`VkValidationFeaturesEXT`, debug
+   builds). **RAN it** (fresh `build/spec-mac-vk-debug`, Debug → validation on):
+   **ZERO SYNC-HAZARD reports** across the scenario draws (incl. three_champ).
+   The 214 validation messages are all *non-sync*: `VUID-vkCmdDraw-renderPass-
+   02684` (pipeline/renderpass format compat, fires every draw — pre-existing,
+   deterministic, not the flake), MSAA `07284`, and teardown `vkDestroyDevice-
+   05137` leaks (the known teardown segfault). **Verdict: the barriers are
+   correct — three_champ is NOT a missing-barrier / sync hazard.**
+
+**Narrowing so far:** flake is NOT CPU sim (sim hash), NOT CPU render-encode
+(render hash), NOT a missing barrier (sync validation). Remaining suspects:
+transient aliasing producing *logically* stale (but sync-valid) reads — now
+mitigated in golden mode — or true GPU-execution/FP nondeterminism. Next:
+per-pass GPU readback hash to localize the first bistable pass (infra:
+`ReadParticleBuffer`/pixel readback), then `[[invariant]]`/no-FMA shader build.
+NOTE: the pixel flake did not reproduce this session (thermal), so the aliasing
+fix is a verified-correct candidate, not yet a confirmed cure.
