@@ -19,10 +19,15 @@ namespace cairns::rhi {
 // #220 Step 3: scenes are engine-owned via cairns::ResourceManager<Scene>;
 // caller passes a span of SceneIds + the pool. Mesh pool also threaded
 // (Step 2 invariant).
+// #222 Phase H.4: out_shared_skin returns the per-call shared skin-attrs
+// SSBO so the engine can stash it on shared_skin_attrs_buf_ without
+// stamping every Mesh::Hot. Null when no scene in scene_ids has any
+// skinned mesh.
 inline bool LoadScenesGpu(std::span<const cairns::SceneId> scene_ids,
                           cairns::ResourceManager<Scene>& scenes_pool,
                           cairns::ResourceManager<Mesh>& meshes_pool,
-                          Resources& rm, Allocator& alloc) {
+                          Resources& rm, Allocator& alloc,
+                          Handle<Buffer>* out_shared_skin) {
     static constexpr size_t kBatchSize = 10;
 
     size_t total_verts = 0;
@@ -216,9 +221,11 @@ inline bool LoadScenesGpu(std::span<const cairns::SceneId> scene_ids,
                     mhot->global_base_vertex *
                         static_cast<uint32_t>(sizeof(VertexAttribute));
                 mhot->attr_skinned_alias = skinned_attr_alias;
-                mhot->skin_attrs_buffer = shared_skin;
             }
         }
+    }
+    if (out_shared_skin) {
+        *out_shared_skin = shared_skin;
     }
     return true;
 }

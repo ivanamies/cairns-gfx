@@ -924,18 +924,12 @@ public:
             if (!cairns::rhi::LoadScenesGpu(
                     std::span<const cairns::SceneId>(scene_ids_.data(),
                                                        scene_ids_.size()),
-                    scenes_, meshes_, rhi_.resources, rhi_.alloc)) {
+                    scenes_, meshes_, rhi_.resources, rhi_.alloc,
+                    &shared_skin_attrs_buf_)) {
                 return false;
             }
-            // #222 Phase H.4 partial: snag the shared skin-attrs handle off
-            // any skinned mesh; same value for all of them.
-            meshes_.ForEachLive(
-                [&](cairns::Mesh::Hot& mhot, cairns::Mesh::Cold&) {
-                    if (shared_skin_attrs_buf_.IsNull() &&
-                        !mhot.skin_attrs_buffer.IsNull()) {
-                        shared_skin_attrs_buf_ = mhot.skin_attrs_buffer;
-                    }
-                });
+            // #222 Phase H.4: skin_attrs_buffer no longer rides on
+            // Mesh::Hot -- LoadScenesGpu returns it via out param.
 
             // #221 Phase 9 (vk): per-skinned-mesh Group A descriptor set.
             // Allocates one set + writes 2 SSBO descriptors per skinned

@@ -171,11 +171,10 @@ struct Mesh {
         // 1 binds this for skinned draws; mesh-local vertex_offset then
         // indexes correctly. Null for unskinned meshes (they use attrHandle).
         rhi::Handle<rhi::Buffer> attr_skinned_alias;
-        // #221 Skinning Phase 9d: shared skin-attr SSBO. Same handle on
-        // every skinned mesh from one LoadScenesGpu call; null for
-        // unskinned meshes. Compute kernel binds this + skin_attr_base_vertex
-        // as buffer(5) to read uvec4 joints / vec4 weights.
-        rhi::Handle<rhi::Buffer> skin_attrs_buffer;
+        // #222 Phase H.4: skin_attrs_buffer retired from Mesh::Hot
+        // (same handle on every skinned mesh from one LoadScenesGpu).
+        // Now returned via LoadScenesGpu's out_shared_skin and stashed on
+        // Engine::shared_skin_attrs_buf_; recorder reads from engine.
         // #221 Skinning Phase 9 (vk): Group A descriptor set for this
         // skinned mesh (positions slice + skin-attrs slice). Allocated at
         // scene load via Resources::CreateSkinGroupA. Null on Metal (Metal's
