@@ -125,7 +125,7 @@ public:
     // the render thread reads slot ~S. Capacity grows on demand; .clear()/
     // .resize() preserve buffers across frame reuse. pending_globals etc. are
     // staged by Build and consumed by EncodeDraws.
-    static constexpr int kNumViewportsPerSlot = 1;
+    static constexpr int kNumViewportsPerSlot = 4;  // #194 matches kNumViewports
     struct PerSlot {
         cairns::RenderProxyArrays proxies;
         std::vector<cairns::Draw> drawList;
@@ -229,6 +229,47 @@ public:
     }
 
     bool CamPoseOverridden() const { return cam_pose_override_; }
+
+    // #194 runtime viewport management.
+    int ActiveViewportCount() const { return active_viewport_count_; }
+    // Returns the new viewport index (0-based) or -1 if at kNumViewports cap.
+    int OpenViewport() {
+        if (active_viewport_count_ >= kNumViewports) {
+            return -1;
+        }
+        const int idx = active_viewport_count_++;
+        // Default rect: stack alongside the previous ones (uniform tile)
+        // until the agent calls setLayout. Compose with active count so the
+        // tiles add up to the full pane.
+        const float w = 1.0f / static_cast<float>(active_viewport_count_);
+        for (int v = 0; v < active_viewport_count_; ++v) {
+            viewports_[v].layout_rect = glm::vec4(w * static_cast<float>(v),
+                                                  0.0f, w, 1.0f);
+        }
+        return idx;
+    }
+    // Close (zero-area) the highest-index viewport. Returns false if at 1.
+    bool CloseViewport() {
+        if (active_viewport_count_ <= 1) {
+            return false;
+        }
+        viewports_[active_viewport_count_ - 1].layout_rect =
+            glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
+        --active_viewport_count_;
+        const float w = 1.0f / static_cast<float>(active_viewport_count_);
+        for (int v = 0; v < active_viewport_count_; ++v) {
+            viewports_[v].layout_rect = glm::vec4(w * static_cast<float>(v),
+                                                  0.0f, w, 1.0f);
+        }
+        return true;
+    }
+    bool SetViewportLayout(int viewport, glm::vec4 rect) {
+        if (viewport < 0 || viewport >= kNumViewports) {
+            return false;
+        }
+        viewports_[viewport].layout_rect = rect;
+        return true;
+    }
 
     // ===== P4 selection / highlight / pick. Document-side state -- the
     // selection set names "what the user (human or VLM) cares about right
@@ -718,7 +759,7 @@ public:
         // bound against the matching offset. Aspect is (vp_w / vp_h) where
         // vp_w = FrameWidth() / kNumViewportsPerSlot (side-by-side split).
         const float vp_w = static_cast<float>(FrameWidth()) /
-                            static_cast<float>(kNumViewportsPerSlot);
+                            static_cast<float>(std::max(1, active_viewport_count_));
         const float vp_h = static_cast<float>(FrameHeight());
         const float aspect_ratio = vp_w / vp_h;
         const float fov = 90 * (std::numbers::pi / 180.0f);
@@ -1472,26 +1513,44 @@ public:
                     vp_color[v] = res.Resolve(color_off[v]);
                     vp_depth[v] = res.Resolve(depth_off[v]);
                 }
-                // Composite each viewport's color into its half of the swap.
-                const float vp_fw = static_cast<float>(vp_w);
-                const float vp_fh = static_cast<float>(vp_h);
+                // #194 composite each LIVE viewport into its layout_rect
+                // region of the swap pane. layout_rect = (x,y,w,h) in NDC
+                // [0..1]. Default for vp 0 is full pane (1,1); follow-up
+                // viewports set their own rects via cairns.viewport.setLayout.
+                // Skip zero-area rects (uninitialised / disabled).
+                const float fb_fw = static_cast<float>(fb_w);
+                const float fb_fh = static_cast<float>(fb_h);
                 for (int v = 0; v < active_viewport_count_; ++v) {
-                    const float x = vp_fw * static_cast<float>(v);
-                    cmd.SetViewport(x, 0.0f, vp_fw, vp_fh);
-                    cmd.SetScissor(static_cast<int32_t>(x), 0,
-                                   vp_w, vp_h);
+                    const glm::vec4& rect = viewports_[v].layout_rect;
+                    if (rect.z <= 0.0f || rect.w <= 0.0f) {
+                        continue;
+                    }
+                    const float rx = rect.x * fb_fw;
+                    const float ry = rect.y * fb_fh;
+                    const float rw = rect.z * fb_fw;
+                    const float rh = rect.w * fb_fh;
+                    cmd.SetViewport(rx, ry, rw, rh);
+                    cmd.SetScissor(static_cast<int32_t>(rx),
+                                   static_cast<int32_t>(ry),
+                                   static_cast<uint32_t>(rw),
+                                   static_cast<uint32_t>(rh));
                     cmd.DrawFullscreen(rhi_.resources, composite_pip_,
                                        std::span<const rhi::Handle<rhi::Texture>>(&vp_color[v], 1),
                                        composite_sampler_);
                 }
                 // Active viewport's depth PIP (bottom-right 25% of the active
-                // viewport's half).
+                // viewport's layout_rect).
                 {
-                    const float vp_x0 = vp_fw * static_cast<float>(active_viewport_);
-                    const float pip_x = vp_x0 + 0.75f * vp_fw;
-                    const float pip_y = 0.75f * vp_fh;
-                    const float pip_w = 0.25f * vp_fw;
-                    const float pip_h = 0.25f * vp_fh;
+                    const glm::vec4& av_rect =
+                        viewports_[active_viewport_].layout_rect;
+                    const float av_w = av_rect.z * fb_fw;
+                    const float av_h = av_rect.w * fb_fh;
+                    const float vp_x0 = av_rect.x * fb_fw;
+                    const float vp_y0 = av_rect.y * fb_fh;
+                    const float pip_x = vp_x0 + 0.75f * av_w;
+                    const float pip_y = vp_y0 + 0.75f * av_h;
+                    const float pip_w = 0.25f * av_w;
+                    const float pip_h = 0.25f * av_h;
                     cmd.SetViewport(pip_x, pip_y, pip_w, pip_h);
                     cmd.SetScissor(static_cast<int32_t>(pip_x),
                                    static_cast<int32_t>(pip_y),

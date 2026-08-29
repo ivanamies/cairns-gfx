@@ -82,16 +82,56 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.viewport.open",
         /*schema=*/json::object(),
-        /*doc=*/"Open a viewport rendering a world. Today: returns id 0 + "
-                "binds the existing final_target_; future viewports get "
-                "their own offscreen targets when P2 wires per-viewport "
-                "extract.",
+        /*doc=*/"Open a new viewport on the swap pane (#194). Caps at the "
+                "engine's kNumViewports. Returns {viewport: <int idx>} on "
+                "success or {error:'capped'} when full. Default layout "
+                "tiles uniformly across the swap pane; override via "
+                "cairns.viewport.setLayout.",
         [engine = &engine](const json& args) -> json {
-            const uint64_t vp = g_viewport_counter.fetch_add(1);
+            const int idx = cairns::headless::OpenViewport(engine);
             const uint32_t w = args.value("w", cairns::headless::GetFinalTargetWidth(engine));
             const uint32_t h = args.value("h", cairns::headless::GetFinalTargetHeight(engine));
-            return {{"viewport", vp}, {"w", w}, {"h", h}};
+            if (idx < 0) {
+                return {{"error", "capped"},
+                        {"viewport", -1},
+                        {"w", w},
+                        {"h", h}};
+            }
+            return {{"viewport", idx},
+                    {"w", w},
+                    {"h", h},
+                    {"active_count", cairns::headless::ActiveViewportCount(engine)}};
         });
+
+    registry.Register(
+        "cairns.viewport.close",
+        /*schema=*/json::object(),
+        /*doc=*/"Close the highest-index viewport. Returns {ok:false} if "
+                "only one viewport is live (cannot drop below 1).",
+        [engine = &engine](const json&) -> json {
+            const bool ok = cairns::headless::CloseViewport(engine);
+            return {{"ok", ok},
+                    {"active_count", cairns::headless::ActiveViewportCount(engine)}};
+        });
+
+    registry.Register(
+        "cairns.viewport.setLayout",
+        /*schema=*/json::object(),
+        /*doc=*/"Set a viewport's NDC tile on the swap pane. args = "
+                "{viewport, x, y, w, h} in [0..1]. Default for a freshly-"
+                "opened viewport is a uniform horizontal tile.",
+        [engine = &engine](const json& args) -> json {
+            const int vp = static_cast<int>(args.value("viewport", int64_t{0}));
+            const float x = static_cast<float>(args.value("x", 0.0));
+            const float y = static_cast<float>(args.value("y", 0.0));
+            const float w = static_cast<float>(args.value("w", 1.0));
+            const float h = static_cast<float>(args.value("h", 1.0));
+            const bool ok = cairns::headless::SetViewportLayout(engine, vp, x, y, w, h);
+            return {{"ok", ok}, {"viewport", vp},
+                    {"x", x}, {"y", y}, {"w", w}, {"h", h}};
+        });
+    registry.RegisterAlias("viewport.close", "cairns.viewport.close");
+    registry.RegisterAlias("viewport.setLayout", "cairns.viewport.setLayout");
 
     registry.Register(
         "cairns.viewport.setCamera",

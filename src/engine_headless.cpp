@@ -123,6 +123,24 @@ void RequestPick(Engine* engine, int viewport, uint32_t x, uint32_t y) {
     engine->RequestPick(viewport, x, y);
 }
 
+int OpenViewport(Engine* engine) {
+    return engine ? engine->OpenViewport() : -1;
+}
+
+bool CloseViewport(Engine* engine) {
+    return engine && engine->CloseViewport();
+}
+
+bool SetViewportLayout(Engine* engine, int viewport,
+                        float x, float y, float w, float h) {
+    return engine && engine->SetViewportLayout(viewport,
+                                                glm::vec4(x, y, w, h));
+}
+
+int ActiveViewportCount(Engine* engine) {
+    return engine ? engine->ActiveViewportCount() : 0;
+}
+
 PickResultExport ConsumePickResult(Engine* engine) {
     PickResultExport out;
     if (!engine || !engine->PickResolved()) {

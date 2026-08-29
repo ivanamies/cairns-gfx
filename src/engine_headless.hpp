@@ -58,6 +58,13 @@ void SetHighlights(Engine* engine, std::vector<SelectionTarget>&& targets);
 void ClearHighlights(Engine* engine);
 void RequestPick(Engine* engine, int viewport, uint32_t x, uint32_t y);
 
+// #194 viewport lifetime + tile layout (NDC 0..1 over the swap pane).
+int OpenViewport(Engine* engine);
+bool CloseViewport(Engine* engine);
+bool SetViewportLayout(Engine* engine, int viewport,
+                        float x, float y, float w, float h);
+int ActiveViewportCount(Engine* engine);
+
 // #208: poll the most recent resolved pick. resolved=false until the
 // engine has run a frame after RequestPick + completed the readback.
 struct PickResultExport {
