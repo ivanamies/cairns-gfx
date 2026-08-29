@@ -20,20 +20,16 @@
 //   kMaxNodesPerScene   = 256
 //   kMaxClipChannels    = 512  (one channel per (node, path) at worst)
 //
-// Bindings (single descriptor set):
+// Bindings (single descriptor set). #231 SSBO pack: 12 read-only tables folded
+// into 3 packed buffers by element type; SceneHeader offsets are element
+// offsets into the packed buffer.
 //   0  : UBO  ActorRecord[]            -- per-frame, kDynamic
-//   1  : SSBO SceneHeader[]            -- per-scene, kDefault
-//   2  : SSBO int32_t parent[]         -- flat across all scenes
-//   3  : SSBO int32_t topo[]           -- flat across all scenes
-//   4  : SSBO GpuTRS bind_pose[]       -- flat across all scenes
-//   5  : SSBO GpuChannel channels[]    -- flat across all clips
-//   6  : SSBO GpuSampler samplers[]    -- flat across all clips
-//   7  : SSBO float times[]            -- flat keyframe times
-//   8  : SSBO vec4 values[]            -- flat keyframe values (T/S in .xyz, R in .xyzw)
-//   9  : SSBO int32_t joint_nodes[]    -- flat across all skins
-//   10 : SSBO mat4 inverse_binds[]     -- flat across all skins
-//   11 : SSBO mat4 world_scratch[]     -- RW; 1024 actors * 256 nodes = 16 MB kDefault
-//   12 : SSBO mat4 palette_out[]       -- W;  1024 actors * 256 joints = 16 MB kDefault
+//   1  : SSBO int ae_i32[]             -- parent | topo | joint_nodes | times(bits)
+//   2  : SSBO vec4 ae_vec4[]           -- bind_pose(3/joint) | values | invbind(4/j)
+//   3  : SSBO uvec4 ae_word16[]        -- channels | samplers (each 16B = 1 uvec4)
+//   4  : SSBO SceneHeader[]            -- per-scene, kDefault
+//   5  : SSBO mat4 world_scratch[]     -- RW; 1024 actors * 256 nodes = 16 MB kDefault
+//   6  : SSBO mat4 palette_out[]       -- W;  1024 actors * 256 joints = 16 MB kDefault
 //
 // AnimationPath enum (matches src/util/gltf_loader.hpp):
 //   0 = kTranslation, 1 = kRotation, 2 = kScale, 3 = kWeights (skipped)
@@ -109,35 +105,44 @@ layout(set = 0, binding = 0, std140) uniform ActorRecords {
     ActorRecord records[1024];
 } ar;
 
-layout(set = 0, binding = 1, std430) readonly buffer SceneHeaders {
+// #231 packed read-only tables (element offsets stamped in SceneHeader).
+layout(set = 0, binding = 1, std430) readonly buffer AeI32   { int  ae_i32[]; };
+layout(set = 0, binding = 2, std430) readonly buffer AeVec4  { vec4 ae_vec4[]; };
+layout(set = 0, binding = 3, std430) readonly buffer AeWord16 {
+    uvec4 ae_word16[];
+};
+layout(set = 0, binding = 4, std430) readonly buffer SceneHeaders {
     SceneHeader headers[];
 };
-
-layout(set = 0, binding = 2, std430) readonly buffer Parent { int parent[]; };
-layout(set = 0, binding = 3, std430) readonly buffer Topo   { int topo[]; };
-layout(set = 0, binding = 4, std430) readonly buffer BindPose {
-    GpuTRS bind_pose[];
-};
-layout(set = 0, binding = 5, std430) readonly buffer Channels {
-    GpuChannel channels[];
-};
-layout(set = 0, binding = 6, std430) readonly buffer Samplers {
-    GpuSampler samplers[];
-};
-layout(set = 0, binding = 7, std430) readonly buffer Times  { float times[]; };
-layout(set = 0, binding = 8, std430) readonly buffer Values { vec4 values[]; };
-layout(set = 0, binding = 9, std430) readonly buffer JointNodes {
-    int joint_nodes[];
-};
-layout(set = 0, binding = 10, std430) readonly buffer InverseBinds {
-    mat4 inverse_binds[];
-};
-layout(set = 0, binding = 11, std430) buffer WorldScratch {
+layout(set = 0, binding = 5, std430) buffer WorldScratch {
     mat4 world_scratch[];
 };
-layout(set = 0, binding = 12, std430) writeonly buffer PaletteOut {
+layout(set = 0, binding = 6, std430) writeonly buffer PaletteOut {
     mat4 palette_out[];
 };
+
+// #231 times live in ae_i32 as float-bit ints; bitcast on read.
+float ae_time(uint idx) { return intBitsToFloat(ae_i32[idx]); }
+
+GpuChannel load_channel(uint idx) {
+    uvec4 w = ae_word16[idx];
+    GpuChannel ch;
+    ch.node_idx = int(w.x);
+    ch.path = w.y;
+    ch.sampler_idx = int(w.z);
+    ch._pad0 = w.w;
+    return ch;
+}
+
+GpuSampler load_sampler(uint idx) {
+    uvec4 w = ae_word16[idx];
+    GpuSampler s;
+    s.times_off = w.x;
+    s.values_off = w.y;
+    s.count = w.z;
+    s.interp = w.w;
+    return s;
+}
 
 shared GpuTRS s_trs[kMaxNodesPerScene];
 shared mat4 s_mesh_world_inv;
@@ -148,7 +153,7 @@ uint upper_key(uint times_off, uint count, float t) {
     uint hi = count - 1u;
     while (lo + 1u < hi) {
         uint mid = (lo + hi) >> 1u;
-        if (times[times_off + mid] <= t) {
+        if (ae_time(times_off + mid) <= t) {
             lo = mid;
         } else {
             hi = mid;
@@ -161,22 +166,22 @@ vec4 sample_sampler(GpuSampler s, uint path, float t) {
     if (s.count == 0u) {
         return vec4(0.0);
     }
-    if (t <= times[s.times_off]) {
-        return values[s.values_off];
+    if (t <= ae_time(s.times_off)) {
+        return ae_vec4[s.values_off];
     }
-    if (t >= times[s.times_off + s.count - 1u]) {
-        return values[s.values_off + s.count - 1u];
+    if (t >= ae_time(s.times_off + s.count - 1u)) {
+        return ae_vec4[s.values_off + s.count - 1u];
     }
     uint hi = upper_key(s.times_off, s.count, t);
     uint lo = hi - 1u;
     if (s.interp == kInterpStep) {
-        return values[s.values_off + lo];
+        return ae_vec4[s.values_off + lo];
     }
-    float t0 = times[s.times_off + lo];
-    float t1 = times[s.times_off + hi];
+    float t0 = ae_time(s.times_off + lo);
+    float t1 = ae_time(s.times_off + hi);
     float u = (t1 > t0) ? (t - t0) / (t1 - t0) : 0.0;
-    vec4 v0 = values[s.values_off + lo];
-    vec4 v1 = values[s.values_off + hi];
+    vec4 v0 = ae_vec4[s.values_off + lo];
+    vec4 v1 = ae_vec4[s.values_off + hi];
     if (path == kPathRotation) {
         // slerp on quaternions
         float cosTheta = dot(v0, v1);
@@ -232,7 +237,10 @@ void main() {
 
     // Stage 1: cooperative seed of shared TRS from bind pose.
     for (uint i = lid; i < sh.node_count; i += 64u) {
-        s_trs[i] = bind_pose[sh.bind_pose_off + i];
+        uint bo = sh.bind_pose_off + i * 3u;
+        s_trs[i].T = ae_vec4[bo + 0u];
+        s_trs[i].R = ae_vec4[bo + 1u];
+        s_trs[i].S = ae_vec4[bo + 2u];
     }
     barrier();
 
@@ -240,14 +248,14 @@ void main() {
     float dur = (sh.duration > 0.0) ? sh.duration : 1.0;
     float wrapped = rec.time - dur * floor(rec.time / dur);
     for (uint c = lid; c < sh.channel_count; c += 64u) {
-        GpuChannel ch = channels[sh.channel_off + c];
+        GpuChannel ch = load_channel(sh.channel_off + c);
         if (ch.sampler_idx < 0 || ch.node_idx < 0) {
             continue;
         }
         if (uint(ch.node_idx) >= sh.node_count) {
             continue;
         }
-        GpuSampler s = samplers[sh.sampler_off + uint(ch.sampler_idx)];
+        GpuSampler s = load_sampler(sh.sampler_off + uint(ch.sampler_idx));
         vec4 v = sample_sampler(s, ch.path, wrapped);
         if (ch.path == kPathTranslation) {
             s_trs[ch.node_idx].T = vec4(v.xyz, 0.0);
@@ -263,11 +271,11 @@ void main() {
     // Stage 3: thread 0 walks topo composing worlds.
     if (lid == 0u) {
         for (uint i = 0u; i < sh.node_count; ++i) {
-            int ni = topo[sh.topo_off + i];
+            int ni = ae_i32[sh.topo_off + i];
             if (ni < 0 || uint(ni) >= sh.node_count) {
                 continue;
             }
-            int pi = parent[sh.parent_off + uint(ni)];
+            int pi = ae_i32[sh.parent_off + uint(ni)];
             mat4 local = compose_trs(s_trs[ni]);
             mat4 world;
             if (pi >= 0) {
@@ -294,13 +302,15 @@ void main() {
     }
     barrier();
     for (uint j = lid; j < sh.joint_count; j += 64u) {
-        int jn = joint_nodes[sh.joint_nodes_off + j];
+        int jn = ae_i32[sh.joint_nodes_off + j];
         if (jn < 0 || uint(jn) >= sh.node_count) {
             palette_out[rec.palette_out_base + j] = mat4(1.0);
             continue;
         }
         mat4 jw = world_scratch[rec.world_scratch_base + uint(jn)];
-        mat4 ib = inverse_binds[sh.inverse_binds_off + j];
+        uint ibo = sh.inverse_binds_off + j * 4u;
+        mat4 ib = mat4(ae_vec4[ibo + 0u], ae_vec4[ibo + 1u],
+                       ae_vec4[ibo + 2u], ae_vec4[ibo + 3u]);
         palette_out[rec.palette_out_base + j] = s_mesh_world_inv * jw * ib;
     }
 }

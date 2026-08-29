@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>  // #231 std::memcpy for SSBO-pack reinterprets
 #include <string_view>
 #include <filesystem>
 #include <optional>
@@ -3920,20 +3921,14 @@ public:
                             memcpy(records_ptr, pkt.actor_records.data(),
                                    records_bytes);
                             rhi::CommandRecorder::AnimEvalArgs ae{};
+                            ae.i32_buf = ae_i32_buf_;
+                            ae.vec4_buf = ae_vec4_buf_;
+                            ae.word16_buf = ae_word16_buf_;
                             ae.scene_headers = scene_headers_buf_;
-                            ae.parent_buf = ae_parent_buf_;
-                            ae.topo_buf = ae_topo_buf_;
-                            ae.bind_pose_buf = ae_bind_pose_buf_;
-                            ae.channels_buf = ae_channels_buf_;
-                            ae.samplers_buf = ae_samplers_buf_;
-                            ae.times_buf = ae_times_buf_;
-                            ae.values_buf = ae_values_buf_;
-                            ae.joint_nodes_buf = ae_joint_nodes_buf_;
-                            ae.inverse_binds_buf = ae_inverse_binds_buf_;
                             ae.world_scratch = world_scratch_buf_;
                             ae.palette_out = palette_out_buf_;
                             // #222 Phase D.3: dyn_set_0 = anim_eval per-FIF
-                            // DynamicBuffers set (binding 0 dyn UBO + 1..12
+                            // DynamicBuffers set (binding 0 dyn UBO + 1..6
                             // SSBO over backing). vk reads it; metal ignored.
                             ae.dyn_set_0 = dyn_anim_eval_;
                             ae.records_byte_offset = records_off;
@@ -4941,21 +4936,21 @@ public:
         if (!anim_eval_tables_uploaded_) {
             return true;
         }
-        const rhi::Handle<rhi::Buffer> ae_ssbo[12] = {
-            scene_headers_buf_, ae_parent_buf_, ae_topo_buf_,
-            ae_bind_pose_buf_, ae_channels_buf_, ae_samplers_buf_,
-            ae_times_buf_, ae_values_buf_, ae_joint_nodes_buf_,
-            ae_inverse_binds_buf_, world_scratch_buf_, palette_out_buf_,
+        // #231 SSBO pack: bindings 1-6 = i32 / vec4 / word16 / headers /
+        // world_scratch / palette_out (matching the kernel binding numbers).
+        const rhi::Handle<rhi::Buffer> ae_ssbo[6] = {
+            ae_i32_buf_, ae_vec4_buf_, ae_word16_buf_,
+            scene_headers_buf_, world_scratch_buf_, palette_out_buf_,
         };
-        cairns::rhi::DynamicBinding ae_b[13]{};
-        for (uint32_t i = 0; i < 13; ++i) {
+        cairns::rhi::DynamicBinding ae_b[7]{};
+        for (uint32_t i = 0; i < 7; ++i) {
             ae_b[i].stages = cairns::rhi::kStageCompute;
         }
         ae_b[0].slot = 0;
         ae_b[0].kind = cairns::rhi::BufferKind::kUniform;
         ae_b[0].max_range = 16384u;
         ae_b[0].has_dynamic_offset = true;
-        for (uint32_t i = 0; i < 12; ++i) {
+        for (uint32_t i = 0; i < 6; ++i) {
             ae_b[1 + i].slot = 1 + i;
             ae_b[1 + i].kind = cairns::rhi::BufferKind::kStorage;
             ae_b[1 + i].max_range = 0;  // VK_WHOLE_SIZE
@@ -4965,7 +4960,7 @@ public:
         cairns::rhi::DynamicBuffersDesc ae_d{};
         ae_d.debug_name = "dyn_anim_eval";
         ae_d.bindings =
-            std::span<const cairns::rhi::DynamicBinding>(ae_b, 13);
+            std::span<const cairns::rhi::DynamicBinding>(ae_b, 7);
         // #228 F1 user: enqueue the old set for kFIF-frame fenced deletion
         // instead of WaitIdle+Destroy. The new set is created+used
         // immediately; the old one persists in-flight one more frame and
@@ -5051,17 +5046,15 @@ public:
         // every prefab from scratch.
         bool full_rebuild = (anim_uploaded_prefab_count_ == 0) ||
                             (anim_uploaded_prefab_count_ > prefab_ids.size());
+        // #231 SSBO pack: 3 packed flat vectors by element type + headers.
+        // i32_flat: parent | topo | joint_nodes | times(int bits).
+        // vec4_flat: bind_pose(T,R,S per joint) | values | inverse_binds(cols).
+        // word16_flat: channels | samplers (each GpuChannel/GpuSampler is 16B).
         // Storage that survives retry (filled once per attempt).
         std::vector<cairns::GpuSceneHeader> headers;
-        std::vector<int32_t> parent_flat;
-        std::vector<int32_t> topo_flat;
-        std::vector<cairns::GpuTRS> bind_pose_flat;
-        std::vector<cairns::GpuChannel> channels_flat;
-        std::vector<cairns::GpuSampler> samplers_flat;
-        std::vector<float> times_flat;
-        std::vector<glm::vec4> values_flat;
-        std::vector<int32_t> joint_nodes_flat;
-        std::vector<glm::mat4> inverse_binds_flat;
+        std::vector<int32_t> i32_flat;
+        std::vector<glm::vec4> vec4_flat;
+        std::vector<glm::uvec4> word16_flat;
         AnimCursors base{};
         AnimCursors target{};
         for (int attempt = 0; attempt < 2; ++attempt) {
@@ -5071,15 +5064,9 @@ public:
             }
             base = anim_cur_;
             headers.clear();
-            parent_flat.clear();
-            topo_flat.clear();
-            bind_pose_flat.clear();
-            channels_flat.clear();
-            samplers_flat.clear();
-            times_flat.clear();
-            values_flat.clear();
-            joint_nodes_flat.clear();
-            inverse_binds_flat.clear();
+            i32_flat.clear();
+            vec4_flat.clear();
+            word16_flat.clear();
             const uint32_t start = anim_uploaded_prefab_count_;
             headers.reserve(prefab_ids.size() - start);
             for (uint32_t i = start; i < prefab_ids.size(); ++i) {
@@ -5102,59 +5089,71 @@ public:
                     static_cast<uint32_t>(cold->gpu_channels.size());
                 sh.sampler_count =
                     static_cast<uint32_t>(cold->gpu_samplers.size());
-                // offsets absolute into the GPU buffer (base + delta-so-far).
-                sh.parent_off = base.parent +
-                                static_cast<uint32_t>(parent_flat.size());
-                sh.topo_off = base.topo +
-                              static_cast<uint32_t>(topo_flat.size());
-                sh.bind_pose_off =
-                    base.bind_pose +
-                    static_cast<uint32_t>(bind_pose_flat.size());
-                sh.channel_off = base.channels +
-                                 static_cast<uint32_t>(channels_flat.size());
-                sh.sampler_off = base.samplers +
-                                 static_cast<uint32_t>(samplers_flat.size());
-                sh.times_off = base.times +
-                               static_cast<uint32_t>(times_flat.size());
-                sh.values_off = base.values +
-                                static_cast<uint32_t>(values_flat.size());
+                // #231 packed offsets, in each packed buffer's ELEMENT units.
+                // i32 block (parent | topo | joint_nodes | times):
+                sh.parent_off =
+                    base.i32 + static_cast<uint32_t>(i32_flat.size());
+                i32_flat.insert(i32_flat.end(), cold->gpu_parent.begin(),
+                                cold->gpu_parent.end());
+                sh.topo_off =
+                    base.i32 + static_cast<uint32_t>(i32_flat.size());
+                i32_flat.insert(i32_flat.end(), cold->gpu_topo.begin(),
+                                cold->gpu_topo.end());
                 sh.joint_nodes_off =
-                    base.joint_nodes +
-                    static_cast<uint32_t>(joint_nodes_flat.size());
+                    base.i32 + static_cast<uint32_t>(i32_flat.size());
+                i32_flat.insert(i32_flat.end(), cold->gpu_joint_nodes.begin(),
+                                cold->gpu_joint_nodes.end());
+                sh.times_off =
+                    base.i32 + static_cast<uint32_t>(i32_flat.size());
+                for (float tf : cold->gpu_times) {
+                    int32_t bits;
+                    std::memcpy(&bits, &tf, sizeof(bits));
+                    i32_flat.push_back(bits);
+                }
+                // vec4 block (bind_pose 3/joint | values | inverse_binds 4/j):
+                sh.bind_pose_off =
+                    base.vec4 + static_cast<uint32_t>(vec4_flat.size());
+                for (const cairns::GpuTRS& trs : cold->gpu_bind_pose) {
+                    vec4_flat.push_back(trs.T);
+                    vec4_flat.push_back(trs.R);
+                    vec4_flat.push_back(trs.S);
+                }
+                sh.values_off =
+                    base.vec4 + static_cast<uint32_t>(vec4_flat.size());
+                vec4_flat.insert(vec4_flat.end(), cold->gpu_values.begin(),
+                                 cold->gpu_values.end());
                 sh.inverse_binds_off =
-                    base.inverse_binds +
-                    static_cast<uint32_t>(inverse_binds_flat.size());
+                    base.vec4 + static_cast<uint32_t>(vec4_flat.size());
+                for (const glm::mat4& m : cold->gpu_inverse_binds) {
+                    vec4_flat.push_back(m[0]);
+                    vec4_flat.push_back(m[1]);
+                    vec4_flat.push_back(m[2]);
+                    vec4_flat.push_back(m[3]);
+                }
+                // word16 block (channels | samplers), each 16B = 1 uvec4:
                 sh.mesh_node = cold->gpu_mesh_node;
                 sh.duration = cold->gpu_clip_duration;
+                // Sampler local offsets fold in the per-scene i32/vec4 bases
+                // (times now i32-element, values now vec4-element) before the
+                // reinterpret.
                 const uint32_t local_times_base = sh.times_off;
                 const uint32_t local_values_base = sh.values_off;
-                parent_flat.insert(parent_flat.end(),
-                                    cold->gpu_parent.begin(),
-                                    cold->gpu_parent.end());
-                topo_flat.insert(topo_flat.end(), cold->gpu_topo.begin(),
-                                  cold->gpu_topo.end());
-                bind_pose_flat.insert(bind_pose_flat.end(),
-                                        cold->gpu_bind_pose.begin(),
-                                        cold->gpu_bind_pose.end());
-                channels_flat.insert(channels_flat.end(),
-                                      cold->gpu_channels.begin(),
-                                      cold->gpu_channels.end());
+                sh.channel_off =
+                    base.word16 + static_cast<uint32_t>(word16_flat.size());
+                for (const cairns::GpuChannel& ch : cold->gpu_channels) {
+                    glm::uvec4 w;
+                    std::memcpy(&w, &ch, sizeof(w));
+                    word16_flat.push_back(w);
+                }
+                sh.sampler_off =
+                    base.word16 + static_cast<uint32_t>(word16_flat.size());
                 for (cairns::GpuSampler gs : cold->gpu_samplers) {
                     gs.times_off += local_times_base;
                     gs.values_off += local_values_base;
-                    samplers_flat.push_back(gs);
+                    glm::uvec4 w;
+                    std::memcpy(&w, &gs, sizeof(w));
+                    word16_flat.push_back(w);
                 }
-                times_flat.insert(times_flat.end(), cold->gpu_times.begin(),
-                                   cold->gpu_times.end());
-                values_flat.insert(values_flat.end(),
-                                    cold->gpu_values.begin(),
-                                    cold->gpu_values.end());
-                joint_nodes_flat.insert(joint_nodes_flat.end(),
-                                         cold->gpu_joint_nodes.begin(),
-                                         cold->gpu_joint_nodes.end());
-                inverse_binds_flat.insert(inverse_binds_flat.end(),
-                                           cold->gpu_inverse_binds.begin(),
-                                           cold->gpu_inverse_binds.end());
                 hot->gpu_prefab_header_idx =
                     base.headers + static_cast<uint32_t>(headers.size());
                 headers.push_back(sh);
@@ -5169,26 +5168,12 @@ public:
             }
             target.headers =
                 base.headers + static_cast<uint32_t>(headers.size());
-            target.parent =
-                base.parent + static_cast<uint32_t>(parent_flat.size());
-            target.topo =
-                base.topo + static_cast<uint32_t>(topo_flat.size());
-            target.bind_pose =
-                base.bind_pose + static_cast<uint32_t>(bind_pose_flat.size());
-            target.channels =
-                base.channels + static_cast<uint32_t>(channels_flat.size());
-            target.samplers =
-                base.samplers + static_cast<uint32_t>(samplers_flat.size());
-            target.times =
-                base.times + static_cast<uint32_t>(times_flat.size());
-            target.values =
-                base.values + static_cast<uint32_t>(values_flat.size());
-            target.joint_nodes =
-                base.joint_nodes +
-                static_cast<uint32_t>(joint_nodes_flat.size());
-            target.inverse_binds =
-                base.inverse_binds +
-                static_cast<uint32_t>(inverse_binds_flat.size());
+            target.i32 =
+                base.i32 + static_cast<uint32_t>(i32_flat.size());
+            target.vec4 =
+                base.vec4 + static_cast<uint32_t>(vec4_flat.size());
+            target.word16 =
+                base.word16 + static_cast<uint32_t>(word16_flat.size());
             // For delta attempts: does every buffer already fit the new
             // total? If not, retry as full rebuild (delta-only writes
             // can't span a destroyed-and-recreated buffer).
@@ -5204,20 +5189,10 @@ public:
             if (!full_rebuild && (
                     !fits(scene_headers_buf_, target.headers,
                           sizeof(cairns::GpuSceneHeader)) ||
-                    !fits(ae_parent_buf_, target.parent, sizeof(int32_t)) ||
-                    !fits(ae_topo_buf_, target.topo, sizeof(int32_t)) ||
-                    !fits(ae_bind_pose_buf_, target.bind_pose,
-                          sizeof(cairns::GpuTRS)) ||
-                    !fits(ae_channels_buf_, target.channels,
-                          sizeof(cairns::GpuChannel)) ||
-                    !fits(ae_samplers_buf_, target.samplers,
-                          sizeof(cairns::GpuSampler)) ||
-                    !fits(ae_times_buf_, target.times, sizeof(float)) ||
-                    !fits(ae_values_buf_, target.values, sizeof(glm::vec4)) ||
-                    !fits(ae_joint_nodes_buf_, target.joint_nodes,
-                          sizeof(int32_t)) ||
-                    !fits(ae_inverse_binds_buf_, target.inverse_binds,
-                          sizeof(glm::mat4)))) {
+                    !fits(ae_i32_buf_, target.i32, sizeof(int32_t)) ||
+                    !fits(ae_vec4_buf_, target.vec4, sizeof(glm::vec4)) ||
+                    !fits(ae_word16_buf_, target.word16,
+                          sizeof(glm::uvec4)))) {
                 full_rebuild = true;
                 continue;
             }
@@ -5279,51 +5254,21 @@ public:
                        base.headers * sizeof(cairns::GpuSceneHeader),
                        target.headers * sizeof(cairns::GpuSceneHeader),
                        scene_headers_buf_) ||
-            !upload_at(parent_flat.data(),
-                       parent_flat.size() * sizeof(int32_t),
-                       base.parent * sizeof(int32_t),
-                       target.parent * sizeof(int32_t),
-                       ae_parent_buf_) ||
-            !upload_at(topo_flat.data(),
-                       topo_flat.size() * sizeof(int32_t),
-                       base.topo * sizeof(int32_t),
-                       target.topo * sizeof(int32_t),
-                       ae_topo_buf_) ||
-            !upload_at(bind_pose_flat.data(),
-                       bind_pose_flat.size() * sizeof(cairns::GpuTRS),
-                       base.bind_pose * sizeof(cairns::GpuTRS),
-                       target.bind_pose * sizeof(cairns::GpuTRS),
-                       ae_bind_pose_buf_) ||
-            !upload_at(channels_flat.empty() ? nullptr : channels_flat.data(),
-                       channels_flat.size() * sizeof(cairns::GpuChannel),
-                       base.channels * sizeof(cairns::GpuChannel),
-                       target.channels * sizeof(cairns::GpuChannel),
-                       ae_channels_buf_) ||
-            !upload_at(samplers_flat.empty() ? nullptr : samplers_flat.data(),
-                       samplers_flat.size() * sizeof(cairns::GpuSampler),
-                       base.samplers * sizeof(cairns::GpuSampler),
-                       target.samplers * sizeof(cairns::GpuSampler),
-                       ae_samplers_buf_) ||
-            !upload_at(times_flat.empty() ? nullptr : times_flat.data(),
-                       times_flat.size() * sizeof(float),
-                       base.times * sizeof(float),
-                       target.times * sizeof(float),
-                       ae_times_buf_) ||
-            !upload_at(values_flat.empty() ? nullptr : values_flat.data(),
-                       values_flat.size() * sizeof(glm::vec4),
-                       base.values * sizeof(glm::vec4),
-                       target.values * sizeof(glm::vec4),
-                       ae_values_buf_) ||
-            !upload_at(joint_nodes_flat.data(),
-                       joint_nodes_flat.size() * sizeof(int32_t),
-                       base.joint_nodes * sizeof(int32_t),
-                       target.joint_nodes * sizeof(int32_t),
-                       ae_joint_nodes_buf_) ||
-            !upload_at(inverse_binds_flat.data(),
-                       inverse_binds_flat.size() * sizeof(glm::mat4),
-                       base.inverse_binds * sizeof(glm::mat4),
-                       target.inverse_binds * sizeof(glm::mat4),
-                       ae_inverse_binds_buf_)) {
+            !upload_at(i32_flat.empty() ? nullptr : i32_flat.data(),
+                       i32_flat.size() * sizeof(int32_t),
+                       base.i32 * sizeof(int32_t),
+                       target.i32 * sizeof(int32_t),
+                       ae_i32_buf_) ||
+            !upload_at(vec4_flat.empty() ? nullptr : vec4_flat.data(),
+                       vec4_flat.size() * sizeof(glm::vec4),
+                       base.vec4 * sizeof(glm::vec4),
+                       target.vec4 * sizeof(glm::vec4),
+                       ae_vec4_buf_) ||
+            !upload_at(word16_flat.empty() ? nullptr : word16_flat.data(),
+                       word16_flat.size() * sizeof(glm::uvec4),
+                       base.word16 * sizeof(glm::uvec4),
+                       target.word16 * sizeof(glm::uvec4),
+                       ae_word16_buf_)) {
             return;
         }
         anim_cur_ = target;
@@ -5340,21 +5285,12 @@ public:
             anim_dyn_dirty_ = false;
         }
         CAIRNS_PRINT("uploadAnimTablesGpu: %s | +%zu scenes -> %u total | "
-                     "parent +%zu/%u topo +%zu/%u bind_pose +%zu/%u "
-                     "channels +%zu/%u samplers +%zu/%u "
-                     "times +%zu/%u values +%zu/%u "
-                     "joint_nodes +%zu/%u inverse_binds +%zu/%u\n",
+                     "i32 +%zu/%u vec4 +%zu/%u word16 +%zu/%u\n",
                      full_rebuild ? "FULL" : "DELTA",
                      headers.size(), target.headers,
-                     parent_flat.size(), target.parent,
-                     topo_flat.size(), target.topo,
-                     bind_pose_flat.size(), target.bind_pose,
-                     channels_flat.size(), target.channels,
-                     samplers_flat.size(), target.samplers,
-                     times_flat.size(), target.times,
-                     values_flat.size(), target.values,
-                     joint_nodes_flat.size(), target.joint_nodes,
-                     inverse_binds_flat.size(), target.inverse_binds);
+                     i32_flat.size(), target.i32,
+                     vec4_flat.size(), target.vec4,
+                     word16_flat.size(), target.word16);
     }
 
     // #221 Phase 4: best-effort load of skin compute kernel. Failing the
@@ -5757,15 +5693,14 @@ private:
     // actors_cap-sized (1024 * 256 mat4 = 16 MB each).
     rhi::Handle<rhi::Kernel> anim_eval_kernel_;
     rhi::Handle<rhi::Buffer> scene_headers_buf_;
-    rhi::Handle<rhi::Buffer> ae_parent_buf_;
-    rhi::Handle<rhi::Buffer> ae_topo_buf_;
-    rhi::Handle<rhi::Buffer> ae_bind_pose_buf_;
-    rhi::Handle<rhi::Buffer> ae_channels_buf_;
-    rhi::Handle<rhi::Buffer> ae_samplers_buf_;
-    rhi::Handle<rhi::Buffer> ae_times_buf_;
-    rhi::Handle<rhi::Buffer> ae_values_buf_;
-    rhi::Handle<rhi::Buffer> ae_joint_nodes_buf_;
-    rhi::Handle<rhi::Buffer> ae_inverse_binds_buf_;
+    // #231 SSBO pack: 9 per-type table buffers folded into 3 by element type.
+    // ae_i32_buf_ packs parent/topo/joint_nodes/times(as int bits);
+    // ae_vec4_buf_ packs bind_pose(3 vec4/joint)/values(1/key)/inverse_binds
+    // (4 vec4/joint = mat4 cols); ae_word16_buf_ packs channels/samplers
+    // (16B = 1 uvec4 each). Drops anim_eval from 12 SSBOs to 6.
+    rhi::Handle<rhi::Buffer> ae_i32_buf_;
+    rhi::Handle<rhi::Buffer> ae_vec4_buf_;
+    rhi::Handle<rhi::Buffer> ae_word16_buf_;
     rhi::Handle<rhi::Buffer> world_scratch_buf_;
     rhi::Handle<rhi::Buffer> palette_out_buf_;
     bool anim_eval_tables_uploaded_ = false;
@@ -5777,15 +5712,10 @@ private:
     // forces a full rebuild for ALL buffers in one retry pass.
     struct AnimCursors {
         uint32_t headers = 0;
-        uint32_t parent = 0;
-        uint32_t topo = 0;
-        uint32_t bind_pose = 0;
-        uint32_t channels = 0;
-        uint32_t samplers = 0;
-        uint32_t times = 0;
-        uint32_t values = 0;
-        uint32_t joint_nodes = 0;
-        uint32_t inverse_binds = 0;
+        // #231 packed-buffer element cursors (i32/vec4/uvec4 elements).
+        uint32_t i32 = 0;
+        uint32_t vec4 = 0;
+        uint32_t word16 = 0;
     };
     AnimCursors anim_cur_{};
     uint32_t anim_uploaded_prefab_count_ = 0;

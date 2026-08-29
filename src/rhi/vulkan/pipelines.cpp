@@ -91,22 +91,22 @@ bool Pipelines::Init(Device& device) {
             return false;
         }
     }
-    {  // anim_eval set layout (13 bindings; DYNAMIC_UBO records @0,
-       // 12 SSBO scene tables + scratch + palette out @1..12).
-        VkDescriptorSetLayoutBinding b[13]{};
+    {  // #231 anim_eval set layout (7 bindings; DYNAMIC_UBO records @0,
+       // 6 packed SSBO i32/vec4/word16 + headers + scratch + palette @1..6).
+        VkDescriptorSetLayoutBinding b[7]{};
         b[0].binding = 0;
         b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        for (uint32_t i = 1; i < 13; ++i) {
+        for (uint32_t i = 1; i < 7; ++i) {
             b[i].binding = i;
             b[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         }
-        for (uint32_t i = 0; i < 13; ++i) {
+        for (uint32_t i = 0; i < 7; ++i) {
             b[i].descriptorCount = 1;
             b[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         }
         VkDescriptorSetLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 13;
+        li.bindingCount = 7;
         li.pBindings = b;
         if (vkCreateDescriptorSetLayout(dev, &li, nullptr,
                                         &plat.anim_eval_layout_) !=

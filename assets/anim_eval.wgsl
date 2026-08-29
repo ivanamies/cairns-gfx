@@ -27,19 +27,29 @@ struct ActorRecord {
 struct GpuChannel { node_idx: i32, path: u32, sampler_idx: i32, _pad0: u32, };
 struct GpuSampler { times_off: u32, values_off: u32, count: u32, interp: u32, };
 
+// #231 SSBO pack: 12 read-only tables folded into 3 by element type. The 3
+// packed reads stay read_write to match MakeAnimEvalSetLayout/MakeComputeSetLayout
+// (Storage) so bind-group and pipeline-layout descriptors are byte-identical.
+@group(0) @binding(1)  var<storage, read_write> ae_i32: array<i32>;
+@group(0) @binding(2)  var<storage, read_write> ae_vec4: array<vec4<f32>>;
+@group(0) @binding(3)  var<storage, read_write> ae_word16: array<vec4<u32>>;
+@group(0) @binding(4)  var<storage, read_write> headers: array<SceneHeader>;
+@group(0) @binding(5)  var<storage, read_write> world_scratch: array<mat4x4<f32>>;
+@group(0) @binding(6)  var<storage, read_write> palette_out: array<mat4x4<f32>>;
 @group(0) @binding(0)  var<uniform> records: array<ActorRecord, 1024>;
-@group(0) @binding(1)  var<storage, read_write> headers: array<SceneHeader>;
-@group(0) @binding(2)  var<storage, read_write> parent: array<i32>;
-@group(0) @binding(3)  var<storage, read_write> topo: array<i32>;
-@group(0) @binding(4)  var<storage, read_write> bind_pose: array<GpuTRS>;
-@group(0) @binding(5)  var<storage, read_write> channels: array<GpuChannel>;
-@group(0) @binding(6)  var<storage, read_write> samplers: array<GpuSampler>;
-@group(0) @binding(7)  var<storage, read_write> times: array<f32>;
-@group(0) @binding(8)  var<storage, read_write> values: array<vec4<f32>>;
-@group(0) @binding(9)  var<storage, read_write> joint_nodes: array<i32>;
-@group(0) @binding(10) var<storage, read_write> inverse_binds: array<mat4x4<f32>>;
-@group(0) @binding(11) var<storage, read_write> world_scratch: array<mat4x4<f32>>;
-@group(0) @binding(12) var<storage, read_write> palette_out: array<mat4x4<f32>>;
+
+// #231 times live in ae_i32 as float-bit ints; bitcast on read.
+fn ae_time(idx: u32) -> f32 { return bitcast<f32>(ae_i32[idx]); }
+
+fn load_channel(idx: u32) -> GpuChannel {
+  let w: vec4<u32> = ae_word16[idx];
+  return GpuChannel(i32(w.x), w.y, i32(w.z), w.w);
+}
+
+fn load_sampler(idx: u32) -> GpuSampler {
+  let w: vec4<u32> = ae_word16[idx];
+  return GpuSampler(w.x, w.y, w.z, w.w);
+}
 
 var<workgroup> s_trs: array<GpuTRS, 256>;
 var<workgroup> s_mw_inv_c0: vec4<f32>;
@@ -53,26 +63,26 @@ fn upper_key(times_off: u32, count: u32, t: f32) -> u32 {
   loop {
     if (!(lo + 1u < hi)) { break; }
     let mid: u32 = (lo + hi) >> 1u;
-    if (times[times_off + mid] <= t) { lo = mid; } else { hi = mid; }
+    if (ae_time(times_off + mid) <= t) { lo = mid; } else { hi = mid; }
   }
   return hi;
 }
 
 fn sample_sampler(s: GpuSampler, path: u32, t: f32) -> vec4<f32> {
   if (s.count == 0u) { return vec4<f32>(0.0); }
-  if (t <= times[s.times_off]) { return values[s.values_off]; }
-  if (t >= times[s.times_off + s.count - 1u]) {
-    return values[s.values_off + s.count - 1u];
+  if (t <= ae_time(s.times_off)) { return ae_vec4[s.values_off]; }
+  if (t >= ae_time(s.times_off + s.count - 1u)) {
+    return ae_vec4[s.values_off + s.count - 1u];
   }
   let hi: u32 = upper_key(s.times_off, s.count, t);
   let lo: u32 = hi - 1u;
-  if (s.interp == kInterpStep) { return values[s.values_off + lo]; }
-  let t0: f32 = times[s.times_off + lo];
-  let t1: f32 = times[s.times_off + hi];
+  if (s.interp == kInterpStep) { return ae_vec4[s.values_off + lo]; }
+  let t0: f32 = ae_time(s.times_off + lo);
+  let t1: f32 = ae_time(s.times_off + hi);
   var u: f32 = 0.0;
   if (t1 > t0) { u = (t - t0) / (t1 - t0); }
-  var v0: vec4<f32> = values[s.values_off + lo];
-  var v1: vec4<f32> = values[s.values_off + hi];
+  var v0: vec4<f32> = ae_vec4[s.values_off + lo];
+  var v1: vec4<f32> = ae_vec4[s.values_off + hi];
   if (path == kPathRotation) {
     var cosTheta: f32 = dot(v0, v1);
     if (cosTheta < 0.0) { v1 = -v1; cosTheta = -cosTheta; }
@@ -119,7 +129,10 @@ fn cs_main(@builtin(workgroup_id) wid: vec3<u32>,
   var i: u32 = tid;
   loop {
     if (!(i < sh.node_count)) { break; }
-    s_trs[i] = bind_pose[sh.bind_pose_off + i];
+    let bo: u32 = sh.bind_pose_off + i * 3u;
+    s_trs[i].T = ae_vec4[bo + 0u];
+    s_trs[i].R = ae_vec4[bo + 1u];
+    s_trs[i].S = ae_vec4[bo + 2u];
     i = i + 64u;
   }
   workgroupBarrier();
@@ -131,10 +144,10 @@ fn cs_main(@builtin(workgroup_id) wid: vec3<u32>,
   var c: u32 = tid;
   loop {
     if (!(c < sh.channel_count)) { break; }
-    let ch: GpuChannel = channels[sh.channel_off + c];
+    let ch: GpuChannel = load_channel(sh.channel_off + c);
     if (ch.sampler_idx >= 0 && ch.node_idx >= 0 &&
         u32(ch.node_idx) < sh.node_count) {
-      let s: GpuSampler = samplers[sh.sampler_off + u32(ch.sampler_idx)];
+      let s: GpuSampler = load_sampler(sh.sampler_off + u32(ch.sampler_idx));
       let v: vec4<f32> = sample_sampler(s, ch.path, wrapped);
       if (ch.path == kPathTranslation) {
         s_trs[u32(ch.node_idx)].T = vec4<f32>(v.xyz, 0.0);
@@ -153,9 +166,9 @@ fn cs_main(@builtin(workgroup_id) wid: vec3<u32>,
     var k: u32 = 0u;
     loop {
       if (!(k < sh.node_count)) { break; }
-      let ni: i32 = topo[sh.topo_off + k];
+      let ni: i32 = ae_i32[sh.topo_off + k];
       if (ni >= 0 && u32(ni) < sh.node_count) {
-        let pi: i32 = parent[sh.parent_off + u32(ni)];
+        let pi: i32 = ae_i32[sh.parent_off + u32(ni)];
         let local: mat4x4<f32> = compose_trs(s_trs[u32(ni)]);
         var world: mat4x4<f32>;
         if (pi >= 0) {
@@ -213,14 +226,16 @@ fn cs_main(@builtin(workgroup_id) wid: vec3<u32>,
   var j: u32 = tid;
   loop {
     if (!(j < sh.joint_count)) { break; }
-    let jn: i32 = joint_nodes[sh.joint_nodes_off + j];
+    let jn: i32 = ae_i32[sh.joint_nodes_off + j];
     if (jn < 0 || u32(jn) >= sh.node_count) {
       palette_out[rec.palette_out_base + j] = mat4x4<f32>(
         vec4<f32>(1.0,0.0,0.0,0.0), vec4<f32>(0.0,1.0,0.0,0.0),
         vec4<f32>(0.0,0.0,1.0,0.0), vec4<f32>(0.0,0.0,0.0,1.0));
     } else {
       let jw: mat4x4<f32> = world_scratch[rec.world_scratch_base + u32(jn)];
-      let ib: mat4x4<f32> = inverse_binds[sh.inverse_binds_off + j];
+      let ibo: u32 = sh.inverse_binds_off + j * 4u;
+      let ib: mat4x4<f32> = mat4x4<f32>(ae_vec4[ibo + 0u], ae_vec4[ibo + 1u],
+                                        ae_vec4[ibo + 2u], ae_vec4[ibo + 3u]);
       palette_out[rec.palette_out_base + j] = mesh_world_inv * jw * ib;
     }
     j = j + 64u;

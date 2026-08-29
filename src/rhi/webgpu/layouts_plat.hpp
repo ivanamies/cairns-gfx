@@ -58,7 +58,7 @@ inline WGPUBindGroupLayout MakeMaterialLayout(WGPUDevice device) {
 // single Storage binding type covers src+dst -- they never alias within a set.
 // Compute-visible; wgpu-native dedups identical descriptors so the bind group
 // (CreateDynamicBuffers) and the pipeline layout share one layout object.
-inline constexpr size_t kMaxComputeBindings = 16;  // anim_eval = 13 bindings
+inline constexpr size_t kMaxComputeBindings = 16;  // anim_eval = 7 bindings (#231)
 
 inline WGPUBindGroupLayout MakeComputeSetLayout(
     WGPUDevice device, const DynamicBinding* bindings, size_t count) {
@@ -79,14 +79,16 @@ inline WGPUBindGroupLayout MakeComputeSetLayout(
     return wgpuDeviceCreateBindGroupLayout(device, &d);
 }
 
-// anim_eval set 0: 13 bindings matching MakeComputeSetLayout's output for the
-// ae_b[] DynamicBindings (binding 0 = dynamic UBO, 1-12 = storage). Built here
-// from desc.layout==kAnimEval (like vk's anim_eval_layout_) so the kernel's
-// pipeline layout exists independent of when dyn_anim_eval_'s backings resolve;
-// wgpu-native dedups it against the bind group's identical descriptor.
+// #231 anim_eval set 0: 7 bindings matching MakeComputeSetLayout's output for
+// the ae_b[] DynamicBindings (binding 0 = dynamic UBO, 1-6 = packed storage).
+// Built here from desc.layout==kAnimEval (like vk's anim_eval_layout_) so the
+// kernel's pipeline layout exists independent of when dyn_anim_eval_'s backings
+// resolve; wgpu-native dedups it against the bind group's identical descriptor.
+// All storage stays read_write (matching MakeComputeSetLayout + the wgsl's
+// read_write declarations) so the two descriptors stay byte-identical.
 inline WGPUBindGroupLayout MakeAnimEvalSetLayout(WGPUDevice device) {
-    WGPUBindGroupLayoutEntry e[13] = {};
-    for (uint32_t i = 0; i < 13; ++i) {
+    WGPUBindGroupLayoutEntry e[7] = {};
+    for (uint32_t i = 0; i < 7; ++i) {
         e[i].binding = i;
         e[i].visibility = WGPUShaderStage_Compute;
         if (i == 0) {
@@ -98,7 +100,7 @@ inline WGPUBindGroupLayout MakeAnimEvalSetLayout(WGPUDevice device) {
         e[i].buffer.minBindingSize = 0;
     }
     WGPUBindGroupLayoutDescriptor d = {};
-    d.entryCount = 13;
+    d.entryCount = 7;
     d.entries = e;
     return wgpuDeviceCreateBindGroupLayout(device, &d);
 }

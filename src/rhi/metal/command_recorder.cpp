@@ -165,7 +165,8 @@ void CommandRecorder::DispatchSkinBatches(
 }
 
 // #221 Phase 5b: Metal mirror of DispatchAnimEval. One workgroup per actor,
-// 64 threads. setBuffer all 13 buffers + setThreadgroupMemoryLength for the
+// 64 threads. setBuffer all 7 buffers (records + 6 packed SSBOs, #231) +
+// setThreadgroupMemoryLength for the
 // shared GpuTRS[256]. Encoder boundary acts as the compute->compute barrier;
 // the subsequent DispatchSkinBatches sees this kernel's writes via Metal's
 // implicit hazard tracking.
@@ -189,18 +190,18 @@ void CommandRecorder::DispatchAnimEval(
     }
     MTL::ComputeCommandEncoder* cenc = plat.cmd_->computeCommandEncoder();
     cenc->setComputePipelineState(khot->api_pso);
-    Handle<Buffer> hs[12] = {
-        args.scene_headers, args.parent_buf, args.topo_buf, args.bind_pose_buf,
-        args.channels_buf, args.samplers_buf, args.times_buf, args.values_buf,
-        args.joint_nodes_buf, args.inverse_binds_buf, args.world_scratch,
-        args.palette_out,
+    // #231 SSBO pack: bindings 1-6 = i32 / vec4 / word16 / headers /
+    // world_scratch / palette_out (matching the metal kernel buffer indices).
+    Handle<Buffer> hs[6] = {
+        args.i32_buf, args.vec4_buf, args.word16_buf,
+        args.scene_headers, args.world_scratch, args.palette_out,
     };
     {
         MTL::Buffer* records_mtl =
             res.plat.GetBumpMasterBuffer(alloc, Memory::kDynamic);
         cenc->setBuffer(records_mtl, records_byte_offset, 0);
     }
-    for (uint32_t i = 0; i < 12; ++i) {
+    for (uint32_t i = 0; i < 6; ++i) {
         uint32_t off = 0;
         MTL::Buffer* b = res.plat.GetMtlBuffer(alloc, hs[i], &off);
         cenc->setBuffer(b, off, 1 + i);

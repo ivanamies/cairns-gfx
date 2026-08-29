@@ -165,16 +165,13 @@ public:
     // #222 Phase R.1: 13-buffer + 2-uint param sprawl collapsed to a
     // parameter object. Add fields here, not to the signature.
     struct AnimEvalArgs {
+        // #231 SSBO pack: 9 read-only table handles folded to 3 by element
+        // type. Binding order = i32(1)/vec4(2)/word16(3)/headers(4)/
+        // world_scratch(5)/palette_out(6).
+        Handle<Buffer> i32_buf;
+        Handle<Buffer> vec4_buf;
+        Handle<Buffer> word16_buf;
         Handle<Buffer> scene_headers;
-        Handle<Buffer> parent_buf;
-        Handle<Buffer> topo_buf;
-        Handle<Buffer> bind_pose_buf;
-        Handle<Buffer> channels_buf;
-        Handle<Buffer> samplers_buf;
-        Handle<Buffer> times_buf;
-        Handle<Buffer> values_buf;
-        Handle<Buffer> joint_nodes_buf;
-        Handle<Buffer> inverse_binds_buf;
         Handle<Buffer> world_scratch;
         Handle<Buffer> palette_out;
         // #222 Phase D.3: dyn_set_0 carries the per-FIF anim_eval set
