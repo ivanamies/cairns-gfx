@@ -4533,3 +4533,256 @@ uint32_t Engine::InstantiatePrefabImpl(uint32_t scene_idx, const glm::mat4& worl
     }
 
 }  // namespace cairns
+
+namespace cairns {
+
+std::vector<Engine::PrefabHandleSnapshot> Engine::SnapshotPrefabHandles() {
+        std::vector<PrefabHandleSnapshot> out;
+        for (uint32_t pi = 0;
+             pi < static_cast<uint32_t>(prefab_store_.prefab_ids.size()); ++pi) {
+            cairns::Prefab::Hot* shot = prefab_store_.prefabs.GetHot(prefab_store_.prefab_ids[pi]);
+            if (!shot) {
+                continue;
+            }
+            for (uint32_t mi = 0;
+                 mi < static_cast<uint32_t>(shot->meshes.size()); ++mi) {
+                cairns::Mesh::Hot* mhot = prefab_store_.meshes.GetHot(shot->meshes[mi]);
+                if (!mhot) {
+                    continue;
+                }
+                PrefabHandleSnapshot s{};
+                s.prefab_idx = pi;
+                s.mesh_idx = mi;
+                s.pos_idx  = mhot->posHandle.index;
+                s.pos_gen  = mhot->posHandle.generation;
+                s.attr_idx = mhot->attrHandle.index;
+                s.attr_gen = mhot->attrHandle.generation;
+                s.idx_idx  = mhot->indexHandle.index;
+                s.idx_gen  = mhot->indexHandle.generation;
+                s.batch_id = mhot->batch_id;
+                s.global_base_vertex = mhot->global_base_vertex;
+                out.push_back(s);
+            }
+        }
+        return out;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+Engine::LoadPrefabBatchResult Engine::RuntimeLoadBatch(
+            std::span<const std::filesystem::path> glbs) {
+        rhi_.device.WaitIdle();
+        LoadPrefabBatchResult r = LoadPrefabBatch(glbs);
+        if (r.count > 0) {
+            // anim tables are a flat per-prefab GPU array; re-flatten +
+            // re-upload picks up the new prefabs. Cost scales with total
+            // prefabs (not batch); cheap relative to parse.
+            uploadAnimTablesGpu();
+            // Backfill any SkinId records that pre-dated the new headers.
+            skinning_.skins.ForEachLive(
+                [&](cairns::SkinnedAttachment::Hot& h,
+                    cairns::SkinnedAttachment::Cold& c) {
+                    if (cairns::Prefab::Hot* sht = prefab_store_.prefabs.GetHot(c.scene)) {
+                        h.gpu_prefab_header_idx = sht->gpu_prefab_header_idx;
+                    }
+                });
+        }
+        return r;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+Engine::LoadPrefabBatchResult Engine::LoadPrefabBatch(
+            std::span<const std::filesystem::path> glbs) {
+        // Phase D: bracket every load with a printf + an Instruments
+        // signpost so the time profiler distinguishes load work from
+        // steady-state frames.
+        const char* first_path =
+            glbs.empty() ? "<empty>" : glbs.front().filename().c_str();
+        CAIRNS_PRINT_ERR("[LOAD] begin batch n=%zu first=%s\n",
+                          glbs.size(), first_path);
+        CAIRNS_SIGNPOST_INTERVAL_SCOPED("load_prefab_batch", first_path);
+#if CAIRNS_ALLOC_TRACE
+        const cairns::alloc_count::Snapshot alloc_load_begin =
+            cairns::alloc_count::Now();
+#endif
+
+        LoadPrefabBatchResult r{};
+        r.first_prefab_idx = static_cast<uint32_t>(prefab_store_.prefab_ids.size());
+
+        // #224 L3: per-stage timing. steady_clock so the trace numbers
+        // are wall-clock; the byte-gate doesn't reference them.
+        using Clock = std::chrono::steady_clock;
+        const auto t_total = Clock::now();
+        cairns::LoadTrace trace{};
+
+        // ── parse + validate + prepare resources per glb (no GPU upload yet) ──
+        const auto t_parse = Clock::now();
+        cairns::ValidationReport vreport{};
+        for (const std::filesystem::path& p : glbs) {
+            cairns::PrefabId sid = prefab_store_.prefabs.Acquire();
+            cairns::Prefab::Hot* shot = prefab_store_.prefabs.GetHot(sid);
+            cairns::Prefab::Cold* scold = prefab_store_.prefabs.GetCold(sid);
+            if (!shot || !scold ||
+                !cairns::LoadPrefabFromGltf(p, *shot, *scold, prefab_store_.meshes, cpu_block_,
+                                            prefab_arena_)) {
+                CAIRNS_PRINT_ERR("[LoadPrefabBatch] parse failed: %s\n",
+                                  p.string().c_str());
+                prefab_store_.prefabs.Release(sid);
+                continue;
+            }
+            // #224 L2: validate against engine caps before upload.
+            const uint32_t prefab_idx_for_log =
+                static_cast<uint32_t>(prefab_store_.prefab_ids.size());
+            if (!ValidatePrefab(*scold, vreport, prefab_idx_for_log)) {
+                CAIRNS_PRINT_ERR(
+                    "[LoadPrefabBatch] validation failed for %s -- "
+                    "skipping prefab.\n", p.string().c_str());
+                prefab_store_.prefabs.Release(sid);
+                continue;
+            }
+            cairns::PreparePrefabResources(*shot, *scold, rhi_.resources,
+                                            rhi_.alloc, prefab_store_.materials);
+            prefab_store_.prefab_ids.push_back(sid);
+            ++r.count;
+        }
+        trace.Add("parse_gltf",
+                   std::chrono::duration<double, std::milli>(
+                       Clock::now() - t_parse).count(),
+                   0, r.count);
+        if (r.count == 0) {
+            trace.total_ms = std::chrono::duration<double, std::milli>(
+                Clock::now() - t_total).count();
+            prefab_store_.last_load_trace = trace;
+            return r;
+        }
+
+        // ── upload the new batch's prefabs to NEW kDefault buffers ──
+        const auto t_upload = Clock::now();
+        rhi::Handle<rhi::Buffer> batch_shared_skin =
+            rhi::Handle<rhi::Buffer>::Null;
+        std::span<const cairns::PrefabId> new_span(
+            prefab_store_.prefab_ids.data() + r.first_prefab_idx, r.count);
+        if (!cairns::rhi::LoadPrefabsGpu(new_span, prefab_store_.prefabs, prefab_store_.meshes,
+                                          rhi_.resources, rhi_.alloc,
+                                          &batch_shared_skin)) {
+            CAIRNS_PRINT_ERR(
+                "[LoadPrefabBatch] LoadPrefabsGpu failed for %u prefabs\n",
+                r.count);
+            trace.total_ms = std::chrono::duration<double, std::milli>(
+                Clock::now() - t_total).count();
+            prefab_store_.last_load_trace = trace;
+            return r;
+        }
+        trace.Add("upload_kdefault",
+                   std::chrono::duration<double, std::milli>(
+                       Clock::now() - t_upload).count(),
+                   0, r.count);
+
+        // ══════════════════════════════════════════════════════════════
+        // #228 H0: THE MANIFEST. The runtime/post-upload state-agreement
+        // transformation, written as an explicit ordered list of named
+        // one-liners. Adding engine state that depends on prefabs =
+        // add a line here AND its matching invariant in
+        // CheckPrefabStateInvariants (H2). There is no other site.
+        // A forgotten member is a visible hole in this list, not a
+        // silent fallback discovered overnight.
+        // ══════════════════════════════════════════════════════════════
+        uint32_t batch_mesh_count = 0;
+        StampBatchSkinAndMeshIds(new_span, batch_shared_skin,
+                                  batch_mesh_count);
+
+        const auto t_group_a = std::chrono::steady_clock::now();
+        BuildGroupABindGroups(new_span, batch_shared_skin);
+        trace.Add("skin_group_a",
+                   std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - t_group_a).count(),
+                   0, r.count);
+
+        const auto t_cleanup = std::chrono::steady_clock::now();
+        ValidateAndCleanupTmps(new_span, r.first_prefab_idx, vreport);
+        trace.Add("cleanup_tmps",
+                   std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - t_cleanup).count());
+
+        BuildMaterialSet2();           // span-independent (idempotent)
+        BuildResidentTextures(new_span);
+        StampPerPrefabAsset(new_span);
+        AppendGlbPaths(new_span, glbs);  // [PICK] log
+        // AppendAnimTables(new_span)  -- H4 (Aaltonen delta, replaces
+        //                                  RuntimeLoadBatch's full
+        //                                  uploadAnimTablesGpu re-call)
+
+        // ── finalize trace + bump counters ──
+        trace.total_ms = std::chrono::duration<double, std::milli>(
+            Clock::now() - t_total).count();
+        trace.prefabs_added = r.count;
+        trace.meshes_added = batch_mesh_count;
+        prefab_store_.last_load_trace = trace;
+        prefab_store_.last_validation_report = vreport;
+        ++prefab_store_.loader_counters.batches_loaded;
+        prefab_store_.loader_counters.prefabs_resident += r.count;
+        prefab_store_.loader_counters.meshes_resident += batch_mesh_count;
+        prefab_store_.loader_counters.last_batch_ms = trace.total_ms;
+        if (trace.total_ms > prefab_store_.loader_counters.peak_batch_ms) {
+            prefab_store_.loader_counters.peak_batch_ms = trace.total_ms;
+        }
+        // Phase D close: end-of-batch marker. Pair with [LOAD] begin
+        // so log scanning can compute per-batch wall time without
+        // hunting for the LoadTrace summary.
+        CAIRNS_PRINT_ERR("[LOAD] end batch ms=%.3f count=%u\n",
+                          trace.total_ms, r.count);
+        // #229: arena/block high-water -- visible in logcat so the S22's 256 MB
+        // budget headroom is observable. prefab_arena (names/children/skin/clip
+        // slices) and the cpu_block_ in-class total (pools + prefab tables +
+        // entt; mesh cpu* are malloc, not here).
+        CAIRNS_PRINT_ERR("[PREFAB-ARENA] used=%zu KiB / %zu KiB cap\n",
+                          prefab_arena_.Used() / 1024,
+                          prefab_arena_.Capacity() / 1024);
+        CAIRNS_PRINT_ERR("[CPU-BLOCK] in_use=%llu KiB / %llu KiB budget\n",
+                          (unsigned long long)(cpu_block_.BytesInUse() / 1024),
+                          (unsigned long long)(
+                              cairns::MemoryBudget::Default().cpu_persistent_bytes
+                              / 1024));
+#if CAIRNS_ALLOC_TRACE
+        cairns::alloc_count::PrintDelta("[LOAD]", alloc_load_begin);
+#endif
+        return r;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+bool Engine::ValidatePrefab(const cairns::Prefab::Cold& cold,
+                                cairns::ValidationReport& report,
+                                uint32_t prefab_idx) {
+        const uint8_t pre_errors = report.issue_count;
+        const uint32_t node_count =
+            static_cast<uint32_t>(cold.nodes.size());
+        if (node_count > kAnimMaxNodes) {
+            report.Add(cairns::ValidationSeverity::kError,
+                        "node_count > kAnimMaxNodes (256)", prefab_idx);
+        }
+        uint32_t max_joints = 0;
+        for (const cairns::Skin& s : cold.skins) {
+            const uint32_t jc = static_cast<uint32_t>(s.jointNodes.size());
+            if (jc > max_joints) {
+                max_joints = jc;
+            }
+        }
+        if (max_joints > kAnimMaxJoints) {
+            report.Add(cairns::ValidationSeverity::kError,
+                        "max_joints > kAnimMaxJoints (256)", prefab_idx);
+        }
+        // Per-mesh weight-sum check requires Mesh::Cold (pre-CleanupTmps)
+        // -- runs in LoadPrefabBatch via ValidateMeshWeights below since
+        // mesh data is owned by the engine pool, not by Prefab::Cold.
+        return report.issue_count == pre_errors;
+    }
+
+}  // namespace cairns
