@@ -55,11 +55,14 @@ run_backend() {
     esac
     [ -x "$serve" ] || { echo "$bk: cairns_serve missing at $serve" >&2; return 1; }
 
-    /bin/rm -f tmp/_lf_empty.png tmp/_lf_loaded.png tmp/_lf_animated.png
+    /bin/rm -f tmp/_lf_${bk}_empty.png tmp/_lf_${bk}_loaded.png tmp/_lf_${bk}_animated.png
 
+    # Stamp the JS with the backend name so dump paths don't collide
+    # between metal and vk runs.
+    local prelude="globalThis.LF_BACKEND = \"${bk}\";"
     local spawn_op
-    spawn_op=$(/usr/bin/python3 -c \
-        'import json,sys;print(json.dumps({"op":"cairns.script.eval","args":{"code":open(sys.argv[1]).read()}}))' \
+    spawn_op=$(BK="$bk" /usr/bin/python3 -c \
+        'import json,sys,os; bk=os.environ["BK"]; body="globalThis.LF_BACKEND=\""+bk+"\";\n"+open(sys.argv[1]).read(); print(json.dumps({"op":"cairns.script.eval","args":{"code":body}}))' \
         scripts/_load_flow_test.js)
     local out
     out=$(printf '%s\n' "$spawn_op" | CAIRNS_DUMP=tmp/_lf_unused.png \
@@ -82,11 +85,11 @@ run_backend() {
     fi
 
     # ── shell-side pixel asserts (every step has a verification) ──
-    assert_size_gt tmp/_lf_empty.png    1024 "$bk: step 2 empty dump"   || return 1
-    assert_size_gt tmp/_lf_loaded.png   1024 "$bk: step 8 loaded dump"  || return 1
-    assert_size_gt tmp/_lf_animated.png 1024 "$bk: step 9 animated dump"|| return 1
-    assert_diff tmp/_lf_empty.png   tmp/_lf_loaded.png   "$bk: instantiate produced no pixel delta" || return 1
-    assert_diff tmp/_lf_loaded.png  tmp/_lf_animated.png "$bk: animation produced no pixel delta"  || return 1
+    assert_size_gt tmp/_lf_${bk}_empty.png    1024 "$bk: step 2 empty dump"   || return 1
+    assert_size_gt tmp/_lf_${bk}_loaded.png   1024 "$bk: step 8 loaded dump"  || return 1
+    assert_size_gt tmp/_lf_${bk}_animated.png 1024 "$bk: step 9 animated dump"|| return 1
+    assert_diff tmp/_lf_${bk}_empty.png   tmp/_lf_${bk}_loaded.png   "$bk: instantiate produced no pixel delta" || return 1
+    assert_diff tmp/_lf_${bk}_loaded.png  tmp/_lf_${bk}_animated.png "$bk: animation produced no pixel delta"  || return 1
 
     local okc
     okc=$(printf '%s' "$out" | /usr/bin/python3 -c \

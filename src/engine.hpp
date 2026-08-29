@@ -408,161 +408,39 @@ public:
                        Clock::now() - t_upload).count(),
                    0, r.count);
 
-        // ── stamp batch_id + append shared-skin handle ──
-        const uint16_t batch_id =
-            static_cast<uint16_t>(per_batch_shared_skin_.size());
-        per_batch_shared_skin_.push_back(batch_shared_skin);
+        // ══════════════════════════════════════════════════════════════
+        // #228 H0: THE MANIFEST. The runtime/post-upload state-agreement
+        // transformation, written as an explicit ordered list of named
+        // one-liners. Adding engine state that depends on prefabs =
+        // add a line here AND its matching invariant in
+        // CheckPrefabStateInvariants (H2). There is no other site.
+        // A forgotten member is a visible hole in this list, not a
+        // silent fallback discovered overnight.
+        // ══════════════════════════════════════════════════════════════
         uint32_t batch_mesh_count = 0;
-        for (cairns::PrefabId sid : new_span) {
-            cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
-            if (!shot) {
-                continue;
-            }
-            for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
-                if (cairns::Mesh::Hot* mhot = meshes_.GetHot(mid)) {
-                    mhot->batch_id = batch_id;
-                    ++batch_mesh_count;
-                }
-            }
-        }
+        StampBatchSkinAndMeshIds(new_span, batch_shared_skin,
+                                  batch_mesh_count);
 
-        // ── Group A descriptor set for each new skinned mesh ──
         const auto t_group_a = std::chrono::steady_clock::now();
-        for (cairns::PrefabId sid : new_span) {
-            cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
-            if (!shot) {
-                continue;
-            }
-            for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
-                cairns::Mesh::Hot* mhot = meshes_.GetHot(mid);
-                if (!mhot || mhot->attr_skinned_alias.IsNull() ||
-                    batch_shared_skin.IsNull() || mhot->vert_count == 0) {
-                    continue;
-                }
-                cairns::rhi::BufferBinding bb[2]{};
-                bb[0].slot = 0;
-                bb[0].buffer = mhot->posHandle;
-                bb[0].offset = mhot->global_base_vertex *
-                    static_cast<uint32_t>(sizeof(glm::vec4));
-                bb[0].range = mhot->vert_count *
-                    static_cast<uint32_t>(sizeof(glm::vec4));
-                bb[0].kind = cairns::rhi::BufferKind::kStorage;
-                bb[1].slot = 1;
-                bb[1].buffer = batch_shared_skin;
-                bb[1].offset = mhot->skin_attr_base_vertex *
-                    static_cast<uint32_t>(sizeof(cairns::PackedSkinVertex));
-                bb[1].range = mhot->vert_count *
-                    static_cast<uint32_t>(sizeof(cairns::PackedSkinVertex));
-                bb[1].kind = cairns::rhi::BufferKind::kStorage;
-                cairns::rhi::BindGroupDesc bgd{};
-                bgd.debug_name = "skin_group_a";
-                bgd.buffers = std::span<const cairns::rhi::BufferBinding>(
-                    bb, 2);
-                mhot->skin_group_a = rhi_.resources.CreateSkinGroupA(
-                    rhi_.alloc, rhi_.frames, rhi_.pipelines, bgd);
-            }
-        }
-
+        BuildGroupABindGroups(new_span, batch_shared_skin);
         trace.Add("skin_group_a",
                    std::chrono::duration<double, std::milli>(
                        std::chrono::steady_clock::now() - t_group_a).count(),
                    0, r.count);
 
-        // ── per-mesh weight-sum check + per-new-prefab CleanupTmps +
-        //    per-new-mesh cpu temp clear ──
         const auto t_cleanup = std::chrono::steady_clock::now();
-        for (uint32_t pi = 0; pi < r.count; ++pi) {
-            const uint32_t prefab_idx = r.first_prefab_idx + pi;
-            cairns::Prefab::Hot* shot = prefabs_.GetHot(prefab_ids_[prefab_idx]);
-            if (!shot) {
-                continue;
-            }
-            for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
-                if (cairns::Mesh::Cold* mc = meshes_.GetCold(mid)) {
-                    ValidateMeshWeights(*mc, vreport, prefab_idx);
-                }
-            }
-        }
-        for (cairns::PrefabId sid : new_span) {
-            if (cairns::Prefab::Cold* sc = prefabs_.GetCold(sid)) {
-                sc->CleanupTmps();
-            }
-        }
-        for (cairns::PrefabId sid : new_span) {
-            cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
-            if (!shot) {
-                continue;
-            }
-            for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
-                if (cairns::Mesh::Cold* mc = meshes_.GetCold(mid)) {
-                    mc->cpuPositions.clear();
-                    mc->cpuAttrs.clear();
-                    mc->cpuIndices.clear();
-                }
-            }
-        }
+        ValidateAndCleanupTmps(new_span, r.first_prefab_idx, vreport);
         trace.Add("cleanup_tmps",
                    std::chrono::duration<double, std::milli>(
                        std::chrono::steady_clock::now() - t_cleanup).count());
 
-        // ── build set2 bind group for any material that doesn't yet have
-        //     one. (initRenderPipeline does this once at boot via
-        //     materials_.ForEachLive -- with L9's empty boot, it
-        //     iterated zero materials. Runtime-loaded materials need
-        //     the same treatment, idempotent skip-if-built.) ──
-        materials_.ForEachLive(
-            [&](cairns::Material::Hot& hot,
-                cairns::Material::Cold& cold) {
-                if (!hot.set2.IsNull()) {
-                    return;
-                }
-                const rhi::TextureBinding tb{0, cold.color};
-                const rhi::SamplerBinding sb{0, cold.sampler};
-                rhi::BindGroupDesc bgd{};
-                bgd.textures = std::span<const rhi::TextureBinding>(&tb, 1);
-                bgd.samplers = std::span<const rhi::SamplerBinding>(&sb, 1);
-                hot.set2 = rhi_.resources.CreateBindGroup(bgd);
-            });
-
-        // ── append the new prefabs' textureHandles to resident_textures_
-        //     so DrawMeshes' bindless sampler array sees them. (Pre-#224
-        //     this was rebuilt from scratch in GreaterInit post-load;
-        //     L9's empty boot stranded it.) ──
-        for (cairns::PrefabId sid : new_span) {
-            cairns::Prefab::Cold* scold = prefabs_.GetCold(sid);
-            if (!scold) {
-                continue;
-            }
-            for (rhi::Handle<rhi::Texture> th : scold->textureHandles) {
-                resident_textures_.push_back(th);
-            }
-        }
-
-        // ── stamp per_prefab_asset_ for the new prefabs ──
-        // InstantiatePrefab indexes per_prefab_asset_[prefab_idx]; without
-        // this the bounds check in InstantiatePrefab rejects every runtime-
-        // loaded prefab and returns the entity:0 fail sentinel. (The pre-
-        // L9 GreaterInit post-load block did this; L9 stranded it because
-        // GreaterInit now hits an empty prefab_ids_.)
-        per_prefab_asset_.reserve(prefab_ids_.size());
-        for (cairns::PrefabId sid : new_span) {
-            cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
-            if (!shot || shot->meshes.empty()) {
-                per_prefab_asset_.push_back(cairns::AssetId{});
-                continue;
-            }
-            const cairns::Mesh::Hot* m0 =
-                meshes_.GetHot(shot->meshes[0]);
-            if (!m0) {
-                per_prefab_asset_.push_back(cairns::AssetId{});
-                continue;
-            }
-            const uint32_t prefab_idx =
-                static_cast<uint32_t>(per_prefab_asset_.size());
-            per_prefab_asset_.push_back(assets_.RegisterExistingScene(
-                prefab_idx, sid,
-                m0->posHandle, m0->attrHandle, m0->indexHandle));
-        }
+        BuildMaterialSet2();           // span-independent (idempotent)
+        BuildResidentTextures(new_span);
+        StampPerPrefabAsset(new_span);
+        // AppendGlbPaths(new_span)    -- H3 (mole #6)
+        // AppendAnimTables(new_span)  -- H4 (Aaltonen delta, replaces
+        //                                  RuntimeLoadBatch's full
+        //                                  uploadAnimTablesGpu re-call)
 
         // ── finalize trace + bump counters ──
         trace.total_ms = std::chrono::duration<double, std::milli>(
@@ -606,6 +484,188 @@ public:
                 });
         }
         return r;
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // #228 H0: the manifest's helper bodies. Each is span-scoped (or
+    // span-independent + idempotent for AcquireSceneCells-style ones)
+    // and does what an old GreaterInit post-load block did once over
+    // all prefabs -- now invoked per batch.
+    //
+    // RULE OF THE MANIFEST: every helper here has a matching invariant
+    // in CheckPrefabStateInvariants (H2). Adding a helper without its
+    // invariant fails review.
+    // ══════════════════════════════════════════════════════════════════
+
+    // Stamp batch_id on every Mesh::Hot of the new prefabs and append
+    // the batch's shared skin attrs buffer to per_batch_shared_skin_.
+    // Also count the new meshes for the trace.
+    void StampBatchSkinAndMeshIds(
+            std::span<const cairns::PrefabId> new_span,
+            rhi::Handle<rhi::Buffer> batch_shared_skin,
+            uint32_t& batch_mesh_count_out) {
+        const uint16_t batch_id =
+            static_cast<uint16_t>(per_batch_shared_skin_.size());
+        per_batch_shared_skin_.push_back(batch_shared_skin);
+        for (cairns::PrefabId sid : new_span) {
+            cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
+            if (!shot) {
+                continue;
+            }
+            for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
+                if (cairns::Mesh::Hot* mhot = meshes_.GetHot(mid)) {
+                    mhot->batch_id = batch_id;
+                    ++batch_mesh_count_out;
+                }
+            }
+        }
+    }
+
+    // Vulkan Group A descriptor set (positions slice + skin attrs slice)
+    // per new skinned mesh. Metal binds buffers directly per batch in
+    // DispatchSkinBatches; CreateSkinGroupA returns Null there.
+    void BuildGroupABindGroups(
+            std::span<const cairns::PrefabId> new_span,
+            rhi::Handle<rhi::Buffer> batch_shared_skin) {
+        for (cairns::PrefabId sid : new_span) {
+            cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
+            if (!shot) {
+                continue;
+            }
+            for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
+                cairns::Mesh::Hot* mhot = meshes_.GetHot(mid);
+                if (!mhot || mhot->attr_skinned_alias.IsNull() ||
+                    batch_shared_skin.IsNull() || mhot->vert_count == 0) {
+                    continue;
+                }
+                cairns::rhi::BufferBinding bb[2]{};
+                bb[0].slot = 0;
+                bb[0].buffer = mhot->posHandle;
+                bb[0].offset = mhot->global_base_vertex *
+                    static_cast<uint32_t>(sizeof(glm::vec4));
+                bb[0].range = mhot->vert_count *
+                    static_cast<uint32_t>(sizeof(glm::vec4));
+                bb[0].kind = cairns::rhi::BufferKind::kStorage;
+                bb[1].slot = 1;
+                bb[1].buffer = batch_shared_skin;
+                bb[1].offset = mhot->skin_attr_base_vertex *
+                    static_cast<uint32_t>(sizeof(cairns::PackedSkinVertex));
+                bb[1].range = mhot->vert_count *
+                    static_cast<uint32_t>(sizeof(cairns::PackedSkinVertex));
+                bb[1].kind = cairns::rhi::BufferKind::kStorage;
+                cairns::rhi::BindGroupDesc bgd{};
+                bgd.debug_name = "skin_group_a";
+                bgd.buffers = std::span<const cairns::rhi::BufferBinding>(
+                    bb, 2);
+                mhot->skin_group_a = rhi_.resources.CreateSkinGroupA(
+                    rhi_.alloc, rhi_.frames, rhi_.pipelines, bgd);
+            }
+        }
+    }
+
+    // Per-mesh weight-sum validation + Prefab::Cold::CleanupTmps +
+    // per-new-mesh cpu temp clear. Combined because they share the
+    // pre-cleanup-tmps window for skin attrs.
+    void ValidateAndCleanupTmps(
+            std::span<const cairns::PrefabId> new_span,
+            uint32_t first_prefab_idx,
+            cairns::ValidationReport& vreport) {
+        for (uint32_t pi = 0;
+             pi < static_cast<uint32_t>(new_span.size()); ++pi) {
+            const uint32_t prefab_idx = first_prefab_idx + pi;
+            cairns::Prefab::Hot* shot =
+                prefabs_.GetHot(prefab_ids_[prefab_idx]);
+            if (!shot) {
+                continue;
+            }
+            for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
+                if (cairns::Mesh::Cold* mc = meshes_.GetCold(mid)) {
+                    ValidateMeshWeights(*mc, vreport, prefab_idx);
+                }
+            }
+        }
+        for (cairns::PrefabId sid : new_span) {
+            if (cairns::Prefab::Cold* sc = prefabs_.GetCold(sid)) {
+                sc->CleanupTmps();
+            }
+        }
+        for (cairns::PrefabId sid : new_span) {
+            cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
+            if (!shot) {
+                continue;
+            }
+            for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
+                if (cairns::Mesh::Cold* mc = meshes_.GetCold(mid)) {
+                    mc->cpuPositions.clear();
+                    mc->cpuAttrs.clear();
+                    mc->cpuIndices.clear();
+                }
+            }
+        }
+    }
+
+    // Build Material::Hot::set2 for every live material that doesn't
+    // already have one. Idempotent skip-if-built so running per-batch
+    // doesn't rebuild prior batches' sets.
+    // (initRenderPipeline also calls this once at boot; with L9's empty
+    // boot it iterates zero materials and was stranded -- L10b moved
+    // the loop here.)
+    void BuildMaterialSet2() {
+        materials_.ForEachLive(
+            [&](cairns::Material::Hot& hot,
+                cairns::Material::Cold& cold) {
+                if (!hot.set2.IsNull()) {
+                    return;
+                }
+                const rhi::TextureBinding tb{0, cold.color};
+                const rhi::SamplerBinding sb{0, cold.sampler};
+                rhi::BindGroupDesc bgd{};
+                bgd.textures = std::span<const rhi::TextureBinding>(&tb, 1);
+                bgd.samplers = std::span<const rhi::SamplerBinding>(&sb, 1);
+                hot.set2 = rhi_.resources.CreateBindGroup(bgd);
+            });
+    }
+
+    // Append the new prefabs' textureHandles to resident_textures_ so
+    // DrawMeshes' bindless sampler array can index them. APPEND-only;
+    // existing entries' indices unchanged (L6 contract).
+    void BuildResidentTextures(std::span<const cairns::PrefabId> new_span) {
+        for (cairns::PrefabId sid : new_span) {
+            cairns::Prefab::Cold* scold = prefabs_.GetCold(sid);
+            if (!scold) {
+                continue;
+            }
+            for (rhi::Handle<rhi::Texture> th : scold->textureHandles) {
+                resident_textures_.push_back(th);
+            }
+        }
+    }
+
+    // Register each new prefab as an AssetId so InstantiatePrefab can
+    // resolve per_prefab_asset_[prefab_idx] without a bounds-check fail.
+    // The InstantiatePrefab bounds check at engine.hpp:223 indexes this
+    // array; a forgotten append here is the L10 silent failure that
+    // returned UINT32_MAX / entity:0.
+    void StampPerPrefabAsset(std::span<const cairns::PrefabId> new_span) {
+        per_prefab_asset_.reserve(prefab_ids_.size());
+        for (cairns::PrefabId sid : new_span) {
+            cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
+            if (!shot || shot->meshes.empty()) {
+                per_prefab_asset_.push_back(cairns::AssetId{});
+                continue;
+            }
+            const cairns::Mesh::Hot* m0 =
+                meshes_.GetHot(shot->meshes[0]);
+            if (!m0) {
+                per_prefab_asset_.push_back(cairns::AssetId{});
+                continue;
+            }
+            const uint32_t prefab_idx =
+                static_cast<uint32_t>(per_prefab_asset_.size());
+            per_prefab_asset_.push_back(assets_.RegisterExistingScene(
+                prefab_idx, sid,
+                m0->posHandle, m0->attrHandle, m0->indexHandle));
+        }
     }
 
     // #224 L5: convenience -- pick `count` GLB paths from the static
