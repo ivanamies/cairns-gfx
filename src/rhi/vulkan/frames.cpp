@@ -273,18 +273,23 @@ bool Frames::Init(Device& device) {
             return false;
         }
 
+        // Compute uses kMaxStepsPerFrame sets per slot (Fiedler N-step sim).
+        // UBO count: point(n) + compute(n * kMaxStepsPerFrame).
+        // SSBO count: compute (2 * n * kMaxStepsPerFrame).
+        // DYNAMIC UBO: globals(n) + drawtmp(n).
         VkDescriptorPoolSize sizes[3]{};
         sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        sizes[0].descriptorCount = n;
+        sizes[0].descriptorCount = n + n * kMaxStepsPerFrame;
         sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        sizes[1].descriptorCount = 2 * n;
+        sizes[1].descriptorCount = 2 * n * kMaxStepsPerFrame;
         sizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         sizes[2].descriptorCount = 2 * n;
         VkDescriptorPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pci.poolSizeCount = 3;
         pci.pPoolSizes = sizes;
-        pci.maxSets = 4 * n;
+        // 3 single-set layouts + compute (kMaxStepsPerFrame sets) per slot.
+        pci.maxSets = 3 * n + n * kMaxStepsPerFrame;
         if (vkCreateDescriptorPool(dev, &pci, nullptr, &descriptor_pool_) !=
             VK_SUCCESS) {
             return false;
@@ -302,10 +307,28 @@ bool Frames::Init(Device& device) {
             return vkAllocateDescriptorSets(dev, &ai, out.data()) == VK_SUCCESS;
         };
         if (!alloc_sets(point_layout_, point_sets_) ||
-            !alloc_sets(compute_layout_, compute_sets_) ||
             !alloc_sets(globals_set_layout_, globals_sets_) ||
             !alloc_sets(drawtmp_set_layout_, drawtmp_sets_)) {
             return false;
+        }
+        compute_sets_.resize(n);
+        {
+            const uint32_t total = n * kMaxStepsPerFrame;
+            std::vector<VkDescriptorSetLayout> layouts(total, compute_layout_);
+            std::vector<VkDescriptorSet> flat(total);
+            VkDescriptorSetAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            ai.descriptorPool = descriptor_pool_;
+            ai.descriptorSetCount = total;
+            ai.pSetLayouts = layouts.data();
+            if (vkAllocateDescriptorSets(dev, &ai, flat.data()) != VK_SUCCESS) {
+                return false;
+            }
+            for (uint32_t f = 0; f < n; ++f) {
+                for (uint32_t k = 0; k < kMaxStepsPerFrame; ++k) {
+                    compute_sets_[f][k] = flat[f * kMaxStepsPerFrame + k];
+                }
+            }
         }
     }
     inited_ = true;
@@ -430,7 +453,7 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
     fc.cmd.device_ = dev;
     fc.cmd.globals_set_ = globals_sets_[cf];
     fc.cmd.drawtmp_set_ = drawtmp_sets_[cf];
-    fc.cmd.compute_set_ = compute_sets_[cf];
+    fc.cmd.compute_sets_ = compute_sets_[cf];
     fc.cmd.point_set_ = point_sets_[cf];
     fc.cmd.ts_pool_ = ts_pool_;
     fc.cmd.pass_names_ = &pass_names_[cf];

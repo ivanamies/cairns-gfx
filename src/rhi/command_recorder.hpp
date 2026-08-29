@@ -13,6 +13,7 @@
 #include "rhi/resource_manager.hpp"
 #include "util/draw.hpp"
 #include "util/draw_key.hpp"
+#include "util/frame_clock.hpp"
 #if CAIRNS_VULKAN
 #include <vulkan/vulkan.h>
 #elif CAIRNS_METAL
@@ -72,6 +73,7 @@ struct ComputeDispatch {
     uint32_t local_x = 1;
     uint32_t local_y = 1;
     uint32_t local_z = 1;
+    uint32_t step_index = 0;
 };
 
 struct MeshDrawList {
@@ -112,7 +114,7 @@ public:
     VkDevice device_ = VK_NULL_HANDLE;
     VkDescriptorSet globals_set_ = VK_NULL_HANDLE;
     VkDescriptorSet drawtmp_set_ = VK_NULL_HANDLE;
-    VkDescriptorSet compute_set_ = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, kMaxStepsPerFrame> compute_sets_{};
     VkDescriptorSet point_set_ = VK_NULL_HANDLE;
     // Per-pass timing (populated by Frames::Begin; written by PassTimerBegin).
     VkQueryPool ts_pool_ = VK_NULL_HANDLE;

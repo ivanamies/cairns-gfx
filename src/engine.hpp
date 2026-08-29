@@ -458,7 +458,10 @@ public:
             rhi_.alloc.BumpAllocate(sizeof(float), rhi_.alloc.UboAlign(),
                                     rhi::Memory::kDynamic, &s.dt_off));
         assert(dt_ptr && "bump alloc failed: delta time");
-        *dt_ptr = delta_time;
+        // Compute kernel sees the fixed sim dt, NOT wall dt -- particles step
+        // at a constant rate regardless of frame timing.
+        *dt_ptr = pkt.fixed_dt;
+        (void)delta_time;
     }
 
     bool draw() {
@@ -697,9 +700,6 @@ public:
 
         rhi::PointDraw pd{};
         pd.pipeline = particle_render_shader_;
-        // Read from the buffer that the loop last wrote into = parity_out.
-        // If N==0, parity_out == parity_in (no Dispatch); both SSBOs were
-        // seeded identically at init, so reading either is safe.
         pd.vertex_buffer = particle_ssbo_[pkt.particle_parity_out];
         pd.vertex_offset = 0;
         pd.vertex_count = kParticleCount;
@@ -721,6 +721,7 @@ public:
                 {2, particle_ssbo_[step_dst], 0},
             };
             cd.buffers = std::span<const rhi::BoundBuffer>(cbufs, 3);
+            cd.step_index = k;
             fc.cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
         }
         fc.cmd.PassTimerEnd();

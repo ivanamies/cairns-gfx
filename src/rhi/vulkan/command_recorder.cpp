@@ -34,7 +34,20 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
                             2 * kMaxPasses * frame_ + 2 * pending_pass_idx_);
     }
     Kernel::Hot* k = res.GetHot(d.kernel);
-    VkDescriptorSet set = compute_set_;
+    assert(d.step_index < kMaxStepsPerFrame);
+    // Barrier between consecutive compute dispatches so step k+1 sees step
+    // k's SSBO writes. Single global memory barrier -- only one buffer pair
+    // is in play here. Skipped on the first step (nothing to wait on).
+    if (d.step_index > 0) {
+        VkMemoryBarrier mb{};
+        mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(comp_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb,
+                             0, nullptr, 0, nullptr);
+    }
+    VkDescriptorSet set = compute_sets_[d.step_index];
 
     const size_t n = d.buffers.size();
     std::vector<VkDescriptorBufferInfo> infos(n);

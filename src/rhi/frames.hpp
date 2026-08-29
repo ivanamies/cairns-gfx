@@ -76,7 +76,10 @@ public:
     VkDescriptorSetLayout point_layout_ = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> globals_sets_;
     std::vector<VkDescriptorSet> drawtmp_sets_;
-    std::vector<VkDescriptorSet> compute_sets_;
+    // One DescriptorSet per in-flight slot per sim step. Indexed
+    // [frame_in_flight][step_index]. Multi-step compute needs distinct sets
+    // because vkUpdateDescriptorSets on an in-use set is UB.
+    std::vector<std::array<VkDescriptorSet, kMaxStepsPerFrame>> compute_sets_;
     std::vector<VkDescriptorSet> point_sets_;
     VkQueryPool ts_pool_ = VK_NULL_HANDLE;
     float ts_period_ns_ = 0.0f;
