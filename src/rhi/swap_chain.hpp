@@ -382,6 +382,34 @@ private:
         VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
         VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
         VkExtent2D extent = chooseSwapExtent(swapChainSupport.capabilities);
+
+        // Android pre-rotation: currentTransform may be ROTATE_90/180/270 (the
+        // OS native orientation). currentExtent then reports the surface's
+        // PRE-rotation dims (e.g. 1080x2400 portrait on a Pixel 6a in landscape
+        // mode). If we pass through that extent + preTransform=currentTransform,
+        // we render into a portrait surface and the OS doesn't rotate at present
+        // (preTransform == currentTransform == "we did the rotation already"),
+        // so display content ends up rotated 90deg. iOS/Metal hide this from
+        // us; native-Vulkan-on-Android does not.
+        //
+        // Fix: ask the compositor to do the rotation by setting preTransform
+        // to IDENTITY (when IDENTITY is supported). Then swap the extent dims
+        // so the swapchain image is landscape-oriented, matching the display.
+        // Everything downstream (Width/Height, viewport, scissor, projection)
+        // sees landscape dims and Just Works.
+        VkSurfaceTransformFlagBitsKHR preTransform =
+            swapChainSupport.capabilities.currentTransform;
+        const bool is_rotated_90_or_270 =
+            (preTransform & (VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR |
+                             VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR)) != 0;
+        const bool identity_supported =
+            (swapChainSupport.capabilities.supportedTransforms &
+             VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) != 0;
+        if (is_rotated_90_or_270 && identity_supported) {
+            preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+            std::swap(extent.width, extent.height);
+        }
+
         uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1;
         if (swapChainSupport.capabilities.maxImageCount > 0 &&
             imageCount > swapChainSupport.capabilities.maxImageCount) {
@@ -411,7 +439,7 @@ private:
             createInfo.queueFamilyIndexCount = 0;
             createInfo.pQueueFamilyIndices = nullptr;
         }
-        createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
+        createInfo.preTransform = preTransform;
         createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
         createInfo.presentMode = presentMode;
         createInfo.clipped = VK_TRUE;
