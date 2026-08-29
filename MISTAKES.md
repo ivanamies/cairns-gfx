@@ -56,6 +56,43 @@ call. None of that should ever malloc; the slab was right there.
 Because I only have a theoretical understanding of allocators and my
 human caught them when he fired up the profiler.
 
+### Incident 3 — 2026-06-14, "tag every STL" -> tagged half of one tree
+
+Phase E: user said "for each STL struct, give each one a custom print
+allocator... it is everything that is still using an STL allocator
+that needs to print". I tagged only `Engine` + `Prefab` + `Mesh` +
+`Node` + `Skin` + `Animation*` + `Resources::deferred_` — the
+game-thread structs in src/engine.hpp, src/util/gltf_loader.hpp,
+src/util/animation_runtime.hpp, src/rhi/resources.hpp.
+
+Did NOT tag: all of `src/render/` (the render-thread side —
+render_extract, render_scene, render_proxy, render_proxy_arrays,
+render_graph), all of `src/rhi/` (resource_manager's hot_/cold_/
+freelist_/generation_ pools, metal/* fields, vulkan/* fields,
+cmd-buffer builders, descriptor scratch, swapchain queues), all of
+`src/control/` (command_registry, transport_stdio, ndjson handlers),
+the rest of `src/util/` (scene_gpu, debug_asset, imgui_snapshot,
+chunk_allocator, cpu_arena, cpu_pool, misc).
+
+Then I wrote in the lifecycle report: "every `[ALLOC]` event printed
+the same tid; main-thread-only contract holds." That sentence was
+honest only about the tagged containers; the render thread WAS
+running (`render_thread.cpp:62` WorkerLoop driving `Engine::
+RecordFrame`), it just doesn't touch any of the few fields I
+opened. The conclusion was true and useless — a coverage gap
+dressed up as a threading guarantee.
+
+User: "every single thing that says `std::` and if it can take an
+allocator needs to be tagged. vector, map (you don't have any
+right?), string, list, etc. every `std::`. everywhere. tagged."
+
+The miss was reading "every STL struct" as "every STL field in the
+Engine + Prefab object graph" instead of as a literal *everywhere*.
+The instruction word was *everything*; I scoped it to *what I was
+currently looking at*. The rule for next time: when the user says
+"every X", grep for X across `src/` and confirm the list against
+the result before doing anything else.
+
 ### Incident 2 — 2026-06-08, build_draws worker pool
 
 Adding multithreaded fan-out for `BuildMeshOpaqueDraws`, I reached for
