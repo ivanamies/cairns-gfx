@@ -1,3 +1,24 @@
+## cairns-gfx: canonical implementation order
+
+The order each subsystem MUST be brought up in, regardless of branch / fork /
+rebase / cherry-pick churn. Each later layer depends on the earlier ones being
+solid; do not skip ahead.
+
+1. **RHI** — device, swapchain, command recorder, frames, single forward pass.
+2. **Allocators** — A: bump arena (CPU). B: chunk allocator. C: range pool / OffsetAllocator. D: ResourceManager<T> + Hot/Cold. GPU side: single heap + single master buffer per memory type, bump ring for upload/dynamic. Batched upload (10 GLBs / batch) baked into LoadScenesGpu from day one.
+3. **Profiling** — Timer slots (frame, build_draws, record, etc), printf report every 120 frames, cpu-ms history ring. GPU completion-handler timer slot on Metal.
+4. **ImGui** — vendor imgui core + impl_sdl3, RHI-routed renderer (own pipeline + per-frame bump upload of vtx/idx + per-cmd scissor + font atlas as CreateTexture). FPS text + cpu-ms PlotLines overlay. Drawn at the end of the existing single forward pass — no separate composite pass required.
+5. **Threading** — game / render thread split with `kFramesInFlight=2`. SPSC handoff via std::mutex + std::condition_variable ONLY (no semaphores, latches, barriers, shared_mutex, atomic wait/notify). Per-slot RenderGraph + draw-list containers so producer and consumer never share mutable state.
+6. **RenderGraph / RenderProxies** — multi-pass graph (compute / depth-prepass / forward / composite / blur / depthviz / parallel branches), Extract from SceneWorld → RenderProxyArrays, draw build off proxies. Transient resource aliasing via OffsetAllocator over baked lifetimes.
+7. **Scene layer** — SceneEntity / SceneWorld as ResourceManager<Hot/Cold>, packed live_entities for dense iteration. Light/Camera/Skin proxies on the same Hot/Cold pattern.
+8. **Animation** — skinning. Persistent skin output pool (RangePool over a GPU buffer), per-instance joint palette via FrameArena, compute-pass deformation, skin_output bound as a vertex buffer to the existing mesh pipeline. (Tier 1 load-time joint inv-binds in BumpArena; Tier 2 persistent skin output in RangePool; Tier 3 per-frame palettes in FrameArena.)
+9. **Physics** — broadphase + narrowphase + solver. CPU first; parallelism via the threading carve from step 5. Hot loops on flat arrays-of-structs-of-arrays in BumpArena.
+10. **Scripting** — embedded VM for gameplay code. Calls into the systems above via thin C wrappers; no direct RHI/scene mutation from script threads.
+
+Out of order = fragile. New subsystem? Find where it slots in vs this list, and only land it after everything below it (lower number) is healthy.
+
+---
+
 ## SDL3 App From Source Minimal Example
 This is a minimal example for building and using SDL3, SDL_Mixer, SDL_Image, and SDL_ttf_ from source 
 using C++ and CMake. It also demonstrates setting up things like macOS/iOS

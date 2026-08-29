@@ -69,7 +69,7 @@ void MemoryAllocator::Deinit() {
         RetireFrame(slot);
     }
     for (uint32_t i = 0; i < blocks_.size(); ++i) {
-        if (blocks_[i].heap) {
+        if (blocks_[i].heap || blocks_[i].master_buffer) {
             DestroyBlock(i);
         }
     }
@@ -115,31 +115,20 @@ bool MemoryAllocator::CreateBumpHeap() {
     }
     assert(total > 0 && "bump heap budget is zero");
 
-    MTL::HeapDescriptor* hd = MTL::HeapDescriptor::alloc()->init();
-    hd->setSize(total);
-    hd->setType(MTL::HeapTypePlacement);
-    // One storage mode covers all bump uses (Upload writes, Dynamic UBOs,
-    // Readback). Skipping WriteCombined for Upload to keep Readback fast.
-    hd->setResourceOptions(MTL::ResourceStorageModeShared |
-                           MTL::ResourceHazardTrackingModeUntracked);
-
-    MTL::Heap* heap = device_->newHeap(hd);
-    hd->release();
-    if (!heap) {
-        return false;
-    }
-
-    MTL::Buffer* master = heap->newBuffer(
+    // Skip the heap wrapper for the Shared bump master. iOS Simulator's
+    // MTLSimDevice rejects any non-Private heap ('MTLStorageModePrivate is
+    // required for heaps'); a standalone Shared MTL::Buffer behaves identically
+    // for our bump-ring use case (one giant CPU-mapped buffer carved up by
+    // offset) on real devices.
+    MTL::Buffer* master = device_->newBuffer(
         total,
-        MTL::ResourceStorageModeShared | MTL::ResourceHazardTrackingModeUntracked,
-        0);
+        MTL::ResourceStorageModeShared | MTL::ResourceHazardTrackingModeUntracked);
     if (!master) {
-        heap->release();
         return false;
     }
 
     HeapBlock blk;
-    blk.heap = heap;
+    blk.heap = nullptr;
     blk.master_buffer = master;
     blk.mapped_ptr = master->contents();
     blk.gpu_address = master->gpuAddress();
@@ -154,29 +143,41 @@ bool MemoryAllocator::CreateBumpHeap() {
 
 bool MemoryAllocator::CreateBufferBlock(uint32_t bytes, Memory mem,
                                         uint32_t* out_index) {
-    MTL::HeapDescriptor* hd = MTL::HeapDescriptor::alloc()->init();
-    hd->setSize(bytes);
-    hd->setType(MTL::HeapTypePlacement);
-    hd->setResourceOptions(options_for(mem));
+    const MTL::StorageMode sm = storage_mode_for(mem);
+    MTL::Heap* heap = nullptr;
+    MTL::Buffer* master = nullptr;
 
-    MTL::Heap* heap = device_->newHeap(hd);
-    hd->release();
-    if (!heap) {
-        return false;
-    }
-
-    MTL::Buffer* master = heap->newBuffer(bytes, options_for(mem), 0);
-    if (!master) {
-        heap->release();
-        return false;
+    if (sm == MTL::StorageModePrivate) {
+        MTL::HeapDescriptor* hd = MTL::HeapDescriptor::alloc()->init();
+        hd->setSize(bytes);
+        hd->setType(MTL::HeapTypePlacement);
+        hd->setResourceOptions(options_for(mem));
+        heap = device_->newHeap(hd);
+        hd->release();
+        if (!heap) {
+            return false;
+        }
+        master = heap->newBuffer(bytes, options_for(mem), 0);
+        if (!master) {
+            heap->release();
+            return false;
+        }
+    } else {
+        // Shared / memoryless: skip the heap wrapper. iOS Simulator's
+        // MTLSimDevice rejects any non-Private heap, and on real Apple devices
+        // a standalone Shared buffer is functionally equivalent for our
+        // bump-ring use case (one giant CPU-mapped buffer carved up by offset).
+        master = device_->newBuffer(bytes, options_for(mem));
+        if (!master) {
+            return false;
+        }
     }
 
     HeapBlock blk;
     blk.heap = heap;
     blk.master_buffer = master;
-    blk.mapped_ptr = (storage_mode_for(mem) == MTL::StorageModePrivate)
-                         ? nullptr
-                         : master->contents();
+    blk.mapped_ptr = (sm == MTL::StorageModePrivate) ? nullptr
+                                                    : master->contents();
     blk.gpu_address = master->gpuAddress();
     blk.offset_alloc = OffsetAllocator::Allocator(bytes);
     blk.size_bytes = bytes;

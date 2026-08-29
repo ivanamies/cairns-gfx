@@ -122,33 +122,22 @@ struct MetalShaderInfo {
     const char* cs;
 };
 MetalShaderInfo resolve_metal_shader(const char* logical) {
-    if (std::strcmp(logical, "unlit") == 0) {
+    if (std::strcmp(logical, "unlit") == 0 ||
+        std::strcmp(logical, "unlit_offscreen") == 0) {
         return {"unlit.metal", "cube::vertexShader", "cube::fragmentShader", nullptr};
     }
-    if (std::strcmp(logical, "depth_only") == 0) {
-        return {"depth_only.metal", "depthonly::depth_only_vertex",
-                "depthonly::depth_only_fragment", nullptr};
+    if (std::strcmp(logical, "imgui") == 0) {
+        return {"imgui.metal", "imguicairns::imgui_vertex",
+                "imguicairns::imgui_fragment", nullptr};
     }
-    if (std::strcmp(logical, "composite") == 0) {
-        return {"composite.metal", "composite::composite_vertex",
-                "composite::composite_fragment", nullptr};
-    }
-    if (std::strcmp(logical, "blur") == 0) {
-        return {"blur.metal", "blurfx::blur_vertex", "blurfx::blur_fragment", nullptr};
+    if (std::strcmp(logical, "composite_pip") == 0) {
+        return {"composite_pip.metal", "composite_pipfx::composite_pip_vertex",
+                "composite_pipfx::composite_pip_fragment", nullptr};
     }
     if (std::strcmp(logical, "depthviz") == 0) {
         return {"depthviz.metal", "depthvizfx::depthviz_vertex",
                 "depthvizfx::depthviz_fragment", nullptr};
     }
-    if (std::strcmp(logical, "composite3") == 0) {
-        return {"composite3.metal", "composite3fx::composite3_vertex",
-                "composite3fx::composite3_fragment", nullptr};
-    }
-    if (std::strcmp(logical, "imgui") == 0) {
-        return {"imgui.metal", "imguicairns::imgui_vertex", "imguicairns::imgui_fragment",
-                nullptr};
-    }
-    // "particle"
     return {"particle.metal", "particle_vertex", "particle_fragment", "particle_compute"};
 }
 

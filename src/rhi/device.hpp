@@ -50,6 +50,9 @@ public:
     VkCommandPool command_pool_ = VK_NULL_HANDLE;
     uint32_t queue_family_index_ = 0;
     VkSampleCountFlagBits msaa_samples_ = VK_SAMPLE_COUNT_1_BIT;
+    float timestamp_period_ns_ = 0.0f;
+    bool host_query_reset_ = false;
+    PFN_vkResetQueryPool vk_reset_query_pool_ = nullptr;
 #elif CAIRNS_METAL
     MTL::Device* device_ = nullptr;
     MTL::CommandQueue* queue_ = nullptr;

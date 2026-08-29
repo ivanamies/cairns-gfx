@@ -20,6 +20,7 @@
 #include "imgui_impl_sdl3.h"
 
 #include "engine.hpp"
+#include "util/task_guard.hpp"
 
 namespace cairns {
 
@@ -49,11 +50,9 @@ SDL_AppResult SDL_Fail(){
 }
 
 SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
-    setvbuf(stderr, nullptr, _IONBF, 0);
-    setvbuf(stdout, nullptr, _IONBF, 0);
-
+    
     constexpr uint32_t kWindowStartWidth = 1280;
-    constexpr uint32_t kWindowStartHeight = 960;
+    constexpr uint32_t kWindowStartHeight = 720;
 
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
     
@@ -129,21 +128,13 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event) {
 SDL_AppResult SDL_AppIterate(void *appstate) {
     auto* app = (AppContext*)appstate;
 
-#if CAIRNS_METAL
-    // metal-cpp returns autoreleased objects per frame; drain them each iterate.
-    NS::AutoreleasePool* pool = NS::AutoreleasePool::alloc()->init();
-#endif
+    [[maybe_unused]] cairns::TaskGuard task_guard;
+
     if ( app->engine) {
         if ( !app->engine->draw()) {
-#if CAIRNS_METAL
-            pool->release();
-#endif
             return SDL_APP_CONTINUE;
         }
     }
-#if CAIRNS_METAL
-    pool->release();
-#endif
 
     return app->app_quit;
 }

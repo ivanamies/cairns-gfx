@@ -112,7 +112,27 @@ file(GLOB_RECURSE ALL_SOURCES
   "src/iosLaunchScreen.storyboard"
 )
 
+list(REMOVE_ITEM ALL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/render/render_thread.cpp")
 target_sources(${EXECUTABLE_NAME} PRIVATE ${ALL_SOURCES})
+
+# Taskflow needs exceptions + has size_t->int narrowing in its headers, so the
+# one TU that includes it lives in its own static library with relaxed flags.
+add_library(cairns_render_thread STATIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/render/render_thread.cpp")
+target_include_directories(cairns_render_thread PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_BINARY_DIR}/generated"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/taskflow"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/glm")
+target_compile_features(cairns_render_thread PUBLIC cxx_std_20)
+target_compile_options(cairns_render_thread PRIVATE -Wall -Wextra)
+target_compile_definitions(cairns_render_thread PRIVATE
+    $<$<BOOL:${CAIRNS_GFX_BACKEND_METAL}>:CAIRNS_METAL=1>
+    $<$<BOOL:${CAIRNS_GFX_BACKEND_VULKAN}>:CAIRNS_VULKAN=1>)
+if (CAIRNS_GFX_BACKEND_VULKAN AND APPLE)
+    target_link_libraries(cairns_render_thread PRIVATE Vulkan::Vulkan)
+endif()
+target_link_libraries(${EXECUTABLE_NAME} PRIVATE cairns_render_thread)
 
 # Set C++ version
 target_compile_features(${EXECUTABLE_NAME} PUBLIC cxx_std_20)
@@ -122,6 +142,7 @@ target_include_directories(${EXECUTABLE_NAME} PRIVATE
     "${CMAKE_BINARY_DIR}/generated"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/glm"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/taskflow"
 )
 
 # on Web targets, we need CMake to generate a HTML webpage. 
@@ -302,6 +323,11 @@ else()
     copy_helper("particle.vert.spv")
     copy_helper("particle.frag.spv")
     copy_helper("particle.comp.spv")
+    copy_helper("imgui.vert.spv")
+    copy_helper("imgui.frag.spv")
+    copy_helper("composite_pip.vert.spv")
+    copy_helper("composite_pip.frag.spv")
+    copy_helper("depthviz.frag.spv")
 endif()
 
 # set some extra configs for each platform

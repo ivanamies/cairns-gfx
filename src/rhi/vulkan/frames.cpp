@@ -16,6 +16,7 @@
 #include "rhi/resource_manager.hpp"  // kFramesInFlight
 #include "rhi/swap_chain.hpp"
 #include "rhi/command_recorder.hpp"
+#include "util/timer.hpp"
 
 namespace cairns::rhi {
 
@@ -159,6 +160,20 @@ bool Frames::Init(Device& device) {
     graphics_queue_ = device.graphics_queue_;
     compute_queue_ = device.compute_queue_;
     present_queue_ = device.present_queue_;
+    ts_period_ns_ = device.timestamp_period_ns_;
+    host_query_reset_ = device.host_query_reset_;
+    vk_reset_query_pool_ = device.vk_reset_query_pool_;
+    {
+        VkQueryPoolCreateInfo qpi{};
+        qpi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        qpi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        qpi.queryCount = 2 * kMaxPasses * kFramesInFlight;
+        if (vkCreateQueryPool(device_, &qpi, nullptr, &ts_pool_) != VK_SUCCESS) {
+            return false;
+        }
+        pass_names_.assign(kFramesInFlight, {});
+        pass_count_.assign(kFramesInFlight, 0);
+    }
 
     {  // per-frame command buffers + sync
         const uint32_t n = kFramesInFlight;
@@ -291,21 +306,47 @@ bool Frames::Init(Device& device) {
             }
         }
 
+        // Composite descriptor set layout: 1 COMBINED_IMAGE_SAMPLER frag (used
+        // by both composite_pip and depthviz fullscreen passes).
+        {
+            VkDescriptorSetLayoutBinding b{};
+            b.binding = 0;
+            b.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            b.descriptorCount = 1;
+            b.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            VkDescriptorSetLayoutCreateInfo li{};
+            li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            li.bindingCount = 1;
+            li.pBindings = &b;
+            if (vkCreateDescriptorSetLayout(dev, &li, nullptr,
+                                            &composite_set_layout_) !=
+                VK_SUCCESS) {
+                return false;
+            }
+        }
+
+        // Compute uses kMaxStepsPerFrame sets per slot (Fiedler N-step sim).
+        // Composite uses kCompositeRingSize sets per slot (PIP multi-draw fix).
+        // UBO count: point(n) + compute(n * kMaxStepsPerFrame).
+        // SSBO count: compute (2 * n * kMaxStepsPerFrame).
+        // DYNAMIC UBO: globals(n) + drawtmp(n).
+        // COMBINED_IMAGE_SAMPLER: composite (n * kCompositeRingSize).
         VkDescriptorPoolSize sizes[4]{};
         sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        sizes[0].descriptorCount = n;
+        sizes[0].descriptorCount = n + n * kMaxStepsPerFrame;
         sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        sizes[1].descriptorCount = 2 * n;
+        sizes[1].descriptorCount = 2 * n * kMaxStepsPerFrame;
         sizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         sizes[2].descriptorCount = 2 * n;
         sizes[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        // composite ring (kCompositeRing sets * 3 bindings) + imgui (1) per frame.
-        sizes[3].descriptorCount = (3 * kCompositeRing + 1) * n;
+        sizes[3].descriptorCount = n * kCompositeRingSize;
         VkDescriptorPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pci.poolSizeCount = 4;
         pci.pPoolSizes = sizes;
-        pci.maxSets = (4 + kCompositeRing + 1) * n;
+        // 3 single-set layouts + compute (kMaxStepsPerFrame) + composite
+        // (kCompositeRingSize) per slot.
+        pci.maxSets = 3 * n + n * kMaxStepsPerFrame + n * kCompositeRingSize;
         if (vkCreateDescriptorPool(dev, &pci, nullptr, &descriptor_pool_) !=
             VK_SUCCESS) {
             return false;
@@ -323,25 +364,50 @@ bool Frames::Init(Device& device) {
             return vkAllocateDescriptorSets(dev, &ai, out.data()) == VK_SUCCESS;
         };
         if (!alloc_sets(point_layout_, point_sets_) ||
-            !alloc_sets(compute_layout_, compute_sets_) ||
             !alloc_sets(globals_set_layout_, globals_sets_) ||
             !alloc_sets(drawtmp_set_layout_, drawtmp_sets_) ||
             !alloc_sets(imgui_set_layout_, imgui_sets_)) {
             return false;
         }
-        {  // composite ring: kCompositeRing sets per frame.
-            const uint32_t total = kCompositeRing * n;
-            std::vector<VkDescriptorSetLayout> layouts(total, composite_set_layout_);
+        compute_sets_.resize(n);
+        {
+            const uint32_t total = n * kMaxStepsPerFrame;
+            std::vector<VkDescriptorSetLayout> layouts(total, compute_layout_);
+            std::vector<VkDescriptorSet> flat(total);
             VkDescriptorSetAllocateInfo ai{};
             ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             ai.descriptorPool = descriptor_pool_;
             ai.descriptorSetCount = total;
             ai.pSetLayouts = layouts.data();
-            composite_sets_.resize(total);
-            if (vkAllocateDescriptorSets(dev, &ai, composite_sets_.data()) != VK_SUCCESS) {
+            if (vkAllocateDescriptorSets(dev, &ai, flat.data()) != VK_SUCCESS) {
                 return false;
             }
+            for (uint32_t f = 0; f < n; ++f) {
+                for (uint32_t k = 0; k < kMaxStepsPerFrame; ++k) {
+                    compute_sets_[f][k] = flat[f * kMaxStepsPerFrame + k];
+                }
+            }
         }
+        composite_sets_.resize(n);
+        {
+            const uint32_t total = n * kCompositeRingSize;
+            std::vector<VkDescriptorSetLayout> layouts(total, composite_set_layout_);
+            std::vector<VkDescriptorSet> flat(total);
+            VkDescriptorSetAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            ai.descriptorPool = descriptor_pool_;
+            ai.descriptorSetCount = total;
+            ai.pSetLayouts = layouts.data();
+            if (vkAllocateDescriptorSets(dev, &ai, flat.data()) != VK_SUCCESS) {
+                return false;
+            }
+            for (uint32_t f = 0; f < n; ++f) {
+                for (uint32_t k = 0; k < kCompositeRingSize; ++k) {
+                    composite_sets_[f][k] = flat[f * kCompositeRingSize + k];
+                }
+            }
+        }
+        offscreen_target_cache_.device = dev;
     }
     inited_ = true;
     return true;
@@ -382,10 +448,11 @@ void Frames::Deinit() {
     if (composite_set_layout_) {
         vkDestroyDescriptorSetLayout(dev, composite_set_layout_, nullptr);
     }
-    if (imgui_set_layout_) {
-        vkDestroyDescriptorSetLayout(dev, imgui_set_layout_, nullptr);
+    offscreen_target_cache_.Deinit();
+    if (ts_pool_) {
+        vkDestroyQueryPool(dev, ts_pool_, nullptr);
+        ts_pool_ = VK_NULL_HANDLE;
     }
-    offscreen_cache_.Deinit();
     inited_ = false;
 }
 
@@ -398,10 +465,37 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc) {
     VkDevice dev = device_;
 
     vkWaitForFences(dev, 1, &compute_in_flight_[cf], VK_TRUE, UINT64_MAX);
+    vkWaitForFences(dev, 1, &in_flight_[cf], VK_TRUE, UINT64_MAX);
+
+    // Both queues' slot-`cf` timestamps are now resolved -- read them BEFORE
+    // resetting fences / cmd buffers / the query pool itself.
+    {
+        const uint32_t np = pass_count_[cf];
+        if (np > 0) {
+            std::array<uint64_t, 2 * kMaxPasses> ticks{};
+            vkGetQueryPoolResults(dev, ts_pool_, 2 * kMaxPasses * cf, 2 * np,
+                                  ticks.size() * sizeof(uint64_t), ticks.data(),
+                                  sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+            for (uint32_t p = 0; p < np; ++p) {
+                const double ns =
+                    (static_cast<double>(ticks[2 * p + 1] - ticks[2 * p])) *
+                    static_cast<double>(ts_period_ns_);
+                const char* nm = pass_names_[cf][p];
+                if (nm) {
+                    TimerStorage::Span(TimerStorage::SlotForPass(nm), nm,
+                                       static_cast<uint64_t>(ns / 1000.0));
+                }
+            }
+        }
+        pass_count_[cf] = 0;
+    }
+    if (host_query_reset_) {
+        vk_reset_query_pool_(dev, ts_pool_, 2 * kMaxPasses * cf,
+                             2 * kMaxPasses);
+    }
+
     vkResetFences(dev, 1, &compute_in_flight_[cf]);
     vkResetCommandBuffer(compute_cmds_[cf], 0);
-
-    vkWaitForFences(dev, 1, &in_flight_[cf], VK_TRUE, UINT64_MAX);
     resources.AdvanceFrame(alloc);  // bump ring reset
 
     vkResetFences(dev, 1, &in_flight_[cf]);
@@ -455,9 +549,47 @@ void Frames::AcquireSwapchain(Resources& /*resources*/, Allocator& /*alloc*/, Sw
         vkAcquireNextImageKHR(dev, sc.swapChain, UINT64_MAX, image_available_[cf],
                               VK_NULL_HANDLE, &image_index);
     }
-    last_image_index_ = image_index;
-    cmd.image_index_ = image_index;
-    swapchain_acquired_ = true;
+    vkResetFences(dev, 1, &in_flight_[cf]);
+    vkResetCommandBuffer(graphics_cmds_[cf], 0);
+
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    vkBeginCommandBuffer(compute_cmds_[cf], &bi);
+    vkBeginCommandBuffer(graphics_cmds_[cf], &bi);
+
+    // Fallback path when hostQueryReset is unavailable: per-queue cmd reset
+    // so the compute subrange's reset is ordered against this frame's compute
+    // writes, and likewise for graphics.
+    if (!host_query_reset_) {
+        vkCmdResetQueryPool(compute_cmds_[cf], ts_pool_, 2 * kMaxPasses * cf,
+                            2 * kMaxPasses);
+        vkCmdResetQueryPool(graphics_cmds_[cf], ts_pool_, 2 * kMaxPasses * cf,
+                            2 * kMaxPasses);
+    }
+
+    FrameContext fc;
+    fc.frame_index = cf;
+    fc.swapchain_image_index = image_index;
+    fc.cmd.frame_ = cf;
+    fc.cmd.image_index_ = image_index;
+    fc.cmd.gfx_ = graphics_cmds_[cf];
+    fc.cmd.comp_ = compute_cmds_[cf];
+    fc.cmd.device_ = dev;
+    fc.cmd.globals_set_ = globals_sets_[cf];
+    fc.cmd.drawtmp_set_ = drawtmp_sets_[cf];
+    fc.cmd.compute_sets_ = compute_sets_[cf];
+    fc.cmd.point_set_ = point_sets_[cf];
+    fc.cmd.composite_sets_ = composite_sets_[cf];
+    fc.cmd.composite_next_idx_ = 0;
+    fc.cmd.offscreen_ = &offscreen_target_cache_;
+    fc.cmd.ts_pool_ = ts_pool_;
+    fc.cmd.pass_names_ = &pass_names_[cf];
+    fc.cmd.pass_count_ = &pass_count_[cf];
+    fc.cmd.pass_cb_ = VK_NULL_HANDLE;
+    fc.cmd.pending_pass_idx_ = UINT32_MAX;
+    fc.cmd.pending_name_ = nullptr;
+    fc.cmd.pending_slot_ = -1;
+    return fc;
 }
 
 void Frames::End(SwapChain& sc, FrameContext& fc) {

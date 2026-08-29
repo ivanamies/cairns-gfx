@@ -1,65 +1,76 @@
+// util/frame_clock.hpp
+//
+// Deterministic two-clock architecture (Fiedler fixed-timestep).
+//
+//   WallClock   -- live mode (production). SDL_GetTicks-based seconds delta.
+//   FixedClock  -- golden mode (CAIRNS_DUMP). Returns kFixedDt every tick.
+//
+// The game thread feeds clock dt into a Fiedler accumulator. sim_frame_,
+// sim_angle_deg_, and the particle compute step count are advanced by the
+// accumulator in fixed kFixedDt increments; render_angle_deg_ interpolates
+// with alpha. Same sim code path in golden capture and production -- only
+// the clock source differs.
+//
+// Which sim/render state uses which clock:
+//
+//   FixedClock (deterministic)        | WallClock (real time)
+//   --------------------------------- | ---------------------------------
+//   scene rotation angle              | main-loop accumulator dt source
+//   particle compute dt (UBO)         | render interpolation alpha source
+//   particle spawn / RNG (seed 42)    | cpu-ms / FPS HUD + frame-time graph
+//   future physics                    | ImGui overlay anims; vsync; logging
+//
+// Invariant: nothing WallClock produces is written into persistent sim state
+// -- the accumulator only emits a per-frame step count + alpha in [0, 1),
+// never stored across frames. No code outside this header should call
+// SDL_GetTicks() for sim/render state.
+
 #pragma once
 
-// Two-clock determinism. The sim consumes only a fixed dt + a sim-frame counter;
-// wall time lives in a separate scheduling layer. The sim code path is identical
-// in production and golden capture -- only the clock source differs -- so a
-// "verification mode" can never drift from the real mode.
-//
-// WHICH PRODUCT USES WHICH CLOCK:
-//
-//   FixedClock (kFixedDt, deterministic)        WallClock (real time)
-//   --------------------------------------      ------------------------------------
-//   * scene rotation angle (sim_angle_deg_)     * main-loop accumulator (production)
-//   * particle compute dt (push/UBO)            * render interpolation alpha source
-//   * particle spawn / RNG (seed 42)            * cpu-ms / FPS HUD + frame-time graph
-//   * any future physics (rigidbody/fluid)      * ImGui overlay animations
-//   * golden-capture accumulator (CAIRNS_DUMP)  * vsync / present timing
-//                                               * logging timestamps
-//                                               * audio playback (real-time)
-//
-// Invariant: nothing WallClock produces may be written into persistent sim state.
-// The accumulator only emits a per-frame step count + an alpha in [0,1) for render
-// interpolation; neither is stored across frames.
+#include <SDL3/SDL.h>
 
 #include <cstdint>
 
-#include "util/timer.hpp"  // cairns::timestamp_ns (static inline)
-
 namespace cairns {
+
+inline constexpr double   kFixedDt          = 1.0 / 60.0;
+inline constexpr uint32_t kMaxStepsPerFrame = 5;
+inline constexpr double   kMaxFrameDt       = 0.250;
+inline constexpr float    kRotDegPerSec     = 22.5f;
+inline constexpr uint64_t kGoldenDumpFrame  = 60;
 
 class FrameClock {
 public:
     virtual ~FrameClock() = default;
-    // Wall-clock-equivalent delta since the last call, in seconds.
-    virtual float Tick() = 0;
+    // Seconds elapsed since the previous Tick(). First Tick returns 0.0 so
+    // the first frame doesn't see startup jitter feeding the accumulator.
+    virtual double Tick() = 0;
 };
 
-// Production: real elapsed seconds between frames.
-class WallClock : public FrameClock {
+class WallClock final : public FrameClock {
 public:
-    float Tick() override {
-        const uint64_t now = cairns::timestamp_ns();
-        if (last_ns_ == 0) {
-            last_ns_ = now;
-            return 0.0f;
+    double Tick() override {
+        const uint64_t now = SDL_GetTicks();
+        if (last_ms_ == 0) {
+            last_ms_ = now;
+            return 0.0;
         }
-        const float dt = static_cast<float>(now - last_ns_) / 1.0e9f;
-        last_ns_ = now;
+        const double dt = (now - last_ms_) / 1000.0;
+        last_ms_ = now;
         return dt;
     }
 
 private:
-    uint64_t last_ns_ = 0;
+    uint64_t last_ms_ = 0;
 };
 
-// Golden capture: a constant dt -> one sim step per render frame, byte-reproducible.
-class FixedClock : public FrameClock {
+class FixedClock final : public FrameClock {
 public:
-    explicit FixedClock(float dt) : dt_(dt) {}
-    float Tick() override { return dt_; }
+    explicit FixedClock(double dt = kFixedDt) : dt_(dt) {}
+    double Tick() override { return dt_; }
 
 private:
-    float dt_;
+    double dt_;
 };
 
 }  // namespace cairns

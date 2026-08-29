@@ -181,6 +181,4 @@ private:
     std::vector<PooledBuf> buf_pool_;
 };
 
-void RenderGraphToyTest(Resources& resources, Allocator& alloc);
-
 }  // namespace cairns::rhi

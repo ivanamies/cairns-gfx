@@ -7,6 +7,7 @@
 #pragma once
 
 #include "util/define.hpp"
+#include "util/log.hpp"
 
 #if CAIRNS_VULKAN
 
@@ -382,6 +383,23 @@ private:
         VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
         VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
         VkExtent2D extent = chooseSwapExtent(swapChainSupport.capabilities);
+
+        // Android Vulkan pre-rotation: currentTransform may be ROTATE_90/180/270.
+        // If we set preTransform=currentTransform we claim we pre-rotated the
+        // content -- but we didn't, so the OS doesn't rotate at present and
+        // display ends up rotated 90deg. Fix: request preTransform=IDENTITY
+        // when IDENTITY is supported; WSI handles the compositor rotation.
+        VkSurfaceTransformFlagBitsKHR preTransform =
+            swapChainSupport.capabilities.currentTransform;
+        const bool is_non_identity =
+            preTransform != VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+        const bool identity_supported =
+            (swapChainSupport.capabilities.supportedTransforms &
+             VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) != 0;
+        if (is_non_identity && identity_supported) {
+            preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+        }
+
         uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1;
         if (swapChainSupport.capabilities.maxImageCount > 0 &&
             imageCount > swapChainSupport.capabilities.maxImageCount) {
@@ -411,7 +429,7 @@ private:
             createInfo.queueFamilyIndexCount = 0;
             createInfo.pQueueFamilyIndices = nullptr;
         }
-        createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
+        createInfo.preTransform = preTransform;
         createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
         createInfo.presentMode = presentMode;
         createInfo.clipped = VK_TRUE;
@@ -443,7 +461,13 @@ private:
         colorAttachment.format = swapChainImageFormat;
         colorAttachment.samples = msaaSamples;
         colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        // DONT_CARE: the MSAA samples are throwaway -- the single-sample
+        // resolve attachment is the real output. STORE here would force the
+        // tiler to write the entire NxMSAA buffer out to DRAM every frame
+        // (~37 MB/frame at 2268x1080 4xMSAA on Adreno), with the resolve as
+        // a separate read+write pass on top. With DONT_CARE the resolve
+        // happens in-tile and the MSAA samples never leave the tile.
+        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -517,12 +541,34 @@ private:
         return true;
     }
 
+    // Try LAZILY_ALLOCATED|DEVICE_LOCAL first (tile-resident memory on
+    // mobile/tilers -- never backs DRAM when paired with DONT_CARE storeOps).
+    // Falls back to DEVICE_LOCAL on devices that don't expose lazy memory
+    // (desktop GPUs typically don't; the fallback costs nothing there since
+    // they're not tilers).
+    bool createImageLazyOrDeviceLocal(uint32_t width, uint32_t height,
+                                      VkSampleCountFlagBits samples,
+                                      VkFormat format, VkImageUsageFlags usage,
+                                      VkImage& out_image,
+                                      VkDeviceMemory& out_memory) {
+        if (createImage(width, height, 1, samples, format, VK_IMAGE_TILING_OPTIMAL,
+                        usage | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+                        VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT |
+                            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                        out_image, out_memory)) {
+            return true;
+        }
+        return createImage(width, height, 1, samples, format, VK_IMAGE_TILING_OPTIMAL,
+                           usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                           out_image, out_memory);
+    }
+
     bool createColorResources() {
         VkFormat colorFormat = swapChainImageFormat;
-        if (!createImage(swapChainExtent.width, swapChainExtent.height, 1, msaaSamples, colorFormat,
-                         VK_IMAGE_TILING_OPTIMAL,
-                         VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, colorImage, colorImageMemory)) {
+        if (!createImageLazyOrDeviceLocal(
+                swapChainExtent.width, swapChainExtent.height, msaaSamples,
+                colorFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                colorImage, colorImageMemory)) {
             return false;
         }
         if (!createImageView(colorImage, colorFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1, colorImageView)) {
@@ -534,9 +580,10 @@ private:
     bool createDepthResources() {
         VkFormat depthFormat;
         if (!findDepthFormat(depthFormat)) return false;
-        if (!createImage(swapChainExtent.width, swapChainExtent.height, 1, msaaSamples, depthFormat,
-                         VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthImage, depthImageMemory)) {
+        if (!createImageLazyOrDeviceLocal(
+                swapChainExtent.width, swapChainExtent.height, msaaSamples,
+                depthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                depthImage, depthImageMemory)) {
             return false;
         }
         if (!createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1, depthImageView)) {

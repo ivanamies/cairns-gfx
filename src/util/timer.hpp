@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <mutex>
 #include <string>
@@ -63,8 +64,6 @@ struct TimerStorage {
     }
 
     static void PrintReport() {
-        std::lock_guard<std::mutex> lk(mu_);
-        CAIRNS_PRINT("==============\n");
         for ( uint32_t i = 0; i < kMaxSlots; ++i ) {
             if ( accum_itrs_[i] == 0 ) {
                 continue;
@@ -82,58 +81,59 @@ struct TimerStorage {
     }
 };
 
-inline std::array<uint64_t, TimerStorage::kMaxSlots> TimerStorage::accum_times_ = {};
-inline std::array<uint64_t, TimerStorage::kMaxSlots> TimerStorage::accum_itrs_ = {};
-inline std::array<const char*, TimerStorage::kMaxSlots> TimerStorage::slot_names_ = {};
-inline std::mutex TimerStorage::mu_;
+inline std::array<uint64_t, Timer::kMaxSlots> Timer::accum_times_ = {};
+inline std::array<uint64_t, Timer::kMaxSlots> Timer::accum_itrs_ = {};
+inline std::array<const char*, Timer::kMaxSlots> Timer::slot_names_ = {};
 
-// Scoped, compile-time-slot RAII timer. Use as:
-//     cairns::Timer<3> t("set up render pass globals");
-//     ... work ...
-//     // dtor (or explicit t.End()) accumulates into slot 3.
-template <uint32_t Slot>
-class Timer {
-public:
-    static_assert(Slot < TimerStorage::kMaxSlots, "Timer slot out of range");
-
-    explicit Timer(const char* task_name)
-        : is_running_(true),
-          start_time_(timestamp_ns()) {
-        TimerStorage::slot_names_[Slot] = task_name;
+class TimerStorage {
+ public:
+  // Walks Timer::slot_names_ (the shared global mapping). If name already lives
+  // in a slot (whether claimed by a Timer CPU ctor or a prior SlotForPass call),
+  // returns it; otherwise claims the first unused slot AND records it as a GPU
+  // pass slot (so the overlay can roll all such slots into `gpu_frame`).
+  // Returns -1 when full.
+  static int SlotForPass(const char* name) {
+    std::lock_guard<std::mutex> lk(mu_);
+    for (uint32_t i = 0; i < Timer::kMaxSlots; ++i) {
+      const char* slot = Timer::slot_names_[i];
+      if (slot == nullptr) {
+        continue;
+      }
+      if (slot == name || std::strcmp(slot, name) == 0) {
+        return static_cast<int>(i);
+      }
     }
-
-    ~Timer() {
-        if (is_running_) {
-            End();
-        }
+    for (uint32_t i = 0; i < Timer::kMaxSlots; ++i) {
+      if (Timer::slot_names_[i] == nullptr) {
+        Timer::slot_names_[i] = name;
+        gpu_slot_mask_ |= (1u << i);
+        return static_cast<int>(i);
+      }
     }
+    return -1;
+  }
 
-    void End() {
-        if (!is_running_) {
-            return;
-        }
-        const uint64_t end_time = timestamp_ns();
-        const uint64_t elapsed_us = (end_time - start_time_) / 1000;
-        {
-            std::lock_guard<std::mutex> lk(TimerStorage::mu_);
-            TimerStorage::accum_times_[Slot] += elapsed_us;
-            TimerStorage::accum_itrs_[Slot]++;
-        }
-        is_running_ = false;
+  static uint32_t GpuSlotMask() {
+    std::lock_guard<std::mutex> lk(mu_);
+    return gpu_slot_mask_;
+  }
+
+  static void Span(int slot, const char* name, uint64_t us) {
+    if (slot < 0) {
+      return;
     }
+    std::lock_guard<std::mutex> lk(mu_);
+    Timer::slot_names_[slot] = name;
+    Timer::accum_times_[slot] += us;
+    Timer::accum_itrs_[slot] += 1;
+  }
 
-    Timer(const Timer&) = delete;
-    Timer& operator=(const Timer&) = delete;
-
-    Timer(Timer&& other) noexcept
-        : is_running_(other.is_running_),
-          start_time_(other.start_time_) {
-        other.is_running_ = false;
-    }
-
-private:
-    bool is_running_;
-    uint64_t start_time_;
+ private:
+  static std::mutex mu_;
+  static uint32_t gpu_slot_mask_;
 };
+
+inline std::mutex TimerStorage::mu_;
+inline uint32_t TimerStorage::gpu_slot_mask_ = 0;
 
 } // namespace cairns

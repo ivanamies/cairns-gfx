@@ -399,7 +399,9 @@ struct Texture {
         uint32_t heap_buffer_index = 0xFFFFFFFFu;  // 0xFFFFFFFF if dedicated
         const char* debug_name = nullptr;
 #if CAIRNS_VULKAN
-        VkImageLayout vk_layout = VK_IMAGE_LAYOUT_UNDEFINED;  // tracked for graph barriers
+        // Current image layout, updated by CommandRecorder::BeginRenderPass when
+        // attachments + input_textures transition between passes.
+        VkImageLayout vk_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 #endif
     };
 };
@@ -443,6 +445,9 @@ struct Shader {
 #if CAIRNS_VULKAN
         VkPipeline vk_pipeline = VK_NULL_HANDLE;
         VkPipelineLayout vk_layout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout vk_imgui_set_layout = VK_NULL_HANDLE;
+        VkDescriptorPool vk_imgui_pool = VK_NULL_HANDLE;
+        VkDescriptorSet vk_imgui_set = VK_NULL_HANDLE;
 #endif
     };
     struct Cold {

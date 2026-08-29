@@ -5,8 +5,8 @@
 # gate, at a known-good commit, then use scripts/verify_<backend>.sh to confirm
 # later changes are byte-identical. Default backend is Metal (the reference).
 #
-# Determinism: CAIRNS_DUMP=<path> auto-engages a FixedClock (fixed-timestep sim),
-# so rotation + particles are reproducible; the app dumps at sim_frame 60 and exits.
+# Determinism: CAIRNS_DUMP=<path> selects FixedClock (sim_frame*kFixedDt
+# rotation, no wall-clock) and triggers a dump at sim_frame == kGoldenDumpFrame.
 #
 # Usage: scripts/regenerate_golden.sh [metal|vk]
 set -e

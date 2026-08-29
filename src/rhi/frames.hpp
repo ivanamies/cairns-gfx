@@ -9,6 +9,7 @@
 
 #include "util/define.hpp"
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <vector>
@@ -81,15 +82,25 @@ public:
     VkDescriptorSetLayout drawtmp_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout compute_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout point_layout_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout composite_set_layout_ = VK_NULL_HANDLE;  // 2 sampled tex
-    VkDescriptorSetLayout imgui_set_layout_ = VK_NULL_HANDLE;      // 1 font sampler
+    VkDescriptorSetLayout composite_set_layout_ = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> globals_sets_;
     std::vector<VkDescriptorSet> drawtmp_sets_;
-    std::vector<VkDescriptorSet> compute_sets_;
+    // One DescriptorSet per in-flight slot per sim step. Indexed
+    // [frame_in_flight][step_index]. Multi-step compute needs distinct sets
+    // because vkUpdateDescriptorSets on an in-use set is UB.
+    std::vector<std::array<VkDescriptorSet, kMaxStepsPerFrame>> compute_sets_;
     std::vector<VkDescriptorSet> point_sets_;
-    std::vector<VkDescriptorSet> composite_sets_;
-    std::vector<VkDescriptorSet> imgui_sets_;
-    OffscreenTargetCache offscreen_cache_;
+    // Per-frame ring of composite descriptor sets for DrawFullscreen. Lets one
+    // pass issue multiple fullscreen draws with distinct textures (the 997af20
+    // last-bound-wins fix).
+    std::vector<std::array<VkDescriptorSet, kCompositeRingSize>> composite_sets_;
+    OffscreenTargetCache offscreen_target_cache_;
+    VkQueryPool ts_pool_ = VK_NULL_HANDLE;
+    float ts_period_ns_ = 0.0f;
+    bool host_query_reset_ = false;
+    PFN_vkResetQueryPool vk_reset_query_pool_ = nullptr;
+    std::vector<std::array<const char*, kMaxPasses>> pass_names_;
+    std::vector<uint32_t> pass_count_;
 #elif CAIRNS_METAL
     MTL::Device* device_ = nullptr;             // mirrored from Device
     MTL::CommandQueue* queue_ = nullptr;        // mirrored from Device

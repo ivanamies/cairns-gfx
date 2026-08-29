@@ -3,9 +3,8 @@
 #include "render/render_proxy_arrays.hpp"
 #include "scene/scene_world.hpp"
 
+#include <cassert>
 #include <cstdint>
-#include <span>
-#include <vector>
 
 namespace cairns {
 
@@ -17,36 +16,30 @@ inline void Extract(SceneWorld& world, RenderProxyArrays& out,
                     std::span<const rhi::Handle<SceneEntity>> filter = {},
                     const glm::mat4* root_override = nullptr) {
     out.Clear();
-    const std::span<const rhi::Handle<SceneEntity>> handles =
-        filter.empty()
-            ? std::span<const rhi::Handle<SceneEntity>>(world.live_entities.data(),
-                                                        world.live_entities.size())
-            : filter;
-    const glm::mat4& root =
-        root_override != nullptr ? *root_override : world.root_transform;
-    std::vector<int32_t> stack;
-    for (rhi::Handle<SceneEntity> h : handles) {
-        SceneEntity::Hot* hot = world.entities.GetHot(h);
-        if (hot == nullptr) {
-            continue;  // stale handle -- silently skip (D's stale-detection)
-        }
-        if (hot->scene_index >= world.scene_count) {
+    // Fixed-size scratch. Observed high-water across 100x33 (hw=59) and 50x66
+    // (hw=49) benches; 256 = 4x headroom. 1 KB on the stack, zero heap.
+    constexpr uint32_t kStackCap = 256;
+    int32_t stack[kStackCap];
+    uint32_t top;
+    for (const SceneEntity& entity : world.entities) {
+        if (entity.scene_index >= world.scene_count) {
             continue;
         }
         const Scene& scene = world.scenes[hot->scene_index];
         const glm::mat4 model_matrix = hot->transform * root;
 
-        stack.clear();
+        top = 0;
         for (size_t j = 0; j < scene.rootNodes.size(); ++j) {
-            stack.push_back(scene.rootNodes[j]);
+            assert(top < kStackCap);
+            stack[top++] = scene.rootNodes[j];
         }
-        while (!stack.empty()) {
-            const int32_t node_idx = stack.back();
-            stack.pop_back();
+        while (top > 0) {
+            const int32_t node_idx = stack[--top];
             const Node& node = scene.nodes[node_idx];
             if (node.meshIndex < 0) {
                 for (int32_t c : node.children) {
-                    stack.push_back(c);
+                    assert(top < kStackCap);
+                    stack[top++] = c;
                 }
                 continue;
             }
@@ -73,7 +66,8 @@ inline void Extract(SceneWorld& world, RenderProxyArrays& out,
             out.meshes.Add(proxy);
 
             for (int32_t c : node.children) {
-                stack.push_back(c);
+                assert(top < kStackCap);
+                stack[top++] = c;
             }
         }
     }

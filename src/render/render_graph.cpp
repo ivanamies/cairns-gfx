@@ -432,9 +432,11 @@ bool RenderGraph::Execute(FrameContext& fc, SwapChain& sc) {
     for (uint32_t p : topo_order_) {
         PassRecord& pass = passes_[p];
         if (pass.type == PassType::kCompute) {
+            fc.cmd.PassTimerBegin(pass.name.c_str());
             if (pass.execute) {
                 pass.execute(fc.cmd, res);
             }
+            fc.cmd.PassTimerEnd();
             continue;
         }
         RenderPassDesc rp{};
@@ -447,11 +449,13 @@ bool RenderGraph::Execute(FrameContext& fc, SwapChain& sc) {
         rp.height = pass.baked_height ? pass.baked_height : sc.Height();
         rp.input_textures = std::span<const Handle<Texture>>(
             pass.baked_inputs.data(), pass.baked_inputs.size());
+        fc.cmd.PassTimerBegin(pass.name.c_str());
         fc.cmd.BeginRenderPass(resources_, sc, rp);
         if (pass.execute) {
             pass.execute(fc.cmd, res);
         }
         fc.cmd.EndRenderPass();
+        fc.cmd.PassTimerEnd();
     }
     return true;
 }
@@ -468,40 +472,6 @@ Handle<Buffer> RenderGraph::ResolveBuffer(GraphBuffer b) const {
         return Handle<Buffer>::Null;
     }
     return resolved_buf_[b.id];
-}
-
-void RenderGraphToyTest(Resources& resources, Allocator& alloc) {
-    RenderGraph g(resources, alloc);
-    GraphTexture t_off;
-    GraphTexture t_out;
-    g.AddPass("toyA", PassType::kGraphics,
-              [&](PassBuilder& b) {
-                  GraphTextureDesc d;
-                  d.width = 256;
-                  d.height = 256;
-                  d.format = Format::kRgba8Unorm;
-                  d.usage = kTexUsageColorTarget | kTexUsageSampled;
-                  t_off = b.CreateColorTarget(d);
-                  const float clear[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-                  b.AddColorOutput("off", t_off, LoadOp::kClear, clear);
-              },
-              [](CommandRecorder&, const PassResources&) {});
-    g.AddPass("toyB", PassType::kGraphics,
-              [&](PassBuilder& b) {
-                  b.AddAttachmentInput(t_off);
-                  GraphTextureDesc d;
-                  d.width = 256;
-                  d.height = 256;
-                  d.format = Format::kRgba8Unorm;
-                  d.usage = kTexUsageColorTarget | kTexUsageSampled;
-                  t_out = b.CreateColorTarget(d);
-                  const float clear[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-                  b.AddColorOutput("out", t_out, LoadOp::kClear, clear);
-              },
-              [](CommandRecorder&, const PassResources&) {});
-    g.SetOutput(t_out);
-    const bool ok = g.Bake();
-    fprintf(stderr, "[RG] toy bake ok=%d\n", ok ? 1 : 0);
 }
 
 }  // namespace cairns::rhi

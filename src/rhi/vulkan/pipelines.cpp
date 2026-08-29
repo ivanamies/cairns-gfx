@@ -72,6 +72,15 @@ void Pipelines::Deinit(Resources& resources) {
             vkDestroyPipelineLayout(dev, hot.vk_layout, nullptr);
             hot.vk_layout = VK_NULL_HANDLE;
         }
+        if (hot.vk_imgui_pool) {
+            vkDestroyDescriptorPool(dev, hot.vk_imgui_pool, nullptr);
+            hot.vk_imgui_pool = VK_NULL_HANDLE;
+            hot.vk_imgui_set = VK_NULL_HANDLE;
+        }
+        if (hot.vk_imgui_set_layout) {
+            vkDestroyDescriptorSetLayout(dev, hot.vk_imgui_set_layout, nullptr);
+            hot.vk_imgui_set_layout = VK_NULL_HANDLE;
+        }
     });
     resources.kernels.ForEachLive([dev](Kernel::Hot& hot, Kernel::Cold&) {
         if (hot.vk_pipeline) {
@@ -175,35 +184,25 @@ struct VkShaderFiles {
     const char* comp;
 };
 VkShaderFiles resolve_vk_shader(const char* logical) {
-    if (std::strcmp(logical, "unlit") == 0) {
+    if (std::strcmp(logical, "unlit") == 0 ||
+        std::strcmp(logical, "unlit_offscreen") == 0) {
         return {"unlit.vert.spv", "unlit.frag.spv", nullptr};
-    }
-    if (std::strcmp(logical, "depth_only") == 0) {
-        return {"depth_only.vert.spv", "depth_only.frag.spv", nullptr};
-    }
-    if (std::strcmp(logical, "composite") == 0) {
-        return {"composite.vert.spv", "composite.frag.spv", nullptr};
-    }
-    if (std::strcmp(logical, "blur") == 0) {
-        return {"composite.vert.spv", "blur.frag.spv", nullptr};
-    }
-    if (std::strcmp(logical, "depthviz") == 0) {
-        return {"composite.vert.spv", "depthviz.frag.spv", nullptr};
-    }
-    if (std::strcmp(logical, "composite3") == 0) {
-        return {"composite.vert.spv", "composite3.frag.spv", nullptr};
     }
     if (std::strcmp(logical, "imgui") == 0) {
         return {"imgui.vert.spv", "imgui.frag.spv", nullptr};
     }
-    // "particle"
+    if (std::strcmp(logical, "composite_pip") == 0) {
+        return {"composite_pip.vert.spv", "composite_pip.frag.spv", nullptr};
+    }
+    if (std::strcmp(logical, "depthviz") == 0) {
+        // depthviz reuses the composite full-screen tri vert.
+        return {"composite_pip.vert.spv", "depthviz.frag.spv", nullptr};
+    }
     return {"particle.vert.spv", "particle.frag.spv", "particle.comp.spv"};
 }
 
-// Build a standalone render pass compatible (matching attachment formats +
-// sample count) with the recorder's offscreen pass, for pipeline creation only.
-// Render-pass compatibility ignores load/store ops + layouts, so those are
-// arbitrary here; the object is destroyed right after pipeline creation.
+// Render-pass compatibility object built once per pipeline create, then
+// destroyed. Used when desc.swap_chain is null (offscreen target compat).
 VkRenderPass build_offscreen_compat_rp(VkDevice dev, VkFormat color, bool has_color,
                                        VkFormat depth, bool has_depth,
                                        VkSampleCountFlagBits samples) {
@@ -384,17 +383,27 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     pc_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pc_range.offset = 0;
     pc_range.size = desc.push_constant_bytes;
-    std::vector<VkDescriptorSetLayout> set_layouts;
     const std::string ls = desc.logical_shader ? desc.logical_shader : "";
-    if (ls == "unlit" || ls == "depth_only") {
+    std::vector<VkDescriptorSetLayout> set_layouts;
+    VkDescriptorSetLayout imgui_set_layout = VK_NULL_HANDLE;
+    if (ls == "unlit" || ls == "unlit_offscreen") {
         set_layouts = {frames.globals_set_layout_,      // set 0: globals (once/frame)
                        resources.MaterialSetLayout(),   // set 1: per-material
                        frames.drawtmp_set_layout_};     // set 2: drawtmp (per draw)
-    } else if (ls == "composite" || ls == "blur" || ls == "depthviz" ||
-               ls == "composite3") {
-        set_layouts = {frames.composite_set_layout_};
+    } else if (ls == "composite_pip" || ls == "depthviz") {
+        set_layouts = {frames.composite_set_layout_};   // 1 COMBINED_IMAGE_SAMPLER frag
     } else if (ls == "imgui") {
-        set_layouts = {frames.imgui_set_layout_};
+        VkDescriptorSetLayoutBinding b{};
+        b.binding = 0;
+        b.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b.descriptorCount = 1;
+        b.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutCreateInfo dl{};
+        dl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dl.bindingCount = 1;
+        dl.pBindings = &b;
+        vkCreateDescriptorSetLayout(device, &dl, nullptr, &imgui_set_layout);
+        set_layouts = {imgui_set_layout};
     } else {
         set_layouts = {frames.point_layout_};
     }
@@ -431,9 +440,12 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     if (desc.swap_chain) {
         pi.renderPass = desc.swap_chain->renderPass;
     } else {
+        const bool has_color = desc.color_format != Format::kUndefined;
+        const bool has_depth = desc.depth_format != Format::kUndefined;
         compat_rp = build_offscreen_compat_rp(
             device, to_vk_format(desc.color_format), has_color,
-            to_vk_format(desc.depth_format), has_depth, to_vk_samples(desc.sample_count));
+            to_vk_format(desc.depth_format), has_depth,
+            to_vk_samples(desc.sample_count));
         pi.renderPass = compat_rp;
     }
     pi.subpass = 0;
@@ -457,6 +469,24 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     Shader::Hot* hot = resources.shaders.GetHot(h);
     hot->vk_pipeline = pipeline;
     hot->vk_layout = layout;
+    if (imgui_set_layout) {
+        hot->vk_imgui_set_layout = imgui_set_layout;
+        VkDescriptorPoolSize ps{};
+        ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        ps.descriptorCount = 1;
+        VkDescriptorPoolCreateInfo pci{};
+        pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pci.maxSets = 1;
+        pci.poolSizeCount = 1;
+        pci.pPoolSizes = &ps;
+        vkCreateDescriptorPool(device, &pci, nullptr, &hot->vk_imgui_pool);
+        VkDescriptorSetAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai.descriptorPool = hot->vk_imgui_pool;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &imgui_set_layout;
+        vkAllocateDescriptorSets(device, &ai, &hot->vk_imgui_set);
+    }
     resources.shaders.GetCold(h)->debug_name = desc.debug_name;
     return h;
 }

@@ -1,59 +1,47 @@
+// src/util/imgui_snapshot.cpp
+
 #include "util/imgui_snapshot.hpp"
 
-#include "imgui.h"
-
-#include <cstring>
+#include "imgui_internal.h"
 
 namespace cairns {
 
-ImDrawData* CloneImGuiDrawData(const ImDrawData* src) {
-    if (src == nullptr) {
-        return nullptr;
+void ImDrawDataSnapshot::Clear() {
+    for (ImDrawList* l : owned) {
+        IM_DELETE(l);
     }
-    ImDrawData* snap = IM_NEW(ImDrawData)();
-    snap->Valid = src->Valid;
-    snap->CmdListsCount = src->CmdListsCount;
-    snap->TotalIdxCount = src->TotalIdxCount;
-    snap->TotalVtxCount = src->TotalVtxCount;
-    snap->DisplayPos = src->DisplayPos;
-    snap->DisplaySize = src->DisplaySize;
-    snap->FramebufferScale = src->FramebufferScale;
-    snap->OwnerViewport = src->OwnerViewport;
-    snap->Textures = src->Textures;
-
-    snap->CmdLists.reserve(src->CmdLists.Size);
-    for (int n = 0; n < src->CmdLists.Size; ++n) {
-        const ImDrawList* sl = src->CmdLists[n];
-        ImDrawList* dl = IM_NEW(ImDrawList)(nullptr);
-        dl->Flags = sl->Flags;
-        dl->CmdBuffer.resize(sl->CmdBuffer.Size);
-        if (sl->CmdBuffer.Size > 0) {
-            std::memcpy(dl->CmdBuffer.Data, sl->CmdBuffer.Data,
-                        sizeof(ImDrawCmd) * sl->CmdBuffer.Size);
-        }
-        dl->VtxBuffer.resize(sl->VtxBuffer.Size);
-        if (sl->VtxBuffer.Size > 0) {
-            std::memcpy(dl->VtxBuffer.Data, sl->VtxBuffer.Data,
-                        sizeof(ImDrawVert) * sl->VtxBuffer.Size);
-        }
-        dl->IdxBuffer.resize(sl->IdxBuffer.Size);
-        if (sl->IdxBuffer.Size > 0) {
-            std::memcpy(dl->IdxBuffer.Data, sl->IdxBuffer.Data,
-                        sizeof(ImDrawIdx) * sl->IdxBuffer.Size);
-        }
-        snap->CmdLists.push_back(dl);
-    }
-    return snap;
+    owned.clear();
+    data.CmdLists.clear();
+    data.Valid = false;
+    data.CmdListsCount = 0;
+    data.TotalIdxCount = 0;
+    data.TotalVtxCount = 0;
+    data.DisplayPos = ImVec2(0.0f, 0.0f);
+    data.DisplaySize = ImVec2(0.0f, 0.0f);
+    data.FramebufferScale = ImVec2(1.0f, 1.0f);
 }
 
-void FreeImGuiSnapshot(ImDrawData* snap) {
-    if (snap == nullptr) {
+void SnapshotImDrawData(const ImDrawData* src, ImDrawDataSnapshot& dst) {
+    dst.Clear();
+    if (!src) {
         return;
     }
-    for (int n = 0; n < snap->CmdLists.Size; ++n) {
-        IM_DELETE(snap->CmdLists[n]);
+    dst.data.Valid = src->Valid;
+    dst.data.TotalIdxCount = src->TotalIdxCount;
+    dst.data.TotalVtxCount = src->TotalVtxCount;
+    dst.data.DisplayPos = src->DisplayPos;
+    dst.data.DisplaySize = src->DisplaySize;
+    dst.data.FramebufferScale = src->FramebufferScale;
+
+    const int n = src->CmdListsCount;
+    dst.owned.reserve(static_cast<size_t>(n));
+    dst.data.CmdLists.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        ImDrawList* clone = src->CmdLists[i]->CloneOutput();
+        dst.owned.push_back(clone);
+        dst.data.CmdLists.push_back(clone);
     }
-    IM_DELETE(snap);
+    dst.data.CmdListsCount = static_cast<int>(dst.data.CmdLists.size());
 }
 
 }  // namespace cairns

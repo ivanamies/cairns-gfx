@@ -6,13 +6,16 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <span>
 #include <utility>
 #include <vector>
 
 #include "rhi/resource_manager.hpp"
 #include "util/draw.hpp"
 #include "util/draw_key.hpp"
+#include "util/frame_clock.hpp"
 #if CAIRNS_VULKAN
 #include <vulkan/vulkan.h>
 #elif CAIRNS_METAL
@@ -22,6 +25,13 @@
 struct ImDrawData;
 
 namespace cairns::rhi {
+
+inline constexpr uint32_t kMaxPasses = 16;
+// Per-frame ring of composite descriptor sets. Lets a single pass issue
+// multiple DrawFullscreen calls with different texture bindings without
+// last-bound-wins aliasing (the 997af20 fix).
+inline constexpr uint32_t kCompositeRingSize = 4;
+
 
 class Resources;
 class Allocator;
@@ -75,6 +85,7 @@ struct ComputeDispatch {
     uint32_t local_x = 1;
     uint32_t local_y = 1;
     uint32_t local_z = 1;
+    uint32_t step_index = 0;
 };
 
 struct MeshDrawList {
@@ -132,18 +143,16 @@ public:
     void BeginRenderPass(Resources& res, SwapChain& sc, const RenderPassDesc& desc);
     void DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list);
     void DrawPoints(Resources& res, Allocator& alloc, const PointDraw& draw);
-    // Fullscreen triangle that binds `tex_count` sampled textures (set 0) + one
-    // shared sampler and draws 3 verts. No vertex buffers.
     void DrawFullscreen(Resources& res, Handle<Shader> pipeline,
-                        const Handle<Texture>* textures, uint32_t tex_count,
+                        std::span<const Handle<Texture>> textures,
                         Handle<Sampler> sampler);
-    // Render ImGui draw data through the RHI (own pipeline + per-frame bump
-    // upload of vtx/idx + per-cmd scissor). Drawn inside the swapchain pass.
+    void SetViewport(float x, float y, float w, float h);
+    void SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h);
     void DrawImGui(Resources& res, Allocator& alloc, Handle<Shader> pipeline,
                    Handle<Texture> font, Handle<Sampler> sampler,
                    const ImDrawData* draw_data);
-    void SetViewport(float x, float y, float w, float h);
-    void SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h);
+    void PassTimerBegin(const char* name);
+    void PassTimerEnd();
     void EndRenderPass();
 
     // Lazy-acquire back-pointers (set by Frames::Begin). The swapchain branch
@@ -162,17 +171,30 @@ public:
     VkDevice device_ = VK_NULL_HANDLE;
     VkDescriptorSet globals_set_ = VK_NULL_HANDLE;
     VkDescriptorSet drawtmp_set_ = VK_NULL_HANDLE;
-    VkDescriptorSet compute_set_ = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, kMaxStepsPerFrame> compute_sets_{};
     VkDescriptorSet point_set_ = VK_NULL_HANDLE;
-    VkDescriptorSet composite_set_ring_[kCompositeRing] = {};
-    uint32_t composite_set_cursor_ = 0;
-    VkDescriptorSet imgui_set_ = VK_NULL_HANDLE;
+    // Composite descriptor ring for DrawFullscreen (multiple per-pass draws with
+    // distinct textures). Advanced by composite_next_idx_ on each DrawFullscreen.
+    std::array<VkDescriptorSet, kCompositeRingSize> composite_sets_{};
+    uint32_t composite_next_idx_ = 0;
     OffscreenTargetCache* offscreen_ = nullptr;  // owned by Frames
+    // Per-pass timing (populated by Frames::Begin; written by PassTimerBegin).
+    VkQueryPool ts_pool_ = VK_NULL_HANDLE;
+    std::array<const char*, kMaxPasses>* pass_names_ = nullptr;
+    uint32_t* pass_count_ = nullptr;
+    VkCommandBuffer pass_cb_ = VK_NULL_HANDLE;
+    uint32_t pending_pass_idx_ = UINT32_MAX;
+    const char* pending_name_ = nullptr;
+    int pending_slot_ = -1;
 #elif CAIRNS_METAL
     MTL::CommandBuffer* cmd_ = nullptr;
     MTL::RenderCommandEncoder* enc_ = nullptr;
     MTL::RenderPassDescriptor* render_pass_desc_ = nullptr;
     MTL::DepthStencilState* depth_stencil_ = nullptr;
+    // Per-pass timing (populated by Frames::Begin; lazy-acquired cmd buffer).
+    MTL::CommandQueue* queue_ = nullptr;
+    const char* pending_name_ = nullptr;
+    int pending_slot_ = -1;
 #endif
 };
 
