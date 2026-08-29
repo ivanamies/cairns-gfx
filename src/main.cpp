@@ -30,6 +30,12 @@
 #include "rhi/init_config.hpp"
 #include "util/task_guard.hpp"
 
+#include <iostream>
+#include "control/agent_stdin_drain.hpp"
+#include "control/command_registry.hpp"
+#include "control/handlers/lifecycle_ops.hpp"
+#include "control/handlers/perf_ops.hpp"
+
 namespace cairns {
 
 
@@ -47,6 +53,11 @@ struct AppContext {
     MIX_Track* track = nullptr;
 
     cairns::Engine* engine = nullptr;
+
+    // Live agent transport: a stdin reader thread + drain on each
+    // SDL_AppIterate. Disabled unless CAIRNS_AGENT_STDIN=1.
+    cairns::control::AgentStdinDrain agent_drain;
+    bool agent_quit = false;
 
     SDL_AppResult app_quit = SDL_APP_CONTINUE;
 
@@ -155,6 +166,18 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
         .engine = engine,
     };
 
+    // Live agent transport setup (no-op unless CAIRNS_AGENT_STDIN is set).
+    AppContext* app_ctx = static_cast<AppContext*>(*appstate);
+    auto& registry = cairns::control::CommandRegistry::Instance();
+    cairns::control::RegisterLifecycleOps(registry, &app_ctx->agent_quit);
+    cairns::control::RegisterPerfOps(registry);
+    app_ctx->agent_drain.Start();
+    if (app_ctx->agent_drain.Enabled()) {
+        std::fprintf(stderr,
+                     "[Agent] stdin transport on -- send NDJSON to drive "
+                     "this window.\n");
+    }
+
     SDL_ShowWindow(window);
     SDL_Log("cairns Application started successfully!");
 
@@ -189,6 +212,15 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     [[maybe_unused]] cairns::TaskGuard task_guard;
 
+    // Drain any pending agent commands BEFORE the frame so the agent's
+    // mutations land on this frame's render. Responses go to stdout; logs
+    // / [Timer] / [FLAKE] stay on stderr per the protocol contract.
+    app->agent_drain.Drain(cairns::control::CommandRegistry::Instance(),
+                           std::cout);
+    if (app->agent_quit) {
+        app->app_quit = SDL_APP_SUCCESS;
+    }
+
     if ( app->engine) {
         if ( !app->engine->draw()) {
             return SDL_APP_CONTINUE;
@@ -201,6 +233,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 void SDL_AppQuit(void* appstate, [[maybe_unused]] SDL_AppResult result) {
     auto* app = (AppContext*)appstate;
     if (app) {
+        app->agent_drain.Stop();
         if ( app->engine ) {
             app->engine->deinit();
         }

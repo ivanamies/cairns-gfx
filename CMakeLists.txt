@@ -103,9 +103,11 @@ target_link_libraries(imgui PUBLIC SDL3::SDL3)
 # handlers) in their own static lib with relaxed flags. Mirrors the
 # cairns_render_thread / Taskflow pattern below.
 add_library(cairns_control STATIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/control/agent_stdin_drain.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/command_registry.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/transport_stdio.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/lifecycle_ops.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/perf_ops.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/render_ops.cpp")
 target_include_directories(cairns_control PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
