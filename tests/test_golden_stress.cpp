@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "util/debug_asset.hpp"  // kDebugGlbs -- 100 distinct champion names
-#include "golden_subject.hpp"
+#include "golden_js.hpp"
 
 namespace {
 
@@ -28,10 +28,25 @@ std::vector<std::string> HundredChampions() {
     return out;
 }
 
+// Compose the spawnFitted dispatch with the 100 distinct glb names as JS.
+std::string SpawnHundredJs(const std::vector<std::string>& glbs) {
+    std::string js = "cairns.dispatch(\"cairns.scene.spawnFitted\", { glbs: [";
+    for (const std::string& g : glbs) {
+        js += "\"";
+        js += g;
+        js += "\", ";
+    }
+    js += "], instances: ";
+    js += std::to_string(glbs.size());
+    js += ", animated: true });";
+    return js;
+}
+
 }  // namespace
 
-SCENARIO("stress: 100 distinct animated champions", "[stress][golden]") {
-    cairns::golden::RunSubject("hundred_champ_anim", HundredChampions(),
-                               cairns::kDebugGlbsToParse, /*animated=*/true,
-                               {0, 0, 0, 0, 0});
+SCENARIO("stress: 100 distinct animated champions (JS-driven)",
+         "[stress][golden]") {
+    const std::vector<std::string> glbs = HundredChampions();
+    cairns::golden::RunJsSubject("hundred_champ_anim", 512, 512, glbs,
+                                 SpawnHundredJs(glbs));
 }

@@ -1512,6 +1512,8 @@ public:
     // else stays off so the captured frames are "pipeline + clear + meshes",
     // no std::rand-shaped contamination.
     void EnableParticles(bool on) { particles_enabled_ = on; }
+    // A.3 single red NDC triangle (no scene): pipeline + clear + one draw.
+    void SetTinyTriangle(bool on) { tiny_quad_test_ = on; }
     bool ParticlesEnabled() const { return particles_enabled_; }
 
     // A.9: drop the implicit "no imgui in golden" gate. G6 imgui stability

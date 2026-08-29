@@ -28,34 +28,54 @@ namespace refs = cairns::test_refs;
 // SCENARIOs; the 100-actor scale workload lives in test_golden_stress.cpp. ----
 SCENARIO("subject: red triangle (pipeline + clear + one draw)",
          "[scenarios][golden][subject]") {
-    cairns::golden::RunSubject("triangle", {}, 1, false, {0, 0, 3, 0, 0});
+    cairns::golden::RunJsSubject("triangle", 512, 512, {}, R"JS(
+        cairns.dispatch("cairns.render.tinyTriangle", { on: true });
+    )JS");
 }
 SCENARIO("subject: one die (single static textured mesh)",
          "[scenarios][golden][subject]") {
-    cairns::golden::RunSubject("one_die", {"die.glb"}, 1, false,
-                               {0, 0, 4, 0, 0});
+    cairns::golden::RunJsSubject("one_die", 512, 512, {"die.glb"}, R"JS(
+        cairns.dispatch("cairns.viewport.setCamera", { viewport: 0, z: 4 });
+        cairns.dispatch("cairns.scene.spawnFitted",
+                        { glbs: ["die.glb"], instances: 1, animated: false });
+    )JS");
 }
 SCENARIO("subject: two dice (instancing / multiple draws)",
          "[scenarios][golden][subject]") {
-    cairns::golden::RunSubject("two_die", {"die.glb"}, 2, false,
-                               {0, 0, 0, 0, 0});
+    cairns::golden::RunJsSubject("two_die", 512, 512, {"die.glb"}, R"JS(
+        cairns.dispatch("cairns.scene.spawnFitted",
+                        { glbs: ["die.glb"], instances: 2, animated: false });
+    )JS");
 }
 SCENARIO("subject: viking room (UVs + depth)",
          "[scenarios][golden][subject]") {
-    cairns::golden::RunSubject("viking_room", {"viking_room.glb"}, 1, false,
-                               {0, 0, 5, 0, 0});
+    cairns::golden::RunJsSubject("viking_room", 512, 512, {"viking_room.glb"},
+                                 R"JS(
+        cairns.dispatch("cairns.viewport.setCamera", { viewport: 0, z: 5 });
+        cairns.dispatch("cairns.scene.spawnFitted",
+                        { glbs: ["viking_room.glb"], instances: 1,
+                          animated: false });
+    )JS");
 }
 SCENARIO("subject: three static champions (production-shape assets)",
          "[scenarios][golden][subject]") {
-    cairns::golden::RunSubject("three_champ_static",
-                               {"ahri.glb", "akali.glb", "alistar.glb"}, 3,
-                               false, {0, 0, 0, 0, 0});
+    cairns::golden::RunJsSubject(
+        "three_champ_static", 512, 512,
+        {"ahri.glb", "akali.glb", "alistar.glb"}, R"JS(
+        cairns.dispatch("cairns.scene.spawnFitted",
+                        { glbs: ["ahri.glb", "akali.glb", "alistar.glb"],
+                          instances: 3, animated: false });
+    )JS");
 }
 SCENARIO("subject: three animated champions (skinning path)",
          "[scenarios][golden][subject]") {
-    cairns::golden::RunSubject("three_champ_anim",
-                               {"ahri.glb", "akali.glb", "alistar.glb"}, 3,
-                               true, {0, 0, 0, 0, 0});
+    cairns::golden::RunJsSubject(
+        "three_champ_anim", 512, 512,
+        {"ahri.glb", "akali.glb", "alistar.glb"}, R"JS(
+        cairns.dispatch("cairns.scene.spawnFitted",
+                        { glbs: ["ahri.glb", "akali.glb", "alistar.glb"],
+                          instances: 3, animated: true });
+    )JS");
 }
 
 // 1) PARTICLES -- VK-tutorial style compute particles. NO render output: the
@@ -66,10 +86,20 @@ SCENARIO("subject: three animated champions (skinning path)",
 //    flake. Building block: [spec][particles][determinism].
 SCENARIO("particles simulate deterministically (no render, state hash)",
          "[golden][scenarios][particles]") {
+    seam::EnsureImguiContext();
+    cairns::rhi::InitConfig icfg{};
+    icfg.surfaceless = true;
+    icfg.width = 512;
+    icfg.height = 512;
+    cairns::EngineConfig ecfg{};
+    ecfg.use_fixed_clock = true;
     cairns::Engine e;
-    REQUIRE(seam::BootHeadless(e, 512, 512));
-    seam::EnableParticles(e, true);  // override the default-off Phase A.2 gate
-    REQUIRE(seam::AdvanceFrames(e, 64));  // settle the sim at a fixed frame
+    REQUIRE(e.GreaterInit(icfg, ecfg));
+    // particle enable + 64-frame settle, composed in JS.
+    cairns::golden::DriveJs(e, R"JS(
+        cairns.dispatch("cairns.particles.enable", { on: true });
+        cairns.dispatch("cairns.render.advanceFrames", { count: 64 });
+    )JS");
 
     std::vector<uint8_t> buf;
     if (!seam::ReadParticleBuffer(e, buf)) {
@@ -252,11 +282,21 @@ SCENARIO("actors outside the frustum are culled from the counters",
 //    Building block: [spec][profiling][hud].
 SCENARIO("imgui overlay is stable when fed mocked numbers",
          "[golden][scenarios][imgui]") {
+    seam::EnsureImguiContext();
+    cairns::rhi::InitConfig icfg{};
+    icfg.surfaceless = true;
+    icfg.width = 512;
+    icfg.height = 512;
+    cairns::EngineConfig ecfg{};
+    ecfg.use_fixed_clock = true;
     cairns::Engine e;
-    REQUIRE(seam::BootHeadless(e, 512, 512));
-    REQUIRE(seam::SpawnGlbs(e, {}, false));
-    REQUIRE(seam::EnableImguiOverlay(e, true));
-    REQUIRE(seam::InjectHudStats(e, cairns::HudStats::Mock()));
+    REQUIRE(e.GreaterInit(icfg, ecfg));
+    // imgui overlay + fixed HUD numbers, composed in JS (matches HudStats::Mock:
+    // 16.6 ms / 60 fps / flat graph).
+    cairns::golden::DriveJs(e, R"JS(
+        cairns.dispatch("cairns.imgui.golden", { on: true });
+        cairns.dispatch("cairns.hud.set", { cpu_ms: 16.6, fps: 60.0 });
+    )JS");
     REQUIRE(seam::AdvanceToGoldenFrame(e));
 
     SECTION("captured screen matches the per-platform overlay reference") {

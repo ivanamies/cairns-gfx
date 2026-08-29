@@ -9,7 +9,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 #include "engine.hpp"
 #include "rhi/init_config.hpp"
@@ -24,6 +26,7 @@
 #include "util/json.hpp"
 
 #include "test_seams.hpp"
+#include "test_refs.hpp"
 
 namespace cairns::golden {
 
@@ -46,6 +49,47 @@ inline void DriveJs(cairns::Engine& engine, const std::string& js) {
         {{"op", "cairns.script.eval"}, {"args", {{"code", js}}}});
     INFO("scenario JS response: " << resp.dump());
     REQUIRE(resp.value("ok", false) == true);
+}
+
+// Boot a w x h headless engine, run the JS composition `setup_js`, then capture
+// the final target at frame 9 + frame 55 and compare per-platform refs. `assets`
+// gates a SKIP when the glbs aren't in this build.
+inline void RunJsSubject(const char* name, uint32_t w, uint32_t h,
+                         const std::vector<std::string>& assets,
+                         const std::string& setup_js) {
+    namespace seam = cairns::test_seams;
+    namespace refs = cairns::test_refs;
+    if (!seam::AssetsPresent(assets)) {
+        SKIP("assets for '" << name << "' not present in this build");
+    }
+    seam::EnsureImguiContext();
+    cairns::rhi::InitConfig icfg{};
+    icfg.surfaceless = true;
+    icfg.width = w;
+    icfg.height = h;
+    cairns::EngineConfig ecfg{};
+    ecfg.use_fixed_clock = true;
+    cairns::Engine e;
+    REQUIRE(e.GreaterInit(icfg, ecfg));
+    DriveJs(e, setup_js);
+    auto capture = [&](const char* tag, uint32_t advance) {
+        REQUIRE(seam::AdvanceFrames(e, advance));
+        std::vector<uint8_t> rgba;
+        uint32_t gw = 0;
+        uint32_t gh = 0;
+        REQUIRE(seam::ReadFinalTargetRgba(e, rgba, gw, gh));
+        const std::string label = std::string(name) + ".f" + tag;
+        seam::DumpFinalTargetPng(e, label);
+        const std::string obs = seam::Md5Hex(rgba);
+        const std::string ref =
+            refs::LoadImageRef(label, seam::PlatformKey(), obs);
+        if (ref.empty()) {
+            SKIP("no ref for " << label << " -- bake one");
+        }
+        REQUIRE(obs == ref);
+    };
+    capture("09", 9);
+    capture("55", 46);
 }
 
 }  // namespace cairns::golden

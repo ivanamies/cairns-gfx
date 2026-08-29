@@ -437,4 +437,10 @@ void SetInjectedHud(Engine* engine, float cpu_ms, float fps) {
     engine->SetInjectedHudStats(s);
 }
 
+void SetTinyTriangle(Engine* engine, bool on) {
+    if (engine) {
+        engine->SetTinyTriangle(on);
+    }
+}
+
 }  // namespace cairns::headless

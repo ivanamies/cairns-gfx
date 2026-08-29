@@ -553,6 +553,16 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         });
 
     registry.Register(
+        "cairns.render.tinyTriangle",
+        json::object(),
+        "Draw a single red NDC triangle (no scene): pipeline + clear + one "
+        "draw. {on}.",
+        [engine = &engine](const json& args) -> json {
+            cairns::headless::SetTinyTriangle(engine, args.value("on", true));
+            return json::object();
+        });
+
+    registry.Register(
         "cairns.imgui.golden",
         json::object(),
         "Draw the imgui overlay in golden/headless mode: {on}. Pair with "
