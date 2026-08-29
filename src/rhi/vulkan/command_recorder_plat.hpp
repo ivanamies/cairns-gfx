@@ -81,7 +81,8 @@ struct CommandRecorderPlat {
     // #222 Phase D.3/D.4 cleanup: compute_sets_ + skin_group_b_set_ +
     // anim_eval_set_ retired. Particle, skin Group B, anim_eval all read
     // set 0 from a DynamicBuffers handle passed at dispatch time.
-    VkDescriptorSet point_set_ = VK_NULL_HANDLE;
+    // #222 Phase E.2: point_set_ retired (particle PSO has zero
+    // descriptor sets in its pipeline layout).
     // Composite descriptor ring for DrawFullscreen (multiple per-pass draws
     // with distinct textures). Advanced by composite_next_idx_ on each
     // DrawFullscreen.

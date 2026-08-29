@@ -17,7 +17,6 @@ struct PipelinesPlat {
     // to alloc per-mesh bind groups.
     VkDescriptorSetLayout globals_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout drawtmp_set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout point_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout composite_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout skin_group_a_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout skin_group_b_layout_ = VK_NULL_HANDLE;

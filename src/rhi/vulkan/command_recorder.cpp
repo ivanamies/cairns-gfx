@@ -653,9 +653,8 @@ void CommandRecorder::DrawPoints(Resources& res, Allocator& alloc, const PointDr
     VkBuffer ssbo = res.plat.GetVkBuffer(alloc,pd.vertex_buffer, &ssbo_off);
     VkDeviceSize off = ssbo_off;
     vkCmdBindVertexBuffers(cb, 0, 1, &ssbo, &off);
-    VkDescriptorSet point_set = plat.point_set_;
-    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p->plat.vk_layout, 0, 1,
-                            &point_set, 0, nullptr);
+    // #222 Phase E.2: pipeline layout has zero descriptor sets; nothing
+    // to bind via vkCmdBindDescriptorSets.
     vkCmdDraw(cb, pd.vertex_count, 1, 0, 0);
 }
 

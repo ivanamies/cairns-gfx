@@ -59,14 +59,9 @@ bool Pipelines::Init(Device& device) {
     // #222 Phase F.4: descriptor set layouts moved from Frames to here
     // (Pipelines is the canonical consumer for VkPipelineLayout creation).
 
-    {  // point layout (empty: particle render reads ssbo as a vertex buffer)
-        VkDescriptorSetLayoutCreateInfo li{};
-        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &plat.point_layout_) !=
-            VK_SUCCESS) {
-            return false;
-        }
-    }
+    // #222 Phase E.2: point_layout_ retired -- particle render PSO has
+    // zero descriptor sets in its pipeline layout (vert reads only
+    // vertex-input attributes); the recorder skips the empty-set bind.
     {  // skin Group B (frame-global skin kernel set 0): dynUBO Params
        // @0, dynSSBO palettes @1, dynSSBO InstanceMeta @2, SSBO output
        // pool whole @3.
@@ -235,7 +230,6 @@ void Pipelines::Deinit(Resources& resources) {
     };
     destroy_layout(plat.globals_set_layout_);
     destroy_layout(plat.drawtmp_set_layout_);
-    destroy_layout(plat.point_layout_);
     destroy_layout(plat.composite_set_layout_);
     destroy_layout(plat.skin_group_a_layout_);
     destroy_layout(plat.skin_group_b_layout_);
@@ -584,7 +578,8 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
         vkCreateDescriptorSetLayout(device, &dl, nullptr, &imgui_set_layout);
         set_layouts = {imgui_set_layout};
     } else {
-        set_layouts = {plat.point_layout_};
+        // #222 Phase E.2: particle vert shader reads no descriptors --
+        // pipeline layout has zero sets, recorder skips bind.
     }
     VkPipelineLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;

@@ -221,8 +221,7 @@ bool Frames::Init(Device& device, Pipelines& pipelines) {
         const uint32_t n = kFramesInFlight;
 
 
-        // Pool sizing post-D cleanup:
-        //   UBO: point_sets_ (n).
+        // Pool sizing post-E.2 (point_sets_ retired):
         //   SSBO: skin Group A (2 per skinned mesh, kMaxSkinnedMeshes
         //     budget) + dyn_skin_group_b_ binding 3 (n) + dyn_anim_eval_
         //     bindings 1..12 (12n) + dyn_particle_parity_[2] (4n).
@@ -231,27 +230,25 @@ bool Frames::Init(Device& device, Pipelines& pipelines) {
         //     (n) + dyn_particle_parity_[2] dt (2n).
         //   SSBO_DYN: dyn_skin_group_b_ palettes + meta (2n).
         //   COMBINED_IMAGE_SAMPLER: composite (3 * n * kCompositeRingSize).
-        //   maxSets: point (n) + globals (n) + drawtmp (n) + composite
+        //   maxSets: globals (n) + drawtmp (n) + composite
         //     (n * kCompositeRingSize) + skin Group A (kMaxSkinnedMeshes)
         //     + dyn_globals_ + dyn_drawtmp_ (2n) + dyn_skin_group_b_ (n)
         //     + dyn_anim_eval_ (n) + dyn_particle_parity_[2] (2n).
-        VkDescriptorPoolSize sizes[5]{};
-        sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        sizes[0].descriptorCount = n;
-        sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        sizes[1].descriptorCount =
+        VkDescriptorPoolSize sizes[4]{};
+        sizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        sizes[0].descriptorCount =
             n + 2 * kMaxSkinnedMeshes + 12 * n + 4 * n;
-        sizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        sizes[2].descriptorCount = n + n + 2 * n + n + n + 2 * n;
-        sizes[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[3].descriptorCount = 3 * n * kCompositeRingSize;
-        sizes[4].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
-        sizes[4].descriptorCount = 2 * n;
+        sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        sizes[1].descriptorCount = n + n + 2 * n + n + n + 2 * n;
+        sizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        sizes[2].descriptorCount = 3 * n * kCompositeRingSize;
+        sizes[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+        sizes[3].descriptorCount = 2 * n;
         VkDescriptorPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pci.poolSizeCount = 5;
+        pci.poolSizeCount = 4;
         pci.pPoolSizes = sizes;
-        pci.maxSets = 3 * n + n * kCompositeRingSize + kMaxSkinnedMeshes +
+        pci.maxSets = 2 * n + n * kCompositeRingSize + kMaxSkinnedMeshes +
                        2 * n + n + n + 2 * n;
         if (vkCreateDescriptorPool(dev, &pci, nullptr, &plat.descriptor_pool_) !=
             VK_SUCCESS) {
@@ -269,8 +266,7 @@ bool Frames::Init(Device& device, Pipelines& pipelines) {
             out.resize(n);
             return vkAllocateDescriptorSets(dev, &ai, out.data()) == VK_SUCCESS;
         };
-        if (!alloc_sets(pp.point_layout_, plat.point_sets_) ||
-            !alloc_sets(pp.globals_set_layout_, plat.globals_sets_) ||
+        if (!alloc_sets(pp.globals_set_layout_, plat.globals_sets_) ||
             !alloc_sets(pp.drawtmp_set_layout_, plat.drawtmp_sets_)) {
             return false;
         }
@@ -470,7 +466,6 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     fc.cmd.plat.device_ = dev;
     fc.cmd.plat.globals_set_ = plat.globals_sets_[cf];
     fc.cmd.plat.drawtmp_set_ = plat.drawtmp_sets_[cf];
-    fc.cmd.plat.point_set_ = plat.point_sets_[cf];
     fc.cmd.plat.composite_sets_ = plat.composite_sets_[cf];
     fc.cmd.plat.composite_next_idx_ = 0;
     fc.cmd.plat.offscreen_ = &offscreen_targets.plat.cache;

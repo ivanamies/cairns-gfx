@@ -37,7 +37,6 @@ struct FramesPlat {
     // Frames only owns per-FIF sets + the pool below.
     std::vector<VkDescriptorSet> globals_sets_;
     std::vector<VkDescriptorSet> drawtmp_sets_;
-    std::vector<VkDescriptorSet> point_sets_;
     // Per-frame ring of composite descriptor sets for DrawFullscreen. Lets one
     // pass issue multiple fullscreen draws with distinct textures (the 997af20
     // last-bound-wins fix).
