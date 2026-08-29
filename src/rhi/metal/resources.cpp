@@ -260,6 +260,10 @@ void Resources::DrainDeferredFrees(Allocator& alloc, uint32_t cur_frame) {
     }
 }
 
+// No fixed material descriptor pool on Metal (argument buffers) -> nothing to
+// reset; the set-2 bind groups free normally via Destroy(BindGroup).
+void Resources::ResetMaterialBindGroups() {}
+
 Buffer::Hot* Resources::GetHot(Handle<Buffer> h) { return buffers.GetHot(h); }
 Texture::Hot* Resources::GetHot(Handle<Texture> h) { return textures.GetHot(h); }
 Sampler::Hot* Resources::GetHot(Handle<Sampler> h) { return samplers.GetHot(h); }

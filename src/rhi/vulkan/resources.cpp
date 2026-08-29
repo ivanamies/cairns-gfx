@@ -460,6 +460,17 @@ void Resources::DrainDeferredFrees(Allocator& alloc, uint32_t cur_frame) {
     }
 }
 
+void Resources::ResetMaterialBindGroups() {
+    // Bulk-free every set allocated from material_pool_ (no per-set
+    // vkFreeDescriptorSets, so the pool needs no FREE_DESCRIPTOR_SET_BIT). The
+    // bind_groups handle slots recycle separately via Destroy(BindGroup); after
+    // this their api_descriptor_set is stale but never dereferenced -- every
+    // owning material is released before this runs (UnloadAllPrefabs).
+    if (plat.material_pool_) {
+        vkResetDescriptorPool(plat.device_, plat.material_pool_, 0);
+    }
+}
+
 Buffer::Hot* Resources::GetHot(Handle<Buffer> h) { return buffers.GetHot(h); }
 Texture::Hot* Resources::GetHot(Handle<Texture> h) { return textures.GetHot(h); }
 Sampler::Hot* Resources::GetHot(Handle<Sampler> h) { return samplers.GetHot(h); }

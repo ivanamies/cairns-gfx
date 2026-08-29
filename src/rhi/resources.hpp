@@ -129,6 +129,14 @@ public:
     // kFIF, so they retire exactly when cur_frame catches up.
     void DrainDeferredFrees(Allocator& alloc, uint32_t cur_frame);
 
+    // #229: bulk-free every per-material set-2 descriptor set. Destroy(BindGroup)
+    // only recycles the handle slot, never vkFreeDescriptorSets, so the fixed
+    // material descriptor pool leaks a set per material across scenario
+    // reloads -> after ~4096 the vk alloc fails -> null set2 -> WHITE actors
+    // (vk-only; Metal/WebGPU have no fixed pool). Call at a full-unload point
+    // (render thread drained, all materials released) so no live set2 remains.
+    void ResetMaterialBindGroups();
+
     Buffer::Hot* GetHot(Handle<Buffer> h);
     Texture::Hot* GetHot(Handle<Texture> h);
     Sampler::Hot* GetHot(Handle<Sampler> h);

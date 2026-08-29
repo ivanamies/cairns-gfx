@@ -3988,6 +3988,12 @@ uint32_t Engine::UnloadAllPrefabs() {
         prefab_store_.per_prefab_asset.clear();
         prefab_store_.glb_paths.clear();
         prefab_store_.resident_textures.clear();
+        // #229: every per-material set-2 descriptor set is now dead (all
+        // materials released above). Bulk-free them from the fixed vk material
+        // pool -- Destroy(BindGroup) only recycles the handle slot, so without
+        // this the pool leaked a set per material across scenario reloads and
+        // eventually failed to allocate -> null set2 -> WHITE actors (vk-only).
+        rhi_.resources.ResetMaterialBindGroups();
         // Anim: reset cursors so the next upload starts fresh against
         // unallocated capacity. The 4x growth pad still holds so the
         // first post-Unload load triggers FULL once, then DELTA after.

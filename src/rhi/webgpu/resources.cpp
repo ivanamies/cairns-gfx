@@ -334,6 +334,8 @@ void Resources::DeferFree(Handle<DynamicBuffers> h) { (void)h; }
 void Resources::DeferFree(Handle<Shader> h) { (void)h; }
 void Resources::DeferFree(Handle<Kernel> h) { (void)h; }
 void Resources::DrainDeferredFrees(Allocator& a, uint32_t cur_frame) { (void)a; (void)cur_frame; }
+// No fixed material descriptor pool on WebGPU -> nothing to reset.
+void Resources::ResetMaterialBindGroups() {}
 
 Buffer::Hot* Resources::GetHot(Handle<Buffer> h) { return buffers.GetHot(h); }
 Texture::Hot* Resources::GetHot(Handle<Texture> h) { return textures.GetHot(h); }
