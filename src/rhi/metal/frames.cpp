@@ -140,18 +140,7 @@ void Frames::WriteSkinGroupBDescriptors(Resources& /*resources*/,
 
 void Frames::WriteAnimEvalDescriptors(
     Resources& /*resources*/, Allocator& /*alloc*/,
-    Handle<Buffer> /*scene_headers*/,
-    Handle<Buffer> /*parent_buf*/,
-    Handle<Buffer> /*topo_buf*/,
-    Handle<Buffer> /*bind_pose_buf*/,
-    Handle<Buffer> /*channels_buf*/,
-    Handle<Buffer> /*samplers_buf*/,
-    Handle<Buffer> /*times_buf*/,
-    Handle<Buffer> /*values_buf*/,
-    Handle<Buffer> /*joint_nodes_buf*/,
-    Handle<Buffer> /*inverse_binds_buf*/,
-    Handle<Buffer> /*world_scratch*/,
-    Handle<Buffer> /*palette_out*/) {
+    const CommandRecorder::AnimEvalArgs& /*args*/) {
     // Metal: compute path binds buffers directly per dispatch via
     // setBuffer:offset:atIndex: in DispatchAnimEval; no descriptor set.
 }

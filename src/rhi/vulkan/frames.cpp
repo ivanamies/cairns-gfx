@@ -668,18 +668,7 @@ void Frames::WriteSkinGroupBDescriptors(Resources& resources,
 
 void Frames::WriteAnimEvalDescriptors(
     Resources& resources, Allocator& alloc,
-    Handle<Buffer> scene_headers,
-    Handle<Buffer> parent_buf,
-    Handle<Buffer> topo_buf,
-    Handle<Buffer> bind_pose_buf,
-    Handle<Buffer> channels_buf,
-    Handle<Buffer> samplers_buf,
-    Handle<Buffer> times_buf,
-    Handle<Buffer> values_buf,
-    Handle<Buffer> joint_nodes_buf,
-    Handle<Buffer> inverse_binds_buf,
-    Handle<Buffer> world_scratch,
-    Handle<Buffer> palette_out) {
+    const CommandRecorder::AnimEvalArgs& args) {
     if (plat.anim_eval_sets_.empty()) {
         return;
     }
@@ -689,9 +678,10 @@ void Frames::WriteAnimEvalDescriptors(
         return;
     }
     Handle<Buffer> ssbo_handles[12] = {
-        scene_headers, parent_buf, topo_buf, bind_pose_buf,
-        channels_buf, samplers_buf, times_buf, values_buf,
-        joint_nodes_buf, inverse_binds_buf, world_scratch, palette_out,
+        args.scene_headers, args.parent_buf, args.topo_buf, args.bind_pose_buf,
+        args.channels_buf, args.samplers_buf, args.times_buf, args.values_buf,
+        args.joint_nodes_buf, args.inverse_binds_buf, args.world_scratch,
+        args.palette_out,
     };
     uint32_t ssbo_offs[12]{};
     VkBuffer ssbo_bufs[12]{};

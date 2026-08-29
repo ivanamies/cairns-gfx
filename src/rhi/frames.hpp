@@ -89,20 +89,11 @@ public:
     // + the persistent palette/world-scratch buffers. The actor-records
     // binding 0 is DYNAMIC_UBO over the kDynamic master; offset is set
     // per-dispatch by the recorder. Metal: no-op.
-    void WriteAnimEvalDescriptors(
-        Resources& resources, Allocator& alloc,
-        rhi::Handle<rhi::Buffer> scene_headers,
-        rhi::Handle<rhi::Buffer> parent_buf,
-        rhi::Handle<rhi::Buffer> topo_buf,
-        rhi::Handle<rhi::Buffer> bind_pose_buf,
-        rhi::Handle<rhi::Buffer> channels_buf,
-        rhi::Handle<rhi::Buffer> samplers_buf,
-        rhi::Handle<rhi::Buffer> times_buf,
-        rhi::Handle<rhi::Buffer> values_buf,
-        rhi::Handle<rhi::Buffer> joint_nodes_buf,
-        rhi::Handle<rhi::Buffer> inverse_binds_buf,
-        rhi::Handle<rhi::Buffer> world_scratch,
-        rhi::Handle<rhi::Buffer> palette_out);
+    // #222 Phase F.5: take the AnimEvalArgs struct from R.1 instead of
+    // a 12-param sprawl. The records_byte_offset / actor_count fields are
+    // unused on this write path (they're per-dispatch state) -- leave at 0.
+    void WriteAnimEvalDescriptors(Resources& resources, Allocator& alloc,
+                                   const CommandRecorder::AnimEvalArgs& args);
 
     // #237 fix: write the per-frame globals_sets_ + drawtmp_sets_ ONCE
     // at engine init. Both bindings are UNIFORM_BUFFER_DYNAMIC pointing

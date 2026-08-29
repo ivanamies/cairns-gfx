@@ -1164,12 +1164,21 @@ public:
                                             : rhi::Handle<rhi::Buffer>{});
         }
         if (anim_eval_tables_uploaded_) {
-            rhi_.frames.WriteAnimEvalDescriptors(
-                rhi_.resources, rhi_.alloc,
-                scene_headers_buf_, ae_parent_buf_, ae_topo_buf_,
-                ae_bind_pose_buf_, ae_channels_buf_, ae_samplers_buf_,
-                ae_times_buf_, ae_values_buf_, ae_joint_nodes_buf_,
-                ae_inverse_binds_buf_, world_scratch_buf_, palette_out_buf_);
+            rhi::CommandRecorder::AnimEvalArgs ae{};
+            ae.scene_headers = scene_headers_buf_;
+            ae.parent_buf = ae_parent_buf_;
+            ae.topo_buf = ae_topo_buf_;
+            ae.bind_pose_buf = ae_bind_pose_buf_;
+            ae.channels_buf = ae_channels_buf_;
+            ae.samplers_buf = ae_samplers_buf_;
+            ae.times_buf = ae_times_buf_;
+            ae.values_buf = ae_values_buf_;
+            ae.joint_nodes_buf = ae_joint_nodes_buf_;
+            ae.inverse_binds_buf = ae_inverse_binds_buf_;
+            ae.world_scratch = world_scratch_buf_;
+            ae.palette_out = palette_out_buf_;
+            rhi_.frames.WriteAnimEvalDescriptors(rhi_.resources, rhi_.alloc,
+                                                   ae);
         }
         // #237 fix: globals + drawtmp DYNAMIC UBO descriptors point at
         // the master kDynamic buffer with sizeof(struct) range; per-pass
