@@ -63,6 +63,12 @@ struct AppContext {
 
     SDL_AppResult app_quit = SDL_APP_CONTINUE;
 
+    // P1 fly-cam: RMB held => mouse-look + WASD/hjkl/QE/Shift drive
+    // engine->ApplyFlyMovement each iterate. last_iter_ns_ is the timestamp
+    // of the previous SDL_AppIterate so the per-frame dt is wall-time.
+    bool rmb_look = false;
+    uint64_t last_iter_ns_ = 0;
+
     ~AppContext() {
         delete engine;
         engine = nullptr;
@@ -204,6 +210,30 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event) {
             app->engine->RequestViewportDump("/tmp/cairns_dump.png");
         }
     }
+    // RMB-held → relative mouse mode + mouse-look. Skipped while ImGui has
+    // mouse focus (e.g. cursor over the perf panel) so dragging widgets
+    // doesn't also rotate the camera.
+    else if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+        if (event->button.button == SDL_BUTTON_RIGHT &&
+            !ImGui::GetIO().WantCaptureMouse) {
+            SDL_SetWindowRelativeMouseMode(app->window, true);
+            app->rmb_look = true;
+        }
+    }
+    else if (event->type == SDL_EVENT_MOUSE_BUTTON_UP) {
+        if (event->button.button == SDL_BUTTON_RIGHT && app->rmb_look) {
+            SDL_SetWindowRelativeMouseMode(app->window, false);
+            app->rmb_look = false;
+        }
+    }
+    else if (event->type == SDL_EVENT_MOUSE_MOTION) {
+        if (app->rmb_look && app->engine) {
+            constexpr float kMouseSensitivity = 0.0025f;  // rad / pixel
+            const float dyaw = event->motion.xrel * kMouseSensitivity;
+            const float dpitch = -event->motion.yrel * kMouseSensitivity;
+            app->engine->ApplyMouseLook(dyaw, dpitch);
+        }
+    }
     else if ( event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
         const int newWidth = event->window.data1;
         const int newHeight = event->window.data2;
@@ -226,6 +256,32 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
                            std::cout);
     if (app->agent_quit) {
         app->app_quit = SDL_APP_SUCCESS;
+    }
+
+    // P1 fly-cam: sample keyboard state once per iterate and drive the
+    // active viewport's FlyController. Skipped under CAIRNS_CAM_POSE (the
+    // engine bails inside ApplyFlyMovement) so byte-gate dumps stay
+    // deterministic regardless of any held keys. WASD + vim hjkl share a
+    // single resolved (right, up, forward) vector.
+    if (app->engine && !app->engine->CamPoseOverridden()) {
+        const uint64_t now_ns = SDL_GetTicksNS();
+        const float dt = app->last_iter_ns_ == 0
+            ? 0.0f
+            : std::min(0.05f, static_cast<float>((now_ns - app->last_iter_ns_) * 1e-9));
+        app->last_iter_ns_ = now_ns;
+        const bool* keys = SDL_GetKeyboardState(nullptr);
+        glm::vec3 input{0.0f};
+        if (keys[SDL_SCANCODE_D] || keys[SDL_SCANCODE_L]) { input.x += 1.0f; }
+        if (keys[SDL_SCANCODE_A] || keys[SDL_SCANCODE_H]) { input.x -= 1.0f; }
+        if (keys[SDL_SCANCODE_E])                          { input.y += 1.0f; }
+        if (keys[SDL_SCANCODE_Q])                          { input.y -= 1.0f; }
+        if (keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_K]) { input.z += 1.0f; }
+        if (keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_J]) { input.z -= 1.0f; }
+        if (glm::dot(input, input) > 0.0f) {
+            const float speed = (keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT])
+                ? 12.0f : 4.0f;
+            app->engine->ApplyFlyMovement(input * (dt * speed));
+        }
     }
 
     if ( app->engine) {

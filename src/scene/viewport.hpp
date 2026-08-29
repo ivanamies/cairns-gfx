@@ -40,4 +40,15 @@ struct Viewport {
     bool camera_dirty = true;
 };
 
+// Per-viewport navigation state. yaw rotates around world up (Y); pitch around
+// the camera's local right (X). The resolved view matrix on Viewport::camera
+// is the durable thing -- this struct is just the input to that resolve. Kept
+// in a parallel array on Engine so growing/replacing the camera implementation
+// doesn't reshape Viewport.
+struct FlyController {
+    glm::vec3 position{0.0f, 0.0f, 0.0f};
+    float yaw = 0.0f;    // radians
+    float pitch = 0.0f;  // radians
+};
+
 }  // namespace cairns

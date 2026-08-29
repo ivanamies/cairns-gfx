@@ -2,6 +2,7 @@
 
 #include "util/define.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <string_view>
@@ -39,6 +40,7 @@
 #include "scene/asset_registry.hpp"
 #include "scene/components.hpp"
 #include "scene/world.hpp"
+#include "scene/viewport.hpp"
 #include "render/frame_packet.hpp"
 #include "render/render_extract.hpp"
 #include "render/render_graph.hpp"
@@ -138,6 +140,42 @@ public:
         rhi_.frames.SetDumpPath(path);
         return true;
     }
+
+    // P1 input surface for main.cpp. Both no-op under CAIRNS_CAM_POSE so a
+    // byte-gate dump can't be perturbed by an event that snuck through.
+
+    // move_input.x = right(+) / left(-), .y = up(+) / down(-),
+    // .z = forward(+) / back(-). Caller multiplies by dt + speed.
+    void ApplyFlyMovement(const glm::vec3& move_input) {
+        if (cam_pose_override_) {
+            return;
+        }
+        cairns::FlyController& fc = fly_[active_viewport_];
+        const float cy = std::cos(fc.yaw);
+        const float sy = std::sin(fc.yaw);
+        const float cp = std::cos(fc.pitch);
+        const float sp = std::sin(fc.pitch);
+        const glm::vec3 forward(-cp * sy, sp, -cp * cy);
+        // right = normalize(cross(forward, world_up)). Cheaper closed-form:
+        // when world_up is (0,1,0), right = (-cy, 0, sy) (independent of pitch).
+        const glm::vec3 right(-cy, 0.0f, sy);
+        const glm::vec3 up(0.0f, 1.0f, 0.0f);
+        fc.position += right * move_input.x + up * move_input.y +
+                        forward * move_input.z;
+    }
+
+    void ApplyMouseLook(float dyaw, float dpitch) {
+        if (cam_pose_override_) {
+            return;
+        }
+        cairns::FlyController& fc = fly_[active_viewport_];
+        fc.yaw += dyaw;
+        // Clamp pitch just inside +/-pi/2 so forward never becomes degenerate.
+        constexpr float kPitchLimit = 1.55334f;
+        fc.pitch = std::clamp(fc.pitch + dpitch, -kPitchLimit, kPitchLimit);
+    }
+
+    bool CamPoseOverridden() const { return cam_pose_override_; }
 
     // Override the deterministic-particles seed (default kept at 42 to match
     // the existing CAIRNS_DUMP byte-gate). Must be called before
@@ -446,6 +484,21 @@ public:
         // Clock selection: CAIRNS_DUMP => FixedClock (golden); else WallClock.
         golden_ = (std::getenv("CAIRNS_DUMP") != nullptr);
         tiny_quad_test_ = (std::getenv("CAIRNS_TINY_QUAD") != nullptr);
+
+        // CAIRNS_CAM_POSE=x,y,z,yaw_rad,pitch_rad pins fly_[0] to a fixed
+        // pose so byte-gate dumps are deterministic. The pre-P1 reference
+        // pose -- origin looking down -Z -- is CAIRNS_CAM_POSE=0,0,0,0,0.
+        if (const char* p = std::getenv("CAIRNS_CAM_POSE")) {
+            float v[5] = {0};
+            int n = std::sscanf(p, "%f,%f,%f,%f,%f", &v[0], &v[1], &v[2],
+                                 &v[3], &v[4]);
+            if (n == 5) {
+                fly_[0].position = glm::vec3(v[0], v[1], v[2]);
+                fly_[0].yaw = v[3];
+                fly_[0].pitch = v[4];
+                cam_pose_override_ = true;
+            }
+        }
         if (golden_) {
             clock_ = std::make_unique<cairns::FixedClock>(cairns::kFixedDt);
         } else {
@@ -732,9 +785,17 @@ public:
         const float angle_rads = angle_degs * std::numbers::pi / 180.0f;
         const glm::mat4 rot_matrix = glm::rotate(glm::mat4(1.0f), angle_rads, glm::vec3(0, 1.0, 0));
 
-        // CAMERA MUST ALWAYS REMAIN AT (0, 0, 0)
-        const glm::vec3 camera_pos(0, 0, 0);
-        const glm::vec3 camera_dir(0, 0, -1);
+        // Resolve the active viewport's view matrix from its FlyController.
+        // yaw rotates around world up (Y); pitch around the camera's local
+        // right (X). yaw=0,pitch=0,pos=(0,0,0) reproduces the pre-P1
+        // origin-looking-down-(-Z) camera (the byte-gate hinge).
+        cairns::FlyController& fc = fly_[active_viewport_];
+        const float cy = std::cos(fc.yaw);
+        const float sy = std::sin(fc.yaw);
+        const float cp = std::cos(fc.pitch);
+        const float sp = std::sin(fc.pitch);
+        const glm::vec3 camera_pos = fc.position;
+        const glm::vec3 camera_dir(-cp * sy, sp, -cp * cy);
         const glm::vec3 world_up(0, 1, 0);
 
         const glm::mat4 view_matrix = glm::lookAtRH(camera_pos, camera_pos + camera_dir, world_up);
@@ -1642,6 +1703,17 @@ private:
     std::vector<cairns::RenderProxyArrays> world_proxies_;
     cairns::WorldId active_world_;
     cairns::WorldId secondary_world_;  // P6 multi-world coexistence test
+
+    // P1: viewports + per-viewport navigation. Single viewport this commit;
+    // P2 grows to 2. fly_ is parallel (yaw/pitch/position) to avoid
+    // reshaping Viewport every time the camera implementation grows.
+    // cam_pose_override_ pins fly_[0] to a fixed (pos, yaw, pitch) from
+    // CAIRNS_CAM_POSE so byte-gate dumps are deterministic regardless of
+    // any keyboard/mouse input on this run.
+    std::array<cairns::Viewport, 1> viewports_{};
+    std::array<cairns::FlyController, 1> fly_{};
+    int active_viewport_ = 0;
+    bool cam_pose_override_ = false;
 
     rhi::Rhi rhi_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
