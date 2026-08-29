@@ -993,6 +993,12 @@ VkSampleCountFlagBits ResourceManager::GetVkMsaaSamples() const {
     return impl_->msaa_samples;
 }
 
+bool ResourceManager::InitSwapChain(SwapChain& sc, SDL_Window* window) {
+    return sc.Init(impl_->params.device, impl_->params.physical, impl_->surface,
+                   window, impl_->params.command_pool, impl_->graphics_queue,
+                   impl_->msaa_samples, true);
+}
+
 Handle<Buffer> ResourceManager::CreateBuffer(const BufferDesc& d) {
     uint32_t align = 16;
     if (d.usage & kUsageUniform) {

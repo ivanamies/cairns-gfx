@@ -157,6 +157,10 @@ MTL::CommandQueue* ResourceManager::GetMtlQueue() const {
     return impl_->params.queue;
 }
 
+bool ResourceManager::InitSwapChain(SwapChain& sc, SDL_Window* window) {
+    return sc.Init(impl_->params.device, window);
+}
+
 Handle<Buffer> ResourceManager::CreateBuffer(const BufferDesc& d) {
     metal::AllocResult r =
         impl_->memory.AllocBuffer(d.byte_size, d.usage, d.memory, 16);

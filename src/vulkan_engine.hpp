@@ -337,8 +337,8 @@ private:
         const glm::vec3 world_up(0, 1, 0);
         const glm::mat4 view_matrix = glm::lookAtRH(camera_pos, camera_pos + camera_dir, world_up);
 
-        const float aspect_ratio = static_cast<float>(sc_.swapChainExtent.width) /
-                                   static_cast<float>(sc_.swapChainExtent.height);
+        const float aspect_ratio = static_cast<float>(sc_.Width()) /
+                                   static_cast<float>(sc_.Height());
         const float fov = 90.0f * (std::numbers::pi / 180.0f);
         const float near_z = 0.1f;
         const float far_z = 100.0f;
@@ -353,10 +353,10 @@ private:
             .camera_pos = glm::vec4(camera_pos, 1.0f),
             .camera_dir = glm::vec4(camera_dir, near_z),
             .screen_params = glm::vec4(
-                static_cast<float>(sc_.swapChainExtent.width),
-                static_cast<float>(sc_.swapChainExtent.height),
-                1.0f / static_cast<float>(sc_.swapChainExtent.width),
-                1.0f / static_cast<float>(sc_.swapChainExtent.height))
+                static_cast<float>(sc_.Width()),
+                static_cast<float>(sc_.Height()),
+                1.0f / static_cast<float>(sc_.Width()),
+                1.0f / static_cast<float>(sc_.Height()))
         };
         void* gptr = rm_.BumpAllocate(
             sizeof(cairns::rhi::RenderPassGlobals), ubo_align_, rhi::Memory::kDynamic);
@@ -464,7 +464,7 @@ private:
             ubo_align_ = std::max(1u, static_cast<uint32_t>(
                 props.limits.minUniformBufferOffsetAlignment));
         }
-        if (!sc_.Init(device, physicalDevice, surface, window_, commandPool, graphicsQueue, msaaSamples, true)) return false;
+        if (!rm_.InitSwapChain(sc_, window_)) return false;
         if (!loadScenes()) return false;
         if (!createBindlessRegistry()) return false;
         if (!createComputePipeline()) return false;
@@ -1940,8 +1940,8 @@ private:
         rhi::RenderPassDesc rp{};
         rp.color = rhi::Span<const rhi::ColorAttachment>(col, 1);
         rp.depth.clear_depth = 1.0f;
-        rp.width = sc_.swapChainExtent.width;
-        rp.height = sc_.swapChainExtent.height;
+        rp.width = sc_.Width();
+        rp.height = sc_.Height();
         fc.cmd.BeginRenderPass(rp);
 
         rhi::MeshDrawList ml{};

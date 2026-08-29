@@ -67,6 +67,9 @@ struct SwapChain {
         return true;
     }
 
+    uint32_t Width() const { return swapChainExtent.width; }
+    uint32_t Height() const { return swapChainExtent.height; }
+
     void RecreateSwapChain() {
         int width = 0;
         int height = 0;
@@ -625,6 +628,8 @@ struct SwapChain {
     }
 
     Size GetDrawableSize() const { return size_; }
+    uint32_t Width() const { return size_.width; }
+    uint32_t Height() const { return size_.height; }
 
     MTL::PixelFormat GetPixelFormat() const { return metalLayer_->pixelFormat(); }
 

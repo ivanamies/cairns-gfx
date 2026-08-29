@@ -72,7 +72,7 @@ public:
     bool initSwapChain(SDL_Window* window) {
         swapChain_ = std::make_unique<cairns::rhi::SwapChain>();
         
-        if ( !swapChain_->Init(device_, window)) {
+        if ( !rm_.InitSwapChain(*swapChain_, window)) {
             return false;
         }
         
@@ -334,7 +334,7 @@ public:
         
         const glm::mat4 view_matrix = glm::lookAtRH(camera_pos, camera_pos + camera_dir, world_up);
         
-        const float aspect_ratio = (1.0f * swapChain_->GetDrawableSize().width) / swapChain_->GetDrawableSize().height;
+        const float aspect_ratio = (1.0f * swapChain_->Width()) / swapChain_->Height();
         const float fov = 90 * (std::numbers::pi / 180.0f);
         const float near_z = 0.1f;
         const float far_z = 100.0f;
@@ -346,8 +346,8 @@ public:
         const BindGroupId bg_globals = getBindGroup();
         { // set up render pass globals
             // set up camera
-            const float screen_width = swapChain_->GetDrawableSize().width;
-            const float screen_height = swapChain_->GetDrawableSize().height;
+            const float screen_width = swapChain_->Width();
+            const float screen_height = swapChain_->Height();
             glm::mat4 view_proj = proj_matrix * view_matrix;
             cairns::rhi::RenderPassGlobals render_pass_globals {
                 .view_proj = view_proj,
@@ -536,8 +536,8 @@ public:
         rhi::RenderPassDesc rp{};
         rp.color = rhi::Span<const rhi::ColorAttachment>(col, 1);
         rp.depth.clear_depth = 1.0f;
-        rp.width = swapChain_->GetDrawableSize().width;
-        rp.height = swapChain_->GetDrawableSize().height;
+        rp.width = swapChain_->Width();
+        rp.height = swapChain_->Height();
         fc.cmd.BeginRenderPass(rp);
 
         rhi::MeshDrawList ml{};

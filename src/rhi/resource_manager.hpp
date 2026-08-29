@@ -582,6 +582,9 @@ public:
     // instance/surface/queues/command pool) from the window, then initializes
     // the memory allocator. Replaces app-side device creation + Init.
     bool InitDevice(SDL_Window* window);
+    // Neutral swapchain bring-up: fills `sc` using the device objects InitDevice
+    // owns (Vulkan: device/surface/queues/pool/samples; Metal: device).
+    bool InitSwapChain(SwapChain& sc, SDL_Window* window);
     void Deinit();
     // Request a one-shot swapchain dump on the next EndFrame (neutral; both
     // backends honor it). Cleared after the dump is written.
