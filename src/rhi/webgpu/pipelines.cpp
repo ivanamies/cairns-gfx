@@ -82,6 +82,7 @@ struct ShaderInfo {
     Kind kind = Kind::kStub;
     const char* stem = nullptr;
     int tex_count = 0;
+    bool depth_sample = false;  // depthviz samples a Depth32Float target
 };
 ShaderInfo Classify(const char* logical) {
     if (!logical) { return {}; }
@@ -90,6 +91,9 @@ ShaderInfo Classify(const char* logical) {
     }
     if (std::strcmp(logical, "composite_pip") == 0) {
         return {Kind::kFullscreen, "composite_pip", 1};
+    }
+    if (std::strcmp(logical, "depthviz") == 0) {
+        return {Kind::kFullscreen, "depthviz", 1, true};
     }
     if (std::strcmp(logical, "unlit_offscreen_noid") == 0) {
         return {Kind::kUnlit, "unlit", 0};
@@ -170,7 +174,9 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(Resources& resources, Frames& f
         for (int i = 0; i < info.tex_count; ++i) {
             entries[i].binding = static_cast<uint32_t>(i);
             entries[i].visibility = WGPUShaderStage_Fragment;
-            entries[i].texture.sampleType = WGPUTextureSampleType_Float;
+            entries[i].texture.sampleType =
+                info.depth_sample ? WGPUTextureSampleType_Depth
+                                  : WGPUTextureSampleType_Float;
             entries[i].texture.viewDimension = WGPUTextureViewDimension_2D;
         }
         entries[info.tex_count].binding = static_cast<uint32_t>(info.tex_count);
