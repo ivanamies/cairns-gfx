@@ -45,6 +45,8 @@
 #include <cstddef>
 #include <cstdio>
 #include <memory>
+#include <sstream>
+#include <thread>
 
 #ifndef CAIRNS_ALLOC_TRACE
 #define CAIRNS_ALLOC_TRACE 0
@@ -70,18 +72,24 @@ public:
     [[nodiscard]] T* allocate(std::size_t n) {
         T* p = std::allocator<T>{}.allocate(n);
 #if CAIRNS_ALLOC_TRACE
-        std::fprintf(stderr, "[ALLOC] %s +%zu*%zu=%zu p=%p\n",
+        std::ostringstream tid_ss;
+        tid_ss << std::this_thread::get_id();
+        std::fprintf(stderr,
+                      "[ALLOC] %s +%zu*%zu=%zu p=%p tid=%s\n",
                       TagT::name(), n, sizeof(T), n * sizeof(T),
-                      static_cast<void*>(p));
+                      static_cast<void*>(p), tid_ss.str().c_str());
 #endif
         return p;
     }
 
     void deallocate(T* p, std::size_t n) noexcept {
 #if CAIRNS_ALLOC_TRACE
-        std::fprintf(stderr, "[ALLOC] %s -%zu*%zu=%zu p=%p\n",
+        std::ostringstream tid_ss;
+        tid_ss << std::this_thread::get_id();
+        std::fprintf(stderr,
+                      "[ALLOC] %s -%zu*%zu=%zu p=%p tid=%s\n",
                       TagT::name(), n, sizeof(T), n * sizeof(T),
-                      static_cast<void*>(p));
+                      static_cast<void*>(p), tid_ss.str().c_str());
 #endif
         std::allocator<T>{}.deallocate(p, n);
     }
