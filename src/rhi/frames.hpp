@@ -9,6 +9,7 @@
 
 #include "util/define.hpp"
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <vector>
@@ -77,6 +78,11 @@ public:
     std::vector<VkDescriptorSet> drawtmp_sets_;
     std::vector<VkDescriptorSet> compute_sets_;
     std::vector<VkDescriptorSet> point_sets_;
+    VkQueryPool ts_pool_ = VK_NULL_HANDLE;
+    float ts_period_ns_ = 0.0f;
+    bool host_query_reset_ = false;
+    std::vector<std::array<const char*, kMaxPasses>> pass_names_;
+    std::vector<uint32_t> pass_count_;
 #elif CAIRNS_METAL
     MTL::Device* device_ = nullptr;             // mirrored from Device
     MTL::CommandQueue* queue_ = nullptr;        // mirrored from Device

@@ -281,6 +281,25 @@ bool Device::Init(SDL_Window* window) {
         vk12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
         vk12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
         vk12.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
+        // Probe + enable hostQueryReset so Frames::Begin can vkResetQueryPool
+        // host-side and avoid the cross-queue cmd-reset race.
+        {
+            VkPhysicalDeviceVulkan12Features probe{};
+            probe.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+            VkPhysicalDeviceFeatures2 f2{};
+            f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            f2.pNext = &probe;
+            vkGetPhysicalDeviceFeatures2(physical_, &f2);
+            host_query_reset_ = (probe.hostQueryReset == VK_TRUE);
+        }
+        if (host_query_reset_) {
+            vk12.hostQueryReset = VK_TRUE;
+        }
+        {
+            VkPhysicalDeviceProperties pp;
+            vkGetPhysicalDeviceProperties(physical_, &pp);
+            timestamp_period_ns_ = pp.limits.timestampPeriod;
+        }
 
         VkPhysicalDeviceFeatures2 features2{};
         features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;

@@ -20,12 +20,19 @@
 #include "util/draw.hpp"
 #include "util/material_gpu.hpp"
 #include "util/render_pass_globals.hpp"
+#include "util/timer.hpp"
 
 #include "imgui.h"
 
 namespace cairns::rhi {
 
 void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDispatch& d) {
+    if (pending_pass_idx_ != UINT32_MAX && pass_cb_ == VK_NULL_HANDLE) {
+        pass_cb_ = comp_;
+        vkCmdWriteTimestamp(pass_cb_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                            ts_pool_,
+                            2 * kMaxPasses * frame_ + 2 * pending_pass_idx_);
+    }
     Kernel::Hot* k = res.GetHot(d.kernel);
     VkDescriptorSet set = compute_set_;
 
@@ -61,6 +68,12 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
 }
 
 void CommandRecorder::BeginRenderPass(SwapChain& sc, const RenderPassDesc& desc) {
+    if (pending_pass_idx_ != UINT32_MAX && pass_cb_ == VK_NULL_HANDLE) {
+        pass_cb_ = gfx_;
+        vkCmdWriteTimestamp(pass_cb_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                            ts_pool_,
+                            2 * kMaxPasses * frame_ + 2 * pending_pass_idx_);
+    }
     VkRenderPassBeginInfo rpi{};
     rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     rpi.renderPass = sc.renderPass;
@@ -290,6 +303,33 @@ void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader>
 
 void CommandRecorder::EndRenderPass() {
     vkCmdEndRenderPass(gfx_);
+}
+
+void CommandRecorder::PassTimerBegin(const char* name) {
+    pending_name_ = name;
+    pending_slot_ = TimerStorage::SlotForPass(name);
+    if (pass_count_ == nullptr || pass_names_ == nullptr) {
+        return;
+    }
+    if (*pass_count_ >= kMaxPasses) {
+        pending_pass_idx_ = UINT32_MAX;
+        return;
+    }
+    pending_pass_idx_ = (*pass_count_)++;
+    (*pass_names_)[pending_pass_idx_] = name;
+    pass_cb_ = VK_NULL_HANDLE;
+}
+
+void CommandRecorder::PassTimerEnd() {
+    if (pending_pass_idx_ != UINT32_MAX && pass_cb_ != VK_NULL_HANDLE) {
+        vkCmdWriteTimestamp(pass_cb_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                            ts_pool_,
+                            2 * kMaxPasses * frame_ + 2 * pending_pass_idx_ + 1);
+    }
+    pending_pass_idx_ = UINT32_MAX;
+    pending_name_ = nullptr;
+    pending_slot_ = -1;
+    pass_cb_ = VK_NULL_HANDLE;
 }
 
 }  // namespace cairns::rhi

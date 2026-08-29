@@ -16,6 +16,7 @@
 #include "rhi/resource_manager.hpp"  // kFramesInFlight
 #include "rhi/swap_chain.hpp"
 #include "rhi/command_recorder.hpp"
+#include "util/timer.hpp"
 
 namespace cairns::rhi {
 
@@ -159,6 +160,19 @@ bool Frames::Init(Device& device) {
     graphics_queue_ = device.graphics_queue_;
     compute_queue_ = device.compute_queue_;
     present_queue_ = device.present_queue_;
+    ts_period_ns_ = device.timestamp_period_ns_;
+    host_query_reset_ = device.host_query_reset_;
+    {
+        VkQueryPoolCreateInfo qpi{};
+        qpi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        qpi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        qpi.queryCount = 2 * kMaxPasses * kFramesInFlight;
+        if (vkCreateQueryPool(device_, &qpi, nullptr, &ts_pool_) != VK_SUCCESS) {
+            return false;
+        }
+        pass_names_.assign(kFramesInFlight, {});
+        pass_count_.assign(kFramesInFlight, 0);
+    }
 
     {  // per-frame command buffers + sync
         const uint32_t n = kFramesInFlight;
@@ -329,6 +343,10 @@ void Frames::Deinit() {
     if (point_layout_) {
         vkDestroyDescriptorSetLayout(dev, point_layout_, nullptr);
     }
+    if (ts_pool_) {
+        vkDestroyQueryPool(dev, ts_pool_, nullptr);
+        ts_pool_ = VK_NULL_HANDLE;
+    }
     inited_ = false;
 }
 
@@ -341,10 +359,36 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
     VkDevice dev = device_;
 
     vkWaitForFences(dev, 1, &compute_in_flight_[cf], VK_TRUE, UINT64_MAX);
+    vkWaitForFences(dev, 1, &in_flight_[cf], VK_TRUE, UINT64_MAX);
+
+    // Both queues' slot-`cf` timestamps are now resolved -- read them BEFORE
+    // resetting fences / cmd buffers / the query pool itself.
+    {
+        const uint32_t np = pass_count_[cf];
+        if (np > 0) {
+            std::array<uint64_t, 2 * kMaxPasses> ticks{};
+            vkGetQueryPoolResults(dev, ts_pool_, 2 * kMaxPasses * cf, 2 * np,
+                                  ticks.size() * sizeof(uint64_t), ticks.data(),
+                                  sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+            for (uint32_t p = 0; p < np; ++p) {
+                const double ns =
+                    (static_cast<double>(ticks[2 * p + 1] - ticks[2 * p])) *
+                    static_cast<double>(ts_period_ns_);
+                const char* nm = pass_names_[cf][p];
+                if (nm) {
+                    TimerStorage::Span(TimerStorage::SlotForPass(nm), nm,
+                                       static_cast<uint64_t>(ns / 1000.0));
+                }
+            }
+        }
+        pass_count_[cf] = 0;
+    }
+    if (host_query_reset_) {
+        vkResetQueryPool(dev, ts_pool_, 2 * kMaxPasses * cf, 2 * kMaxPasses);
+    }
+
     vkResetFences(dev, 1, &compute_in_flight_[cf]);
     vkResetCommandBuffer(compute_cmds_[cf], 0);
-
-    vkWaitForFences(dev, 1, &in_flight_[cf], VK_TRUE, UINT64_MAX);
     resources.AdvanceFrame(alloc);  // bump ring reset
 
     uint32_t image_index = 0;
@@ -364,6 +408,16 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
     vkBeginCommandBuffer(compute_cmds_[cf], &bi);
     vkBeginCommandBuffer(graphics_cmds_[cf], &bi);
 
+    // Fallback path when hostQueryReset is unavailable: per-queue cmd reset
+    // so the compute subrange's reset is ordered against this frame's compute
+    // writes, and likewise for graphics.
+    if (!host_query_reset_) {
+        vkCmdResetQueryPool(compute_cmds_[cf], ts_pool_, 2 * kMaxPasses * cf,
+                            2 * kMaxPasses);
+        vkCmdResetQueryPool(graphics_cmds_[cf], ts_pool_, 2 * kMaxPasses * cf,
+                            2 * kMaxPasses);
+    }
+
     FrameContext fc;
     fc.frame_index = cf;
     fc.swapchain_image_index = image_index;
@@ -376,6 +430,13 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
     fc.cmd.drawtmp_set_ = drawtmp_sets_[cf];
     fc.cmd.compute_set_ = compute_sets_[cf];
     fc.cmd.point_set_ = point_sets_[cf];
+    fc.cmd.ts_pool_ = ts_pool_;
+    fc.cmd.pass_names_ = &pass_names_[cf];
+    fc.cmd.pass_count_ = &pass_count_[cf];
+    fc.cmd.pass_cb_ = VK_NULL_HANDLE;
+    fc.cmd.pending_pass_idx_ = UINT32_MAX;
+    fc.cmd.pending_name_ = nullptr;
+    fc.cmd.pending_slot_ = -1;
     return fc;
 }
 
