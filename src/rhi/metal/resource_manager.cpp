@@ -161,6 +161,8 @@ bool ResourceManager::InitSwapChain(SwapChain& sc, SDL_Window* window) {
     return sc.Init(impl_->params.device, window);
 }
 
+uint32_t ResourceManager::UboAlign() const { return 32; }
+
 Handle<Buffer> ResourceManager::CreateBuffer(const BufferDesc& d) {
     metal::AllocResult r =
         impl_->memory.AllocBuffer(d.byte_size, d.usage, d.memory, 16);

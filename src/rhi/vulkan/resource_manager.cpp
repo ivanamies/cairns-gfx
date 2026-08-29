@@ -999,6 +999,8 @@ bool ResourceManager::InitSwapChain(SwapChain& sc, SDL_Window* window) {
                    impl_->msaa_samples, true);
 }
 
+uint32_t ResourceManager::UboAlign() const { return impl_->uniform_align; }
+
 Handle<Buffer> ResourceManager::CreateBuffer(const BufferDesc& d) {
     uint32_t align = 16;
     if (d.usage & kUsageUniform) {

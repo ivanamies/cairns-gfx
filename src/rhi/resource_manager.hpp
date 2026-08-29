@@ -589,6 +589,9 @@ public:
     // Request a one-shot swapchain dump on the next EndFrame (neutral; both
     // backends honor it). Cleared after the dump is written.
     void SetDumpPath(const std::filesystem::path& path);
+    // Minimum dynamic-UBO offset alignment for this backend (bump-allocate
+    // dynamic uniform data to this). Neutral.
+    uint32_t UboAlign() const;
 
     Handle<Buffer> CreateBuffer(const BufferDesc& desc);
     Handle<Texture> CreateTexture(const TextureDesc& desc);

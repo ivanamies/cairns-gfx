@@ -512,7 +512,7 @@ public:
         }
 
         float* dt_ptr = static_cast<float*>(
-            rm_.BumpAllocate(sizeof(float), sizeof(float), rhi::Memory::kDynamic));
+            rm_.BumpAllocate(sizeof(float), rm_.UboAlign(), rhi::Memory::kDynamic));
         *dt_ptr = delta_time;
         const uint32_t dt_off = rm_.BumpOffset(dt_ptr);
 
