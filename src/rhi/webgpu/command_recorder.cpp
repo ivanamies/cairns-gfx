@@ -358,7 +358,7 @@ void CommandRecorder::DrawFullscreenParams(
                              : nullptr;
     entries[n + 1].binding = n + 1;
     entries[n + 1].buffer = master;
-    entries[n + 1].size = 64;
+    entries[n + 1].size = 256;
     WGPUBindGroupDescriptor bgd = {};
     bgd.layout = sh->plat.bind_group_layouts[0];
     bgd.entryCount = n + 2;

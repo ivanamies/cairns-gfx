@@ -1884,9 +1884,17 @@ void Engine::RecordFrame(FramePacket& pkt) {
             glm::vec4 p0;
             glm::vec4 p1;
             glm::vec4 p2;
+            // Moebius (M6): world-pos-from-depth + shadow projection ride
+            // the params block so the fullscreen path stays self-contained.
+            glm::mat4 inv_view_proj;
+            glm::mat4 light_view_proj;
+            glm::vec4 light_dir;
+            glm::vec4 pad0;
+            glm::vec4 pad1;
+            glm::vec4 pad2;
         };
-        static_assert(sizeof(PostFxParamsGpu) == 64,
-                      "postfx params block must match the 64B dyn-UBO range");
+        static_assert(sizeof(PostFxParamsGpu) == 256,
+                      "postfx params block must match the 256B dyn-UBO range");
         std::array<rhi::GraphTexture, kNumViewports> chain_out{};
         std::array<bool, kNumViewports> chain_ran{};
         // Execute lambdas resolve these after the build loop ends -- they
@@ -1924,7 +1932,7 @@ void Engine::RecordFrame(FramePacket& pkt) {
         // taps); the viewport is the DEST dims -- they differ in bloom's
         // resolution ladder.
         auto push_params = [&](rhi::CommandRecorder& cmd,
-                               uint32_t fx_idx,
+                               uint32_t fx_idx, int pp_vp,
                                uint32_t src_w, uint32_t src_h,
                                uint32_t dst_w, uint32_t dst_h,
                                const glm::vec4& p2,
@@ -1940,6 +1948,9 @@ void Engine::RecordFrame(FramePacket& pkt) {
             pp.p0 = s.post_effects[fx_idx].p0;
             pp.p1 = s.post_effects[fx_idx].p1;
             pp.p2 = p2;
+            pp.inv_view_proj = s.pending_globals[pp_vp].inv_view_proj;
+            pp.light_view_proj = s.pending_globals[pp_vp].light_view_proj;
+            pp.light_dir = s.pending_globals[pp_vp].light_dir;
             uint32_t off = 0;
             void* ptr = rhi_.alloc.BumpAllocate(
                 sizeof(pp), 256, rhi::Memory::kDynamic, &off);
@@ -1995,12 +2006,12 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                     fx_bloom_down[vp_idx][fx_idx][0],
                                     rhi::LoadOp::kClear, fc);
                             },
-                            [&, fx_idx, cur, dw = lw[0], dh = lh[0]](
+                            [&, vp_idx, fx_idx, cur, dw = lw[0], dh = lh[0]](
                                 rhi::CommandRecorder& cmd,
                                 const rhi::PassResources& res) {
                                 const rhi::Handle<rhi::Texture> srcs[1] = {
                                     res.Resolve(cur)};
-                                push_params(cmd, fx_idx, vp_w, vp_h, dw, dh,
+                                push_params(cmd, fx_idx, vp_idx, vp_w, vp_h, dw, dh,
                                             glm::vec4(0.0f), bloom_bright_pip_,
                                         composite_sampler_,
                                             std::span<const rhi::Handle<
@@ -2031,7 +2042,7 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                         res.Resolve(fx_bloom_down[vp_idx]
                                                                  [fx_idx]
                                                                  [li - 1])};
-                                    push_params(cmd, fx_idx, sw, sh, dw, dh,
+                                    push_params(cmd, fx_idx, vp_idx, sw, sh, dw, dh,
                                                 glm::vec4(0.0f), bloom_down_pip_,
                                         composite_sampler_,
                                                 std::span<const rhi::Handle<
@@ -2081,7 +2092,7 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                         res.Resolve(fx_bloom_down[vp_idx]
                                                                  [fx_idx]
                                                                  [skip_lvl])};
-                                    push_params(cmd, fx_idx, sw, sh, dw, dh,
+                                    push_params(cmd, fx_idx, vp_idx, sw, sh, dw, dh,
                                                 glm::vec4(0.0f), bloom_up_pip_,
                                         composite_sampler_,
                                                 std::span<const rhi::Handle<
@@ -2116,7 +2127,7 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                     res.Resolve(cur),
                                     res.Resolve(
                                         fx_bloom_up[vp_idx][fx_idx][2])};
-                                push_params(cmd, fx_idx, vp_w, vp_h, vp_w,
+                                push_params(cmd, fx_idx, vp_idx, vp_w, vp_h, vp_w,
                                             vp_h, glm::vec4(0.0f), bloom_combine_pip_,
                                         composite_sampler_,
                                             std::span<const rhi::Handle<
@@ -2150,11 +2161,11 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                                  fx_wc_a[vp_idx][fx_idx],
                                                  rhi::LoadOp::kClear, fc);
                             },
-                            [&, fx_idx, cur](rhi::CommandRecorder& cmd,
+                            [&, vp_idx, fx_idx, cur](rhi::CommandRecorder& cmd,
                                              const rhi::PassResources& res) {
                                 const rhi::Handle<rhi::Texture> srcs[1] = {
                                     res.Resolve(cur)};
-                                push_params(cmd, fx_idx, vp_w, vp_h, vp_w,
+                                push_params(cmd, fx_idx, vp_idx, vp_w, vp_h, vp_w,
                                             vp_h,
                                             glm::vec4(1.0f, 0.0f, 0.0f, 0.0f),
                                             wc_blur_pip_, composite_sampler_,
@@ -2176,7 +2187,7 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                 const rhi::PassResources& res) {
                                 const rhi::Handle<rhi::Texture> srcs[1] = {
                                     res.Resolve(fx_wc_a[vp_idx][fx_idx])};
-                                push_params(cmd, fx_idx, vp_w, vp_h, vp_w,
+                                push_params(cmd, fx_idx, vp_idx, vp_w, vp_h, vp_w,
                                             vp_h,
                                             glm::vec4(0.0f, 1.0f, 0.0f, 0.0f),
                                             wc_blur_pip_, composite_sampler_,
@@ -2204,7 +2215,7 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                     res.Resolve(depth_off[vp_idx])};
                                 // Nearest sampler: the depth binding rejects
                                 // filtering (matches depthviz/outline).
-                                push_params(cmd, fx_idx, vp_w, vp_h, vp_w,
+                                push_params(cmd, fx_idx, vp_idx, vp_w, vp_h, vp_w,
                                             vp_h,
                                             glm::vec4(0.0f, 0.0f, near_z,
                                                       far_z),
@@ -2242,7 +2253,7 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                     res.Resolve(fx_wc_b[vp_idx][fx_idx]),
                                     res.Resolve(fx_wc_edge[vp_idx][fx_idx]),
                                     wc_pn_tex};
-                                push_params(cmd, fx_idx, vp_w, vp_h, vp_w,
+                                push_params(cmd, fx_idx, vp_idx, vp_w, vp_h, vp_w,
                                             vp_h, glm::vec4(0.0f),
                                             wc_composite_pip_,
                                             composite_sampler_,
@@ -2277,11 +2288,11 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                              fx_tensor[vp_idx][fx_idx],
                                              rhi::LoadOp::kClear, fc);
                         },
-                        [&, fx_idx, cur](rhi::CommandRecorder& cmd,
+                        [&, vp_idx, fx_idx, cur](rhi::CommandRecorder& cmd,
                                          const rhi::PassResources& res) {
                             const rhi::Handle<rhi::Texture> srcs[1] = {
                                 res.Resolve(cur)};
-                            push_params(cmd, fx_idx, vp_w, vp_h, vp_w, vp_h,
+                            push_params(cmd, fx_idx, vp_idx, vp_w, vp_h, vp_w, vp_h,
                                         glm::vec4(0.0f), kuwahara_tensor_pip_,
                                         composite_sampler_,
                                         std::span<const rhi::Handle<
@@ -2309,7 +2320,7 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                             const rhi::PassResources& res) {
                             const rhi::Handle<rhi::Texture> srcs[1] = {
                                 res.Resolve(fx_tensor[vp_idx][fx_idx])};
-                            push_params(cmd, fx_idx, vp_w, vp_h, vp_w, vp_h,
+                            push_params(cmd, fx_idx, vp_idx, vp_w, vp_h, vp_w, vp_h,
                                         glm::vec4(0.0f), kuwahara_tfm_pip_,
                                         composite_sampler_,
                                         std::span<const rhi::Handle<
@@ -2340,7 +2351,7 @@ void Engine::RecordFrame(FramePacket& pkt) {
                             const rhi::Handle<rhi::Texture> srcs[2] = {
                                 res.Resolve(cur),
                                 res.Resolve(fx_tfm[vp_idx][fx_idx])};
-                            push_params(cmd, fx_idx, vp_w, vp_h, vp_w, vp_h,
+                            push_params(cmd, fx_idx, vp_idx, vp_w, vp_h, vp_w, vp_h,
                                         glm::vec4(0.0f), kuwahara_filter_pip_,
                                         composite_sampler_,
                                         std::span<const rhi::Handle<
@@ -3885,7 +3896,7 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
             cairns::rhi::DynamicBinding pb{};
             pb.slot = 0;
             pb.kind = cairns::rhi::BufferKind::kUniform;
-            pb.max_range = 64;
+            pb.max_range = 256;
             pb.stages = static_cast<cairns::rhi::ShaderStage>(
                 cairns::rhi::kStageVertex | cairns::rhi::kStageFragment);
             cairns::rhi::DynamicBuffersDesc pd{};

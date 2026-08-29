@@ -87,7 +87,7 @@ struct ShaderInfo {
     // (depthviz's single texture) still reads as mask 1.
     uint8_t depth_mask = 0;
     bool id_textures = false;   // outline: binding 0 = color (float), 1+ = R32U
-    // Post-effect passes: the fullscreen group gains a dynamic-offset 64-byte
+    // Post-effect passes: the fullscreen group gains a dynamic-offset 256-byte
     // uniform at binding tex_count+1 (DrawFullscreenParams supplies it).
     bool has_params = false;
 };
@@ -261,7 +261,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(Resources& resources, Frames& f
             pe.visibility = WGPUShaderStage_Fragment;
             pe.buffer.type = WGPUBufferBindingType_Uniform;
             pe.buffer.hasDynamicOffset = true;
-            pe.buffer.minBindingSize = 64;
+            pe.buffer.minBindingSize = 256;
             ++entry_count;
         }
         WGPUBindGroupLayoutDescriptor bgld = {};

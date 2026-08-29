@@ -187,7 +187,7 @@ public:
     void DrawFullscreen(Resources& res, Handle<Shader> pipeline,
                         std::span<const Handle<Texture>> textures,
                         Handle<Sampler> sampler);
-    // Fullscreen pass with a 64-byte params UBO (the post-effect chain).
+    // Fullscreen pass with a 256-byte params UBO (the post-effect chain).
     // params_offset = a kDynamic bump offset the caller filled this frame.
     // params_set = a DynamicBuffers whose binding 0 is a dyn UBO over the
     // kDynamic master (the dyn_globals_ shape): vk binds its per-FIF set at
