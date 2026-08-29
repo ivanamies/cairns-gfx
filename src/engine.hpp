@@ -157,9 +157,12 @@ public:
         const float cp = std::cos(fc.pitch);
         const float sp = std::sin(fc.pitch);
         const glm::vec3 forward(-cp * sy, sp, -cp * cy);
-        // right = normalize(cross(forward, world_up)). Cheaper closed-form:
-        // when world_up is (0,1,0), right = (-cy, 0, sy) (independent of pitch).
-        const glm::vec3 right(-cy, 0.0f, sy);
+        // right = normalize(cross(forward, world_up)). Closed-form with
+        // world_up=(0,1,0): right = (cy, 0, -sy) (independent of pitch).
+        // At yaw=0,pitch=0 this is (1,0,0): +X is screen-right while looking
+        // down -Z. Backend-agnostic -- vk's negative-height viewport flips
+        // only Y, not X, so metal and vk see the same horizontal motion.
+        const glm::vec3 right(cy, 0.0f, -sy);
         const glm::vec3 up(0.0f, 1.0f, 0.0f);
         fc.position += right * move_input.x + up * move_input.y +
                         forward * move_input.z;

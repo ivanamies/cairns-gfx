@@ -208,7 +208,9 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event) {
         app->app_quit = SDL_APP_SUCCESS;
     }
     else if (event->type == SDL_EVENT_KEY_DOWN) {
-        if (event->key.scancode == SDL_SCANCODE_D && app->engine) {
+        // Z dumps the current swap frame to disk. D is RIGHT in WASD nav --
+        // do NOT bind dump there.
+        if (event->key.scancode == SDL_SCANCODE_Z && app->engine) {
             app->engine->RequestViewportDump("/tmp/cairns_dump.png");
         }
     }
@@ -248,7 +250,12 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event) {
     else if (event->type == SDL_EVENT_MOUSE_MOTION) {
         if (app->rmb_look && app->engine) {
             constexpr float kMouseSensitivity = 0.0025f;  // rad / pixel
-            const float dyaw = event->motion.xrel * kMouseSensitivity;
+            // SDL: +xrel = mouse right. With camera_dir = (-cp*sy, sp, -cp*cy),
+            // positive yaw rotates the look direction toward -X (CCW from
+            // above) -- so mouse-right wants dyaw < 0 to swing the view +X.
+            // +yrel = mouse down; pitch convention is "positive = look up",
+            // and looking down = pitch decreases, so -yrel keeps it natural.
+            const float dyaw = -event->motion.xrel * kMouseSensitivity;
             const float dpitch = -event->motion.yrel * kMouseSensitivity;
             app->engine->ApplyMouseLook(dyaw, dpitch);
         }

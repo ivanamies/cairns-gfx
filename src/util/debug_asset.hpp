@@ -95,8 +95,6 @@ static constexpr std::array kDebugGlbs = {
     "alistar_skt_t1.glb",
     "alistar_sweeper.glb",
     "alistar_unchained.glb",
-    "ambessa.glb",
-    "ambessa_chosen_of_the_wolf.glb",
     "amumu.glb",
     "amumu_almost-prom_king.glb",
     "amumu_dumpling_darlings.glb",
