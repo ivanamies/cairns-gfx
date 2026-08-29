@@ -28,6 +28,7 @@
 #include "util/debug_asset.hpp"
 #include "util/draw.hpp"
 #include "util/draw_key.hpp"
+#include "util/frame_transient_cache.hpp"
 #include "util/timer.hpp"
 #include "util/unique_ptr.hpp"
 #include "rhi2/resource_manager.hpp"
@@ -260,7 +261,7 @@ public:
     
     using TexHandle = cairns::rhi::Handle<cairns::rhi::Texture>;
     using BufHandle = cairns::rhi::Handle<cairns::rhi::Buffer>;
-    using DbufHandle = cairns::rhi::Handle<cairns::rhi::DynamicBuffers>;
+    using DynBufId = uint32_t;
     using ShaderHandle = rhi2::Handle<rhi2::Shader>;
     using MatId = uint32_t;
     using SamplerHandle = cairns::rhi::Handle<cairns::rhi::Sampler>;
@@ -326,7 +327,7 @@ public:
     
     void resetFrameTmps(uint32_t frame) {
         drawTmpIdxs_[frame] = 0;
-        dbufCacheIdx_ = 0;
+        dynBufs_.Reset();
         bindGroupCacheIdx_ = 0;
         materialBufferIdxs_[frame] = 0;
     }
@@ -370,13 +371,10 @@ public:
         texManager_ = cairns::make_unique<ResourceManager<Texture>>(hot_arena_, hot_arena_, 1024);
         renderPassTexManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Texture>>(hot_arena_, hot_arena_, 2);
         bufferManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Buffer>>(hot_arena_, hot_arena_, 1024);
-        const uint32_t estUbos = kBufferedFrames * kMaxDrawTmpsPerFrame;
-        dynamicBuffersManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::DynamicBuffers>>(hot_arena_, hot_arena_, estUbos);
         // 4 because we're only pretending to be a real UGC engine at this point
         samplerManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Sampler>>(hot_arena_, hot_arena_, 256);
         materialBufferManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Buffer>>(hot_arena_, hot_arena_, 1024);
         bindGroupManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::BindGroup>>(hot_arena_, hot_arena_, 1024);
-        dynamicBuffersManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::DynamicBuffers>>(hot_arena_, hot_arena_, 1024);
         return true;
     }
     
@@ -467,16 +465,8 @@ public:
     }
     
     // tagiamies
-    DbufHandle getDynamicBuffers() {
-        if ( dbufCacheIdx_ < dbufsCache_.size() ) {
-            return dbufsCache_[dbufCacheIdx_++];
-        }
-        else {
-            auto h = dynamicBuffersManager_->New();
-            dbufsCache_.push_back(h);
-            ++dbufCacheIdx_;
-            return h;
-        }
+    DynBufId getDynamicBuffers() {
+        return dynBufs_.Acquire();
     }
     
     BindGroupHandle getBindGroup() {
@@ -670,8 +660,8 @@ public:
                     }
                     
                     //                    cairns::Timer timer8("timer8", 8);
-                    const DbufHandle tmp_handle = getDynamicBuffers();
-                    auto& tmp_obj = *dynamicBuffersManager_->GetObj(tmp_handle);
+                    const DynBufId tmp_handle = getDynamicBuffers();
+                    auto& tmp_obj = dynBufs_.At(tmp_handle);
                     const glm::mat4 model_matrix = scene_xform * rot_matrix;
                     { // tmp draws set up
                         const cairns::rhi::DrawTmp draw_tmp {
@@ -692,7 +682,6 @@ public:
                         auto* th = bufferManager_->GetObj(h);
                         th->buffer = rm_.GetBumpMasterBuffer(rhi2::Memory::kDynamic);
                         th->mem.offset = rm_.BumpOffset(tptr);
-                        tmp_obj.type = cairns::rhi::DynamicBuffers::Type::kTmp;
                         tmp_obj.buf = h;
                     }
                     
@@ -837,8 +826,8 @@ public:
                     }
                 }
                 { // set up draw temporary
-                    const DbufHandle draw_tmp_bg = draw.dynamic_buffers;
-                    auto& draw_tmp_obj = *dynamicBuffersManager_->GetObj(draw_tmp_bg);
+                    const DynBufId draw_tmp_bg = draw.dynamic_buffers;
+                    auto& draw_tmp_obj = dynBufs_.At(draw_tmp_bg);
                     const BufHandle draw_tmp_buf = draw_tmp_obj.buf;
                     const cairns::OffsetAllocator::Allocation draw_tmp_mem = bufferManager_->GetObj(draw_tmp_buf)->mem;
                     encoder->setVertexBufferOffset(draw_tmp_mem.offset, cairns::kDrawTmpBindSlot);
@@ -1083,7 +1072,7 @@ private:
     
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Texture>> texManager_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Buffer>> bufferManager_;
-    cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::DynamicBuffers>> dynamicBuffersManager_;
+    cairns::FrameTransientCache<cairns::DynamicBuffersAssoc> dynBufs_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::BindGroup>> bindGroupManager_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Sampler>> samplerManager_;
     std::vector<cairns::LoadedMaterial> materials_;
@@ -1096,9 +1085,6 @@ private:
     
     std::vector<uint32_t> materialBufferIdxs_;
     std::vector<std::vector<BufHandle>> materialBuffers_;
-    
-    uint32_t dbufCacheIdx_ = 0;
-    std::vector<DbufHandle> dbufsCache_;
     
     uint32_t bindGroupCacheIdx_ = 0;
     std::vector<BindGroupHandle> bindGroupsCache_;

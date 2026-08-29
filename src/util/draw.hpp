@@ -22,7 +22,7 @@ struct Draw {
     // slot 3: "the third slot has shader specific bindings" idk. like LUTs and ssbos for particles and skinning.
     std::array<rhi::Handle<rhi::BindGroup>,3> bind_groups = {};
     // slot 4: "We use the last slot in Vulkan and WebGPU for dynamic offset bound buffers. This is important for bump allocated temporary data, such as uniform buffers." I would put r/w SSBOs here too.
-    rhi::Handle<rhi::DynamicBuffers> dynamic_buffers;
+    uint32_t dynamic_buffers = 0;
     rhi::Handle<rhi::Buffer> index_buffer = rhi::Handle<rhi::Buffer>::Null;
     // slot 1: position
     static constexpr uint32_t kVertexBufferPosSlot = 0;
