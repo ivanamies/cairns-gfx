@@ -24,6 +24,8 @@ Newest first.
 | `acquire_wait`     | —             |  0.01 ms   |
 | `fence_wait`       | —             |  0.00 ms   |
 
+Note on `frame` = 20.84 ms: `CGDisplayCopyDisplayMode(CGMainDisplayID()).refreshRate` returned **47.95 Hz** at the time of this capture. 1/47.95 Hz = 20.86 ms. The MBP built-in ProMotion display had stepped to its 48 Hz tier. After forcing the display to 60 Hz via System Settings → Displays → Refresh Rate, the panel reports 60.0 Hz. The 20.84 ms was the panel, not the engine.
+
 ---
 
 ## bisect (2026-06-15) — skinning_compute regression 2026-06-09 → 2026-06-11
