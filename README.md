@@ -588,6 +588,180 @@ descriptor sets after the first runtime `loadBatch` (commit `a273119`
 on `ia/dev` adds `recreateSkinGroupB`; H4b's `recreateAnimDynBindings`
 was the other half).
 
+## Testing
+
+Two tiers:
+
+- **Tier S — spec tests.** Pure CPU, no engine, no GPU. Build first, run in
+  milliseconds, identical on every platform via `ctest -L spec`. ~102
+  SCENARIOs covering the data-oriented core (allocators, frustum math,
+  particle determinism, draw-key bit layout, render-graph scheduling,
+  scene ECS PODs, RHI descriptor PODs, threading SPSC invariants).
+- **Tier G — golden / divergence tests.** Hardware, four platforms.
+  Per-platform image refs + a small set of shared cross-platform
+  buffer/counter refs. The ladder (`test_golden_ladder.cpp`) is the
+  escalating baseline (7 rungs L1–L7); scenarios (`test_golden_scenarios.cpp`)
+  isolate specific subsystems (G1 particles, G2 hot reload, G3 two
+  viewports, G4 nested graph, G5 frustum cull, G6 imgui stability) on
+  top of a prerequisite rung. Image refs live under `tests/refs/` as
+  `{name}.f09.{platform}.imghash` (frame 9) and `.f55.imghash` (frame 55).
+
+Plan and notes:
+- `dev/plans/2026-06-18_gfx_test-tech-tree-redo-phase-a-to-g.md` — the plan
+- `dev/plans/2026-06-18_gfx_modularization-notes.md` — generalization
+  opportunities accumulated while writing the suite
+
+### Configure (once per platform / build flavor)
+
+```sh
+# macOS Metal
+cmake -S . -B build/spec-mac-metal -DCAIRNS_GFX_BUILD_TESTS=ON \
+  -DCAIRNS_GFX_BUILD_GOLDEN_TESTS=ON -DCAIRNS_GFX_BACKEND=metal -G Ninja
+
+# macOS Vulkan (MoltenVK)
+cmake -S . -B build/spec-mac-vk -DCAIRNS_GFX_BUILD_TESTS=ON \
+  -DCAIRNS_GFX_BUILD_GOLDEN_TESTS=ON -DCAIRNS_GFX_BACKEND=vulkan -G Ninja
+
+# iOS simulator
+cmake -S . -B build/spec-ios-sim -DCAIRNS_GFX_BUILD_TESTS=ON \
+  -DCAIRNS_GFX_BUILD_GOLDEN_TESTS=ON -DCAIRNS_GFX_BACKEND=metal \
+  -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphonesimulator \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 -G Ninja
+
+# Android NDK (S22 or Pixel 6a AVD)
+cmake -S . -B build/spec-android-vk -DCAIRNS_GFX_BUILD_TESTS=ON \
+  -DCAIRNS_GFX_BUILD_GOLDEN_TESTS=ON -DCAIRNS_GFX_BACKEND=vulkan \
+  -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-31 \
+  -DMOBILE_ASSETS_DIR=/tmp/cairns-spec-android-assets -G Ninja
+```
+
+### Tier S — spec suite
+
+```sh
+# macOS metal (~102 SCENARIOs, ~1s)
+cmake --build build/spec-mac-metal --target cairns_spec_tests -j
+ctest --test-dir build/spec-mac-metal -L spec --output-on-failure
+
+# macOS vk
+cmake --build build/spec-mac-vk --target cairns_spec_tests -j
+ctest --test-dir build/spec-mac-vk -L spec --output-on-failure
+
+# iOS sim (boot iPhone 16 / iOS 18.3 first)
+xcrun simctl boot AFF28AB7-49F7-421A-B589-7D318757C566
+cmake --build build/spec-ios-sim --target cairns_spec_tests -j
+xcrun simctl spawn booted \
+  ./build/spec-ios-sim/cairns_spec_tests.app/cairns_spec_tests --reporter compact
+
+# Android NDK (S22: R5CTA35BGLL; AVD: emulator-5554)
+cmake --build build/spec-android-vk --target cairns_spec_tests -j
+adb -s R5CTA35BGLL push build/spec-android-vk/cairns_spec_tests /data/local/tmp/
+adb -s R5CTA35BGLL shell chmod +x /data/local/tmp/cairns_spec_tests
+adb -s R5CTA35BGLL shell /data/local/tmp/cairns_spec_tests --reporter compact
+```
+
+### Tier G — golden tests (desktop)
+
+The cairns_golden_tests binary runs from the build dir; assets are staged
+alongside.
+
+```sh
+# macOS metal
+cmake --build build/spec-mac-metal --target cairns_golden_tests -j
+./build/spec-mac-metal/cairns_golden_tests --reporter compact
+
+# Filtered subsets:
+./build/spec-mac-metal/cairns_golden_tests "[ladder]"      # 7 rungs x 2 frames
+./build/spec-mac-metal/cairns_golden_tests "[scenarios]"   # 6 scenarios
+./build/spec-mac-metal/cairns_golden_tests "[particles]"   # G1 alone (avoids the [scenarios] G1/G6 flake)
+
+# Same shape for vk:
+./build/spec-mac-vk/cairns_golden_tests --reporter compact
+```
+
+### Tier G — iOS simulator
+
+Assets bundle into `.app/Resources/` via the CMake glob.
+
+```sh
+cmake --build build/spec-ios-sim --target cairns_golden_tests -j
+xcrun simctl spawn booted \
+  ./build/spec-ios-sim/cairns_golden_tests.app/cairns_golden_tests \
+  "[ladder]" --reporter compact
+```
+
+### Tier G — Android (S22 device or Pixel AVD)
+
+NDK raw binary; assets pushed via adb; path resolution via env vars
+(`CAIRNS_BASE_PATH`, `CAIRNS_PLATFORM_KEY`). `CAIRNS_PLATFORM_KEY`
+distinguishes the Adreno device (`android-vk`) from the SwiftShader
+emulator (`android-vk-emu`) so refs don't collide.
+
+```sh
+DEV=emulator-5554   # or R5CTA35BGLL for S22
+PLATFORM_KEY=android-vk-emu   # use android-vk on S22
+
+# Stage binary + libs + assets (once per device reset)
+adb -s $DEV shell mkdir -p /data/local/tmp/cairns_test/refs
+adb -s $DEV push build/spec-android-vk/cairns_golden_tests /data/local/tmp/cairns_test/
+for so in build/spec-android-vk/*.so; do
+  adb -s $DEV push "$so" /data/local/tmp/cairns_test/
+done
+adb -s $DEV push /tmp/cairns-spec-android-assets/. /data/local/tmp/cairns_test/
+
+# Run
+adb -s $DEV shell "cd /data/local/tmp/cairns_test && \
+  CAIRNS_PLATFORM_KEY=$PLATFORM_KEY \
+  CAIRNS_BASE_PATH=/data/local/tmp/cairns_test \
+  CAIRNS_TEST_REFS_DIR=/data/local/tmp/cairns_test/refs \
+  LD_LIBRARY_PATH=. ./cairns_golden_tests '[ladder]' --reporter compact"
+
+# Pull baked refs back into the repo
+adb -s $DEV pull /data/local/tmp/cairns_test/refs/. tests/refs/
+```
+
+### Eyeball / headless PNG inspection
+
+```sh
+# Dump rendered PNGs alongside the hash check.
+CAIRNS_DUMP_PNGS=/tmp/cairns-pngs \
+  ./build/spec-mac-vk/cairns_golden_tests "[ladder]"
+
+# A tiny stb-image-based pixel sampler lives at /tmp/png_inspect.c
+# (rebuild with: clang -std=c11 /tmp/png_inspect.c -o /tmp/png_inspect)
+# It prints non-clear-pixel counts and a bounding box so you can verify
+# headlessly that "viking_room actually renders viking_room."
+```
+
+### Re-baking refs
+
+Refs auto-bake on first run when missing. To force a re-bake:
+
+```sh
+# Delete one to force-bake on next run (it will trivially pass once).
+rm tests/refs/<name>.<platform>.imghash
+
+# Or force-bake everything:
+CAIRNS_GFX_BAKE_REFS=1 ./build/.../cairns_golden_tests
+```
+
+### Known caveats
+
+- `[scenarios]` full-suite run flakes the G1 and G6 image hashes
+  intermittently (shared ImGui static state across SCENARIOs; tracked in
+  modularization-notes #9b). Run `[particles]` and `[imgui]` separately
+  for stable results.
+- S22 device must be physically connected for the `android-vk` refs to
+  be writable; otherwise only AVD (`android-vk-emu`) bakes.
+- iOS sim runs require a booted simulator (`xcrun simctl boot <UDID>`).
+- Desktop `[ladder]` runs from build dir (assets staged alongside the
+  binary); `cd build/<dir>` first if running with a relative path.
+- G5 frustum-cull counters SKIP until a production cull stage lands
+  (engine does not call `cairns::AabbOutsideFrustum`); tracked in
+  modularization-notes #10b.
+- G1 buffer / G4 resolved-depth / L6+L7 skin-buffer SECTIONs SKIP until
+  `Resources::ReadBackBuffer` lands on both backends (open task).
+
 ## Known deferrals (acknowledged, not bugs)
 
 Moved to `TODO.md`. README carries architecture, not work items.
