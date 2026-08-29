@@ -5,6 +5,7 @@
 #include "rhi/resource_manager.hpp"
 #include "rhi/swap_resolve_target.hpp"
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -151,7 +152,13 @@ private:
         std::vector<ColorOutput> color_outputs;
         bool has_depth = false;
         DepthOutput depth_output;
-        std::vector<ColorAttachment> baked_color;
+        // Bounded by GraphicsPipelineDesc::kMaxColorFormats (=4, #206 MRT).
+        // Fixed cap on the stack -> no per-frame std::vector reallocation
+        // (was ~77 KB / 1849 grows in the 3300-hero trace). Overflow is a
+        // hard abort with a printed diagnostic, matching the push_or_die
+        // pattern used in render_extract's DFS scratch stack.
+        std::array<ColorAttachment, GraphicsPipelineDesc::kMaxColorFormats> baked_color{};
+        uint8_t baked_color_count = 0;
         DepthAttachment baked_depth;
         std::vector<Handle<Texture>> baked_inputs;
     };

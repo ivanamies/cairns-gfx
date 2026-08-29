@@ -455,17 +455,27 @@ bool RenderGraph::Bake(uint32_t slot) {
     // Step 6: bake per-pass attachments + barrier inputs.
     for (uint32_t p : topo_order_) {
         PassRecord& pass = passes_[p];
-        pass.baked_color.clear();
+        pass.baked_color_count = 0;
         pass.baked_inputs.clear();
         for (const ColorOutput& co : pass.color_outputs) {
-            ColorAttachment ca;
+            if (pass.baked_color_count >=
+                GraphicsPipelineDesc::kMaxColorFormats) {
+                fprintf(stderr,
+                        "RenderGraph::Bake: pass '%.*s' has more color "
+                        "outputs (%zu) than kMaxColorFormats (%u) -- raise "
+                        "the cap or split the pass.\n",
+                        static_cast<int>(pass.name.size()), pass.name.data(),
+                        pass.color_outputs.size(),
+                        GraphicsPipelineDesc::kMaxColorFormats);
+                std::abort();
+            }
+            ColorAttachment& ca = pass.baked_color[pass.baked_color_count++];
             ca.target = resolved_tex_[co.tex];
             ca.clear[0] = co.clear[0];
             ca.clear[1] = co.clear[1];
             ca.clear[2] = co.clear[2];
             ca.clear[3] = co.clear[3];
             ca.load = co.load;
-            pass.baked_color.push_back(ca);
         }
         if (pass.has_depth) {
             pass.baked_depth = DepthAttachment{};
@@ -510,7 +520,7 @@ bool RenderGraph::Execute(FrameContext& fc, const SwapResolveTarget& target) {
         }
         RenderPassDesc rp{};
         rp.color = std::span<const ColorAttachment>(pass.baked_color.data(),
-                                                    pass.baked_color.size());
+                                                    pass.baked_color_count);
         if (pass.has_depth) {
             rp.depth = pass.baked_depth;
         }
