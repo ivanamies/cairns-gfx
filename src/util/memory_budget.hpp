@@ -59,12 +59,12 @@ struct MemoryBudget {
 #else
         b.cpu_persistent_bytes = 1024ull * 1024 * 1024;  // 1 GB
         b.gpu_resident_bytes = 1024ull * 1024 * 1024;    // 1 GB
-        // 128 MB everywhere (was 1 GB, briefly 256 MB). A whole-pool storage bind
-        // must fit max_storage_buffer_range; 128 MB is both the WebGPU spec floor
-        // AND the measured Adreno-730 / S22 range, so one uniform 128 MB pool +
-        // floor binds on every target. The 100-actor stress uses ~40 MB, so 128 MB
-        // is ample headroom; SkinPoolFitsDevice enforces the bind.
-        b.gpu_skin_pool_bytes = 128ull * 1024 * 1024;    // 128 MB (SSBO bind floor)
+        // 256 MB on desktop + webgpu (mobile is 128 MB above). The whole-pool
+        // storage bind must fit max_storage_buffer_range: 128 MB is the mobile
+        // floor (Adreno-730 / S22), but desktop runs 500 actors (5x mobile) whose
+        // skinned output overflows 128 MB, so desktop + webgpu get 256 MB (their
+        // ranges are GBs). SkinPoolFitsDevice enforces the per-platform bind.
+        b.gpu_skin_pool_bytes = 256ull * 1024 * 1024;    // 256 MB (desktop + webgpu)
 #endif
         b.cpu_frame_slab_bytes = 16ull * 1024 * 1024;    // 16 MB / slot (existing)
         b.gpu_staging_ring_bytes = 64ull * 1024 * 1024;  // 64 MB / slot (existing)

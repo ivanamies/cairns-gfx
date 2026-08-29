@@ -65,13 +65,13 @@ struct DeviceCaps {
 // is 8; native Vulkan reports far more -- the measured S22 / Adreno-730 gives
 // 524288, so it clears this trivially).
 //
-// The storage-buffer-SIZE floor is a uniform 128 MB on every platform. It lives
-// as the skin-pool size in MemoryBudget and is enforced by SkinPoolFitsDevice
-// against max_storage_buffer_range. 128 MB is both the WebGPU spec floor AND the
-// real Adreno-730 / S22 maxStorageBufferRange (measured on-device 2026-06-22 --
-// the old "256 MB Adreno" comment was wrong; an earlier fixed 256 MB floor
-// rejected the actual S22). The web3dsurvey 256-MiB tier (~96.5%) is
-// desktop-dominated and not representative of mobile, so we don't rely on it.
+// The storage-buffer-SIZE floor is per-platform (the skin-pool size in
+// MemoryBudget, enforced by SkinPoolFitsDevice against max_storage_buffer_range):
+// 128 MB on mobile, 256 MB on desktop + webgpu. 128 MB is the WebGPU spec floor
+// AND the measured Adreno-730 / S22 maxStorageBufferRange (on-device 2026-06-22 --
+// the old "256 MB Adreno" comment was wrong; a fixed 256 MB floor rejected the
+// real S22). Desktop runs 5x the mobile actor count, whose skinned output needs
+// 256 MB; desktop/webgpu ranges are GBs so the bind fits.
 inline constexpr uint32_t kMinStorageBuffersPerStage = 10u;
 
 constexpr bool DeviceMeetsComputeRequirements(const DeviceCaps& caps) {

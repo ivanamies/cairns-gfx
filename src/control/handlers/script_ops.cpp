@@ -1,14 +1,18 @@
 #include "control/handlers/script_ops.hpp"
 
+#include <algorithm>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
 #include "control/command_registry.hpp"
 #include "control/handlers/studio_js.hpp"
+#include "platform/platform.hpp"        // ReadAsset for scenario.load
 #include "util/chunk_allocator.hpp"  // #229 M7: QuickJS heap backing
 #include "util/json.hpp"
 #include "util/memory_budget.hpp"
+#include "util/misc.hpp"                 // GetBasePathSafe / GetStaticResourceFilepath
 
 #include <cstddef>
 #include <cstdio>
@@ -143,14 +147,17 @@ void BindAndAutoloadStudio(JSContext* ctx) {
     JS_SetPropertyStr(ctx, cairns_obj, "dispatch",
                       JS_NewCFunction(ctx, &JsDispatch, "dispatch", 2));
     // #229: instantiate-pass count for the boot workload, platform-aware so
-    // run.js renders 100 actors on mobile (Adreno/Apple tile budget) vs 500 on
-    // desktop. Derived from the persistent budget (mobile is floored to 256 MB)
-    // to avoid duplicating the __ANDROID__/iOS guard from memory_budget.hpp.
+    // run.js renders 100 actors on mobile (Adreno/Apple tile budget) vs 300 on
+    // desktop. Desktop was 500 (5 passes) but 500 actors' skinned output is
+    // ~288 MB, over the 256 MB skin pool we cap at for WebGPU portability (the
+    // S22/Adreno + WebGPU storage-bind floor), so desktop drops to 3 passes = 300
+    // actors. Derived from the persistent budget (mobile is floored to 256 MB) to
+    // avoid duplicating the __ANDROID__/iOS guard from memory_budget.hpp.
     const bool mobile =
         cairns::MemoryBudget::Default().cpu_persistent_bytes <=
         512ull * 1024 * 1024;
     JS_SetPropertyStr(ctx, cairns_obj, "instancePasses",
-                      JS_NewInt32(ctx, mobile ? 1 : 5));
+                      JS_NewInt32(ctx, mobile ? 1 : 3));
     JS_SetPropertyStr(ctx, global, "cairns", cairns_obj);
     JS_FreeValue(ctx, global);
 
@@ -328,6 +335,70 @@ void RegisterScriptOps(CommandRegistry& registry) {
         });
 
     registry.RegisterAlias("script.eval", "cairns.script.eval");
+
+    // General scenario REFLECTION: enumerate the bundled scenario scripts
+    // (scripts/*.js) so a client can discover what's loadable without any
+    // per-scenario C++. Returns {scenarios:[stem names], count}.
+    registry.Register(
+        "cairns.scenario.list",
+        json::object(),
+        "List the bundled scenario scripts (scripts/*.js) by name. "
+        "Returns {scenarios:[names], count}. Pairs with cairns.scenario.load.",
+        [](const json&) -> json {
+            std::vector<std::string> names;
+            const std::filesystem::path dir =
+                std::filesystem::path(cairns::GetBasePathSafe()) / "scripts";
+            std::error_code ec;
+            if (std::filesystem::is_directory(dir, ec)) {
+                for (const auto& e :
+                     std::filesystem::directory_iterator(dir, ec)) {
+                    if (e.path().extension() == ".js") {
+                        names.push_back(e.path().stem().string());
+                    }
+                }
+            }
+            std::sort(names.begin(), names.end());
+            json arr = json::array();
+            for (const std::string& n : names) {
+                arr.push_back(n);
+            }
+            return {{"scenarios", std::move(arr)},
+                    {"count", static_cast<uint32_t>(names.size())}};
+        });
+
+    // General scenario LOAD: read scripts/<name>.js + eval it through the same
+    // JS context (mirrors RunBootScript). Data-driven -- one loader for every
+    // scenario, no LOAD_TEST_CASE specialization. Args: {name}.
+    registry.Register(
+        "cairns.scenario.load",
+        json::object(),
+        "Load + eval a bundled scenario by name (scripts/<name>.js). "
+        "Args: {name}. Returns {ok, name}. Pairs with cairns.scenario.list.",
+        [&registry](const json& args) -> json {
+            const std::string name = args.value("name", std::string{});
+            if (name.empty()) {
+                throw std::runtime_error("cairns.scenario.load: missing 'name'");
+            }
+            std::filesystem::path path;
+            const std::string rel = "scripts/" + name + ".js";
+            if (!cairns::GetStaticResourceFilepath(rel, path)) {
+                throw std::runtime_error("scenario not found: " + rel);
+            }
+            std::string code;
+            if (!cairns::platform::ReadAsset(path, code) || code.empty()) {
+                throw std::runtime_error("scenario read failed: " +
+                                         path.string());
+            }
+            json req;
+            req["op"] = "cairns.script.eval";
+            req["args"] = json::object();
+            req["args"]["code"] = code;
+            const json resp = registry.Dispatch(req);
+            if (resp.contains("error")) {
+                throw std::runtime_error("scenario eval failed: " + resp.dump());
+            }
+            return {{"ok", true}, {"name", name}};
+        });
 }
 
 }  // namespace cairns::control
