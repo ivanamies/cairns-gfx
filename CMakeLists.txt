@@ -139,12 +139,11 @@ target_include_directories(imgui PUBLIC
 )
 target_compile_features(imgui PUBLIC cxx_std_20)
 target_compile_options(imgui PRIVATE -fno-exceptions -fno-rtti)
-# The SDL platform backend (input) is native-only; the web build feeds ImGuiIO
-# from DOM events, and the GPU renderer is our own RHI either way.
-if(NOT EMSCRIPTEN)
-    target_sources(imgui PRIVATE third_party/imgui/backends/imgui_impl_sdl3.cpp)
-    target_link_libraries(imgui PUBLIC SDL3::SDL3)
-endif()
+# The SDL platform backend (input) drives ImGuiIO on every target -- SDL's
+# emscripten video driver feeds DOM events into SDL, so the web build uses it
+# too; the GPU renderer is our own RHI on all backends.
+target_sources(imgui PRIVATE third_party/imgui/backends/imgui_impl_sdl3.cpp)
+target_link_libraries(imgui PUBLIC SDL3::SDL3)
 
 # QuickJS: vendored copy of quickjs-ng (third_party/QuickJS). Minimal static
 # lib over the core C TUs; we don't pull the vendor's CMakeLists because it
@@ -370,20 +369,21 @@ if(CAIRNS_GFX_BACKEND_WEBGPU)
     endif()
 endif()
 
-# Third-party link surface. The SDL stack (asset IO via platform_sdl.cpp, audio,
-# fonts, image codecs) is native-only; the web build uses the std/MEMFS platform
-# impl + stb_image and never links SDL.
+# Third-party link surface. Core SDL (window/input/timer/IO/filesystem) links on
+# EVERY target including emscripten -- asset IO, the scenario picker, and shader
+# loads all route through SDL. The satellites (audio, fonts, image codecs) stay
+# native-only; the web build has no audio path and loads its own assets.
 target_link_libraries(cairns_core PUBLIC
     fastgltf::fastgltf
     imgui
     cairns_render_thread
+    SDL3::SDL3
 )
 if(NOT EMSCRIPTEN)
     target_link_libraries(cairns_core PUBLIC
         SDL3_ttf::SDL3_ttf
         SDL3_mixer::SDL3_mixer
         SDL3_image::SDL3_image
-        SDL3::SDL3
     )
 endif()
 

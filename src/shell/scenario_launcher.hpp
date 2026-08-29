@@ -8,19 +8,16 @@
 #pragma once
 
 #include <algorithm>
-#include <filesystem>
 #include <string>
 #include <vector>
 
 #include "imgui.h"
 #include "util/misc.hpp"  // GetBasePathSafe
-#ifndef __EMSCRIPTEN__
-// SDL_EnumerateDirectory routes to the Android AssetManager (posix
-// SDL_sysfsops falls back to AAssetDir), so one path enumerates APK assets +
-// desktop dirs alike -- std::filesystem can't see APK assets. The web build
-// isn't SDL (raw emscripten) + reads MEMFS, so it keeps std::filesystem below.
+// SDL_EnumerateDirectory routes to the Android AssetManager (posix SDL_sysfsops
+// falls back to AAssetDir), plain dirs on desktop, and MEMFS on the web build
+// (posix opendir) -- one path enumerates APK assets, desktop, and the browser's
+// preloaded FS alike; std::filesystem can't see APK assets.
 #include <SDL3/SDL_filesystem.h>
-#endif
 
 namespace cairns {
 
@@ -45,7 +42,6 @@ struct ScenarioLauncher {
         scripts.push_back({label, path});
     }
 
-#ifndef __EMSCRIPTEN__
     static SDL_EnumerationResult SDLCALL EnumCb(void* userdata,
                                                 const char* dirname,
                                                 const char* fname) {
@@ -60,30 +56,15 @@ struct ScenarioLauncher {
         }
         return SDL_ENUM_CONTINUE;
     }
-#endif
 
     void Enumerate() {
         scripts.clear();
-#ifdef __EMSCRIPTEN__
-        // Web (raw emscripten, not SDL): assets are in MEMFS -> std::filesystem.
-        namespace fs = std::filesystem;
-        const fs::path dir = fs::path(cairns::GetBasePathSafe()) / "scripts";
-        std::error_code ec;
-        if (fs::is_directory(dir, ec)) {
-            for (const auto& e : fs::directory_iterator(dir, ec)) {
-                if (e.path().extension() == ".js") {
-                    AddOne(e.path().stem().string(), e.path().string());
-                }
-            }
-        }
-#else
-        // SDL platforms (metal/vk desktop + Android): SDL_EnumerateDirectory
-        // finds APK assets via the AssetManager, plain dirs on desktop. (SDL
-        // strips any trailing '/' internally, so the callback dirname may or
-        // may not carry one -- EnumCb normalizes it.)
+        // SDL_EnumerateDirectory finds APK assets via the AssetManager (Android),
+        // plain dirs on desktop, and the preloaded FS on web. (SDL strips any
+        // trailing '/' internally, so the callback dirname may or may not carry
+        // one -- EnumCb normalizes it.)
         const std::string dir = cairns::GetBasePathSafe() + "scripts";
         SDL_EnumerateDirectory(dir.c_str(), &EnumCb, this);
-#endif
         // Sort by path so the NN_ prefix orders the list, label stays clean.
         std::sort(scripts.begin(), scripts.end(),
                   [](const Script& a, const Script& b) { return a.path < b.path; });

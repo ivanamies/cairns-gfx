@@ -14,6 +14,8 @@
 #include "rhi/frames.hpp"
 #include "rhi/webgpu/layouts_plat.hpp"
 
+#include <SDL3/SDL.h>
+
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -113,11 +115,11 @@ ShaderInfo Classify(const char* logical) {
 }
 
 bool ReadFile(const std::string& path, std::string& out) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) { return false; }
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    out = ss.str();
+    size_t n = 0;
+    void* data = SDL_LoadFile(path.c_str(), &n);
+    if (!data) { return false; }
+    out.assign(static_cast<const char*>(data), n);
+    SDL_free(data);
     return !out.empty();
 }
 

@@ -9,10 +9,11 @@
 
 #include <emscripten/emscripten.h>
 
+#include <SDL3/SDL.h>
+
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
-#include <fstream>
 
 namespace cairns::platform {
 
@@ -35,8 +36,12 @@ std::string DefaultBasePath() {
 }
 
 bool AssetExists(const std::filesystem::path& path) {
-    std::error_code ec;
-    if (std::filesystem::exists(path, ec) && !ec) { return true; }
+    // MEMFS lookup via SDL (POSIX-backed on emscripten, same path as native).
+    SDL_IOStream* io = SDL_IOFromFile(path.string().c_str(), "rb");
+    if (io) {
+        SDL_CloseIO(io);
+        return true;
+    }
     // Champion GLBs are NOT bundled into the MEMFS .data (that put ~0.9 GB
     // resident and OOM-killed the tab). They're served as loose files and
     // lazy-fetched in ReadAsset; report them as existing so the loader proceeds.
@@ -45,14 +50,14 @@ bool AssetExists(const std::filesystem::path& path) {
 }
 
 bool ReadAsset(const std::filesystem::path& path, std::string& out) {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (f) {
-        const std::streamsize n = f.tellg();
-        if (n < 0) { return false; }
-        f.seekg(0, std::ios::beg);
-        out.resize(static_cast<size_t>(n));
-        f.read(out.data(), n);
-        return f.gcount() == n;
+    // MEMFS read via SDL (POSIX-backed); the loose champion GLBs miss here and
+    // fall through to the network fetch below.
+    size_t n = 0;
+    void* data = SDL_LoadFile(path.string().c_str(), &n);
+    if (data) {
+        out.assign(static_cast<const char*>(data), n);
+        SDL_free(data);
+        return true;
     }
     // Not in MEMFS: lazy-fetch over the network (loose champion GLB). The bytes
     // are transient -- fastgltf parses + uploads to the GPU, then `out` frees --

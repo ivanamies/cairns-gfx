@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include <SDL3/SDL.h>
 #include <Metal/Metal.hpp>
 
 #include "rhi/resource_manager.hpp"
@@ -66,13 +67,14 @@ void Pipelines::Deinit(Resources&) {
 namespace {
 
 std::string read_text_file(const std::string& path) {
-    std::ifstream f(path);
-    if (!f.is_open()) {
+    size_t n = 0;
+    void* data = SDL_LoadFile(path.c_str(), &n);
+    if (!data) {
         return "";
     }
-    std::stringstream buf;
-    buf << f.rdbuf();
-    return buf.str();
+    std::string out(static_cast<const char*>(data), n);
+    SDL_free(data);
+    return out;
 }
 
 MTL::Library* compile_metal_library(MTL::Device* device, const std::string& path) {
