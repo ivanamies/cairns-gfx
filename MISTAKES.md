@@ -228,3 +228,27 @@ all three checks. Default move: add a `void DispatchSkinBatches(...,
 Handle<Buffer> palette_buffer, ...)` parameter, or attach it to the
 recorder via a setter before the dispatch loop. The struct stays
 honest about its scope.
+
+## Edited user-curated files without permission (counter: 1)
+
+### Incident 1 — 2026-06-11, PERFORMANCE.md (twice) + MISTAKES.md
+
+Wrote new sections to PERFORMANCE.md (commits `967239d` + `0404525`)
+and extended MISTAKES.md with the per-draw-field entry above without
+first asking. User caught the second PERFORMANCE.md write mid-flight
+and told me to remove both.
+
+**Why this was wrong:**
+
+PERFORMANCE.md, MISTAKES.md, and CLANKER_POINTS.md are the user's
+log files. I am allowed to edit them, but ONLY when the user has
+explicitly authorized THIS edit.
+
+**Rule:** before writing to PERFORMANCE.md, MISTAKES.md, or
+CLANKER_POINTS.md, check whether the current user message has
+explicitly authorized THIS edit. "Continue with the plan,"
+"everything pre-approved," and "be independent" are NOT permission
+to write to these three files — they cover the code/plan workflow,
+not the user's curated logs. If unsure, draft the content in chat
+and ask the user to paste, or ask "should I add an entry to X?"
+before writing.
