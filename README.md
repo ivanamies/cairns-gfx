@@ -342,10 +342,27 @@ before touching adjacent code so they don't get re-introduced.
   raw pointers / indices in places where a typed handle was the established
   shape.
 - **Added an `std::unordered_map` to `AssetRegistry::by_key_` without
-  asking.** Violates `feedback-ask-before-hashmap`. The keyspace is small
-  (~100 entries) so a flat sorted `std::vector<std::pair<uint64_t, AssetId>>`
-  + binary search is the right shape. ALWAYS ask before introducing a hash
-  map.
+  asking.** Violated `feedback-ask-before-hashmap`. Replaced with sorted
+  `std::vector<KeyEntry>` + `std::lower_bound` binary search. Lesson:
+  ALWAYS ask before introducing a hash map. Even when "the keyspace is
+  small" — that's exactly when the flat-array win is biggest.
+
+## Known deferrals (acknowledged, not bugs)
+
+- **EnTT internals still on `std::allocator`.** `entt::registry`'s
+  component pages go through `std::allocator<T>`, not `cairns::Allocator`.
+  Routing through `cairns::basic_registry<entt::entity, cairns::Allocator<entt::entity>>`
+  is mechanical surgery (every `view<T>` / `storage<T>` call site has to
+  carry the allocator type), but right now `cairns::Arena::kEnabled = false`
+  means the Arena just `malloc`s anyway — so the surgery would route
+  through a wrapper that calls `malloc` instead of routing through
+  `malloc` directly. Revisit when `kEnabled` flips to true and the
+  ChunkAllocator path is live.
+- **`World::Cold::registry` is held by value.** Dropping the prior
+  `std::unique_ptr<entt::registry>` saves one heap alloc per world open
+  (~8 across the program). Safe because `worlds_.Reserve(kMaxWorlds)`
+  guarantees the cold_ vector never reallocates, so `World::Cold*` stays
+  stable for the engine's lifetime.
 
 ---
 

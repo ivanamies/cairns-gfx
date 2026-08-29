@@ -5,10 +5,14 @@
 // the editor can open >= 4 of them simultaneously, each referenced by a
 // generational WorldId.
 //
-// Cold holds entt::registry via unique_ptr so World::Cold* stays stable
-// across ResourceManager<World>::Acquire growth (the cold_ vector may
-// move on resize but the pointee doesn't). Belt-and-suspenders: Engine
-// also calls worlds_.Reserve(kMaxWorlds) at startup.
+// Cold holds entt::registry BY VALUE. Pointer stability across
+// ResourceManager<World>::Acquire growth is guaranteed by
+// worlds_.Reserve(kMaxWorlds) at engine startup -- the cold_ vector
+// never reallocates, so World::Cold* and registry-internal pointers
+// stay valid for the engine's lifetime. (entt::registry itself is
+// move-constructible, so it works inside the pool's storage even
+// before Reserve, but we rely on Reserve to keep external Cold*
+// callers safe.)
 
 #pragma once
 
@@ -18,7 +22,6 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
-#include <memory>
 
 namespace cairns {
 
@@ -30,8 +33,7 @@ struct World {
     };
 
     struct Cold {
-        std::unique_ptr<entt::registry> registry =
-            std::make_unique<entt::registry>();
+        entt::registry registry;
         // Future: undo stack, document name, std::vector<AssetId> referenced
         // (for ref-counting cascade on world close).
     };

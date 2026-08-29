@@ -21,9 +21,6 @@ namespace cairns {
 inline void ExtractFromWorld(World::Cold& wc, const glm::mat4& root,
                              AssetRegistry& assets, RenderProxyArrays& out) {
     out.Clear();
-    if (!wc.registry) {
-        return;
-    }
     constexpr uint32_t kStackCap = 256;
     int32_t stack[kStackCap];
     uint32_t top;
@@ -37,8 +34,8 @@ inline void ExtractFromWorld(World::Cold& wc, const glm::mat4& root,
         stack[top++] = v;
     };
 
-    auto view = wc.registry->view<const WorldTransform, const AssetRef,
-                                  const Renderable>();
+    auto view = wc.registry.view<const WorldTransform, const AssetRef,
+                                 const Renderable>();
     for (auto entity : view) {
         const WorldTransform& xf = view.get<const WorldTransform>(entity);
         const AssetRef& ref = view.get<const AssetRef>(entity);

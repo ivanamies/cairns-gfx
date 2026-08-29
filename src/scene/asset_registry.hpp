@@ -20,9 +20,11 @@
 #include "rhi/resource_manager.hpp"
 #include "util/offset_allocator.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
-#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace cairns {
 
@@ -82,11 +84,11 @@ public:
                                          rhi::Handle<rhi::Buffer> attr,
                                          rhi::Handle<rhi::Buffer> index) {
         const uint64_t key = static_cast<uint64_t>(scene_idx);
-        if (auto it = by_key_.find(key); it != by_key_.end()) {
-            if (auto* c = pool_.GetCold(it->second)) {
+        if (AssetId* existing = FindByKey(key)) {
+            if (auto* c = pool_.GetCold(*existing)) {
                 ++c->ref_count;
             }
-            return it->second;
+            return *existing;
         }
         AssetId id = pool_.Acquire();
         // Reused-slot trap (spec §3): freshly re-initialize Cold every
@@ -101,7 +103,7 @@ public:
             hot->attr = attr;
             hot->index = index;
         }
-        by_key_[key] = id;
+        InsertSorted(key, id);
         return id;
     }
 
@@ -109,8 +111,34 @@ public:
     const ResourceManager<Asset>& Pool() const { return pool_; }
 
 private:
+    // Acton-pilled dedup table: sorted flat vector keyed by content
+    // hash; binary search for lookup. The keyspace is hundreds at
+    // worst, so linear-or-binary cost is irrelevant -- the win is no
+    // hash, no buckets, no allocator surprises, cache-line-tight.
+    struct KeyEntry {
+        uint64_t key = 0;
+        AssetId id;
+    };
+    std::vector<KeyEntry> by_key_;
+
+    AssetId* FindByKey(uint64_t key) {
+        auto it = std::lower_bound(
+            by_key_.begin(), by_key_.end(), key,
+            [](const KeyEntry& e, uint64_t k) { return e.key < k; });
+        if (it != by_key_.end() && it->key == key) {
+            return &it->id;
+        }
+        return nullptr;
+    }
+
+    void InsertSorted(uint64_t key, AssetId id) {
+        auto it = std::lower_bound(
+            by_key_.begin(), by_key_.end(), key,
+            [](const KeyEntry& e, uint64_t k) { return e.key < k; });
+        by_key_.insert(it, KeyEntry{key, id});
+    }
+
     ResourceManager<Asset> pool_;
-    std::unordered_map<uint64_t, AssetId> by_key_;
     // Shared packed buffer handles owned by the registry (created on
     // first Load). The OffsetAllocator instances carve slices for each
     // Asset's pos/attr/idx range.

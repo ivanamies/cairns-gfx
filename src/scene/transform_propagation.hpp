@@ -33,10 +33,7 @@ inline glm::mat4 ComposeTRS(const Transform& t) {
 }
 
 inline void PropagateTransforms(World::Cold& wc, const glm::mat4& root) {
-    if (!wc.registry) {
-        return;
-    }
-    auto& reg = *wc.registry;
+    auto& reg = wc.registry;
 
     // Roots: entities with Transform but no Parent.
     auto root_view = reg.view<const Transform>(entt::exclude<Parent>);

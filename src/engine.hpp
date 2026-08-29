@@ -322,7 +322,7 @@ public:
                 wh->proxy_slot = 0;
                 wh->dirty = true;
 
-                auto& reg = *wc->registry;
+                auto& reg = wc->registry;
                 for (size_t i = 0; i < debugSceneXforms_.size(); ++i) {
                     const uint32_t scene_idx =
                         static_cast<uint32_t>(i % scenes_.size());
@@ -356,7 +356,7 @@ public:
                     *wc2 = cairns::World::Cold{};
                     wh2->proxy_slot = 1;
                     wh2->dirty = true;
-                    auto& reg2 = *wc2->registry;
+                    auto& reg2 = wc2->registry;
                     const size_t half = debugSceneXforms_.size() / 2;
                     for (size_t i = 0; i < half; ++i) {
                         const uint32_t scene_idx = static_cast<uint32_t>(
@@ -526,7 +526,7 @@ public:
             const float aspect_ratio = (1.0f * swapchain_.Width()) / swapchain_.Height();
             size_t entity_count = 0;
             if (auto* wc = worlds_.GetCold(active_world_)) {
-                entity_count = wc->registry ? wc->registry->storage<entt::entity>().size() : 0;
+                entity_count = wc->registry.storage<entt::entity>().size();
             }
             fprintf(stderr,
                     "[FLAKE] frame=%u w=%u h=%u aspect=%.9f vp00=%.9f vp11=%.9f "
@@ -752,7 +752,7 @@ public:
             const size_t loaded = scenes_.size();
             size_t entities = 0;
             if (auto* wc = worlds_.GetCold(active_world_)) {
-                entities = wc->registry ? wc->registry->storage<entt::entity>().size() : 0;
+                entities = wc->registry.storage<entt::entity>().size();
             }
             const size_t slices = loaded > 0 ? entities / loaded : 0;
             CAIRNS_PRINT("============\n");
