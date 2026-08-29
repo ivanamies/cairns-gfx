@@ -19,9 +19,8 @@
 
 #include "rhi/tag.hpp"
 #include "rhi/sampler.hpp"
-#include "rhi/device.hpp"
 #include "rhi/resource.hpp"
-#include "rhi/swap_chain.hpp"
+#include "swap_chain.hpp"
 #include "rhi/gpu_scene_registry.hpp"
 #include "util/misc.hpp"
 #include "util/offset_allocator.hpp"
@@ -167,6 +166,7 @@ bool UpdateRenderPassDescriptor(MTL::RenderPassDescriptor* render_pass_desc, MTL
 namespace cairns {
 
 inline static constexpr uint32_t kHotArenaMemorySize = 1 << 29;
+inline static constexpr uint32_t kUboAlign = 32;
 
 class Engine {
 public:
@@ -191,14 +191,14 @@ public:
     }
     
     bool initDevice() {
-        device = cairns::rhi::Device(MTL::CreateSystemDefaultDevice());
-        return device.get() != nullptr;
+        device_ = MTL::CreateSystemDefaultDevice();
+        return device_ != nullptr;
     }
     
     bool initSwapChain(SDL_Window* window) {
         swapChain_ = std::make_unique<cairns::rhi::SwapChain>();
         
-        if ( !swapChain_->Init(device, window)) {
+        if ( !swapChain_->Init(device_, window)) {
             return false;
         }
         
@@ -272,7 +272,7 @@ public:
         }
         {
             rhi2::BackendInitParams rhi2_p;
-            rhi2_p.device = device.get();
+            rhi2_p.device = device_;
             rhi2_p.queue = metalCommandQueue;
             if (!rm_.Init(rhi2_p)) {
                 return false;
@@ -339,7 +339,7 @@ public:
     }
     
     bool initCommandQueue() {
-        metalCommandQueue = device.get()->newCommandQueue();
+        metalCommandQueue = device_->newCommandQueue();
         return metalCommandQueue != nullptr;
     }
     
@@ -437,7 +437,7 @@ public:
                 .screen_params = glm::vec4(screen_width, screen_height, 1.0f / screen_width, 1.0f / screen_height)
             };
             const uint32_t dyn_align =
-                static_cast<uint32_t>(device.GetGpuAlignUboOffset());
+                kUboAlign;
             void* gptr = rm_.BumpAllocate(
                 sizeof(cairns::rhi::RenderPassGlobals), dyn_align,
                 rhi2::Memory::kDynamic);
@@ -491,7 +491,7 @@ public:
                             .sampler_id = gpu_sampler_id,
                         };
                         const uint32_t dyn_align =
-                            static_cast<uint32_t>(device.GetGpuAlignUboOffset());
+                            kUboAlign;
                         void* mptr = rm_.BumpAllocate(
                             sizeof(cairns::rhi::MaterialGpu), dyn_align,
                             rhi2::Memory::kDynamic);
@@ -512,7 +512,7 @@ public:
                             .sampler_id = gpu_sampler_id
                         };
                         const uint32_t dyn_align =
-                            static_cast<uint32_t>(device.GetGpuAlignUboOffset());
+                            kUboAlign;
                         void* tptr = rm_.BumpAllocate(
                             sizeof(cairns::rhi::DrawTmp), dyn_align,
                             rhi2::Memory::kDynamic);
@@ -697,7 +697,7 @@ public:
             const NS::UInteger h = drawableTex->height();
             const NS::UInteger bytesPerRow = w * 4;
             const NS::UInteger bufSize = bytesPerRow * h;
-            MTL::Buffer* readback = device.get()->newBuffer(bufSize, MTL::ResourceStorageModeShared);
+            MTL::Buffer* readback = device_->newBuffer(bufSize, MTL::ResourceStorageModeShared);
             MTL::BlitCommandEncoder* blitEnc = cmdBuf->blitCommandEncoder();
             blitEnc->copyFromTexture(drawableTex, 0, 0,
                                      MTL::Origin{0, 0, 0}, MTL::Size{w, h, 1},
@@ -742,7 +742,7 @@ public:
 #endif // CAIRNS_ANDROID
             const auto cubeShaderPath = basePath / "unlit.metal";
 
-            metal_default_library = compileMetalShader(device.get(), cubeShaderPath.string().c_str());
+            metal_default_library = compileMetalShader(device_, cubeShaderPath.string().c_str());
         }
 
         MTL::Function* vertexShader = metal_default_library->newFunction(NS::String::string("cube::vertexShader", NS::ASCIIStringEncoding));
@@ -778,7 +778,7 @@ public:
         NS::Error* error = nullptr;
 
         MTL::RenderPipelineState* pso =
-            device.get()->newRenderPipelineState(renderPipelineDescriptor, &error);
+            device_->newRenderPipelineState(renderPipelineDescriptor, &error);
 
         if (pso == nullptr) {
             std::cout << "Error creating render pipeline state: " << error << std::endl;
@@ -807,7 +807,7 @@ public:
             sampArg->setAccess(MTL::ArgumentAccessReadOnly);
 
             NS::Array* args = NS::Array::array((NS::Object*[]){ texArg, attrArg, sampArg }, 3);
-            MTL::ArgumentEncoder* arg_encoder = device.get()->newArgumentEncoder(args);
+            MTL::ArgumentEncoder* arg_encoder = device_->newArgumentEncoder(args);
 
             rhi2::BufferDesc bd;
             bd.byte_size = static_cast<uint32_t>(arg_encoder->encodedLength());
@@ -870,7 +870,7 @@ public:
         MTL::DepthStencilDescriptor* depthStencilDescriptor = MTL::DepthStencilDescriptor::alloc()->init();
         depthStencilDescriptor->setDepthCompareFunction(MTL::CompareFunctionLessEqual);
         depthStencilDescriptor->setDepthWriteEnabled(true);
-        depthStencilState = device.get()->newDepthStencilState(depthStencilDescriptor);
+        depthStencilState = device_->newDepthStencilState(depthStencilDescriptor);
         
         renderPipelineDescriptor->release();
         vertexShader->release();
@@ -901,7 +901,7 @@ private:
     static constexpr uint32_t kBufferedFrames = 2;
     uint32_t frame_ = 0;
     
-    cairns::rhi::Device device;
+    MTL::Device* device_ = nullptr;
     std::vector<cairns::Scene, cairns::Allocator<cairns::Scene>> scenes_;
     std::vector<int32_t, cairns::Allocator<int32_t>> root_nodes_stack_cache_;
     
