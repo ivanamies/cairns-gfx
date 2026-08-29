@@ -64,9 +64,14 @@ struct Node {
     std::string name;
     glm::mat4 localTransform = glm::mat4(1.0f);
     glm::mat4 globalTransform = glm::mat4(1.0f);
-    
+
     int32_t meshIndex = -1; // Index into Scene.meshes
     std::vector<int32_t> children;
+};
+
+struct LoadedMaterial {
+    rhi::Handle<rhi::Texture> color = rhi::Handle<rhi::Texture>::Null;
+    rhi::Handle<rhi::Sampler> sampler = rhi::Handle<rhi::Sampler>::Null;
 };
 
 struct Scene {
@@ -78,7 +83,7 @@ struct Scene {
     rootNodes(cairns::Allocator<int32_t>(arena_)),
     textureHandles(cairns::Allocator<rhi::Handle<rhi::Texture>>(arena_)),
     samplerHandles(cairns::Allocator<rhi::Handle<rhi::Sampler>>(arena_)),
-    materialHandles(cairns::Allocator<rhi::Handle<rhi::Material>>(arena_))
+    materialIds(cairns::Allocator<uint32_t>(arena_))
     { }
     
     Arena& arena_;
@@ -98,7 +103,7 @@ struct Scene {
     // Bindless Registry Data
     std::vector<rhi::Handle<rhi::Texture>, cairns::Allocator<rhi::Handle<rhi::Texture>>> textureHandles;
     std::vector<rhi::Handle<rhi::Sampler>, cairns::Allocator<rhi::Handle<rhi::Sampler>>> samplerHandles;
-    std::vector<rhi::Handle<rhi::Material>, cairns::Allocator<rhi::Handle<rhi::Material>>> materialHandles;
+    std::vector<uint32_t, cairns::Allocator<uint32_t>> materialIds;
 
     void CleanupTmps() {
         for ( size_t i = 0; i < loaded_textures.size(); ++i ) {
@@ -353,7 +358,7 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene) {
     return true;
 }
 
-inline void PrepareSceneResources(rhi::Device& device, Scene& scene, rhi::ResourceManager<rhi::Buffer>& buf_mgr, rhi::ResourceManager<rhi::Texture>& tex_mgr, rhi::ResourceManager<rhi::Sampler>& sampler_mgr, rhi::ResourceManager<rhi::Material>& mat_mgr) {
+inline void PrepareSceneResources(rhi::Device& device, Scene& scene, rhi::ResourceManager<rhi::Buffer>& buf_mgr, rhi::ResourceManager<rhi::Texture>& tex_mgr, rhi::ResourceManager<rhi::Sampler>& sampler_mgr, std::vector<LoadedMaterial>& materials) {
     // Textures
     for (const auto& texDescIn : scene.loaded_textures) {
         rhi::Handle<rhi::Texture> h = tex_mgr.New();
@@ -416,10 +421,9 @@ inline void PrepareSceneResources(rhi::Device& device, Scene& scene, rhi::Resour
         uint32_t gltf_sampler_idx = scene.materialToSamplerIndex[i];
         auto t = scene.textureHandles[gltf_tex_idx];
         auto s = scene.samplerHandles[gltf_sampler_idx];
-        auto m = mat_mgr.New();
-        mat_mgr.GetObj(m)->color = t;
-        mat_mgr.GetObj(m)->sampler = s;
-        scene.materialHandles.push_back(m);
+        const uint32_t mat_id = static_cast<uint32_t>(materials.size());
+        materials.push_back(LoadedMaterial{t, s});
+        scene.materialIds.push_back(mat_id);
     }
 }
 

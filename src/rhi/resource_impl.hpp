@@ -111,7 +111,7 @@ struct ResourceObject<BindGroup> {
     Handle<Buffer> globals;
     // materials
     Handle<Buffer> material_buffer;
-    Handle<Material> material;
+    uint32_t material = std::numeric_limits<uint32_t>::max();
     // shader specific
     uint32_t ssbo_type = std::numeric_limits<uint32_t>::max(); // particles or animation
     Handle<Buffer> ssbo;

@@ -267,7 +267,7 @@ public:
     using DbufHandle = cairns::rhi::Handle<cairns::rhi::DynamicBuffers>;
     using ShaderHandle = rhi2::Handle<rhi2::Shader>;
     using RenderPassHandle = cairns::rhi::Handle<cairns::rhi::RenderPass>;
-    using MatHandle = cairns::rhi::Handle<cairns::rhi::Material>;
+    using MatId = uint32_t;
     using SamplerHandle = cairns::rhi::Handle<cairns::rhi::Sampler>;
     using BindGroupHandle = cairns::rhi::Handle<cairns::rhi::BindGroup>;
     
@@ -381,7 +381,6 @@ public:
         samplerManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Sampler>>(hot_arena_, hot_arena_, 256);
         renderPassManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::RenderPass>>(hot_arena_, hot_arena_, 1);
         materialBufferManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Buffer>>(hot_arena_, hot_arena_, 1024);
-        materialManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Material>>(hot_arena_, hot_arena_, 1024);
         bindGroupManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::BindGroup>>(hot_arena_, hot_arena_, 1024);
         dynamicBuffersManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::DynamicBuffers>>(hot_arena_, hot_arena_, 1024);
         return true;
@@ -444,7 +443,7 @@ public:
                 if (!cairns::LoadSceneFromGltf(filepath, scene)) {
                     return false;
                 }
-                cairns::PrepareSceneResources(device, scene, *bufferManager_, *texManager_, *samplerManager_, *materialManager_);
+                cairns::PrepareSceneResources(device, scene, *bufferManager_, *texManager_, *samplerManager_, materials_);
                 
                 if (!cairns::rhi::LoadSceneGpu(scene, *bufferManager_, *texManager_, *samplerManager_, rm_)) {
                     return false;
@@ -646,9 +645,9 @@ public:
                 for(const auto& prim : mesh.primitives) {
                     //                    cairns::Timer timer6("timer6", 6);
                     const uint32_t scene_mat_idx = prim.materialIndex;
-                    const MatHandle mat_handle = scene.materialHandles[scene_mat_idx];
-                    const TexHandle tex_handle = materialManager_->GetObj(mat_handle)->color;
-                    const SamplerHandle sampler_handle = materialManager_->GetObj(mat_handle)->sampler;
+                    const MatId mat_id = scene.materialIds[scene_mat_idx];
+                    const TexHandle tex_handle = materials_[mat_id].color;
+                    const SamplerHandle sampler_handle = materials_[mat_id].sampler;
                     
                     const uint32_t gpu_tex_id = tex_handle.get_id();
                     const uint32_t gpu_sampler_id = sampler_id_map_[sampler_handle.get_id()];
@@ -676,7 +675,7 @@ public:
                         mh->mem.offset = rm_.BumpOffset(mptr);
                         mat_obj.type = cairns::rhi::BindGroup::Type::kMaterial;
                         mat_obj.material_buffer = h;
-                        mat_obj.material = mat_handle;
+                        mat_obj.material = mat_id;
                     }
                     
                     //                    cairns::Timer timer8("timer8", 8);
@@ -826,7 +825,7 @@ public:
             // set up per draw temporaries bind group in vertex shader
             encoder->setVertexBuffer(dyn_master, 0, cairns::kDrawTmpBindSlot);
             
-            MatHandle last_mat = MatHandle::Null;
+            MatId last_mat = std::numeric_limits<uint32_t>::max();
             uint32_t triangles = 0;
             for ( size_t draw_idx = 0; draw_idx < drawListSorted_.size(); ++draw_idx ) {
                 const cairns::Draw& draw = drawList_[drawListSorted_[draw_idx].second];
@@ -839,7 +838,7 @@ public:
                 { // set up material
                     const BindGroupHandle mat_bg = draw.bind_groups[cairns::kMaterialBindSlot-1];
                     auto& mat_bg_obj = *bindGroupManager_->GetObj(mat_bg);
-                    const MatHandle mat = mat_bg_obj.material;
+                    const MatId mat = mat_bg_obj.material;
                     if ( mat != last_mat ) {
                         last_mat = mat;
                         const BufHandle material_buffer = mat_bg_obj.material_buffer;
@@ -1097,7 +1096,7 @@ private:
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::DynamicBuffers>> dynamicBuffersManager_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::BindGroup>> bindGroupManager_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Sampler>> samplerManager_;
-    cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Material>> materialManager_;
+    std::vector<cairns::LoadedMaterial> materials_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Buffer>> materialBufferManager_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Texture>> renderPassTexManager_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::RenderPass>> renderPassManager_;
