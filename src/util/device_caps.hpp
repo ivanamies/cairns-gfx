@@ -54,7 +54,7 @@ struct DeviceCaps {
 // The storage-buffer-SIZE floor is per-platform (the skin-pool size in
 // MemoryBudget, enforced by SkinPoolFitsDevice against max_storage_buffer_range):
 // 128 MB on mobile, 256 MB on desktop + webgpu. 128 MB is the WebGPU spec floor
-// AND the measured Adreno-730 / S22 maxStorageBufferRange (on-device 2026-06-22 --
+// AND the measured Adreno-730 / S22 maxStorageBufferRange (on-device at `6674340` --
 // the old "256 MB Adreno" comment was wrong; a fixed 256 MB floor rejected the
 // real S22). Desktop runs 5x the mobile actor count, whose skinned output needs
 // 256 MB; desktop/webgpu ranges are GBs so the bind fits.

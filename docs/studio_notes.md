@@ -108,7 +108,7 @@ that returns `Promise.resolve(...)`. Two reasons:
    a true Promise return without changing call sites.
 2. QuickJS's promise machinery leaves shutdown state that trips a
    refcount assert at `JS_FreeRuntime` time when scripts go through
-   `cairns.dispatch` (reproduced 2026-06-05; the global-object-ref leak
+   `cairns.dispatch` (reproduced at `757f552`; the global-object-ref leak
    in `JsDispatch` is fixed, further fixes deferred). Returning the
    value directly avoids the machinery entirely.
 

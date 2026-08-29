@@ -5,7 +5,7 @@ Newest first.
 
 ---
 
-## `b69f582` (2026-07-05) — perf smoke, 4-platform pass
+## `b69f582` — perf smoke, 4-platform pass
 
 Scenario-driven (desktop via `scripts/dev_drive.sh` eval of the scenario script;
 Android + web via the picker), 120-frame timer windows at steady state. Actor
@@ -62,7 +62,7 @@ browser."
 
 ---
 
-## `6674340` (2026-06-22) — perf smoke, 300 actors / 100 distinct GLBs
+## `6674340` — perf smoke, 300 actors / 100 distinct GLBs
 
 **Forced down from 500 → 300 actors by WebGPU.** The anim_eval SSBO pack (12 → 6
 buffers, to fit WebGPU's 8/10 storage-buffers-per-stage floor) and the
@@ -96,7 +96,7 @@ The cost of WebGPU portability is the actor-count drop (500 → 300), not frame 
 
 ---
 
-## `73ce3c4` (2026-06-17) — run.js boot, 500 actors / 100 distinct GLBs
+## `73ce3c4` — run.js boot, 500 actors / 100 distinct GLBs
 
 ### macOS, M2 Max, vk Release, 2560×1440, 30s capture, 120-frame window
 
@@ -118,7 +118,7 @@ The cost of WebGPU portability is the actor-count drop (500 → 300), not frame 
 
 ---
 
-## `c78ed77` (2026-06-15) — revert S.1 LDS palette; 500 actors / 100 distinct GLBs
+## `c78ed77` — revert S.1 LDS palette; 500 actors / 100 distinct GLBs
 
 ### macOS, M2 Max, 2560×1440, vsync, CAIRNS_AGENT_STDIN + spawnTotal(500)
 
@@ -141,23 +141,23 @@ Note on `frame` = 20.84 ms: `CGDisplayCopyDisplayMode(CGMainDisplayID()).refresh
 
 ---
 
-## bisect (2026-06-15) — skinning_compute regression 2026-06-09 → 2026-06-11
+## bisect `8e778e9` — skinning_compute regression `c838f5f` → `9a94846`
 
-Bisect run today on `bisect/skinning-perf` to chase the bad animation GPU numbers.
+Bisect run on `bisect/skinning-perf` to chase the bad animation GPU numbers.
 500 actors / 100 distinct GLBs, metal Release, M2 Max, 2560×1440, vsync (frame locked ~20.84 ms).
 Bisect threshold: skinning_compute < 8 ms = good, ≥ 8 ms = bad.
 
-| date          | commit       | description                                | skinning_compute    | forward_vp0 | record  | build_draws | verdict |
-|---------------|--------------|--------------------------------------------|---------------------|-------------|---------|-------------|---------|
-| 2026-06-09 23:56 | `c838f5f` | EOD 6/9 — P9 walking-clip + SkinRef attach | — (slot not present)| 1.72 ms     | 0.40 ms | 0.52 ms     | —       |
-| 2026-06-10 23:56 | `302f58c` | EOD 6/10 — imgui flicker fix               | 5.18 ms             | 3.87 ms     | 0.60 ms | 0.64 ms     | good    |
-| 2026-06-11 21:11 | `9737baa` | phase A.1 conditional id MRT               | 4.97 ms             | —           | —       | —           | good    |
-| 2026-06-11 21:50 | `a82c326` | windowed crash fix (ImDrawData bypass)     | 4.86 ms             | —           | —       | —           | good    |
-| 2026-06-11 21:57 | `2694662` | phase H.6 hoist resident_textures          | 4.84 ms             | —           | —       | —           | good    |
-| 2026-06-11 22:03 | `a155ac9` | phase E.0 vk generic recorder loops        | 4.94 ms             | —           | —       | —           | good    |
-| **2026-06-11 22:08** | **`b5495c4`** | **phase S.1 LDS palette in skin.comp** | **11.70 ms**    | —           | —       | —           | **first BAD** |
-| 2026-06-11 23:26 | `9a94846` | EOD 6/11 — Phase S.2 pack skin attrs       | 11.09 ms            | 1.49 ms     | 0.48 ms | 0.53 ms     | bad     |
-| 2026-06-15 21:23 | `577938e` | known-good rewind = `984dae1`              | 14.11 ms            | 1.51 ms     | 0.42 ms | 0.47 ms     | bad     |
+| commit       | description                                | skinning_compute    | forward_vp0 | record  | build_draws | verdict |
+|--------------|--------------------------------------------|---------------------|-------------|---------|-------------|---------|
+| `c838f5f` | P9 walking-clip + SkinRef attach | — (slot not present)| 1.72 ms     | 0.40 ms | 0.52 ms     | —       |
+| `302f58c` | imgui flicker fix               | 5.18 ms             | 3.87 ms     | 0.60 ms | 0.64 ms     | good    |
+| `9737baa` | phase A.1 conditional id MRT               | 4.97 ms             | —           | —       | —           | good    |
+| `a82c326` | windowed crash fix (ImDrawData bypass)     | 4.86 ms             | —           | —       | —           | good    |
+| `2694662` | phase H.6 hoist resident_textures          | 4.84 ms             | —           | —       | —           | good    |
+| `a155ac9` | phase E.0 vk generic recorder loops        | 4.94 ms             | —           | —       | —           | good    |
+| **`b5495c4`** | **phase S.1 LDS palette in skin.comp** | **11.70 ms**    | —           | —       | —           | **first BAD** |
+| `9a94846` | Phase S.2 pack skin attrs       | 11.09 ms            | 1.49 ms     | 0.48 ms | 0.53 ms     | bad     |
+| `577938e` | known-good rewind = `984dae1`              | 14.11 ms            | 1.51 ms     | 0.42 ms | 0.47 ms     | bad     |
 
 First bad commit: `b5495c4`. `shared mat4 s_palette[256]` (16 KB threadgroup memory per workgroup); metal mirror stores palette as 4-rows-per-joint with rebuild-on-read.
 
@@ -172,7 +172,7 @@ First bad commit: `b5495c4`. `shared mat4 s_palette[256]` (16 KB threadgroup mem
 
 ---
 
-## `577938e` (2026-06-15) — known-good baseline, 500 actors / 100 distinct GLBs
+## `577938e` — known-good baseline, 500 actors / 100 distinct GLBs
 
 ### macOS Metal Release — M2 Max, 2560×1440
 
@@ -193,7 +193,7 @@ First bad commit: `b5495c4`. `shared mat4 s_palette[256]` (16 KB threadgroup mem
 
 ---
 
-## `<skinning P3>` (2026-06-09) — #221 Skinning Phase 3: ring growth + persistent skin output pool
+## `f8ea407` — #221 Skinning Phase 3: ring growth + persistent skin output pool
 
 Memory budget note (no perf rows yet -- skinned content not loaded yet):
 
@@ -213,7 +213,7 @@ Memory budget note (no perf rows yet -- skinned content not loaded yet):
 
 ---
 
-## `88f7d70+` (2026-06-08) — #220 Steps 1+2+3 (handle-ify LoadedMaterial / Mesh / Scene) + render_graph PassRecord vectors -> std::array push_or_die + multithreaded build_draws experiment (WorkerPool, max-4 cap)
+## `88f7d70+` — #220 Steps 1+2+3 (handle-ify LoadedMaterial / Mesh / Scene) + render_graph PassRecord vectors -> std::array push_or_die + multithreaded build_draws experiment (WorkerPool, max-4 cap)
 
 What changed since `dc9b669+`:
 - `4e2189a` #220 Step 1: `LoadedMaterial -> ResourceManager<LoadedMaterial>`,
@@ -332,7 +332,7 @@ taskflow Executor's worker init, which is out of scope for this commit.
 
 ---
 
-## `dc9b669+` (2026-06-06) — #201 / #202 / #204 / #205 landed + Frames::End -> EndSubmit/Present split (vkQueuePresentKHR hoisted to main)
+## `dc9b669+` — #201 / #202 / #204 / #205 landed + Frames::End -> EndSubmit/Present split (vkQueuePresentKHR hoisted to main)
 
 What changed since `0b51ce3+`:
 - #201 platform `#ifdef`s removed from `engine.hpp` + `main.cpp`. Engine-side
@@ -418,7 +418,7 @@ previous note ("ramps from cold 97 ms to sustained ~130 ms").
 
 ---
 
-## `0b51ce3+` (2026-06-06) — P0–P4 cameras+viewports+selection landed, rhi composition refactor, kNumViewports=1
+## `0b51ce3+` — P0–P4 cameras+viewports+selection landed, rhi composition refactor, kNumViewports=1
 
 P0–P4 of the Resizing & Cameras plan all landed (`#188`–`#192`), plus
 the rhi composition-not-ifdef refactor across Pipelines/Device/Frames/
@@ -508,7 +508,7 @@ builds clean (`build/ios/`) but the run is a separate step.
 
 ---
 
-## `757f552` (2026-06-06) — studio surface Day 1 (Unity-shaped scripting via `studio.js`)
+## `757f552` — studio surface Day 1 (Unity-shaped scripting via `studio.js`)
 
 Day 1 of the Unity-shaped op surface landed: `RegisterAlias` +
 `Command.aliased_for` + `tools.search` on the registry; 18 ops migrated
@@ -590,7 +590,7 @@ surface adds negligible per-call latency above the existing
 
 ---
 
-## `52d5d16` (2026-06-05) — headless editor mode P0–P5 + 0xCC heap garbage init
+## `52d5d16` — headless editor mode P0–P5 + 0xCC heap garbage init
 
 Full headless-editor-mode plan landed P0–P5: CMake split (`cairns_core` +
 `sdl-min` + `cairns_serve`), RHI surface lift via `InitConfig`,
@@ -693,7 +693,7 @@ to the windowed numbers — separate code path through
 
 ---
 
-## `c90a43b` (2026-06-04) — EnTT scene layer landed (P0–P8 done; iOS Debug refreshed)
+## `c90a43b` — EnTT scene layer landed (P0–P8 done; iOS Debug refreshed)
 
 Full P0–P8 sequence of the EnTT scene-layer plan is in. Engine drives
 the active world through `ResourceManager<World>` + `entt::registry`;
@@ -746,7 +746,7 @@ on the swap pass.
 | `swap`          |  0.43 ms (GPU) |
 | GPU total       | ~57.0 ms |
 
-S22 today settled at the "cold" end of the thermally-noisy range
+S22 settled at the "cold" end of the thermally-noisy range
 documented at `042ebec` — `forward` 56.5 ms, well below the
 steady-state ~120 ms observed in some warmer sessions. **Apply the
 same thermal caveat**: a single reading on this device names a point
@@ -805,7 +805,7 @@ in `define.hpp`, or force `ARCHS=arm64` for simulator builds.
 
 ---
 
-## `042ebec` (2026-06-04) — RecordFrame routed through render graph (forward → swap)
+## `042ebec` — RecordFrame routed through render graph (forward → swap)
 
 Frame is now graph-routed: `particle_sim` (kCompute) → `forward` (offscreen
 single-sample color + depth) → `swap` (composite full-screen color +
@@ -898,7 +898,7 @@ load-bearing factor on Adreno here either.
 
 ---
 
-## `6386768` (2026-06-04) — tiny-quad diagnostic isolates geometry vs draw-submission
+## `6386768` — tiny-quad diagnostic isolates geometry vs draw-submission
 
 S22 Android Vulkan Release. CAIRNS_TINY_QUAD=1 pins every draw's
 `triangle_count = 2`. Draw count + submission identical (11517 draws);
@@ -935,7 +935,7 @@ intent extras).
 
 ---
 
-## `fce2ade` (2026-06-04) — game/render thread split landed; APK asset loading
+## `fce2ade` — game/render thread split landed; APK asset loading
 
 Workload: `100 GLBs × 33 slices = 3300 entities`, 11517 draws. Release.
 
@@ -991,7 +991,7 @@ a glTF), which we haven't tried yet.
 
 ---
 
-## `c311cd7` (2026-06-04) — full readout + Android bisect
+## `c311cd7` — full readout + Android bisect
 
 Workload: `100 GLBs × 33 slices = 3300 entities`, 11517 draws. Release.
 
@@ -1057,7 +1057,7 @@ not reverting** — readable overlay is worth the 10 ms.
 
 ---
 
-## `f2625d1` (2026-06-03) — gpu_frame row, per-pass GPU timing landed
+## `f2625d1` — gpu_frame row, per-pass GPU timing landed
 
 Workload: `100 GLBs × 33 slices = 3300 entities`, 11517 draws. Release.
 
@@ -1104,7 +1104,7 @@ throughput dominates as expected.
 
 ---
 
-## `b6c7785` (2026-05-31) — fragment / rasterization proof
+## `b6c7785` — fragment / rasterization proof
 
 iPhone 15 Release. Two runs, same workload (`100 GLBs × 33 slices = 3300
 entities`, 11517 draws, batched upload), only the window size + hero scale
@@ -1145,7 +1145,7 @@ arrangement / memory transfer / CPU build loop itself.**
 
 ---
 
-## `b0febf1` (2026-05-30) — `ia/26-05-30/performance_debug` (re-baseline)
+## `b0febf1` — `ia/26-05-30/performance_debug` (re-baseline)
 
 9d90f90 source + cherry-picked batched upload (`b0febf1`). No layout, window,
 or orientation changes vs 9d90f90 baseline. Engine now also prints
@@ -1178,13 +1178,13 @@ Observations:
 - Both miss v-sync (~25 fps and ~31 fps respectively); CPU-bound on phone.
 - 100×33 is ~20% faster than 50×66 because the second half of `kDebugGlbs`
   has fewer primitives per GLB — fewer total draws (11.5k vs 15.1k).
-- build_draws 9.1 ms at 15k draws is in line with the 5/28 baseline's 8.3 ms
+- build_draws 9.1 ms at 15k draws is in line with the `9d90f90` baseline's 8.3 ms
   at 11.5k draws (per-draw cost is similar). The 17 ms iPhone 15 number from
   earlier was on a different branch state; this re-baseline is healthy.
 
 ---
 
-## `e2d0c26` (2026-05-30) — `ia/26-05-30/performance_debug`
+## `e2d0c26` — `ia/26-05-30/performance_debug`
 
 Layout: 20×5 grid × 33 slices = **3300 entities**, ~11.5k draws.
 Heroes: scale 0.01, dx=dy=0.7, dz=2.0, front slice z=-4.
@@ -1245,20 +1245,20 @@ slot 4 (build opaque draw list):         avg  5641– 5938 us
 draws: 11517
 ```
 
-Both desktop backends regressed vs 5/28 baseline (build_draws ~2x: 3.07 → 6.3 ms
+Both desktop backends regressed vs `9d90f90` baseline (build_draws ~2x: 3.07 → 6.3 ms
 Metal, 2.16 → 5.9 ms Vulkan). Suspect: bigger window (720×1280 → 2400×1080) +
 larger heroes (scale 0.005 → 0.01) push more pixels and the CPU sort/build
 loop touches more state per draw. Worth bisecting if we want to recover the
-5/28 numbers.
+`9d90f90` numbers.
 
 ### iOS device — not yet measured at this commit.
 
 ---
 
-## `4fb1e46` (2026-05-30) — `ia/26-05-30/performance_debug`
+## `4fb1e46` — `ia/26-05-30/performance_debug`
 
 Branch base = `9d90f90`. Constants flipped: `kDebugGlbsToParse 50→100`,
-`kHeroSlices 66→33`. Same 3300-entity / ~11.5k-draw workload as 5/28; just
+`kHeroSlices 66→33`. Same 3300-entity / ~11.5k-draw workload as `9d90f90`; just
 redistributed (each of 100 GLBs drawn 33×).
 
 ### iOS Simulator (iPhone 16 Pro, Release)
@@ -1300,7 +1300,7 @@ Not yet measured at this commit.
 
 ---
 
-## `9d90f90` (2026-05-28) — *across-GLB packing*
+## `9d90f90` — *across-GLB packing*
 
 Workload: 10 × 10 × 30 = 3300 entities → **11517 draws** (`set 11k draws`).
 Timer slots active at this commit: 0=frame, 1=build_draws, 2=record,
@@ -1346,7 +1346,7 @@ build_draws.
 
 ---
 
-## 2026-06-21 — SDL windowed, post cpu_block_ compaction + string interning
+## `792998b` — SDL windowed, post cpu_block_ compaction + string interning
 
 Apple-silicon Mac, **SDL windowed** (real swapchain, 1280×720 window → 2560×1440
 retina), **Release**, **500 actors (100 GLBs × 5)**, the run.js boot scene. Numbers

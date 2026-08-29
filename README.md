@@ -27,7 +27,7 @@ with Blender's `bpy`, HuggingFace notebooks, and their own scripts in
 whatever language they already speak.
 
 Full headless surface design at
-`~/dev/plans/2026-06-05_gfx_headless-editor-requirements.md`.
+`~/dev/plans/gfx_headless-editor-requirements.md`.
 
 ### The canonical demo (verification scenario, ratcheted)
 
@@ -127,7 +127,7 @@ one small op still to add so "left" composes from the current pose.)
 | **WebGPU native (macOS)** | ✅ surfaceless wgpu-native + NDJSON (`CAIRNS_GFX_BACKEND=webgpu`); golden gate renders triangle + die/two-die/viking, matches macos-metal | 🟡 `SDL_WINDOW_METAL` + metal-layer surface (sdl3webgpu glue) + present-by-copy; `dev_drive.sh start wgpu`. Builds + boots clean (surface/device/pipelines OK); on-screen render unconfirmed in headless CI — verify interactively | offscreen readback → PNG |
 | **Web / Chrome (WASM)** | ✅ the SAME `src/main.cpp` SDL shell; boots + renders in headed AND headless Chrome (WebGPU via emdawnwebgpu); `[Timer]`/`[STEADY]` over the CDP console | ✅ headed Chrome: CDP `Input.dispatchMouseEvent` → SDL event → ImGui picker → scenario; `window.cairns.dispatch` bridge for sync ops (picker click needs headed) | CDP `Page.captureScreenshot` → PNG |
 
-✅ wired · ⚠ partial (transport gap) · 🔭 planned (see `~/dev/plans/2026-06-21_gfx_webgpu-wgpu-native-standup.md`).
+✅ wired · ⚠ partial (transport gap) · 🔭 planned (see `~/dev/plans/gfx_webgpu-wgpu-native-standup.md`).
 
 ---
 
@@ -186,14 +186,14 @@ build-on-game-thread is the headliner; see there.
 
 `src/render/render_graph` is a partial copy of Themaister's Granite render graph
 (`renderer/render_graph.{cpp,hpp}`). Granite's headline feature is *automatic,
-complete* barrier/semaphore generation — and as of 2026-07-07 the
+complete* barrier/semaphore generation — and as of `309fb53` the
 synchronization model is fully ported for correctness (invalidate/flush +
 WAR + buffers, all backends off the same graph-computed barriers; the
 historical cross-frame `final_target_` WAW flake is dead). **Rule: copy
 Granite, do not re-invent.** Point-by-point:
 
 **The core stray — barriers belonged in the graph with persistent per-resource
-state. PORTED (texture model 2026-06-20; WAR + buffers 2026-07-07).**
+state. PORTED (texture model `08fccb5`; WAR + buffers `3d9cd68`..`309fb53`).**
 
 - **Granite computes barriers in `bake()`; now we do too.** `render_graph::
   Execute` computes per-pass `invalidate` (before) + `flush` (after) barriers
@@ -257,7 +257,7 @@ same barriers, `final_target_` dedicated-tracked for Metal coherence.
 **Remaining = perf items only** (per-stage scoping, split-barrier events, pass
 reorder, subpass merge, transient aliasing barriers [NPR plan M0c], async
 compute, history resources). Plan:
-`~/dev/plans/2026-07-07_gfx_granite-sync-port.md`.
+`~/dev/plans/gfx_granite-sync-port.md`.
 
 ---
 
@@ -466,8 +466,8 @@ own `-UNDEBUG`, so optimization + asserts coexist). Two tiers:
   (frame 9) and `.f55.imghash` (frame 55).
 
 Plan and notes:
-- `dev/plans/2026-06-18_gfx_test-tech-tree-redo-phase-a-to-g.md` — the plan
-- `dev/plans/2026-06-18_gfx_modularization-notes.md` — generalization
+- `dev/plans/gfx_test-tech-tree-redo-phase-a-to-g.md` — the plan
+- `dev/plans/gfx_modularization-notes.md` — generalization
   opportunities accumulated while writing the suite
 
 ### Configure (once per platform / build flavor)
@@ -626,7 +626,7 @@ CAIRNS_GFX_BAKE_REFS=1 ./build/.../cairns_golden_tests
 
 The third RHI backend: gfx-rs **wgpu-native** C bindings headless/native,
 emdawnwebgpu in the browser. At parity with metal/vk on the golden subjects;
-stand-up history in `~/dev/plans/2026-06-21_gfx_webgpu-wgpu-native-standup.md`.
+stand-up history in `~/dev/plans/gfx_webgpu-wgpu-native-standup.md`.
 
 ### Build + run
 

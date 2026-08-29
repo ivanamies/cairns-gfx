@@ -7,7 +7,7 @@ here.
 
 ---
 
-## #picking-accel — CPU ray-cast pick is a linear scan (2026-06-22)
+## #picking-accel — CPU ray-cast pick is a linear scan (`2d133cb`)
 
 Picking was moved from the GPU id-buffer readback to a CPU ray-cast
 (`Engine::ResolvePickRaycast`) so it is SYNCHRONOUS + identical on metal/vulkan/
@@ -26,7 +26,7 @@ Current shortcuts, fine at hundreds of actors, fix before the 3300-GLB rung:
 
 ---
 
-## #resize-surface-bugs — window/surface resize is broken across backends (2026-06-22)
+## #resize-surface-bugs — window/surface resize is broken across backends (`8b874a4`)
 
 One bug class, three surfaces. The engine renders correctly (golden gate is green
 on metal/vk/webgpu; headless WebGPU captures the die/viking perfectly and stably)
@@ -60,9 +60,9 @@ flaky, so investigate with a real repro before "fixing."
 
 ---
 
-## #webgpu-browser-strictness — animated champions in Chrome (2026-06-22)
+## #webgpu-browser-strictness — animated champions in Chrome (`8fdbbd8`)
 
-**RESOLVED 2026-06-23 — the WebGPU/Chrome web app reached metal/vulkan SDL
+**RESOLVED `9e22e9e` — the WebGPU/Chrome web app reached metal/vulkan SDL
 parity.** Same imgui scenario picker + HUD; all scenarios (triangle, dice,
 viking, static + ANIMATED champions, 20-champ + depth strip); CPU ray-cast
 pick + selection highlight; click-to-pick. The Dawn-strictness rejections below
@@ -144,7 +144,7 @@ champion, before/after capture) is DONE with static champions.
 
 ---
 
-## #229 scenario launcher + Unity-components refactor (2026-06-21)
+## #229 scenario launcher + Unity-components refactor (`c8b5112`)
 
 Remaining work:
 
@@ -170,7 +170,7 @@ Remaining work:
 
 Our `src/render/render_graph` is a partial copy of Granite's render graph,
 whose headline feature is *automatic* barrier/semaphore insertion.
-**Correctness parity reached 2026-07-07** (granite-sync-port plan, G0–G2c):
+**Correctness parity reached at `309fb53`** (granite-sync-port plan, G0–G2c):
 persistent per-resource `PipelineEvent` (textures AND buffers), RAW/WAW/layout
 + WAR (read-as-fake-flush), compute passes barriered via
 `BeginComputePass`/`EndComputePass`, all backends off the same graph-computed
@@ -205,9 +205,9 @@ Also surfaced (not a graph gap): a **pre-existing MSAA sample-count mismatch**
 
 ## Deterministic imgui rendering (per-pixel hash gates for the UI work)
 
-The imgui overlay IS bit-stable per process run today (proven 2026-07-07:
+The imgui overlay IS bit-stable per process run today (proven at `e5edf12`:
 identical MD5 across standalone runs). The heavy JS/imgui editor work
-(`~/dev/plans/2026-07-08_gfx_js-imgui-editor-ui.md`) keeps per-pixel goldens
+(`~/dev/plans/gfx_js-imgui-editor-ui.md`) keeps per-pixel goldens
 viable by holding these invariants -- each one, when violated, is a
 diagnosed source of drift:
 
@@ -237,7 +237,7 @@ diagnosed source of drift:
    gap). Until then, run `[imgui]` isolated -- and after any picker-visible
    change (adding/renaming assets/scripts/*.js!), REBAKE `imgui.overlay`:
    the overlay renders the scenario button list, so a stable-but-new image
-   is expected, not a flake (exactly the 2026-07-07 incident).
+   is expected, not a flake (exactly the `1cbf608` incident).
 7. **Content rule for UI scripts.** No `Date.now()`/random in draw paths;
    text is fixed or mocked; scrolling starts pinned (`SetScrollY(0)`).
 
@@ -245,18 +245,18 @@ diagnosed source of drift:
 
 ## Active
 
-### wgpu_readback_smoke broken -> full spec-mac-metal builds stop early (2026-07-09)
+### wgpu_readback_smoke broken -> full spec-mac-metal builds stop early (`36e364d`)
 `tests/wgpu_readback_smoke.cpp:70/:89` fail to compile in spec-mac-metal
 (`td.size = {..}` / `ca.clearValue = {..}` "expected expression" -- the
 wgpu-native vs emdawnwebgpu header divergence bit the brace-inits). The W3
 de-risk target is long past its purpose. DANGER: a full `cmake --build` of
 spec-mac-metal aborts at this target BEFORE relinking cairns_golden_tests /
-cairns_serve -> stale binaries silently pass ctest (bit me twice on 2026-07-09;
+cairns_serve -> stale binaries silently pass ctest (bit me twice;
 worked around with `--target cairns_golden_tests`). Either fix the inits per
 header or drop the target from the default build (CAIRNS_BUILD_WGPU_SMOKE off).
 
 ### Shadow-map correctness: side-polarity + acne + peter-pan all machine-proven
-2026-07-09: tests/test_npr_properties.cpp proves headlessly (metal+vk) that
+`bdf7a5f`+`bb358f7`: tests/test_npr_properties.cpp proves headlessly (metal+vk) that
 shadows (a) only darken, (b) toggle with castShadows, (c) land on the
 geometrically correct side (darkened-centroid tracks light X-tilt), (d) NO
 acne: an unoccluded convex ground renders identical (<=1 LSB) with shadows on
@@ -346,7 +346,7 @@ draws. WebGPU / WebGL / DX12 have no base-instance (Aaltonen slide 42), so index
 per-instance data off `instance_index`. Consumers: two_die (die.glb ×2) + the
 grid scenarios.
 
-### White champion in the nested golden -- RESOLVED: broken asset, engine faithful (2026-07)
+### White champion in the nested golden -- RESOLVED: broken asset, engine faithful (`70706b3`)
 The near-white champion in `nested graph: 20 GLBs` is **aatrox_victorious.glb**
 (kDebugGlbs idx 12, prefab 12, entity_id 13; earlier notes blamed
 aatrox_prestige_blood_moon idx 7 -- that was a crop x/y mix-up; idx 7/8 render
@@ -448,5 +448,5 @@ porting dead shaders to WGSL.
 
 ---
 
-Last touched 2026-06-21. When adding a row: name the issue/branch in
+When adding a row: name the issue/branch in
 the heading (e.g. `### #299 thing`) so `git log --grep` can find it.

@@ -138,7 +138,7 @@ bool MemoryAllocator::CreateBumpHeap() {
     // 0xCCCCCCCC everywhere instead of an accidentally-zeroed value that
     // might render "fine" by coincidence. Set CAIRNS_HEAP_ZERO=1 to fall
     // back to 0x00 fill (useful when chasing whether 0xCC itself perturbs
-    // pixels). Empirical note 2026-06-05: Metal pre-zeros newBuffer +
+    // pixels). Empirical note (`b4e5c81`): Metal pre-zeros newBuffer +
     // heap newBuffer at allocation -- proven by hexdump under
     // CAIRNS_HEAPDUMP=1 -- but driver behavior is not contract, and we
     // want the symptom-on-first-leak guarantee regardless.
