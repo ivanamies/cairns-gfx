@@ -4031,18 +4031,38 @@ public:
         if (headers.empty()) {
             return;
         }
+        // #228 H4a: recycle existing buffers when they're still large enough,
+        // instead of CreateBuffer every call. The old "always allocate fresh"
+        // path churned the GPU allocator between consecutive runtime loads
+        // (the 2nd uploadAnimTablesGpu's 10 new buffers got new offsets,
+        // and any non-determinism in the allocator's free-list selection
+        // surfaced across cairns_serve invocations -- #297). Recycling
+        // collapses the steady-state case to "UploadBuffer at offset 0"
+        // and only triggers Destroy + CreateBuffer when a buffer outgrows
+        // its current allocation.
         auto upload = [&](const void* data, size_t bytes,
                           rhi::Handle<rhi::Buffer>& out) -> bool {
             if (bytes == 0) {
                 bytes = 16;
             }
-            rhi::BufferDesc bd{};
-            bd.byte_size = static_cast<uint32_t>(bytes);
-            bd.usage = rhi::kUsageStorage;
-            bd.memory = rhi::Memory::kDefault;
-            out = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
-            if (out.IsNull()) {
-                return false;
+            const uint32_t need = static_cast<uint32_t>(bytes);
+            uint32_t have = 0;
+            if (!out.IsNull()) {
+                have = rhi_.resources.GetBufferByteSize(out);
+            }
+            if (out.IsNull() || have < need) {
+                if (!out.IsNull()) {
+                    rhi_.device.WaitIdle();
+                    rhi_.resources.Destroy(rhi_.alloc, out);
+                }
+                rhi::BufferDesc bd{};
+                bd.byte_size = need;
+                bd.usage = rhi::kUsageStorage;
+                bd.memory = rhi::Memory::kDefault;
+                out = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
+                if (out.IsNull()) {
+                    return false;
+                }
             }
             if (data) {
                 rhi_.resources.UploadBuffer(
