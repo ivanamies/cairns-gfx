@@ -2,9 +2,11 @@
 
 #include "render/render_proxy_arrays.hpp"
 #include "scene/scene_world.hpp"
+#include "util/log.hpp"
 
 #include <cassert>
 #include <cstdint>
+#include <cstdlib>
 
 namespace cairns {
 
@@ -15,6 +17,15 @@ inline void Extract(const SceneWorld& world, RenderProxyArrays& out) {
     constexpr uint32_t kStackCap = 256;
     int32_t stack[kStackCap];
     uint32_t top;
+    auto push_or_die = [&](int32_t v) {
+        if (top >= kStackCap) {
+            CAIRNS_PRINT(
+                "render_extract: scratch stack overflow (top=%u, cap=%u)\n",
+                top, kStackCap);
+            std::abort();
+        }
+        stack[top++] = v;
+    };
     for (const SceneEntity& entity : world.entities) {
         if (entity.scene_index >= world.scene_count) {
             continue;
@@ -24,16 +35,14 @@ inline void Extract(const SceneWorld& world, RenderProxyArrays& out) {
 
         top = 0;
         for (size_t j = 0; j < scene.rootNodes.size(); ++j) {
-            assert(top < kStackCap);
-            stack[top++] = scene.rootNodes[j];
+            push_or_die(scene.rootNodes[j]);
         }
         while (top > 0) {
             const int32_t node_idx = stack[--top];
             const Node& node = scene.nodes[node_idx];
             if (node.meshIndex < 0) {
                 for (int32_t c : node.children) {
-                    assert(top < kStackCap);
-                    stack[top++] = c;
+                    push_or_die(c);
                 }
                 continue;
             }
@@ -60,8 +69,7 @@ inline void Extract(const SceneWorld& world, RenderProxyArrays& out) {
             out.meshes.Add(proxy);
 
             for (int32_t c : node.children) {
-                assert(top < kStackCap);
-                stack[top++] = c;
+                push_or_die(c);
             }
         }
     }
