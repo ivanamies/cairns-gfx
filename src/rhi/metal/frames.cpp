@@ -136,6 +136,13 @@ void Frames::WriteSkinGroupBDescriptors(Resources& /*resources*/,
     // setBuffer:offset:atIndex: in DispatchSkinBatches; no Group B set.
 }
 
+void Frames::WriteUnlitDescriptors(Resources& /*resources*/,
+                                     Allocator& /*alloc*/) {
+    // Metal: no per-frame descriptor sets in the unlit path; render
+    // pass globals + per-draw uniforms are bound directly via
+    // setVertexBytes / setFragmentBuffer in the recorder.
+}
+
 FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
                             const SwapResolveTarget& target) {
     dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(plat.frame_semaphore_),

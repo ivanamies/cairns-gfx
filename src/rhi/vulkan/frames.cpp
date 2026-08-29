@@ -17,6 +17,8 @@
 #include "rhi/swap_chain.hpp"
 #include "rhi/swap_resolve_target.hpp"
 #include "rhi/command_recorder.hpp"
+#include "util/material_gpu.hpp"        // DrawTmp
+#include "util/render_pass_globals.hpp" // RenderPassGlobals
 #include "util/timer.hpp"
 
 namespace cairns::rhi {
@@ -520,6 +522,41 @@ void Frames::SetDumpPath(const std::filesystem::path& path) {
 // (keyed on format, not dims) survive.
 void Frames::OnSurfaceResize() {
     plat.offscreen_target_cache_.FlushFramebuffers();
+}
+
+void Frames::WriteUnlitDescriptors(Resources& resources, Allocator& alloc) {
+    if (plat.globals_sets_.empty() || plat.drawtmp_sets_.empty()) {
+        return;
+    }
+    VkBuffer dyn_master =
+        resources.plat.GetVkBumpMasterBuffer(alloc, Memory::kDynamic);
+    if (dyn_master == VK_NULL_HANDLE) {
+        return;
+    }
+    const uint32_t globals_range =
+        static_cast<uint32_t>(sizeof(RenderPassGlobals));
+    const uint32_t drawtmp_range = static_cast<uint32_t>(sizeof(DrawTmp));
+    for (uint32_t i = 0; i < plat.globals_sets_.size(); ++i) {
+        VkDescriptorBufferInfo bi[2]{};
+        VkWriteDescriptorSet w[2]{};
+        bi[0].buffer = dyn_master;
+        bi[0].offset = 0;
+        bi[0].range = globals_range;
+        bi[1].buffer = dyn_master;
+        bi[1].offset = 0;
+        bi[1].range = drawtmp_range;
+        for (uint32_t k = 0; k < 2; ++k) {
+            w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[k].dstBinding = 0;
+            w[k].descriptorCount = 1;
+            w[k].descriptorType =
+                VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+            w[k].pBufferInfo = &bi[k];
+        }
+        w[0].dstSet = plat.globals_sets_[i];
+        w[1].dstSet = plat.drawtmp_sets_[i];
+        vkUpdateDescriptorSets(plat.device_, 2, w, 0, nullptr);
+    }
 }
 
 void Frames::WriteSkinGroupBDescriptors(Resources& resources,

@@ -464,29 +464,12 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& t
 
 void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list) {
     VkCommandBuffer cb = plat.gfx_;
+    (void)alloc;  // descriptors now written once at init (Frames::WriteUnlitDescriptors).
 
-    // Aaltonen frequency split: globals = set 0 (one dynamic UBO, bound once per
-    // frame), drawtmp = set 2 (one dynamic UBO, one offset per draw). Each is its own
-    // descriptor set so the per-draw bind carries a single dynamic offset.
-    VkBuffer bump_buf = res.plat.GetVkBumpMasterBuffer(alloc, Memory::kDynamic);
-    std::array<VkWriteDescriptorSet, 2> writes{};
-    std::array<VkDescriptorBufferInfo, 2> buf_infos{};
-    const VkDescriptorSet sets[2] = {plat.globals_set_, plat.drawtmp_set_};
-    const uint32_t ranges[2] = {static_cast<uint32_t>(sizeof(RenderPassGlobals)),
-                                static_cast<uint32_t>(sizeof(DrawTmp))};
-    for (uint32_t i = 0; i < 2; ++i) {
-        buf_infos[i].buffer = bump_buf;
-        buf_infos[i].offset = 0;
-        buf_infos[i].range = ranges[i];
-        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = sets[i];
-        writes[i].dstBinding = 0;
-        writes[i].dstArrayElement = 0;
-        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        writes[i].descriptorCount = 1;
-        writes[i].pBufferInfo = &buf_infos[i];
-    }
-    vkUpdateDescriptorSets(plat.device_, 2, writes.data(), 0, nullptr);
+    // #237 fix: globals + drawtmp descriptors are written ONCE at engine
+    // init pointing at the master kDynamic buffer. Per-pass we only
+    // supply the dynamic offset at vkCmdBindDescriptorSets time. Avoids
+    // VUID-vkUpdateDescriptorSets-None-03047 (set in use by pending cmd).
 
     Shader::Hot* unlit = res.GetHot(list.pipeline);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->plat.vk_pipeline);
@@ -581,18 +564,34 @@ void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader>
         return;
     }
 
-    VkDescriptorImageInfo ii{};
-    ii.sampler = reinterpret_cast<VkSampler>(res.GetHot(sampler)->api_sampler);
-    ii.imageView = reinterpret_cast<VkImageView>(res.GetHot(font)->api_view);
-    ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    VkWriteDescriptorSet w{};
-    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    w.dstSet = sh->plat.vk_imgui_set;
-    w.dstBinding = 0;
-    w.descriptorCount = 1;
-    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    w.pImageInfo = &ii;
-    vkUpdateDescriptorSets(plat.device_, 1, &w, 0, nullptr);
+    // #236 fix: imgui font + sampler are stable post-Engine init; the
+    // per-frame write was racing the prior frame's pending gfx cmd
+    // buffer (VUID-vkUpdateDescriptorSets-None-03047). Only call
+    // vkUpdateDescriptorSets when the (font, sampler) handles actually
+    // change. The cached packed values live on ShaderHotPlat.
+    const uint32_t font_packed =
+        (static_cast<uint32_t>(font.generation) << 16) | font.index;
+    const uint32_t sampler_packed =
+        (static_cast<uint32_t>(sampler.generation) << 16) | sampler.index;
+    if (font_packed != sh->plat.vk_imgui_last_font_packed ||
+        sampler_packed != sh->plat.vk_imgui_last_sampler_packed) {
+        VkDescriptorImageInfo ii{};
+        ii.sampler =
+            reinterpret_cast<VkSampler>(res.GetHot(sampler)->api_sampler);
+        ii.imageView =
+            reinterpret_cast<VkImageView>(res.GetHot(font)->api_view);
+        ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet w{};
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = sh->plat.vk_imgui_set;
+        w.dstBinding = 0;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.pImageInfo = &ii;
+        vkUpdateDescriptorSets(plat.device_, 1, &w, 0, nullptr);
+        sh->plat.vk_imgui_last_font_packed = font_packed;
+        sh->plat.vk_imgui_last_sampler_packed = sampler_packed;
+    }
 
     vkCmdBindPipeline(plat.gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->plat.vk_pipeline);
     vkCmdBindDescriptorSets(plat.gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->plat.vk_layout, 0, 1,

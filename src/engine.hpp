@@ -1052,6 +1052,10 @@ public:
             rhi_.frames.WriteSkinGroupBDescriptors(
                 rhi_.resources, rhi_.alloc, skin_output_pool_buffer_);
         }
+        // #237 fix: globals + drawtmp DYNAMIC UBO descriptors point at
+        // the master kDynamic buffer with sizeof(struct) range; per-pass
+        // bind supplies the offset. Write once here.
+        rhi_.frames.WriteUnlitDescriptors(rhi_.resources, rhi_.alloc);
         if ( !initParticles() ) {
             CAIRNS_PRINT("GreaterInit: initParticles failed\n");
             return false;

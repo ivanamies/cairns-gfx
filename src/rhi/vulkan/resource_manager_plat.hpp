@@ -31,6 +31,12 @@ struct ShaderHotPlat {
     VkDescriptorSetLayout vk_imgui_set_layout = VK_NULL_HANDLE;
     VkDescriptorPool vk_imgui_pool = VK_NULL_HANDLE;
     VkDescriptorSet vk_imgui_set = VK_NULL_HANDLE;
+    // #236 fix: cache the last-written (font, sampler) pair so DrawImGui
+    // only re-runs vkUpdateDescriptorSets when they actually change.
+    // Stable across frames since the font atlas + sampler are immutable
+    // post-Engine init -- avoids VUID-vkUpdateDescriptorSets-None-03047.
+    uint32_t vk_imgui_last_font_packed = 0xFFFFFFFFu;
+    uint32_t vk_imgui_last_sampler_packed = 0xFFFFFFFFu;
 };
 
 struct KernelHotPlat {

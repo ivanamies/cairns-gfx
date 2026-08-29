@@ -83,6 +83,14 @@ public:
     void WriteSkinGroupBDescriptors(Resources& resources, Allocator& alloc,
                                      rhi::Handle<rhi::Buffer> output_pool);
 
+    // #237 fix: write the per-frame globals_sets_ + drawtmp_sets_ ONCE
+    // at engine init. Both bindings are UNIFORM_BUFFER_DYNAMIC pointing
+    // at the master kDynamic buffer with a fixed sizeof(struct) range;
+    // the dynamic offset selects the per-pass / per-draw window at bind
+    // time. Avoids per-pass vkUpdateDescriptorSets racing pending cmd
+    // buffers (VUID-vkUpdateDescriptorSets-None-03047). Metal: no-op.
+    void WriteUnlitDescriptors(Resources& resources, Allocator& alloc);
+
     // Called by the engine after a window-resize is applied. Metal no-op
     // (drawable resize is handled implicitly per-frame). Vk wipes the
     // offscreen-target-cache framebuffers (sized at create-time against
