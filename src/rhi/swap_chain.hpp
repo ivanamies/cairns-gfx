@@ -613,6 +613,7 @@ struct SwapChain {
         }
         metalLayer_->setDevice(device);
         metalLayer_->setPixelFormat(MTL::PixelFormatBGRA8Unorm);
+        metalLayer_->setFramebufferOnly(false);
         size_ = cairns::Size(metalLayer_->drawableSize().width,
                              metalLayer_->drawableSize().height);
         return true;
