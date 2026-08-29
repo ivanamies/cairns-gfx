@@ -43,6 +43,8 @@
 #include <filesystem>
 #include <unordered_map>
 
+#include "rhi2/resource_manager.hpp"
+
 namespace cairns {
 
 namespace vk_debug {
@@ -225,6 +227,7 @@ private:
         if (!createImageViews()) return false;
         if (!createRenderPass()) return false;
         if (!createCommandPool()) return false;
+        if (!initResourceManager()) return false;
         if (!createDescriptorSetLayout()) return false;
         if (!createComputePipeline()) return false;
         if (!createGraphicsPipeline()) return false;
@@ -566,9 +569,10 @@ private:
                 descriptorWrites[0].descriptorCount = 1;
                 descriptorWrites[0].pBufferInfo = &uniformBufferInfo;
 
+                uint32_t lastFrameOffset = 0;
                 VkDescriptorBufferInfo storageBufferInfoLastFrame{};
-                storageBufferInfoLastFrame.buffer = shaderStorageBuffers[(i-1) % MAX_FRAMES_IN_FLIGHT];
-                storageBufferInfoLastFrame.offset = 0;
+                storageBufferInfoLastFrame.buffer = rm_.GetVkBuffer(ssbo_[(i-1) % MAX_FRAMES_IN_FLIGHT], &lastFrameOffset);
+                storageBufferInfoLastFrame.offset = lastFrameOffset;
                 storageBufferInfoLastFrame.range = sizeof(Particle) * PARTICLE_COUNT;
 
                 descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -578,9 +582,10 @@ private:
                 descriptorWrites[1].descriptorCount = 1;
                 descriptorWrites[1].pBufferInfo = &storageBufferInfoLastFrame;
 
+                uint32_t currentFrameOffset = 0;
                 VkDescriptorBufferInfo storageBufferInfoCurrentFrame{};
-                storageBufferInfoCurrentFrame.buffer = shaderStorageBuffers[i];
-                storageBufferInfoCurrentFrame.offset = 0;
+                storageBufferInfoCurrentFrame.buffer = rm_.GetVkBuffer(ssbo_[i], &currentFrameOffset);
+                storageBufferInfoCurrentFrame.offset = currentFrameOffset;
                 storageBufferInfoCurrentFrame.range = sizeof(Particle) * PARTICLE_COUNT;
 
                 descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -598,10 +603,7 @@ private:
     }
 
     bool createShaderStorageBuffers() {
-        shaderStorageBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-        shaderStorageBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
-
-        std::default_random_engine rndEngine((unsigned)time(nullptr));
+        std::default_random_engine rndEngine(42);
         std::uniform_real_distribution<float> rndDist(0.0f, 1.0f);
 
         std::vector<Particle> particles(PARTICLE_COUNT);
@@ -616,22 +618,23 @@ private:
         }
 
         VkDeviceSize bufferSize = sizeof(Particle) * PARTICLE_COUNT;
-
-        VkBuffer stagingBuffer;
-        VkDeviceMemory stagingBufferMemory;
-        createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
-        void* data;
-        vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-        memcpy(data, particles.data(), (size_t)bufferSize);
-        vkUnmapMemory(device, stagingBufferMemory);
+        rhi2::Span<const uint8_t> init(
+            reinterpret_cast<const uint8_t*>(particles.data()),
+            static_cast<size_t>(bufferSize));
 
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-            createBuffer(bufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, shaderStorageBuffers[i], shaderStorageBuffersMemory[i]);
-            copyBuffer(stagingBuffer, shaderStorageBuffers[i], bufferSize);
+            rhi2::BufferDesc desc{};
+            desc.debug_name = "ssbo";
+            desc.byte_size = static_cast<uint32_t>(bufferSize);
+            desc.usage = rhi2::kUsageStorage | rhi2::kUsageVertex |
+                         rhi2::kUsageTransferDst;
+            desc.memory = rhi2::Memory::kDefault;
+            desc.initial_data = init;
+            ssbo_[i] = rm_.CreateBuffer(desc);
+            if (ssbo_[i].IsNull()) {
+                return false;
+            }
         }
-
-        vkDestroyBuffer(device, stagingBuffer, nullptr);
-        vkFreeMemory(device, stagingBufferMemory, nullptr);
         return true;
     }
 
@@ -736,22 +739,16 @@ private:
 
     bool createIndexBuffer() {
         VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
-        VkBuffer stagingBuffer;
-        VkDeviceMemory stagingBufferMemory;
-        createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
-
-        void* data;
-        vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-        memcpy(data, indices.data(), (size_t)bufferSize);
-        vkUnmapMemory(device, stagingBufferMemory);
-
-        createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
-
-        copyBuffer(stagingBuffer, indexBuffer, bufferSize);
-
-        vkDestroyBuffer(device, stagingBuffer, nullptr);
-        vkFreeMemory(device, stagingBufferMemory, nullptr);
-        return true;
+        rhi2::BufferDesc desc{};
+        desc.debug_name = "index";
+        desc.byte_size = static_cast<uint32_t>(bufferSize);
+        desc.usage = rhi2::kUsageIndex | rhi2::kUsageTransferDst;
+        desc.memory = rhi2::Memory::kDefault;
+        desc.initial_data = rhi2::Span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(indices.data()),
+            static_cast<size_t>(bufferSize));
+        index_buffer_ = rm_.CreateBuffer(desc);
+        return !index_buffer_.IsNull();
     }
 
     bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
@@ -996,26 +993,17 @@ private:
     }
 
     bool createVertexBuffer() {
-
         VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
-
-        VkBuffer stagingBuffer;
-        VkDeviceMemory stagingBufferMemory;
-        createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
-
-        void* data;
-        vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-        memcpy(data, vertices.data(), (size_t)bufferSize);
-        vkUnmapMemory(device, stagingBufferMemory);
-
-        createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory);
-
-        copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
-
-        vkDestroyBuffer(device, stagingBuffer, nullptr);
-        vkFreeMemory(device, stagingBufferMemory, nullptr);
-
-        return true;
+        rhi2::BufferDesc desc{};
+        desc.debug_name = "vertex";
+        desc.byte_size = static_cast<uint32_t>(bufferSize);
+        desc.usage = rhi2::kUsageVertex | rhi2::kUsageTransferDst;
+        desc.memory = rhi2::Memory::kDefault;
+        desc.initial_data = rhi2::Span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(vertices.data()),
+            static_cast<size_t>(bufferSize));
+        vertex_buffer_ = rm_.CreateBuffer(desc);
+        return !vertex_buffer_.IsNull();
     }
 
     bool findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties, uint32_t& out) {
@@ -1173,11 +1161,15 @@ private:
         {
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 
-            VkBuffer vertexBuffers[] = {vertexBuffer};
-            VkDeviceSize offsets[] = { 0 };
+            uint32_t vbOffset = 0;
+            VkBuffer vb = rm_.GetVkBuffer(vertex_buffer_, &vbOffset);
+            VkBuffer vertexBuffers[] = {vb};
+            VkDeviceSize offsets[] = { vbOffset };
             vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
 
-            vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            uint32_t ibOffset = 0;
+            VkBuffer ib = rm_.GetVkBuffer(index_buffer_, &ibOffset);
+            vkCmdBindIndexBuffer(commandBuffer, ib, ibOffset, VK_INDEX_TYPE_UINT32);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[currentFrame], 0, nullptr);
 
             vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
@@ -1189,8 +1181,10 @@ private:
         {
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline2);
 
-            std::array<VkBuffer,1> vertexBuffers = {shaderStorageBuffers[currentFrame]};
-            VkDeviceSize offsets[] = { 0 };
+            uint32_t ssboOffset = 0;
+            VkBuffer ssboBuf = rm_.GetVkBuffer(ssbo_[currentFrame], &ssboOffset);
+            std::array<VkBuffer,1> vertexBuffers = {ssboBuf};
+            VkDeviceSize offsets[] = { ssboOffset };
             vkCmdBindVertexBuffers(commandBuffer, 0, vertexBuffers.size(), vertexBuffers.data(), offsets);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout2, 0, 1, &descriptorSets2[currentFrame], 0, nullptr);
 
@@ -1231,6 +1225,19 @@ private:
             return false;
         }
         return true;
+    }
+
+    bool initResourceManager() {
+        QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice);
+        rhi2::BackendInitParams params{};
+        params.instance = instance;
+        params.physical = physicalDevice;
+        params.device = device;
+        params.queue = graphicsQueue;
+        params.queue_family_index = queueFamilyIndices.graphicsAndComputeFamily.value();
+        params.command_pool = commandPool;
+        params.enable_bda = false;
+        return rm_.Init(params);
     }
 
     bool createFramebuffers() {
@@ -2362,11 +2369,6 @@ private:
         cleanupSwapChain();
 
         for ( size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
-            vkDestroyBuffer(device, shaderStorageBuffers[i], nullptr);
-            vkFreeMemory(device, shaderStorageBuffersMemory[i], nullptr);
-        }
-
-        for ( size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
             vkDestroyBuffer(device, uniformBuffers[i], nullptr);
             vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
         }
@@ -2381,12 +2383,6 @@ private:
         vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
         vkDestroyDescriptorSetLayout(device, descriptorSetLayout2, nullptr);
         vkDestroyDescriptorSetLayout(device, computeDescriptorSetLayout, nullptr);
-
-        vkDestroyBuffer(device, indexBuffer, nullptr);
-        vkFreeMemory(device, indexBufferMemory, nullptr);
-
-        vkDestroyBuffer(device, vertexBuffer, nullptr);
-        vkFreeMemory(device, vertexBufferMemory, nullptr);
 
         vkDestroyPipeline(device, graphicsPipeline, nullptr);
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
@@ -2411,6 +2407,8 @@ private:
             vkDestroySemaphore(device, computeFinishedSemaphores[i], nullptr);
             vkDestroyFence(device, computeInFlightFences[i], nullptr);
         }
+        rm_.Deinit();
+
         vkDestroyCommandPool(device, commandPool, nullptr);
 
         vkDestroyDevice(device, nullptr);
@@ -2575,12 +2573,12 @@ private:
     bool framebufferResized = false;
     uint32_t currentFrame = 0;
 
+    rhi2::ResourceManager rm_;
+
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
-    VkBuffer vertexBuffer;
-    VkDeviceMemory vertexBufferMemory;
-    VkBuffer indexBuffer;
-    VkDeviceMemory indexBufferMemory;
+    rhi2::Handle<rhi2::Buffer> vertex_buffer_;
+    rhi2::Handle<rhi2::Buffer> index_buffer_;
 
     std::vector<VkBuffer> uniformBuffers;
     std::vector<VkDeviceMemory> uniformBuffersMemory;
@@ -2590,8 +2588,7 @@ private:
     std::vector<VkDeviceMemory> computeUniformBuffersMemory;
     std::vector<void*> computeUniformBuffersMapped;
 
-    std::vector<VkBuffer> shaderStorageBuffers;
-    std::vector<VkDeviceMemory> shaderStorageBuffersMemory;
+    std::array<rhi2::Handle<rhi2::Buffer>, MAX_FRAMES_IN_FLIGHT> ssbo_;
 
     VkDescriptorPool descriptorPool;
     std::vector<VkDescriptorSet> descriptorSets;
