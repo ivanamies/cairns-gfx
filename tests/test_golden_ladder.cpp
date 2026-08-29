@@ -61,14 +61,20 @@ struct Rung {
     cairns::EngineConfig::CamPose cam;
 };
 
+// The amalgam's canonical asset names (dye/viking_room/lol_a..c) aren't in
+// the cairns asset tree; substitute production glbs from kDebugGlbs that DO
+// ship with the project so L2..L7 actually exercise the pipeline. Their
+// `false` skinning intent is informational only -- InstantiatePrefab attaches
+// a skin opportunistically (via TryCreateSkinForScene) when the glb has one,
+// so the LoL champs are always animated in practice.
 const std::vector<Rung> kLadder = {
-    {"triangle",          {},                                       1,   false, false, {0,0,3, 0,0}},
-    {"one_dye",           {"dye.glb"},                              1,   false, false, {0,1,4, 0,0}},
-    {"two_dye",           {"dye.glb"},                              2,   false, false, {0,1,5, 0,0}},
-    {"viking_room",       {"viking_room.glb"},                      1,   false, false, {2,2,2, 3.9f,-0.5f}},
-    {"three_lol_static",  {"lol_a.glb","lol_b.glb","lol_c.glb"},    3,   false, false, {0,1.5f,6, 0,0}},
-    {"three_lol_anim",    {"lol_a.glb","lol_b.glb","lol_c.glb"},    3,   true,  true,  {0,1.5f,6, 0,0}},
-    {"hundred_lol_anim",  {"lol_a.glb","lol_b.glb","lol_c.glb"},    100, true,  true,  {0,8,22, 0,0}},
+    {"triangle",          {},                                              1,   false, false, {0,0,3, 0,0}},
+    {"one_aatrox",        {"aatrox.glb"},                                  1,   false, false, {0,1,4, 0,0}},
+    {"two_aatrox",        {"aatrox.glb"},                                  2,   false, false, {0,1,5, 0,0}},
+    {"viking_room",       {"viking_room.glb"},                             1,   false, false, {2,2,2, 3.9f,-0.5f}},
+    {"three_champ_static",{"ahri.glb","akali.glb","alistar.glb"},          3,   false, false, {0,1.5f,6, 0,0}},
+    {"three_champ_anim",  {"ahri.glb","akali.glb","alistar.glb"},          3,   true,  true,  {0,1.5f,6, 0,0}},
+    {"hundred_champ_anim",{"ahri.glb","akali.glb","alistar.glb"},          100, true,  true,  {0,8,22, 0,0}},
 };
 
 constexpr uint32_t kGoldenW = 512;
@@ -77,8 +83,12 @@ constexpr uint32_t kGoldenH = 512;
 }  // namespace
 
 TEST_CASE("golden ladder", "[golden][ladder]") {
+    // 7 rungs (0..6). Catch2 v3.5.4 doesn't ship range<size_t>; an explicit
+    // value list is the portable shape and reads as well.
     const std::size_t idx =
-        GENERATE(Catch::Generators::range<std::size_t>(0, 7));
+        GENERATE(std::size_t{0}, std::size_t{1}, std::size_t{2},
+                 std::size_t{3}, std::size_t{4}, std::size_t{5},
+                 std::size_t{6});
     const Rung& rung = kLadder[idx];
 
     INFO("rung: " << rung.name << "  platform: " << kPlatformKey);
@@ -101,6 +111,7 @@ TEST_CASE("golden ladder", "[golden][ladder]") {
     // bool instead so the engine doesn't kill the test process.
     ecfg.use_fixed_clock = true;
 
+    cairns::test_seams::EnsureImguiContext();
     cairns::Engine engine;
     REQUIRE(engine.GreaterInit(icfg, ecfg));
     REQUIRE(cairns::test_seams::BuildLadderScene(engine, rung.glbs,

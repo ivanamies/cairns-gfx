@@ -1782,6 +1782,17 @@ public:
         return draw();
     }
 
+    // Test seam: surfaceless byte readback of the offscreen target. The
+    // golden ladder hashes this buffer and compares to a per-platform ref.
+    // Mirrors DumpFinalTarget's pipeline but skips the PNG encode.
+    bool ReadFinalTargetRgba(std::vector<uint8_t>& rgba, uint32_t& w,
+                              uint32_t& h) {
+        if (final_target_.IsNull()) {
+            return false;
+        }
+        return rhi_.resources.ReadBackTextureRgba(final_target_, rgba, w, h);
+    }
+
     // Headless texture readback: blit final_target_ -> Shared buffer ->
     // PNG. Mirrors the windowed dump in metal/frames.cpp::End() but reads
     // from the offscreen target instead of the swapchain drawable. Apple

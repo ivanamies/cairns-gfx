@@ -102,9 +102,21 @@ if(CAIRNS_GFX_BUILD_GOLDEN_TESTS)
     target_include_directories(cairns_golden_tests PRIVATE
         "${CMAKE_SOURCE_DIR}/src"
         "${CMAKE_SOURCE_DIR}/third_party/glm"
+        "${CMAKE_SOURCE_DIR}/third_party/entt"
         "${CMAKE_CURRENT_SOURCE_DIR}")
     target_compile_features(cairns_golden_tests PRIVATE cxx_std_20)
+    # tests/refs/ baseline path -- the refs loader checks
+    # $CAIRNS_TEST_REFS_DIR first, then this compile-time fallback. Each
+    # run-from-build-dir CI invocation can override via the env var.
+    target_compile_definitions(cairns_golden_tests PRIVATE
+        CAIRNS_TEST_REFS_DIR_DEFINE=\"${CMAKE_CURRENT_SOURCE_DIR}/refs\")
     target_link_libraries(cairns_golden_tests PRIVATE
         cairns_core Catch2::Catch2WithMain)
-    catch_discover_tests(cairns_golden_tests PROPERTIES LABELS "golden")
+    if(CMAKE_CROSSCOMPILING)
+        catch_discover_tests(cairns_golden_tests
+            PROPERTIES LABELS "golden"
+            DISCOVERY_MODE PRE_TEST)
+    else()
+        catch_discover_tests(cairns_golden_tests PROPERTIES LABELS "golden")
+    endif()
 endif()
