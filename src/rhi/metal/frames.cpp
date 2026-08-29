@@ -19,6 +19,29 @@
 
 namespace cairns::rhi {
 
+namespace {
+
+void make_render_targets(Resources& res, Allocator& alloc, uint32_t w, uint32_t h,
+                         Handle<Texture>& msaa_out, Handle<Texture>& depth_out) {
+    constexpr uint32_t kSampleCount = 4;
+    TextureDesc cd;
+    cd.dimensions = {static_cast<int32_t>(w), static_cast<int32_t>(h), 1};
+    cd.format = Format::kBgra8Unorm;
+    cd.sample_count = kSampleCount;
+    cd.usage = kTexUsageColorTarget;
+    cd.memory = Memory::kDefault;
+    msaa_out = res.CreateTexture(alloc, cd);
+    TextureDesc dd;
+    dd.dimensions = {static_cast<int32_t>(w), static_cast<int32_t>(h), 1};
+    dd.format = Format::kD32F;
+    dd.sample_count = kSampleCount;
+    dd.usage = kTexUsageDepthTarget;
+    dd.memory = Memory::kDefault;
+    depth_out = res.CreateTexture(alloc, dd);
+}
+
+}  // namespace
+
 Frames::~Frames() { Deinit(); }
 
 bool Frames::Init(Device& device) {
@@ -43,32 +66,10 @@ bool Frames::Init(Device& device) {
 // Metal MSAA/depth targets share the texture Pool index space with scene
 // textures; created after scene textures load (call post scene load).
 bool Frames::InitTargets(Resources& resources, Allocator& alloc, SwapChain& sc) {
-    constexpr uint32_t kSampleCount = 4;
-    const int32_t w = static_cast<int32_t>(sc.Width());
-    const int32_t h = static_cast<int32_t>(sc.Height());
-    {
-        TextureDesc d;
-        d.dimensions = {w, h, 1};
-        d.format = Format::kBgra8Unorm;
-        d.sample_count = kSampleCount;
-        d.usage = kTexUsageColorTarget;
-        d.memory = Memory::kDefault;
-        msaa_handle_ = resources.CreateTexture(alloc, d);
-        if (msaa_handle_.IsNull()) {
-            return false;
-        }
-    }
-    {
-        TextureDesc d;
-        d.dimensions = {w, h, 1};
-        d.format = Format::kD32F;
-        d.sample_count = kSampleCount;
-        d.usage = kTexUsageDepthTarget;
-        d.memory = Memory::kDefault;
-        depth_handle_ = resources.CreateTexture(alloc, d);
-        if (depth_handle_.IsNull()) {
-            return false;
-        }
+    make_render_targets(resources, alloc, sc.Width(), sc.Height(), msaa_handle_,
+                        depth_handle_);
+    if (msaa_handle_.IsNull() || depth_handle_.IsNull()) {
+        return false;
     }
     MTL::Texture* msaa = resources.GetHot(msaa_handle_)->api_view;
     MTL::Texture* depth = resources.GetHot(depth_handle_)->api_view;
@@ -98,6 +99,22 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
     resources.AdvanceFrame(alloc);  // bump ring reset
 
     sc.NextDrawable();
+    MTL::Texture* drawable_tex = sc.GetDrawable()->texture();
+    Texture::Hot* msaa_hot = resources.GetHot(msaa_handle_);
+    if (drawable_tex &&
+        (!msaa_hot || msaa_hot->api_view->width() != drawable_tex->width() ||
+         msaa_hot->api_view->height() != drawable_tex->height())) {
+        if (!msaa_handle_.IsNull()) {
+            resources.Destroy(alloc, msaa_handle_);
+        }
+        if (!depth_handle_.IsNull()) {
+            resources.Destroy(alloc, depth_handle_);
+        }
+        make_render_targets(resources, alloc,
+                            static_cast<uint32_t>(drawable_tex->width()),
+                            static_cast<uint32_t>(drawable_tex->height()),
+                            msaa_handle_, depth_handle_);
+    }
     MTL::Texture* msaa = resources.GetHot(msaa_handle_)->api_view;
     MTL::Texture* depth = resources.GetHot(depth_handle_)->api_view;
     UpdateRenderPassDescriptor(render_pass_desc_, msaa, depth, sc);

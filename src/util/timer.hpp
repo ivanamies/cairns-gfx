@@ -70,7 +70,8 @@ class Timer {
         printf("==============\n");
         for ( uint32_t i = 0; i < kMaxSlots; ++i ) {
             if ( average ) {
-                printf("slot %d average: %lld (us)\n",i,accum_times_[i]/accum_itrs_[i]);
+                printf("slot %d average: %lld (us)\n",i,
+                       accum_itrs_[i] ? accum_times_[i]/accum_itrs_[i] : 0);
             }
             else { // accum
                 printf("slot %d accum: %lld (us)\n",i,accum_times_[i]);

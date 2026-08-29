@@ -613,6 +613,8 @@ struct SwapChain {
         }
         metalLayer_->setDevice(device);
         metalLayer_->setPixelFormat(MTL::PixelFormatBGRA8Unorm);
+        // Drawables must be blittable: Frames::End copies from the drawable for the
+        // swapchain dump, which Metal forbids on a framebufferOnly layer.
         metalLayer_->setFramebufferOnly(false);
         size_ = cairns::Size(metalLayer_->drawableSize().width,
                              metalLayer_->drawableSize().height);

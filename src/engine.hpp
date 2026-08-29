@@ -438,7 +438,7 @@ public:
         particle_parity_ ^= 1;
         t_frame.End();
         if (frame_ % 120 == 0) {
-            cairns::Timer::PrintReport(false);
+            cairns::Timer::PrintReport(true);
         }
         return true;
     }
