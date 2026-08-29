@@ -71,7 +71,8 @@ inline bool LoadScenesGpu(std::span<Scene> scenes, Resources& rm, Allocator& all
     }
 
     // Upload in batches of kBatchSize scenes. Local vectors fall out of scope
-    // at the end of each iteration -> CPU temps released between batches.
+    // at the end of each iteration; per-mesh CPU temps freed inline after the
+    // batch uploads (don't wait for Scene::CleanupTmps at end-of-load).
     size_t cur_vert_off_bytes = 0;
     size_t cur_attr_off_bytes = 0;
     size_t cur_idx_off_bytes = 0;
@@ -118,6 +119,20 @@ inline bool LoadScenesGpu(std::span<Scene> scenes, Resources& rm, Allocator& all
         cur_vert_off_bytes += pos_batch_bytes;
         cur_attr_off_bytes += attr_batch_bytes;
         cur_idx_off_bytes += idx_batch_bytes;
+
+        // CPU temps for THIS batch's meshes are on-GPU now -- free them so the
+        // ChunkAllocator returns the slab. Leaves Scene::CleanupTmps a no-op
+        // for the cpu* vectors when it runs later.
+        for (size_t s = batch_start; s < batch_end; ++s) {
+            for (Mesh& mesh : scenes[s].meshes) {
+                mesh.cpuPositions.clear();
+                mesh.cpuPositions.shrink_to_fit();
+                mesh.cpuAttrs.clear();
+                mesh.cpuAttrs.shrink_to_fit();
+                mesh.cpuIndices.clear();
+                mesh.cpuIndices.shrink_to_fit();
+            }
+        }
     }
 
     Handle<Buffer> attr_alias = rm.buffers.Acquire();
