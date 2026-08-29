@@ -229,6 +229,9 @@ bool Device::Init(const InitConfig& cfg) {
             cfg.plat.vk_instance_extensions + cfg.plat.vk_instance_extension_count);
         if (plat.validation_enabled_) {
             extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+            // #229 GPU-determinism: VK_EXT_validation_features carries the
+            // synchronization-validation toggle below.
+            extensions.push_back(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
         }
 #if CAIRNS_APPLE
         extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
@@ -244,11 +247,25 @@ bool Device::Init(const InitConfig& cfg) {
         ci.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         ci.ppEnabledExtensionNames = extensions.data();
         VkDebugUtilsMessengerCreateInfoEXT dbg{};
+        // #229 GPU-determinism: enable Khronos SYNCHRONIZATION validation in
+        // debug builds. It flags read-before-write / missing-barrier hazards on
+        // reused GPU memory (transient slots, ping-pong SSBOs) -- the suspected
+        // three_champ flake class -- and names the exact pass + resource via the
+        // debug messenger. No-op in Release (validation_enabled_ = false). The
+        // enable array + features struct must outlive vkCreateInstance.
+        const VkValidationFeatureEnableEXT sync_val_enable[] = {
+            VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
+        };
+        VkValidationFeaturesEXT val_features{};
         if (plat.validation_enabled_) {
             ci.enabledLayerCount = static_cast<uint32_t>(kValidationLayers.size());
             ci.ppEnabledLayerNames = kValidationLayers.data();
             populate_debug_ci(dbg);
-            ci.pNext = &dbg;
+            val_features.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
+            val_features.enabledValidationFeatureCount = 1;
+            val_features.pEnabledValidationFeatures = sync_val_enable;
+            val_features.pNext = &dbg;  // chain: ci -> val_features -> dbg
+            ci.pNext = &val_features;
         }
         if (vkCreateInstance(&ci, nullptr, &plat.instance_) != VK_SUCCESS) {
             return false;
