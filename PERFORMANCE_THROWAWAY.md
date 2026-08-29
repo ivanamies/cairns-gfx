@@ -519,11 +519,31 @@ ladder:
    05137` leaks (the known teardown segfault). **Verdict: the barriers are
    correct — three_champ is NOT a missing-barrier / sync hazard.**
 
-**Narrowing so far:** flake is NOT CPU sim (sim hash), NOT CPU render-encode
-(render hash), NOT a missing barrier (sync validation). Remaining suspects:
-transient aliasing producing *logically* stale (but sync-valid) reads — now
-mitigated in golden mode — or true GPU-execution/FP nondeterminism. Next:
-per-pass GPU readback hash to localize the first bistable pass (infra:
-`ReadParticleBuffer`/pixel readback), then `[[invariant]]`/no-FMA shader build.
-NOTE: the pixel flake did not reproduce this session (thermal), so the aliasing
-fix is a verified-correct candidate, not yet a confirmed cure.
+3. **Transient aliasing REFUTED for three_champ (CAIRNS_RG_LOG measurement).**
+   three_champ's graph is 2 passes (`forward_vp0` → `swap`) with 2 transients
+   (color + depth), **both lifetime 0..1 (overlapping)** → the lifetime-aliasing
+   path (`s.last < tex_first[t]`) never fires. Measured **0 `[RG] alias` lines
+   across the ENTIRE [scenarios] suite** (all graphs are forward[+vp1]/swap,
+   occasionally a compute prepass; no scenario aliases). So the aliasing fix in
+   (1), while correct general hardening for future multi-pass graphs, **does
+   nothing for the current flake** — the plan's "top suspect" is wrong for this
+   specific case.
+
+4. **Reproduction: 0/200.** A/B'd baseline (aliasing ON) vs fix via a temp
+   `CAIRNS_FORCE_ALIAS` toggle (since reverted): **0/40 serial + 0/160 8-way
+   parallel** three_champ flakes, baseline AND fix. The flake did not reproduce
+   on this machine across the whole session (early 12-run check + these 200) —
+   thermal/timing, or incidentally masked by earlier work (the P7-MVP slab
+   zero-fill was explicitly flagged as a possible uninitialized-read mask; the
+   CPU-compaction + interning also moved every allocation). Cannot empirically
+   confirm/refute any GPU fix without reproduction.
+
+**Verdict (corrected):** three_champ is NOT CPU sim, NOT render-encode, NOT a
+missing barrier, NOT transient aliasing (it never aliases). For a 2-pass static
+forward render with all of those excluded, the live suspects are **depth-tie /
+z-fighting nondeterminism** (3 overlapping champion meshes → near-coplanar
+fragments whose winner depends on GPU-internal raster order) or pure
+shader-execution/FMA variance. Both need the flake to reproduce to pursue. Next
+when it reproduces: per-pass GPU readback hash to localize the bistable pass,
+`[[invariant]]`/`precise` + no-FMA golden shader build, and a depth-tie probe
+(nudge z / disable depth-equal).

@@ -3734,6 +3734,12 @@ public:
             // aliasing (the top suspect for the three_champ flake -- aliased
             // memory is undefined until written, so a read-before-write is
             // bistable). Behaviour-preserving (pure layout); pool auto-grows.
+            // #229 golden-mode determinism INSURANCE for future multi-pass
+            // graphs. NOTE: measured 0 aliasing across the entire golden suite
+            // today (all graphs are forward[+vp1]/swap with overlapping-lifetime
+            // transients), so this does NOT affect three_champ -- the aliasing
+            // hypothesis is refuted for the current flake. Kept as correct
+            // hardening for when transient graphs grow.
             graph_->SetDisableTransientAliasing(golden_);
         }
         graph_->Reset();
