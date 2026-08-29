@@ -32,4 +32,14 @@ pedagogical warning:
 - Javascript Engines
 - Entity Component Systems
 
+HUMAN TODO (do at the end of the renderer merge):
+- audit all rhi headers (esp. resource_manager.hpp) for `#if CAIRNS_VULKAN` fields
+  leaking backend types into the public surface: VkRenderPass render_pass +
+  Span<VkDescriptorSetLayout> set_layouts on GraphicsPipelineDesc/ComputePipelineDesc,
+  VkPipeline/VkPipelineLayout on Shader/Kernel Hot+Desc, VkDescriptorSet on BindGroup.
+  these are placeholders while render pass + descriptor-set-layouts still live in the
+  engine. once Phase 3 (bindless layout) + Phase 4 (render pass/swapchain) move those
+  into the rhi, hide them — opaque backend handle? pimpl? not sure yet. goal: zero
+  raw Vk*/MTL* in the public header.
+
 (the very next slide is the CPU database and GPU virtual machine analogy)

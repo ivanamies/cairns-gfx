@@ -226,6 +226,7 @@ enum class Format : uint16_t {
     kD24S8,
     kBc7Rgba,
     kAstc4x4,
+    kRg32F,
 };
 
 enum ShaderStage : uint32_t {
@@ -444,6 +445,75 @@ struct KernelDesc {
 #endif
 };
 
+// --- Pipeline creation -----------------------------------------------------
+// Portable description of a graphics/compute pipeline. The backend resolves
+// logical_shader to its own shader file(s) + entry point(s) (e.g. "unlit" ->
+// unlit.metal / unlit.{vert,frag}.spv). Some fields are consumed only by the
+// backend that needs them (Metal applies cull/winding/depth-compare at encode;
+// Vulkan takes color_format from the render pass). Backend-owned handles not
+// yet abstracted by the rhi (Vulkan render pass + descriptor set layouts) are
+// passed in under #if for now.
+
+enum class PrimitiveTopology : uint8_t { kTriangleList, kPointList };
+enum class CullMode : uint8_t { kNone, kBack, kFront };
+enum class FrontFace : uint8_t { kCounterClockwise, kClockwise };
+enum class CompareOp : uint8_t {
+    kNever, kLess, kEqual, kLessEqual, kGreater, kNotEqual, kGreaterEqual, kAlways,
+};
+enum class BlendFactor : uint8_t { kZero, kOne, kSrcAlpha, kOneMinusSrcAlpha };
+
+struct VertexInputAttribute {
+    uint32_t location = 0;     // vk location / metal attribute index
+    uint32_t buffer_slot = 0;  // vk binding / metal buffer index
+    Format format = Format::kRgba32F;
+    uint32_t offset = 0;
+};
+
+struct VertexBufferLayout {
+    uint32_t buffer_slot = 0;
+    uint32_t stride = 0;
+};
+
+struct BlendState {
+    bool enable = false;
+    BlendFactor src_color = BlendFactor::kOne;
+    BlendFactor dst_color = BlendFactor::kZero;
+    BlendFactor src_alpha = BlendFactor::kOne;
+    BlendFactor dst_alpha = BlendFactor::kZero;
+};
+
+struct GraphicsPipelineDesc {
+    const char* logical_shader = nullptr;  // "unlit" / "particle"
+    const char* shader_dir = nullptr;      // base dir for shader files
+    Span<const VertexInputAttribute> vertex_attributes;
+    Span<const VertexBufferLayout> vertex_buffers;
+    PrimitiveTopology topology = PrimitiveTopology::kTriangleList;
+    CullMode cull = CullMode::kNone;
+    FrontFace front_face = FrontFace::kCounterClockwise;
+    bool depth_test = true;
+    bool depth_write = true;
+    CompareOp depth_compare = CompareOp::kLess;
+    BlendState blend;
+    Format color_format = Format::kBgra8Unorm;
+    Format depth_format = Format::kD32F;
+    uint32_t sample_count = 1;
+    uint32_t push_constant_bytes = 0;
+    const char* debug_name = nullptr;
+#if CAIRNS_VULKAN
+    VkRenderPass render_pass = VK_NULL_HANDLE;
+    Span<const VkDescriptorSetLayout> set_layouts;
+#endif
+};
+
+struct ComputePipelineDesc {
+    const char* logical_shader = nullptr;  // "particle"
+    const char* shader_dir = nullptr;
+    const char* debug_name = nullptr;
+#if CAIRNS_VULKAN
+    Span<const VkDescriptorSetLayout> set_layouts;
+#endif
+};
+
 #if CAIRNS_VULKAN
 struct BackendInitParams {
     VkInstance instance = VK_NULL_HANDLE;
@@ -485,6 +555,8 @@ public:
     Handle<DynamicBuffers> CreateDynamicBuffers(const DynamicBuffersDesc& desc);
     Handle<Shader> CreateShader(const ShaderDesc& desc);
     Handle<Kernel> CreateKernel(const KernelDesc& desc);
+    Handle<Shader> CreateGraphicsPipeline(const GraphicsPipelineDesc& desc);
+    Handle<Kernel> CreateComputePipeline(const ComputePipelineDesc& desc);
 
     void Destroy(Handle<Buffer> h);
     void Destroy(Handle<Texture> h);
