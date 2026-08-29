@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <utility>
 
@@ -21,6 +22,9 @@
 struct ImDrawData;
 
 namespace cairns::rhi {
+
+inline constexpr uint32_t kMaxPasses = 16;
+
 
 class Resources;
 class Allocator;
@@ -95,6 +99,8 @@ public:
     void DrawImGui(Resources& res, Allocator& alloc, Handle<Shader> pipeline,
                    Handle<Texture> font, Handle<Sampler> sampler,
                    const ImDrawData* draw_data);
+    void PassTimerBegin(const char* name);
+    void PassTimerEnd();
     void EndRenderPass();
 
     // Per-frame recording state, populated by Frames::Begin.
@@ -108,11 +114,23 @@ public:
     VkDescriptorSet drawtmp_set_ = VK_NULL_HANDLE;
     VkDescriptorSet compute_set_ = VK_NULL_HANDLE;
     VkDescriptorSet point_set_ = VK_NULL_HANDLE;
+    // Per-pass timing (populated by Frames::Begin; written by PassTimerBegin).
+    VkQueryPool ts_pool_ = VK_NULL_HANDLE;
+    std::array<const char*, kMaxPasses>* pass_names_ = nullptr;
+    uint32_t* pass_count_ = nullptr;
+    VkCommandBuffer pass_cb_ = VK_NULL_HANDLE;
+    uint32_t pending_pass_idx_ = UINT32_MAX;
+    const char* pending_name_ = nullptr;
+    int pending_slot_ = -1;
 #elif CAIRNS_METAL
     MTL::CommandBuffer* cmd_ = nullptr;
     MTL::RenderCommandEncoder* enc_ = nullptr;
     MTL::RenderPassDescriptor* render_pass_desc_ = nullptr;
     MTL::DepthStencilState* depth_stencil_ = nullptr;
+    // Per-pass timing (populated by Frames::Begin; lazy-acquired cmd buffer).
+    MTL::CommandQueue* queue_ = nullptr;
+    const char* pending_name_ = nullptr;
+    int pending_slot_ = -1;
 #endif
 };
 
