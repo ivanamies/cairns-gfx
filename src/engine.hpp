@@ -585,6 +585,14 @@ public:
 
         render_thread_->Submit(slot, &s.pkt);
 
+        // Under CAIRNS_DUMP, collapse to depth-1 pipelining: wait for the
+        // render thread to fully complete this frame before the next iteration
+        // queues another. Keeps frame 5's dump output byte-identical regardless
+        // of threading (Drain forces same parity sequence as single-threaded).
+        if (std::getenv("CAIRNS_DUMP")) {
+            render_thread_->Drain();
+        }
+
         particle_parity_ ^= 1;
         t_frame.End();
         if (frame_ % 120 == 0) {
