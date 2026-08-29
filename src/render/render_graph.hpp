@@ -139,28 +139,50 @@ private:
         float clear_depth = 1.0f;
     };
 
+    // Fixed-cap stacks on every PassRecord so AddPass/Bake never
+    // allocate per-frame. Caps sized for the swap pass at kNumViewports
+    // = 8 (today's = 4 + 2x headroom): reads/attachment_inputs = 2*N.
+    // Overflow is push_or_die (printed diagnostic + abort), matching
+    // baked_color and render_extract's DFS scratch stack.
+    static constexpr uint32_t kMaxPassReads = 16;
+    static constexpr uint32_t kMaxPassWrites = 8;
+    static constexpr uint32_t kMaxPassBufReads = 4;
+    static constexpr uint32_t kMaxPassBufWrites = 4;
+    static constexpr uint32_t kMaxPassAttachmentInputs = 16;
+    static constexpr uint32_t kMaxPassBakedInputs = 16;
+    static_assert(kMaxPassAttachmentInputs == kMaxPassBakedInputs,
+                  "baked_inputs cap must match attachment_inputs so Bake "
+                  "can copy without a second push_or_die");
+
     struct PassRecord {
         std::string_view name;  // #214 callers pass string literals
         PassType type = PassType::kGraphics;
         SetupFn setup;
         ExecuteFn execute;
-        std::vector<uint16_t> reads;
-        std::vector<uint16_t> writes;
-        std::vector<uint16_t> buf_reads;
-        std::vector<uint16_t> buf_writes;
-        std::vector<uint16_t> attachment_inputs;
-        std::vector<ColorOutput> color_outputs;
+        std::array<uint16_t, kMaxPassReads> reads{};
+        uint8_t reads_count = 0;
+        std::array<uint16_t, kMaxPassWrites> writes{};
+        uint8_t writes_count = 0;
+        std::array<uint16_t, kMaxPassBufReads> buf_reads{};
+        uint8_t buf_reads_count = 0;
+        std::array<uint16_t, kMaxPassBufWrites> buf_writes{};
+        uint8_t buf_writes_count = 0;
+        std::array<uint16_t, kMaxPassAttachmentInputs> attachment_inputs{};
+        uint8_t attachment_inputs_count = 0;
+        std::array<ColorOutput, GraphicsPipelineDesc::kMaxColorFormats>
+            color_outputs{};
+        uint8_t color_outputs_count = 0;
         bool has_depth = false;
         DepthOutput depth_output;
         // Bounded by GraphicsPipelineDesc::kMaxColorFormats (=4, #206 MRT).
         // Fixed cap on the stack -> no per-frame std::vector reallocation
-        // (was ~77 KB / 1849 grows in the 3300-hero trace). Overflow is a
-        // hard abort with a printed diagnostic, matching the push_or_die
-        // pattern used in render_extract's DFS scratch stack.
-        std::array<ColorAttachment, GraphicsPipelineDesc::kMaxColorFormats> baked_color{};
+        // (was ~77 KB / 1849 grows in the 3300-hero trace).
+        std::array<ColorAttachment, GraphicsPipelineDesc::kMaxColorFormats>
+            baked_color{};
         uint8_t baked_color_count = 0;
         DepthAttachment baked_depth;
-        std::vector<Handle<Texture>> baked_inputs;
+        std::array<Handle<Texture>, kMaxPassBakedInputs> baked_inputs{};
+        uint8_t baked_inputs_count = 0;
     };
 
     struct PooledTex {

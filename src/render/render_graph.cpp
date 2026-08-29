@@ -79,39 +79,76 @@ GraphBuffer PassBuilder::ImportBuffer(Handle<Buffer> handle,
     return graph_->AddBuffer(rec);
 }
 
+namespace {
+
+[[noreturn]] void PassCapAbort(std::string_view pass_name, const char* field,
+                               uint32_t cap) {
+    fprintf(stderr,
+            "RenderGraph: pass '%.*s' exceeded %s cap (%u) -- raise the "
+            "cap or split the pass.\n",
+            static_cast<int>(pass_name.size()), pass_name.data(), field, cap);
+    std::abort();
+}
+
+}  // namespace
+
+#define PUSH_OR_DIE(pass, arr, cnt, cap, field, val) \
+    do {                                              \
+        if ((pass).cnt >= (cap)) {                    \
+            PassCapAbort((pass).name, (field), (cap)); \
+        }                                             \
+        (pass).arr[(pass).cnt++] = (val);             \
+    } while (0)
+
 void PassBuilder::Read(GraphTexture t) {
-    graph_->passes_[pass_].reads.push_back(t.id);
+    auto& p = graph_->passes_[pass_];
+    PUSH_OR_DIE(p, reads, reads_count, RenderGraph::kMaxPassReads, "reads",
+                t.id);
 }
 
 void PassBuilder::Write(GraphTexture t) {
-    graph_->passes_[pass_].writes.push_back(t.id);
+    auto& p = graph_->passes_[pass_];
+    PUSH_OR_DIE(p, writes, writes_count, RenderGraph::kMaxPassWrites,
+                "writes", t.id);
 }
 
 void PassBuilder::ReadWrite(GraphTexture t) {
-    graph_->passes_[pass_].reads.push_back(t.id);
-    graph_->passes_[pass_].writes.push_back(t.id);
+    auto& p = graph_->passes_[pass_];
+    PUSH_OR_DIE(p, reads, reads_count, RenderGraph::kMaxPassReads, "reads",
+                t.id);
+    PUSH_OR_DIE(p, writes, writes_count, RenderGraph::kMaxPassWrites,
+                "writes", t.id);
 }
 
 void PassBuilder::ReadBuffer(GraphBuffer b) {
-    graph_->passes_[pass_].buf_reads.push_back(b.id);
+    auto& p = graph_->passes_[pass_];
+    PUSH_OR_DIE(p, buf_reads, buf_reads_count, RenderGraph::kMaxPassBufReads,
+                "buf_reads", b.id);
 }
 
 void PassBuilder::WriteBuffer(GraphBuffer b) {
-    graph_->passes_[pass_].buf_writes.push_back(b.id);
+    auto& p = graph_->passes_[pass_];
+    PUSH_OR_DIE(p, buf_writes, buf_writes_count,
+                RenderGraph::kMaxPassBufWrites, "buf_writes", b.id);
 }
 
 void PassBuilder::AddColorOutput(const char* name, GraphTexture t, LoadOp load,
                                  const float clear[4]) {
     (void)name;
-    RenderGraph::ColorOutput out;
+    auto& p = graph_->passes_[pass_];
+    if (p.color_outputs_count >= GraphicsPipelineDesc::kMaxColorFormats) {
+        PassCapAbort(p.name, "color_outputs",
+                     GraphicsPipelineDesc::kMaxColorFormats);
+    }
+    RenderGraph::ColorOutput& out = p.color_outputs[p.color_outputs_count++];
     out.tex = t.id;
     out.load = load;
     out.clear[0] = clear[0];
     out.clear[1] = clear[1];
     out.clear[2] = clear[2];
     out.clear[3] = clear[3];
-    graph_->passes_[pass_].color_outputs.push_back(out);
-    graph_->passes_[pass_].writes.push_back(t.id);
+    PUSH_OR_DIE(p, writes, writes_count, RenderGraph::kMaxPassWrites,
+                "writes", t.id);
 }
 
 void PassBuilder::AddDepthOutput(const char* name, GraphTexture t, LoadOp load,
@@ -122,12 +159,17 @@ void PassBuilder::AddDepthOutput(const char* name, GraphTexture t, LoadOp load,
     p.depth_output.tex = t.id;
     p.depth_output.load = load;
     p.depth_output.clear_depth = clear_depth;
-    p.writes.push_back(t.id);
+    PUSH_OR_DIE(p, writes, writes_count, RenderGraph::kMaxPassWrites,
+                "writes", t.id);
 }
 
 void PassBuilder::AddAttachmentInput(GraphTexture t) {
-    graph_->passes_[pass_].attachment_inputs.push_back(t.id);
-    graph_->passes_[pass_].reads.push_back(t.id);
+    auto& p = graph_->passes_[pass_];
+    PUSH_OR_DIE(p, attachment_inputs, attachment_inputs_count,
+                RenderGraph::kMaxPassAttachmentInputs, "attachment_inputs",
+                t.id);
+    PUSH_OR_DIE(p, reads, reads_count, RenderGraph::kMaxPassReads, "reads",
+                t.id);
 }
 
 RenderGraph::RenderGraph(Resources& resources, Allocator& alloc)
@@ -250,8 +292,10 @@ bool RenderGraph::Bake(uint32_t slot) {
     for (size_t i = 0; i < n_tex; ++i) tex_w_cnt[i] = 0;
     for (size_t i = 0; i < n_buf; ++i) buf_w_cnt[i] = 0;
     for (uint32_t p = 0; p < n_pass; ++p) {
-        for (uint16_t w : passes_[p].writes) ++tex_w_cnt[w];
-        for (uint16_t w : passes_[p].buf_writes) ++buf_w_cnt[w];
+        const PassRecord& pr = passes_[p];
+        for (uint8_t i = 0; i < pr.writes_count; ++i) ++tex_w_cnt[pr.writes[i]];
+        for (uint8_t i = 0; i < pr.buf_writes_count; ++i)
+            ++buf_w_cnt[pr.buf_writes[i]];
     }
     uint32_t tex_total = 0;
     for (size_t i = 0; i < n_tex; ++i) { tex_w_off[i] = tex_total; tex_total += tex_w_cnt[i]; }
@@ -264,10 +308,13 @@ bool RenderGraph::Bake(uint32_t slot) {
     for (size_t i = 0; i < n_tex; ++i) tex_head[i] = 0;
     for (size_t i = 0; i < n_buf; ++i) buf_head[i] = 0;
     for (uint32_t p = 0; p < n_pass; ++p) {
-        for (uint16_t w : passes_[p].writes) {
+        const PassRecord& pr = passes_[p];
+        for (uint8_t i = 0; i < pr.writes_count; ++i) {
+            const uint16_t w = pr.writes[i];
             tex_w_data[tex_w_off[w] + tex_head[w]++] = p;
         }
-        for (uint16_t w : passes_[p].buf_writes) {
+        for (uint8_t i = 0; i < pr.buf_writes_count; ++i) {
+            const uint16_t w = pr.buf_writes[i];
             buf_w_data[buf_w_off[w] + buf_head[w]++] = p;
         }
     }
@@ -293,11 +340,13 @@ bool RenderGraph::Bake(uint32_t slot) {
         for (uint32_t p : tex_writers_span(output_.id)) mark(p);
     }
     for (uint32_t p = 0; p < n_pass; ++p) {
-        for (uint16_t w : passes_[p].writes) {
-            if (textures_[w].kind == ResKind::kImported) mark(p);
+        const PassRecord& pr = passes_[p];
+        for (uint8_t i = 0; i < pr.writes_count; ++i) {
+            if (textures_[pr.writes[i]].kind == ResKind::kImported) mark(p);
         }
-        for (uint16_t w : passes_[p].buf_writes) {
-            if (buffers_[w].kind == ResKind::kImported) mark(p);
+        for (uint8_t i = 0; i < pr.buf_writes_count; ++i) {
+            if (buffers_[pr.buf_writes[i]].kind == ResKind::kImported)
+                mark(p);
         }
     }
     if (output_.IsNull()) {
@@ -305,11 +354,14 @@ bool RenderGraph::Bake(uint32_t slot) {
     }
     while (work_top > 0) {
         const uint32_t p = work_buf[--work_top];
-        for (uint16_t r : passes_[p].reads) {
-            for (uint32_t producer : tex_writers_span(r)) mark(producer);
+        const PassRecord& pr = passes_[p];
+        for (uint8_t i = 0; i < pr.reads_count; ++i) {
+            for (uint32_t producer : tex_writers_span(pr.reads[i]))
+                mark(producer);
         }
-        for (uint16_t r : passes_[p].buf_reads) {
-            for (uint32_t producer : buf_writers_span(r)) mark(producer);
+        for (uint8_t i = 0; i < pr.buf_reads_count; ++i) {
+            for (uint32_t producer : buf_writers_span(pr.buf_reads[i]))
+                mark(producer);
         }
     }
 
@@ -320,15 +372,16 @@ bool RenderGraph::Bake(uint32_t slot) {
     // Pass 1: count edges per source.
     for (uint32_t q = 0; q < n_pass; ++q) {
         if (!alive[q]) continue;
-        for (uint16_t r : passes_[q].reads) {
-            for (uint32_t p : tex_writers_span(r)) {
+        const PassRecord& pr = passes_[q];
+        for (uint8_t i = 0; i < pr.reads_count; ++i) {
+            for (uint32_t p : tex_writers_span(pr.reads[i])) {
                 if (p == q || !alive[p]) continue;
                 ++edge_cnt[p];
                 ++indeg[q];
             }
         }
-        for (uint16_t r : passes_[q].buf_reads) {
-            for (uint32_t p : buf_writers_span(r)) {
+        for (uint8_t i = 0; i < pr.buf_reads_count; ++i) {
+            for (uint32_t p : buf_writers_span(pr.buf_reads[i])) {
                 if (p == q || !alive[p]) continue;
                 ++edge_cnt[p];
                 ++indeg[q];
@@ -345,15 +398,16 @@ bool RenderGraph::Bake(uint32_t slot) {
     for (uint32_t i = 0; i < n_pass; ++i) indeg[i] = 0;
     for (uint32_t q = 0; q < n_pass; ++q) {
         if (!alive[q]) continue;
-        for (uint16_t r : passes_[q].reads) {
-            for (uint32_t p : tex_writers_span(r)) {
+        const PassRecord& pr = passes_[q];
+        for (uint8_t i = 0; i < pr.reads_count; ++i) {
+            for (uint32_t p : tex_writers_span(pr.reads[i])) {
                 if (p == q || !alive[p]) continue;
                 edge_data[edge_off[p] + edge_head[p]++] = q;
                 ++indeg[q];
             }
         }
-        for (uint16_t r : passes_[q].buf_reads) {
-            for (uint32_t p : buf_writers_span(r)) {
+        for (uint8_t i = 0; i < pr.buf_reads_count; ++i) {
+            for (uint32_t p : buf_writers_span(pr.buf_reads[i])) {
                 if (p == q || !alive[p]) continue;
                 edge_data[edge_off[p] + edge_head[p]++] = q;
                 ++indeg[q];
@@ -385,11 +439,13 @@ bool RenderGraph::Bake(uint32_t slot) {
     for (uint32_t idx = 0; idx < topo_order_.size(); ++idx) {
         const PassRecord& pass = passes_[topo_order_[idx]];
         const int pos = static_cast<int>(idx);
-        for (uint16_t r : pass.reads) {
+        for (uint8_t i = 0; i < pass.reads_count; ++i) {
+            const uint16_t r = pass.reads[i];
             tex_first[r] = std::min(tex_first[r], pos);
             tex_last[r] = std::max(tex_last[r], pos);
         }
-        for (uint16_t w : pass.writes) {
+        for (uint8_t i = 0; i < pass.writes_count; ++i) {
+            const uint16_t w = pass.writes[i];
             tex_first[w] = std::min(tex_first[w], pos);
             tex_last[w] = std::max(tex_last[w], pos);
         }
@@ -456,19 +512,12 @@ bool RenderGraph::Bake(uint32_t slot) {
     for (uint32_t p : topo_order_) {
         PassRecord& pass = passes_[p];
         pass.baked_color_count = 0;
-        pass.baked_inputs.clear();
-        for (const ColorOutput& co : pass.color_outputs) {
-            if (pass.baked_color_count >=
-                GraphicsPipelineDesc::kMaxColorFormats) {
-                fprintf(stderr,
-                        "RenderGraph::Bake: pass '%.*s' has more color "
-                        "outputs (%zu) than kMaxColorFormats (%u) -- raise "
-                        "the cap or split the pass.\n",
-                        static_cast<int>(pass.name.size()), pass.name.data(),
-                        pass.color_outputs.size(),
-                        GraphicsPipelineDesc::kMaxColorFormats);
-                std::abort();
-            }
+        pass.baked_inputs_count = 0;
+        for (uint8_t i = 0; i < pass.color_outputs_count; ++i) {
+            const ColorOutput& co = pass.color_outputs[i];
+            // PassRecord::color_outputs is already capped at
+            // kMaxColorFormats in AddColorOutput; baked_color shares the
+            // same cap so we can drop the secondary check here.
             ColorAttachment& ca = pass.baked_color[pass.baked_color_count++];
             ca.target = resolved_tex_[co.tex];
             ca.clear[0] = co.clear[0];
@@ -483,8 +532,12 @@ bool RenderGraph::Bake(uint32_t slot) {
             pass.baked_depth.clear_depth = pass.depth_output.clear_depth;
             pass.baked_depth.load = pass.depth_output.load;
         }
-        for (uint16_t in : pass.attachment_inputs) {
-            pass.baked_inputs.push_back(resolved_tex_[in]);
+        for (uint8_t i = 0; i < pass.attachment_inputs_count; ++i) {
+            // attachment_inputs cap == baked_inputs cap, so no need for a
+            // second push_or_die here -- the AddAttachmentInput cap is the
+            // gate. Asserted via static_assert in the header.
+            pass.baked_inputs[pass.baked_inputs_count++] =
+                resolved_tex_[pass.attachment_inputs[i]];
         }
     }
 
@@ -527,7 +580,7 @@ bool RenderGraph::Execute(FrameContext& fc, const SwapResolveTarget& target) {
         rp.width = target.width;
         rp.height = target.height;
         rp.input_textures = std::span<const Handle<Texture>>(
-            pass.baked_inputs.data(), pass.baked_inputs.size());
+            pass.baked_inputs.data(), pass.baked_inputs_count);
         fc.cmd.PassTimerBegin(pass.name.data());
         fc.cmd.BeginRenderPass(resources_, target, rp);
         if (pass.execute) {
