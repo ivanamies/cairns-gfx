@@ -209,6 +209,10 @@ uint32_t ClearActiveScene(Engine* engine) {
     return engine ? engine->ClearActiveScene() : 0;
 }
 
+uint64_t NextSceneId(Engine* engine) {
+    return engine ? engine->NextSceneId() : 0;
+}
+
 uint32_t UnloadAllPrefabs(Engine* engine) {
     return engine ? engine->UnloadAllPrefabs() : 0;
 }

@@ -11,18 +11,10 @@
 
 namespace cairns::control {
 
-namespace {
-
-// Synthetic id counters. These IDs are visible to the agent + script.eval
-// flow today, but the rendering side doesn't yet honor them -- the canonical
-// demo's scene composition lights up once the resizing-and-cameras plan
-// lands and Engine grows the per-viewport extract / final_target_-routed
-// swap pass. Until then the ops are surface-stable stubs.
-std::atomic<uint64_t> g_scene_counter{0};
-std::atomic<uint64_t> g_asset_counter{0};
-std::atomic<uint64_t> g_entity_counter{0};
-
-}  // namespace
+// #229 M0b: the synthetic-id counters were process-global `std::atomic<uint64_t>`
+// (g_scene/asset/entity_counter) -> two Engine instances shared them, breaking
+// run-to-run determinism (and the no-statics rule). asset/entity were unused
+// (deleted); scene_counter is now Engine::NextSceneId() (per-instance).
 
 void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     // ──────────────────────────────────────────────────────────────────
@@ -38,8 +30,8 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         "Allocate a new Scene (Unity Scene == cairns container of "
         "GameObjects). Returns {scene: synthetic id}. Stub until the "
         "scene-per-viewport extract path lands.",
-        [](const json&) -> json {
-            return {{"scene", g_scene_counter.fetch_add(1)}};
+        [&engine](const json&) -> json {
+            return {{"scene", cairns::headless::NextSceneId(&engine)}};
         });
 
     registry.Register(

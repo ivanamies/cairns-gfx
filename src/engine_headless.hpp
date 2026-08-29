@@ -102,6 +102,8 @@ std::vector<uint32_t> ListActiveSceneEntities(Engine* engine);
 bool SetEntityTransform(Engine* engine, uint32_t entity_int,
                          float x, float y, float z, float scale);
 uint32_t ClearActiveScene(Engine* engine);
+// #229 M0b: per-Engine synthetic scene id (was the g_scene_counter global).
+uint64_t NextSceneId(Engine* engine);
 
 // #228 F2: drop every resident prefab + DeferFree their GPU resources
 // through the F1 ring. Calls ClearActiveScene internally so the post-

@@ -1688,6 +1688,10 @@ public:
         return true;
     }
 
+    // #229 M0b: per-Engine synthetic scene id (was the g_scene_counter process
+    // global -- no statics; deterministic per instance for the run-to-run hash).
+    uint64_t NextSceneId() { return next_scene_id_++; }
+
     // #194 runtime viewport management. #220 Step 4: handle-pilled +
     // vpN wire-name layer.
     int ActiveViewportCount() const { return active_viewport_count_; }
@@ -5669,6 +5673,7 @@ private:
     std::array<ViewportName, kNumViewports> viewport_names_{};
     uint8_t viewport_names_count_ = 0;
     uint32_t next_viewport_name_ = 0;
+    uint64_t next_scene_id_ = 0;  // #229 M0b: was g_scene_counter (no statics).
 
     // #210 per-slot CPU arena capacity. #221 Phase 3 raise to 16 MiB to
     // cover the per-frame palette/InstanceMeta/SkinMeshBatch arrays the
