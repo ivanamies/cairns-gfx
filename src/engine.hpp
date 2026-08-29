@@ -127,7 +127,10 @@ public:
     using SamplerHandle = rhi::Handle<rhi::Sampler>;
     using BindGroupId = uint32_t;
 
-    static constexpr uint32_t kFramesInFlight = 2;
+    // #222 Phase T.1: kFramesInFlight has one home -- cairns::rhi::kFramesInFlight
+    // in rhi/resource_manager.hpp. This re-export keeps existing
+    // Engine::kFramesInFlight call sites compiling.
+    static constexpr uint32_t kFramesInFlight = cairns::rhi::kFramesInFlight;
 
     // #222 Phase 0.2: caps for the GPU anim_eval kernel + its persistent
     // buffers. KEEP IN SYNC with assets/anim_eval.comp.glsl (records[1024],

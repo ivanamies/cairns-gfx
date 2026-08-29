@@ -25,13 +25,16 @@
 #include <functional>
 #include <memory>
 
+#include "rhi/resource_manager.hpp"  // cairns::rhi::kFramesInFlight
+
 namespace cairns {
 
 struct FramePacket;
 
 class RenderThread {
 public:
-    static constexpr uint32_t kFramesInFlight = 2;
+    // #222 Phase T.1: re-export of cairns::rhi::kFramesInFlight.
+    static constexpr uint32_t kFramesInFlight = cairns::rhi::kFramesInFlight;
 
     // record_fn is called by the worker thread for each published packet.
     explicit RenderThread(std::function<void(FramePacket&)> record_fn);
