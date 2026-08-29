@@ -106,10 +106,9 @@ class Timer {
   uint64_t start_time_;
 };
 
-// todo @iamies move this out
-std::array<uint64_t, Timer::kMaxSlots> Timer::accum_times_ = {};
-std::array<uint64_t, Timer::kMaxSlots> Timer::accum_itrs_ = {};
-std::array<const char*, Timer::kMaxSlots> Timer::slot_names_ = {};
+inline std::array<uint64_t, Timer::kMaxSlots> Timer::accum_times_ = {};
+inline std::array<uint64_t, Timer::kMaxSlots> Timer::accum_itrs_ = {};
+inline std::array<const char*, Timer::kMaxSlots> Timer::slot_names_ = {};
 
 class TimerStorage {
  public:
@@ -147,8 +146,8 @@ class TimerStorage {
   static uint32_t count_;
 };
 
-std::mutex TimerStorage::mu_;
-std::array<const char*, Timer::kMaxSlots> TimerStorage::names_ = {};
-uint32_t TimerStorage::count_ = 0;
+inline std::mutex TimerStorage::mu_;
+inline std::array<const char*, Timer::kMaxSlots> TimerStorage::names_ = {};
+inline uint32_t TimerStorage::count_ = 0;
 
 } // namespace cairns

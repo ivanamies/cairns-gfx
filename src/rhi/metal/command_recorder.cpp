@@ -18,12 +18,16 @@
 #include "rhi/swap_chain.hpp"
 #include "gpu_scene_registry.hpp"
 #include "util/draw.hpp"
+#include "util/timer.hpp"
 
 #include "imgui.h"
 
 namespace cairns::rhi {
 
 void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDispatch& d) {
+    if (cmd_ == nullptr) {
+        cmd_ = queue_->commandBuffer();
+    }
     MTL::ComputeCommandEncoder* cenc = cmd_->computeCommandEncoder();
     cenc->setComputePipelineState(res.GetHot(d.kernel)->api_pso);
     for (size_t i = 0; i < d.buffers.size(); ++i) {
@@ -38,6 +42,9 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
 }
 
 void CommandRecorder::BeginRenderPass(SwapChain&, const RenderPassDesc& desc) {
+    if (cmd_ == nullptr) {
+        cmd_ = queue_->commandBuffer();
+    }
     if (!desc.color.empty()) {
         const float* c = desc.color[0].clear;
         render_pass_desc_->colorAttachments()->object(0)->setClearColor(
@@ -207,6 +214,31 @@ void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader>
 
 void CommandRecorder::EndRenderPass() {
     enc_->endEncoding();
+}
+
+void CommandRecorder::PassTimerBegin(const char* name) {
+    pending_name_ = name;
+    pending_slot_ = TimerStorage::SlotForPass(name);
+}
+
+void CommandRecorder::PassTimerEnd() {
+    if (cmd_ == nullptr) {
+        pending_name_ = nullptr;
+        pending_slot_ = -1;
+        return;
+    }
+    MTL::CommandBuffer* cb = cmd_;
+    const char* name = pending_name_;
+    const int slot = pending_slot_;
+    cb->addCompletedHandler([slot, name](MTL::CommandBuffer* b) {
+        const uint64_t us =
+            static_cast<uint64_t>((b->GPUEndTime() - b->GPUStartTime()) * 1e6);
+        TimerStorage::Span(slot, name, us);
+    });
+    cb->commit();
+    cmd_ = nullptr;
+    pending_name_ = nullptr;
+    pending_slot_ = -1;
 }
 
 }  // namespace cairns::rhi

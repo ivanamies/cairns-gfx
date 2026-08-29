@@ -119,23 +119,29 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
     MTL::Texture* depth = resources.GetHot(depth_handle_)->api_view;
     UpdateRenderPassDescriptor(render_pass_desc_, msaa, depth, sc);
 
-    MTL::CommandBuffer* cmd = queue_->commandBuffer();
-    dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(frame_semaphore_);
-    cmd->addCompletedHandler([sem](MTL::CommandBuffer*) { dispatch_semaphore_signal(sem); });
-
     FrameContext fc;
     fc.frame_index = 0;
     fc.swapchain_image_index = 0;
-    fc.cmd.cmd_ = cmd;
+    fc.cmd.cmd_ = nullptr;
+    fc.cmd.queue_ = queue_;
     fc.cmd.enc_ = nullptr;
     fc.cmd.render_pass_desc_ = render_pass_desc_;
     fc.cmd.depth_stencil_ = depth_stencil_;
+    fc.cmd.pending_name_ = nullptr;
+    fc.cmd.pending_slot_ = -1;
     return fc;
 }
 
 void Frames::End(SwapChain& sc, FrameContext& fc) {
     CommandRecorder& ri = fc.cmd;
-    MTL::CommandBuffer* cmd = ri.cmd_;
+    if (ri.cmd_ != nullptr) {
+        // Encoded work without a PassTimerEnd -- commit the orphan so the GPU
+        // sees it before the terminal buffer presents.
+        ri.cmd_->commit();
+        ri.cmd_ = nullptr;
+    }
+
+    MTL::CommandBuffer* term = queue_->commandBuffer();
 
     if (!dump_path_.empty()) {
         MTL::Texture* drawableTex = sc.GetDrawable()->texture();
@@ -144,13 +150,15 @@ void Frames::End(SwapChain& sc, FrameContext& fc) {
         const NS::UInteger bytesPerRow = w * 4;
         const NS::UInteger bufSize = bytesPerRow * h;
         MTL::Buffer* readback = device_->newBuffer(bufSize, MTL::ResourceStorageModeShared);
-        MTL::BlitCommandEncoder* blitEnc = cmd->blitCommandEncoder();
+        MTL::BlitCommandEncoder* blitEnc = term->blitCommandEncoder();
         blitEnc->copyFromTexture(drawableTex, 0, 0, MTL::Origin{0, 0, 0}, MTL::Size{w, h, 1},
                                  readback, 0, bytesPerRow, 0);
         blitEnc->endEncoding();
-        cmd->presentDrawable(sc.GetDrawable());
-        cmd->commit();
-        cmd->waitUntilCompleted();
+        term->presentDrawable(sc.GetDrawable());
+        dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(frame_semaphore_);
+        term->addCompletedHandler([sem](MTL::CommandBuffer*) { dispatch_semaphore_signal(sem); });
+        term->commit();
+        term->waitUntilCompleted();
         std::vector<uint8_t> rgba(bufSize);
         const uint8_t* bgra = static_cast<const uint8_t*>(readback->contents());
         for (NS::UInteger i = 0; i < w * h; ++i) {
@@ -164,8 +172,10 @@ void Frames::End(SwapChain& sc, FrameContext& fc) {
         readback->release();
         dump_path_.clear();
     } else {
-        cmd->presentDrawable(sc.GetDrawable());
-        cmd->commit();
+        term->presentDrawable(sc.GetDrawable());
+        dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(frame_semaphore_);
+        term->addCompletedHandler([sem](MTL::CommandBuffer*) { dispatch_semaphore_signal(sem); });
+        term->commit();
     }
 }
 
