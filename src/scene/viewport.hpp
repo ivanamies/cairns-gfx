@@ -32,35 +32,47 @@ struct Camera {
     float far_z = 100.0f;
 };
 
-struct Viewport {
-    WorldId world;
-    Camera camera;
-    rhi::Handle<rhi::Texture> target;
-    rhi::Handle<rhi::Texture> depth_target;
-    uint32_t target_w = 0;
-    uint32_t target_h = 0;
-    bool camera_dirty = true;
-    // Camera role #2: when non-null, the viewport's Camera is resolved
-    // from this entity's WorldTransform + CameraComponent each frame.
-    // entt::null means "use FlyController" (Camera role #1). Resolution
-    // happens once per frame in BuildMeshOpaqueDraws.
-    entt::entity camera_entity = entt::null;
-    // #194: where this viewport tiles on the swap pane, in NDC (0..1).
-    // (x, y) = bottom-left corner; (z, w) = size. {0,0,1,1} = full pane.
-    // Default for viewport 0 = full pane; other viewports = zero-size so
-    // they're inert until the agent calls cairns.viewport.setLayout.
-    glm::vec4 layout_rect{0.0f, 0.0f, 0.0f, 0.0f};
-};
-
 // Per-viewport navigation state. yaw rotates around world up (Y); pitch around
 // the camera's local right (X). The resolved view matrix on Viewport::camera
-// is the durable thing -- this struct is just the input to that resolve. Kept
-// in a parallel array on Engine so growing/replacing the camera implementation
-// doesn't reshape Viewport.
+// is the durable thing -- this struct is just the input to that resolve.
+// #220 Step 4: lives in Viewport::Cold (folded in from the old parallel
+// Engine::fly_ array; generational pool removed the reason that was
+// parallel).
 struct FlyController {
     glm::vec3 position{0.0f, 0.0f, 0.0f};
     float yaw = 0.0f;    // radians
     float pitch = 0.0f;  // radians
 };
+
+// #220 Step 4: Viewport is now Handle-pilled (ViewportId = Handle<Viewport>),
+// owned by Engine::viewports_ ResourceManager. Hot/Cold split per the plan:
+// Hot = per-draw read in RecordFrame; Cold = camera-entity binding + fly
+// controller, both read once per frame.
+struct Viewport {
+    struct Hot {
+        WorldId world;
+        Camera camera;
+        rhi::Handle<rhi::Texture> target;
+        rhi::Handle<rhi::Texture> depth_target;
+        uint32_t target_w = 0;
+        uint32_t target_h = 0;
+        // #194: where this viewport tiles on the swap pane, in NDC (0..1).
+        // (x, y) = bottom-left corner; (z, w) = size. {0,0,1,1} = full pane.
+        // Default for viewport 0 = full pane; other viewports = zero-size so
+        // they're inert until the agent calls cairns.viewport.setLayout.
+        glm::vec4 layout_rect{0.0f, 0.0f, 0.0f, 0.0f};
+        bool camera_dirty = true;
+    };
+    struct Cold {
+        // Camera role #2: when non-null, the viewport's Camera is resolved
+        // from this entity's WorldTransform + CameraComponent each frame.
+        // entt::null means "use FlyController" (Camera role #1). Resolution
+        // happens once per frame in BuildMeshOpaqueDraws.
+        entt::entity camera_entity = entt::null;
+        FlyController fly;
+    };
+};
+
+using ViewportId = Handle<Viewport>;
 
 }  // namespace cairns

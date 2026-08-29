@@ -1,6 +1,7 @@
 #include "control/handlers/scene_ops.hpp"
 
 #include <atomic>
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 
@@ -83,21 +84,24 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         "cairns.viewport.open",
         /*schema=*/json::object(),
         /*doc=*/"Open a new viewport on the swap pane (#194). Caps at the "
-                "engine's kNumViewports. Returns {viewport: <int idx>} on "
-                "success or {error:'capped'} when full. Default layout "
-                "tiles uniformly across the swap pane; override via "
+                "engine's kNumViewports. Returns {viewport: 'vpN'} on "
+                "success (engine-assigned monotonic name; never reused) "
+                "or {error:'capped'} when full. Default layout tiles "
+                "uniformly across the swap pane; override via "
                 "cairns.viewport.setLayout.",
         [engine = &engine](const json& args) -> json {
-            const int idx = cairns::headless::OpenViewport(engine);
+            const int counter = cairns::headless::OpenViewport(engine);
             const uint32_t w = args.value("w", cairns::headless::GetFinalTargetWidth(engine));
             const uint32_t h = args.value("h", cairns::headless::GetFinalTargetHeight(engine));
-            if (idx < 0) {
+            if (counter < 0) {
                 return {{"error", "capped"},
-                        {"viewport", -1},
+                        {"viewport", nullptr},
                         {"w", w},
                         {"h", h}};
             }
-            return {{"viewport", idx},
+            char name[16];
+            std::snprintf(name, sizeof(name), "vp%d", counter);
+            return {{"viewport", std::string(name)},
                     {"w", w},
                     {"h", h},
                     {"active_count", cairns::headless::ActiveViewportCount(engine)}};
@@ -118,16 +122,37 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         "cairns.viewport.setLayout",
         /*schema=*/json::object(),
         /*doc=*/"Set a viewport's NDC tile on the swap pane. args = "
-                "{viewport, x, y, w, h} in [0..1]. Default for a freshly-"
-                "opened viewport is a uniform horizontal tile.",
+                "{viewport: 'vpN', x, y, w, h} in [0..1]. The viewport "
+                "field is the engine-assigned monotonic name returned "
+                "from cairns.viewport.open. Default for a freshly-opened "
+                "viewport is a uniform horizontal tile.",
         [engine = &engine](const json& args) -> json {
-            const int vp = static_cast<int>(args.value("viewport", int64_t{0}));
+            // viewport name: prefer string "vpN"; fall back to integer
+            // for back-compat with older clients.
+            uint32_t counter = 0;
+            bool parsed = false;
+            const auto& v = args["viewport"];
+            if (v.is_string()) {
+                const std::string& s = v.get_ref<const std::string&>();
+                if (s.size() > 2 && s[0] == 'v' && s[1] == 'p') {
+                    counter = static_cast<uint32_t>(
+                        std::strtoul(s.c_str() + 2, nullptr, 10));
+                    parsed = true;
+                }
+            } else if (v.is_number_integer()) {
+                counter = static_cast<uint32_t>(v.get<int64_t>());
+                parsed = true;
+            }
             const float x = static_cast<float>(args.value("x", 0.0));
             const float y = static_cast<float>(args.value("y", 0.0));
             const float w = static_cast<float>(args.value("w", 1.0));
             const float h = static_cast<float>(args.value("h", 1.0));
-            const bool ok = cairns::headless::SetViewportLayout(engine, vp, x, y, w, h);
-            return {{"ok", ok}, {"viewport", vp},
+            const bool ok = parsed &&
+                cairns::headless::SetViewportLayoutByName(engine, counter,
+                                                           x, y, w, h);
+            char name[16];
+            std::snprintf(name, sizeof(name), "vp%u", counter);
+            return {{"ok", ok}, {"viewport", std::string(name)},
                     {"x", x}, {"y", y}, {"w", w}, {"h", h}};
         });
     registry.RegisterAlias("viewport.close", "cairns.viewport.close");

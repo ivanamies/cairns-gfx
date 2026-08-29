@@ -59,10 +59,17 @@ void ClearHighlights(Engine* engine);
 void RequestPick(Engine* engine, int viewport, uint32_t x, uint32_t y);
 
 // #194 viewport lifetime + tile layout (NDC 0..1 over the swap pane).
+// #220 Step 4: OpenViewport returns the engine-assigned monotonic name
+// counter ("vp{N}" without prefix; cast to int so -1 signals capped).
+// Names are never reused.
 int OpenViewport(Engine* engine);
 bool CloseViewport(Engine* engine);
+// Legacy int-slot setLayout kept; new wire-name path is
+// SetViewportLayoutByName.
 bool SetViewportLayout(Engine* engine, int viewport,
                         float x, float y, float w, float h);
+bool SetViewportLayoutByName(Engine* engine, uint32_t name_counter,
+                              float x, float y, float w, float h);
 int ActiveViewportCount(Engine* engine);
 
 // #208: poll the most recent resolved pick. resolved=false until the

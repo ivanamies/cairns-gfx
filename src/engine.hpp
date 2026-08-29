@@ -213,7 +213,8 @@ public:
         if (cam_pose_override_) {
             return;
         }
-        cairns::FlyController& fc = fly_[active_viewport_];
+        cairns::FlyController& fc =
+            viewports_.GetCold(active_viewport_)->fly;
         const float cy = std::cos(fc.yaw);
         const float sy = std::sin(fc.yaw);
         const float cp = std::cos(fc.pitch);
@@ -234,7 +235,8 @@ public:
         if (cam_pose_override_) {
             return;
         }
-        cairns::FlyController& fc = fly_[active_viewport_];
+        cairns::FlyController& fc =
+            viewports_.GetCold(active_viewport_)->fly;
         fc.yaw += dyaw;
         // Clamp pitch just inside +/-pi/2 so forward never becomes degenerate.
         constexpr float kPitchLimit = 1.55334f;
@@ -243,45 +245,133 @@ public:
 
     bool CamPoseOverridden() const { return cam_pose_override_; }
 
-    // #194 runtime viewport management.
+    // #194 runtime viewport management. #220 Step 4: handle-pilled +
+    // vpN wire-name layer.
     int ActiveViewportCount() const { return active_viewport_count_; }
-    // Returns the new viewport index (0-based) or -1 if at kNumViewports cap.
-    int OpenViewport() {
+
+    // Returns the engine-assigned monotonic name counter ("vp{N}" without
+    // the prefix) or UINT32_MAX if at kNumViewports cap. Names are never
+    // reused for the lifetime of the engine process (locked sub-decision
+    // in plan #220 Step 4). The RPC layer formats the result as "vp{N}"
+    // on the wire.
+    uint32_t OpenViewport() {
         if (active_viewport_count_ >= kNumViewports) {
-            return -1;
+            return UINT32_MAX;
+        }
+        cairns::ViewportId id = viewports_.Acquire();
+        // Reused-slot trap: re-init both halves so a previously-released
+        // slot doesn't carry over.
+        if (auto* h = viewports_.GetHot(id)) {
+            *h = cairns::Viewport::Hot{};
+            h->world = active_world_;
+        }
+        if (auto* c = viewports_.GetCold(id)) {
+            *c = cairns::Viewport::Cold{};
         }
         const int idx = active_viewport_count_++;
-        // Default rect: stack alongside the previous ones (uniform tile)
-        // until the agent calls setLayout. Compose with active count so the
-        // tiles add up to the full pane.
+        viewport_ids_[idx] = id;
+        // Default rect: uniform tile across the swap pane until the agent
+        // calls setLayout. Tiles add up to the full pane.
         const float w = 1.0f / static_cast<float>(active_viewport_count_);
         for (int v = 0; v < active_viewport_count_; ++v) {
-            viewports_[v].layout_rect = glm::vec4(w * static_cast<float>(v),
-                                                  0.0f, w, 1.0f);
+            viewports_.GetHot(viewport_ids_[v])->layout_rect =
+                glm::vec4(w * static_cast<float>(v), 0.0f, w, 1.0f);
         }
-        return idx;
+        const uint32_t name = next_viewport_name_++;
+        // Append-sorted: next_viewport_name_ is monotonic so the new
+        // counter is always the largest seen.
+        viewport_names_[viewport_names_count_++] = ViewportName{name, id};
+        return name;
     }
-    // Close (zero-area) the highest-index viewport. Returns false if at 1.
+
+    // Close the highest-index viewport. Returns false if at 1 (cannot drop
+    // below 1). Existing RPC takes no argument; this targets the last
+    // opened viewport for backward compat with the protocol.
     bool CloseViewport() {
         if (active_viewport_count_ <= 1) {
             return false;
         }
-        viewports_[active_viewport_count_ - 1].layout_rect =
-            glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
+        const int last_idx = active_viewport_count_ - 1;
+        cairns::ViewportId id = viewport_ids_[last_idx];
+        viewports_.GetHot(id)->layout_rect = glm::vec4(0.0f);
+        viewport_ids_[last_idx] = cairns::ViewportId::Null;
         --active_viewport_count_;
+        // Drop the name table entry for this id. The counter itself
+        // remains burned (never reused) per the locked sub-decision.
+        for (uint8_t i = 0; i < viewport_names_count_; ++i) {
+            if (viewport_names_[i].id.index == id.index &&
+                viewport_names_[i].id.generation == id.generation) {
+                for (uint8_t j = i; j + 1 < viewport_names_count_; ++j) {
+                    viewport_names_[j] = viewport_names_[j + 1];
+                }
+                --viewport_names_count_;
+                break;
+            }
+        }
+        viewports_.Release(id);
         const float w = 1.0f / static_cast<float>(active_viewport_count_);
         for (int v = 0; v < active_viewport_count_; ++v) {
-            viewports_[v].layout_rect = glm::vec4(w * static_cast<float>(v),
-                                                  0.0f, w, 1.0f);
+            viewports_.GetHot(viewport_ids_[v])->layout_rect =
+                glm::vec4(w * static_cast<float>(v), 0.0f, w, 1.0f);
         }
         return true;
     }
+
+    // Old int-indexed setLayout kept as a slot-position API for in-engine
+    // callers; the wire layer uses SetViewportLayoutByName.
     bool SetViewportLayout(int viewport, glm::vec4 rect) {
-        if (viewport < 0 || viewport >= kNumViewports) {
+        if (viewport < 0 || viewport >= active_viewport_count_) {
             return false;
         }
-        viewports_[viewport].layout_rect = rect;
+        viewports_.GetHot(viewport_ids_[viewport])->layout_rect = rect;
         return true;
+    }
+
+    // #220 Step 4 wire-name layer. Parse "vp{N}" -> counter -> binary
+    // search the sorted name table -> ViewportId. Returns Null on miss.
+    cairns::ViewportId ResolveViewportName(uint32_t counter) const {
+        int lo = 0;
+        int hi = static_cast<int>(viewport_names_count_);
+        while (lo < hi) {
+            const int mid = (lo + hi) / 2;
+            const uint32_t k = viewport_names_[mid].counter;
+            if (k == counter) {
+                return viewport_names_[mid].id;
+            }
+            if (k < counter) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return cairns::ViewportId::Null;
+    }
+
+    int FindViewportSlot(cairns::ViewportId id) const {
+        for (int i = 0; i < active_viewport_count_; ++i) {
+            if (viewport_ids_[i].index == id.index &&
+                viewport_ids_[i].generation == id.generation) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    bool SetViewportLayoutByName(uint32_t name_counter, glm::vec4 rect) {
+        cairns::ViewportId id = ResolveViewportName(name_counter);
+        if (id.IsNull()) {
+            return false;
+        }
+        viewports_.GetHot(id)->layout_rect = rect;
+        return true;
+    }
+
+    void SetActiveViewportSlot(int idx) {
+        if (idx < 0 || idx >= active_viewport_count_) {
+            return;
+        }
+        active_viewport_index_ = idx;
+        active_viewport_ = viewport_ids_[idx];
     }
 
     // ===== P4 selection / highlight / pick. Document-side state -- the
@@ -381,9 +471,9 @@ public:
     void SetActiveViewportFromClickX(float window_x) {
         const float half = static_cast<float>(FrameWidth()) /
                             static_cast<float>(std::max(1, active_viewport_count_));
-        active_viewport_ = (window_x < half) ? 0 : 1;
+        SetActiveViewportSlot((window_x < half) ? 0 : 1);
     }
-    int ActiveViewport() const { return active_viewport_; }
+    int ActiveViewport() const { return active_viewport_index_; }
 
     // Override the deterministic-particles seed (default kept at 42 to match
     // the existing CAIRNS_DUMP byte-gate). Must be called before
@@ -530,9 +620,32 @@ public:
             s.arena_storage.assign(kArenaBytesPerSlot, 0);
             s.arena.Init(s.arena_storage.data(), kArenaBytesPerSlot);
         }
-        // Default layout: viewport 0 full-frame, others zero-size.
-        viewports_[0].layout_rect = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
         return true;
+    }
+
+    // #220 Step 4: acquire the initial viewport slot (vp0) and pre-fill
+    // the layout / active selection. Called from GreaterInit before any
+    // cam_pose override walks the viewport pool. Idempotent: bails if
+    // viewport 0 is already live.
+    void InitInitialViewport() {
+        if (active_viewport_count_ > 0 && !viewport_ids_[0].IsNull()) {
+            return;
+        }
+        cairns::ViewportId id = viewports_.Acquire();
+        if (auto* h = viewports_.GetHot(id)) {
+            *h = cairns::Viewport::Hot{};
+            h->layout_rect = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
+            h->world = active_world_;
+        }
+        if (auto* c = viewports_.GetCold(id)) {
+            *c = cairns::Viewport::Cold{};
+        }
+        viewport_ids_[0] = id;
+        active_viewport_count_ = 1;
+        active_viewport_ = id;
+        active_viewport_index_ = 0;
+        const uint32_t name = next_viewport_name_++;
+        viewport_names_[viewport_names_count_++] = ViewportName{name, id};
     }
     
     bool initResourceManagers() {
@@ -560,6 +673,11 @@ public:
         golden_ = !engine_cfg_.dump_path.empty();
         tiny_quad_test_ = engine_cfg_.tiny_quad;
 
+        // #220 Step 4: viewport pool must be set up BEFORE the cam_pose
+        // override walks it. InitInitialViewport acquires vp0 and primes
+        // its layout / active_viewport_ / name table.
+        InitInitialViewport();
+
         // Pin every viewport's fly controller to the override pose so byte-
         // gate dumps are deterministic. Pre-P1 reference pose is
         // (0,0,0,0,0). Diverging viewports for multi-pose byte-gates is the
@@ -567,9 +685,11 @@ public:
         if (engine_cfg_.cam_pose.has_value()) {
             const EngineConfig::CamPose& p = *engine_cfg_.cam_pose;
             for (int vi = 0; vi < active_viewport_count_; ++vi) {
-                fly_[vi].position = glm::vec3(p.x, p.y, p.z);
-                fly_[vi].yaw = p.yaw;
-                fly_[vi].pitch = p.pitch;
+                cairns::FlyController& fc =
+                    viewports_.GetCold(viewport_ids_[vi])->fly;
+                fc.position = glm::vec3(p.x, p.y, p.z);
+                fc.yaw = p.yaw;
+                fc.pitch = p.pitch;
             }
             cam_pose_override_ = true;
         }
@@ -896,11 +1016,13 @@ public:
         // to-world matrix; the view matrix is its inverse.
         cairns::World::Cold* wc_cam = worlds_.GetCold(active_world_);
         for (int v = 0; v < active_viewport_count_; ++v) {
-            const cairns::Viewport& vp = viewports_[v];
+            cairns::Viewport::Cold* vpc =
+                viewports_.GetCold(viewport_ids_[v]);
+            const entt::entity vp_cam_entity = vpc->camera_entity;
             const bool entity_cam =
-                vp.camera_entity != entt::null && wc_cam &&
+                vp_cam_entity != entt::null && wc_cam &&
                 wc_cam->registry.all_of<cairns::WorldTransform,
-                                         cairns::CameraComponent>(vp.camera_entity);
+                                         cairns::CameraComponent>(vp_cam_entity);
             glm::vec3 camera_pos;
             glm::vec3 camera_dir;
             glm::mat4 view_matrix;
@@ -909,9 +1031,9 @@ public:
             float vp_far = far_z;
             if (entity_cam) {
                 const cairns::CameraComponent& cc =
-                    wc_cam->registry.get<cairns::CameraComponent>(vp.camera_entity);
+                    wc_cam->registry.get<cairns::CameraComponent>(vp_cam_entity);
                 const cairns::WorldTransform& wt =
-                    wc_cam->registry.get<cairns::WorldTransform>(vp.camera_entity);
+                    wc_cam->registry.get<cairns::WorldTransform>(vp_cam_entity);
                 vp_fov = cc.fov_y_rad;
                 vp_near = cc.near_z;
                 vp_far = cc.far_z;
@@ -920,7 +1042,7 @@ public:
                 // -Z in local space is the camera's forward in world space.
                 camera_dir = glm::normalize(glm::vec3(-wt.world[2]));
             } else {
-                const cairns::FlyController& fc = fly_[v];
+                const cairns::FlyController& fc = vpc->fly;
                 const float cy = std::cos(fc.yaw);
                 const float sy = std::sin(fc.yaw);
                 const float cp = std::cos(fc.pitch);
@@ -966,7 +1088,8 @@ public:
         // stay on default heap (untouched in current code).
         s.proxies.Reset(s.arena);
         for (int v = 0; v < active_viewport_count_; ++v) {
-            const cairns::WorldId wid = viewports_[v].world;
+            const cairns::WorldId wid =
+                viewports_.GetHot(viewport_ids_[v])->world;
             cairns::World::Hot* wh = worlds_.GetHot(wid);
             cairns::World::Cold* wc = worlds_.GetCold(wid);
             if (!wh || !wc) {
@@ -996,7 +1119,8 @@ public:
             if (cairns::World::Cold* wc_a = worlds_.GetCold(active_world_)) {
                 bool already_extracted = false;
                 for (int v = 0; v < active_viewport_count_; ++v) {
-                    if (viewports_[v].world.index == active_world_.index) {
+                    if (viewports_.GetHot(viewport_ids_[v])->world.index
+                            == active_world_.index) {
                         already_extracted = true;
                         break;
                     }
@@ -1148,7 +1272,7 @@ public:
             memcpy(gptr, &s.pending_globals[v], sizeof(cairns::rhi::RenderPassGlobals));
         }
         if (frame_ <= 6) {
-            const glm::mat4& vp = s.pending_globals[active_viewport_].view_proj;
+            const glm::mat4& vp = s.pending_globals[active_viewport_index_].view_proj;
             const float vp_w = static_cast<float>(FrameWidth()) /
                                 static_cast<float>(std::max(1, active_viewport_count_));
             const float aspect_ratio = vp_w / static_cast<float>(FrameHeight());
@@ -1348,10 +1472,10 @@ public:
         // Fill packet header (the view into per-slot storage).
         s.pkt.frame_idx = frame_;
         s.pkt.slot = slot;
-        s.pkt.view = s.pending_view_matrix[active_viewport_];
+        s.pkt.view = s.pending_view_matrix[active_viewport_index_];
         s.pkt.proj = glm::mat4(1.0f);  // not used downstream; view_proj baked into pending_globals
-        s.pkt.near_z = s.pending_near_z[active_viewport_];
-        s.pkt.far_z = s.pending_far_z[active_viewport_];
+        s.pkt.near_z = s.pending_near_z[active_viewport_index_];
+        s.pkt.far_z = s.pending_far_z[active_viewport_index_];
         s.pkt.sim_steps_this_frame = sim_steps_this_frame_;
         s.pkt.fixed_dt = static_cast<float>(cairns::kFixedDt);
         // Wait for the previous frame's render-thread-published parity. In
@@ -1820,7 +1944,8 @@ public:
                 const float fb_fw = static_cast<float>(fb_w);
                 const float fb_fh = static_cast<float>(fb_h);
                 for (int v = 0; v < active_viewport_count_; ++v) {
-                    const glm::vec4& rect = viewports_[v].layout_rect;
+                    const glm::vec4& rect =
+                        viewports_.GetHot(viewport_ids_[v])->layout_rect;
                     if (rect.z <= 0.0f || rect.w <= 0.0f) {
                         continue;
                     }
@@ -1841,7 +1966,7 @@ public:
                 // viewport's layout_rect).
                 {
                     const glm::vec4& av_rect =
-                        viewports_[active_viewport_].layout_rect;
+                        viewports_.GetHot(active_viewport_)->layout_rect;
                     const float av_w = av_rect.z * fb_fw;
                     const float av_h = av_rect.w * fb_fh;
                     const float vp_x0 = av_rect.x * fb_fw;
@@ -1856,7 +1981,7 @@ public:
                                    static_cast<uint32_t>(pip_w),
                                    static_cast<uint32_t>(pip_h));
                     cmd.DrawFullscreen(rhi_.resources, depthviz_,
-                                       std::span<const rhi::Handle<rhi::Texture>>(&vp_depth[active_viewport_], 1),
+                                       std::span<const rhi::Handle<rhi::Texture>>(&vp_depth[active_viewport_index_], 1),
                                        composite_sampler_);
                 }
                 // Restore full extent before the ui draw.
@@ -2309,23 +2434,44 @@ private:
     cairns::WorldId active_world_;
     cairns::WorldId secondary_world_;  // P6 multi-world coexistence test
 
-    // P2: two viewports side-by-side. fly_ is parallel (yaw/pitch/position)
-    // to avoid reshaping Viewport every time the camera implementation grows.
-    // cam_pose_override_ pins both controllers to a fixed (pos, yaw, pitch)
-    // from CAIRNS_CAM_POSE so byte-gate dumps are deterministic regardless of
-    // any keyboard/mouse input on this run.
+    // #220 Step 4: handle-pilled Viewport pool. viewports_ owns Hot+Cold;
+    // viewport_ids_[0..active_viewport_count_) carry the slot ordering
+    // (preserves the [0..N) layout/indexing semantics the rest of the
+    // engine uses to address PerSlot::pending_globals[], id_target_[],
+    // etc.). FlyController moved into Viewport::Cold (was fly_ parallel
+    // array; reason "fly is parallel so Viewport struct can grow" is moot
+    // once Viewport is in a generational pool).
+    //
+    // active_viewport_ is now the ViewportId of the focused viewport.
+    // active_viewport_index_ caches its position in viewport_ids_ so the
+    // PerSlot per-viewport arrays can still be indexed by int. Both fields
+    // are updated together via setActiveViewport().
+    //
     // #194: compile-time cap on simultaneous viewports. active_viewport_count_
     // (runtime) tells the engine how many slots are LIVE. Default = 1 (full-
-    // frame viewport 0; per-viewport work for slots 1..N is skipped). Grow
-    // via cairns.viewport.open / shrink via cairns.viewport.close. Layout
-    // rects on Viewport.layout_rect (NDC 0..1 over the swap pane) describe
-    // where each live viewport tiles.
+    // frame viewport 0). Grow via cairns.viewport.open / shrink via
+    // cairns.viewport.close. Layout rects on Viewport::Hot::layout_rect
+    // (NDC 0..1 over the swap pane) describe where each live viewport tiles.
     static constexpr int kNumViewports = 4;
-    std::array<cairns::Viewport, kNumViewports> viewports_{};
-    std::array<cairns::FlyController, kNumViewports> fly_{};
-    int active_viewport_ = 0;
+    cairns::ResourceManager<cairns::Viewport> viewports_;
+    std::array<cairns::ViewportId, kNumViewports> viewport_ids_{};
+    cairns::ViewportId active_viewport_;
+    int active_viewport_index_ = 0;
     int active_viewport_count_ = 1;  // #194 runtime-live count, default 1
     bool cam_pose_override_ = false;
+
+    // #220 Step 4 vpN wire-name layer. Engine-assigned monotonic counter
+    // ("vp0", "vp1", ...); names never reused for the lifetime of the
+    // engine process. Sorted-vector mapping (small N, binary search). The
+    // RPC layer (scene_ops.cpp) is the only consumer; everywhere internal
+    // uses ViewportId.
+    struct ViewportName {
+        uint32_t counter = 0;
+        cairns::ViewportId id;
+    };
+    std::array<ViewportName, kNumViewports> viewport_names_{};
+    uint8_t viewport_names_count_ = 0;
+    uint32_t next_viewport_name_ = 0;
 
     // #210 per-slot CPU arena capacity. 4 MiB headroom covers
     // RenderGraph::Bake scratch + PassRecord int spans + CommandRecorder

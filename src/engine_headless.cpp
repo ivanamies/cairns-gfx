@@ -124,7 +124,11 @@ void RequestPick(Engine* engine, int viewport, uint32_t x, uint32_t y) {
 }
 
 int OpenViewport(Engine* engine) {
-    return engine ? engine->OpenViewport() : -1;
+    if (!engine) {
+        return -1;
+    }
+    const uint32_t name = engine->OpenViewport();
+    return name == UINT32_MAX ? -1 : static_cast<int>(name);
 }
 
 bool CloseViewport(Engine* engine) {
@@ -135,6 +139,12 @@ bool SetViewportLayout(Engine* engine, int viewport,
                         float x, float y, float w, float h) {
     return engine && engine->SetViewportLayout(viewport,
                                                 glm::vec4(x, y, w, h));
+}
+
+bool SetViewportLayoutByName(Engine* engine, uint32_t name_counter,
+                              float x, float y, float w, float h) {
+    return engine && engine->SetViewportLayoutByName(name_counter,
+                                                       glm::vec4(x, y, w, h));
 }
 
 int ActiveViewportCount(Engine* engine) {
