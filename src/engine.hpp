@@ -5,7 +5,6 @@
 #include <cmath>
 #include <cstdlib>
 #include <string_view>
-#include <unordered_map>
 #include <filesystem>
 #include <thread>
 #include <fstream>
@@ -176,9 +175,11 @@ public:
                 }
             }
 
+            const int kHeroSlices = 1;
+            const int loaded_heroes = static_cast<int>(glb_paths.size());
             const int instance_count =
                 std::getenv("CAIRNS_N") ? std::atoi(std::getenv("CAIRNS_N"))
-                                        : static_cast<int>(glb_paths.size());
+                                        : loaded_heroes * kHeroSlices;
             const int grid_n = std::max(
                 1, static_cast<int>(std::ceil(std::sqrt(
                        static_cast<float>(instance_count)))));
@@ -496,6 +497,9 @@ public:
                 cairns::Scene& scene = scenes_[i];
                 for (size_t j = 0; j < scene.textureHandles.size(); ++j) {
                     auto h = scene.textureHandles[j];
+                    if (h.index >= texture_id_map_.size()) {
+                        texture_id_map_.resize(h.index + 1, 0);
+                    }
                     rhi::Texture::Hot* hot = rhi_.resources.GetHot(h);
                     if (hot && hot->api_view) {
                         texture_id_map_[h.index] =
@@ -505,12 +509,18 @@ public:
                 for (size_t j = 0; j < scene.meshes.size(); ++j) {
                     auto h = scene.meshes[j].attrHandle;
                     if (!h.IsNull()) {
+                        if (h.index >= mesh_attr_id_map_.size()) {
+                            mesh_attr_id_map_.resize(h.index + 1, 0);
+                        }
                         mesh_attr_id_map_[h.index] =
                             rhi_.bindless.AddAttrBuffer(rhi_.resources, rhi_.alloc, bindless_bg_, h);
                     }
                 }
                 for (size_t j = 0; j < scene.samplerHandles.size(); ++j) {
                     auto h = scene.samplerHandles[j];
+                    if (h.index >= sampler_id_map_.size()) {
+                        sampler_id_map_.resize(h.index + 1, 0);
+                    }
                     sampler_id_map_[h.index] =
                         rhi_.bindless.AddSampler(rhi_.resources, bindless_bg_, h);
                 }
@@ -680,9 +690,9 @@ private:
     rhi::Rhi rhi_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
     rhi::Handle<rhi::BindGroup> bindless_bg_;
-    std::unordered_map<uint32_t, uint32_t> texture_id_map_;
-    std::unordered_map<uint32_t, uint32_t> mesh_attr_id_map_;
-    std::unordered_map<uint32_t, uint32_t> sampler_id_map_;
+    std::vector<uint32_t> texture_id_map_;
+    std::vector<uint32_t> mesh_attr_id_map_;
+    std::vector<uint32_t> sampler_id_map_;
 
     cairns::rhi::SwapChain swapchain_;
     // shaders
