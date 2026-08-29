@@ -35,6 +35,11 @@ public:
     // CALLER: ENGINE.
     [[nodiscard]] bool InitSwapChain(SwapChain& sc, const InitConfig& cfg);
 
+    // Block until the GPU has drained all in-flight work. Metal no-op
+    // (drawable resize is synchronous); vk calls vkDeviceWaitIdle. Used by
+    // the engine's window-resize path.
+    void WaitIdle();
+
     // Platform handles live in plat; the subsystems mirror these into their
     // own plat during their Init().
     DevicePlat plat;

@@ -292,7 +292,7 @@ public:
         td.dimensions = {static_cast<int32_t>(w), static_cast<int32_t>(h), 1};
         td.format = rhi::Format::kBgra8Unorm;
         td.usage = rhi::kTexUsageColorTarget | rhi::kTexUsageSampled |
-                   rhi::kTexUsageTransferSrc;
+                   rhi::kTexUsageTransferSrc | rhi::kTexUsageTransferDst;
         td.memory = rhi::Memory::kDefault;
         final_target_ = rhi_.resources.CreateTexture(rhi_.alloc, td);
         return !final_target_.IsNull();
@@ -308,73 +308,17 @@ public:
         if (final_target_.IsNull()) {
             return false;
         }
-#if CAIRNS_METAL
-        return draw();
-#elif CAIRNS_VULKAN
-        // vk headless full-scene render not yet wired (see GreaterInit
-        // comment). Fall back to a one-shot clear so io.dumpTexture sees
-        // the engine's clear color until vk Frames learns the headless
-        // path.
-        VkImage img = static_cast<VkImage>(
-            rhi_.resources.textures.GetCold(final_target_)->api_image);
-        if (img == VK_NULL_HANDLE) {
-            return false;
+        if constexpr (rhi::kSupportsSurfacelessRender) {
+            return draw();
+        } else {
+            // vk surfaceless full-scene render not wired yet (#199). Clear
+            // to the engine's background so io.dumpTexture has something
+            // deterministic to hand back.
+            constexpr float kEngineClearColor[4] = {
+                41.0f / 255.0f, 42.0f / 255.0f, 48.0f / 255.0f, 1.0f};
+            return rhi_.resources.ClearColorTexture(final_target_,
+                                                     kEngineClearColor);
         }
-        VkCommandBufferAllocateInfo cai{};
-        cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        cai.commandPool = rhi_.device.plat.command_pool_;
-        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        cai.commandBufferCount = 1;
-        VkCommandBuffer cb = VK_NULL_HANDLE;
-        if (vkAllocateCommandBuffers(rhi_.device.plat.device_, &cai, &cb) != VK_SUCCESS) {
-            return false;
-        }
-        VkCommandBufferBeginInfo bi{};
-        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cb, &bi);
-        VkImageMemoryBarrier to_dst{};
-        to_dst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        to_dst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        to_dst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        to_dst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        to_dst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        to_dst.image = img;
-        to_dst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        to_dst.srcAccessMask = 0;
-        to_dst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
-                              0, nullptr, 1, &to_dst);
-        VkClearColorValue cc{};
-        cc.float32[0] = 41.0f / 255.0f;
-        cc.float32[1] = 42.0f / 255.0f;
-        cc.float32[2] = 48.0f / 255.0f;
-        cc.float32[3] = 1.0f;
-        VkImageSubresourceRange r{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdClearColorImage(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                              &cc, 1, &r);
-        VkImageMemoryBarrier to_shader = to_dst;
-        to_shader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        to_shader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        to_shader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        to_shader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-                              0, nullptr, 0, nullptr, 1, &to_shader);
-        vkEndCommandBuffer(cb);
-        VkSubmitInfo si{};
-        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.commandBufferCount = 1;
-        si.pCommandBuffers = &cb;
-        vkQueueSubmit(rhi_.device.plat.graphics_queue_, 1, &si, VK_NULL_HANDLE);
-        vkQueueWaitIdle(rhi_.device.plat.graphics_queue_);
-        vkFreeCommandBuffers(rhi_.device.plat.device_, rhi_.device.plat.command_pool_,
-                              1, &cb);
-        return true;
-#else
-        return false;
-#endif
     }
 
     // Headless texture readback: blit final_target_ -> Shared buffer ->
@@ -386,168 +330,15 @@ public:
         if (final_target_.IsNull()) {
             return false;
         }
-#if CAIRNS_METAL
-        MTL::Texture* tex =
-            rhi_.resources.GetHot(final_target_)->api_view;
-        if (!tex) {
+        std::vector<uint8_t> rgba;
+        uint32_t w = 0;
+        uint32_t h = 0;
+        if (!rhi_.resources.ReadBackTextureRgba(final_target_, rgba, w, h)) {
             return false;
         }
-        const NS::UInteger w = tex->width();
-        const NS::UInteger h = tex->height();
-        const NS::UInteger bpr = w * 4;
-        const NS::UInteger bufSize = bpr * h;
-        MTL::Buffer* readback = rhi_.device.plat.device_->newBuffer(
-            bufSize, MTL::ResourceStorageModeShared);
-        if (!readback) {
-            return false;
-        }
-        MTL::CommandBuffer* cb = rhi_.device.plat.queue_->commandBuffer();
-        MTL::BlitCommandEncoder* blit = cb->blitCommandEncoder();
-        blit->copyFromTexture(tex, 0, 0, MTL::Origin{0, 0, 0},
-                              MTL::Size{w, h, 1}, readback, 0, bpr, 0);
-        blit->endEncoding();
-        cb->commit();
-        cb->waitUntilCompleted();
-        std::vector<uint8_t> rgba(bufSize);
-        const uint8_t* bgra =
-            static_cast<const uint8_t*>(readback->contents());
-        for (NS::UInteger i = 0; i < w * h; ++i) {
-            rgba[i * 4 + 0] = bgra[i * 4 + 2];
-            rgba[i * 4 + 1] = bgra[i * 4 + 1];
-            rgba[i * 4 + 2] = bgra[i * 4 + 0];
-            rgba[i * 4 + 3] = bgra[i * 4 + 3];
-        }
-        const bool ok = stbi_write_png(
-            path.string().c_str(), static_cast<int>(w),
-            static_cast<int>(h), 4, rgba.data(),
-            static_cast<int>(bpr)) != 0;
-        readback->release();
-        return ok;
-#elif CAIRNS_VULKAN
-        VkImage img = static_cast<VkImage>(
-            rhi_.resources.textures.GetCold(final_target_)->api_image);
-        if (img == VK_NULL_HANDLE) {
-            return false;
-        }
-        const uint32_t w = final_target_w_;
-        const uint32_t h = final_target_h_;
-        const VkDeviceSize buf_size =
-            static_cast<VkDeviceSize>(w) * h * 4;
-
-        VkBufferCreateInfo bci{};
-        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bci.size = buf_size;
-        bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        VkBuffer buf = VK_NULL_HANDLE;
-        if (vkCreateBuffer(rhi_.device.plat.device_, &bci, nullptr, &buf) !=
-            VK_SUCCESS) {
-            return false;
-        }
-        VkMemoryRequirements mr{};
-        vkGetBufferMemoryRequirements(rhi_.device.plat.device_, buf, &mr);
-        VkPhysicalDeviceMemoryProperties mp{};
-        vkGetPhysicalDeviceMemoryProperties(rhi_.device.plat.physical_, &mp);
-        uint32_t type_idx = 0;
-        bool found_type = false;
-        for (uint32_t i = 0; i < mp.memoryTypeCount; ++i) {
-            const auto need = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-            if ((mr.memoryTypeBits & (1u << i)) &&
-                (mp.memoryTypes[i].propertyFlags & need) == need) {
-                type_idx = i;
-                found_type = true;
-                break;
-            }
-        }
-        if (!found_type) {
-            vkDestroyBuffer(rhi_.device.plat.device_, buf, nullptr);
-            return false;
-        }
-        VkMemoryAllocateInfo mai{};
-        mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        mai.allocationSize = mr.size;
-        mai.memoryTypeIndex = type_idx;
-        VkDeviceMemory mem = VK_NULL_HANDLE;
-        vkAllocateMemory(rhi_.device.plat.device_, &mai, nullptr, &mem);
-        vkBindBufferMemory(rhi_.device.plat.device_, buf, mem, 0);
-
-        VkCommandBufferAllocateInfo cai{};
-        cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        cai.commandPool = rhi_.device.plat.command_pool_;
-        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        cai.commandBufferCount = 1;
-        VkCommandBuffer cb = VK_NULL_HANDLE;
-        vkAllocateCommandBuffers(rhi_.device.plat.device_, &cai, &cb);
-        VkCommandBufferBeginInfo bi{};
-        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cb, &bi);
-
-        VkImageMemoryBarrier to_src{};
-        to_src.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        to_src.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        to_src.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        to_src.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        to_src.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        to_src.image = img;
-        to_src.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        to_src.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        to_src.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
-                              0, nullptr, 1, &to_src);
-
-        VkBufferImageCopy region{};
-        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.imageExtent = {w, h, 1};
-        vkCmdCopyImageToBuffer(cb, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                buf, 1, &region);
-
-        VkImageMemoryBarrier to_shader = to_src;
-        to_shader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        to_shader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        to_shader.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        to_shader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-                              0, nullptr, 0, nullptr, 1, &to_shader);
-
-        vkEndCommandBuffer(cb);
-        VkSubmitInfo si{};
-        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.commandBufferCount = 1;
-        si.pCommandBuffers = &cb;
-        vkQueueSubmit(rhi_.device.plat.graphics_queue_, 1, &si, VK_NULL_HANDLE);
-        vkQueueWaitIdle(rhi_.device.plat.graphics_queue_);
-
-        void* mapped = nullptr;
-        vkMapMemory(rhi_.device.plat.device_, mem, 0, buf_size, 0, &mapped);
-        std::vector<uint8_t> rgba(static_cast<size_t>(buf_size));
-        const uint8_t* src = static_cast<const uint8_t*>(mapped);
-        // final_target_ format is BGRA8Unorm (matches the metal path).
-        for (uint32_t i = 0; i < w * h; ++i) {
-            rgba[i * 4 + 0] = src[i * 4 + 2];
-            rgba[i * 4 + 1] = src[i * 4 + 1];
-            rgba[i * 4 + 2] = src[i * 4 + 0];
-            rgba[i * 4 + 3] = src[i * 4 + 3];
-        }
-        vkUnmapMemory(rhi_.device.plat.device_, mem);
-
-        const bool ok = stbi_write_png(
-            path.string().c_str(), static_cast<int>(w),
-            static_cast<int>(h), 4, rgba.data(),
-            static_cast<int>(w * 4)) != 0;
-
-        vkFreeCommandBuffers(rhi_.device.plat.device_, rhi_.device.plat.command_pool_,
-                              1, &cb);
-        vkDestroyBuffer(rhi_.device.plat.device_, buf, nullptr);
-        vkFreeMemory(rhi_.device.plat.device_, mem, nullptr);
-        return ok;
-#else
-        (void)path;
-        return false;
-#endif
+        return stbi_write_png(path.string().c_str(), static_cast<int>(w),
+                              static_cast<int>(h), 4, rgba.data(),
+                              static_cast<int>(w * 4)) != 0;
     }
     
     bool initCpuAllocators() {
@@ -829,19 +620,20 @@ public:
                              static_cast<int32_t>(cfg.height), 1};
             td.format = rhi::Format::kBgra8Unorm;
             td.usage = rhi::kTexUsageColorTarget | rhi::kTexUsageSampled |
-                       rhi::kTexUsageTransferSrc;
+                       rhi::kTexUsageTransferSrc | rhi::kTexUsageTransferDst;
             td.memory = rhi::Memory::kDefault;
             final_target_ = rhi_.resources.CreateTexture(rhi_.alloc, td);
             if (final_target_.IsNull()) {
                 CAIRNS_PRINT("GreaterInit: final_target_ create failed\n");
                 return false;
             }
-#if !CAIRNS_METAL
-            // vk render-to-texture not yet wired (needs a render_pass +
-            // framebuffer over final_target_'s VkImageView, replacing the
-            // SwapChain ones). RenderHeadlessFrame falls back to a clear.
-            return true;
-#endif
+            if constexpr (!rhi::kSupportsSurfacelessRender) {
+                // vk render-to-texture not yet wired (needs a render_pass +
+                // framebuffer over final_target_'s VkImageView, replacing
+                // the SwapChain ones). RenderHeadlessFrame falls back to a
+                // clear; the render thread never spins up.
+                return true;
+            }
         }
         if ( !initRenderPipeline() ) {
             CAIRNS_PRINT("GreaterInit: initRenderPipeline failed\n");
@@ -1071,17 +863,8 @@ public:
         if (render_thread_) {
             render_thread_->Drain();
         }
-#if CAIRNS_VULKAN
-        if (rhi_.device.plat.device_) {
-            vkDeviceWaitIdle(rhi_.device.plat.device_);
-        }
-        // Framebuffers in the offscreen cache are sized at create-time
-        // against the prior swap dims; the (w, h) check inside
-        // get_offscreen_fb wouldn't match the new dims so they'd grow
-        // unboundedly. Wipe them on resize; render passes (keyed on format,
-        // not dims) survive.
-        rhi_.frames.plat.offscreen_target_cache_.FlushFramebuffers();
-#endif
+        rhi_.device.WaitIdle();
+        rhi_.frames.OnSurfaceResize();
         if (!final_target_.IsNull() &&
             (resize_pending_w_ != final_target_w_ ||
              resize_pending_h_ != final_target_h_) &&
@@ -1318,15 +1101,8 @@ public:
         if (final_target_.IsNull()) {
             return swapchain_.AcquireForFrame();
         }
-#if CAIRNS_METAL
-        MTL::Texture* tex = rhi_.resources.GetHot(final_target_)->api_view;
-        return rhi::MakeSwapResolveTargetFromTexture(tex, final_target_w_,
-                                                       final_target_h_);
-#else
-        // vk render-to-texture not yet wired (#199); surfaceless mode bails
-        // before render_thread_ is created so this path isn't reached.
-        return rhi::SwapResolveTarget{};
-#endif
+        return rhi_.resources.MakeSurfacelessSwapResolveTarget(
+            final_target_, final_target_w_, final_target_h_);
     }
 
     // Render-thread entry point (post commit 6). Today called synchronously

@@ -14,8 +14,10 @@
 
 #include <cstdint>
 #include <span>
+#include <vector>
 
 #include "rhi/resource_manager.hpp"  // ResourceManager<T>, Handle<>, resource types, Descs
+#include "rhi/swap_resolve_target.hpp"
 #if CAIRNS_METAL
 #include "rhi/metal/resources_plat.hpp"
 #elif CAIRNS_VULKAN
@@ -26,6 +28,18 @@ namespace cairns::rhi {
 
 class Device;
 class Allocator;
+
+// Compile-time backend capability flag. Today: metal renders the full scene
+// into final_target_ via the swap pass; vk's render-to-texture (#199) isn't
+// wired yet, so surfaceless mode bails before the render thread spins up.
+// Engine consults this instead of #if CAIRNS_METAL.
+inline constexpr bool kSupportsSurfacelessRender =
+#if CAIRNS_METAL
+    true
+#else
+    false
+#endif
+    ;
 
 class Resources {
 public:
@@ -74,6 +88,25 @@ public:
 
     // Byte offset of a buffer within its backing master allocation.
     uint32_t BufferBaseOffset(Allocator& alloc, Handle<Buffer> h);
+
+    // Backend-neutral helpers used by the engine's surfaceless / dump path.
+    //
+    // ReadBackTextureRgba: blit |h| (BGRA8Unorm) into a host-visible buffer,
+    // wait, swizzle to RGBA8, return the pixel bytes + dims. Caller writes
+    // to disk (so stb stays out of rhi/).
+    //
+    // ClearColorTexture: one-shot clear of |h| to |color| and transition into
+    // shader-read. Used by RenderHeadlessFrame's vk fallback until #199 wires
+    // the full scene through final_target_.
+    //
+    // MakeSurfacelessSwapResolveTarget: build a SwapResolveTarget that writes
+    // into |h| instead of a swapchain drawable. Returns a null target on vk
+    // (surfaceless render-to-texture not yet wired).
+    bool ReadBackTextureRgba(Handle<Texture> h, std::vector<uint8_t>& out_rgba,
+                              uint32_t& out_w, uint32_t& out_h);
+    bool ClearColorTexture(Handle<Texture> h, const float color[4]);
+    SwapResolveTarget MakeSurfacelessSwapResolveTarget(Handle<Texture> h,
+                                                        uint32_t w, uint32_t h_px);
 
     // Native-handle resolution + MaterialSetLayout (vk-only) live on plat.
     // External callers go `res.plat.GetVkBuffer(...)` / `res.plat.GetMtlBuffer(...)`

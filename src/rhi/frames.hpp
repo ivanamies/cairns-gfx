@@ -55,6 +55,12 @@ public:
     // Request a one-shot swapchain dump on the next End(). CALLER: ENGINE.
     void SetDumpPath(const std::filesystem::path& path);
 
+    // Called by the engine after a window-resize is applied. Metal no-op
+    // (drawable resize is handled implicitly per-frame). Vk wipes the
+    // offscreen-target-cache framebuffers (sized at create-time against
+    // prior dims; would never re-match the new size).
+    void OnSurfaceResize();
+
     // Backend state. Pipelines reads plat.*_set_layout_ (vk pipeline layouts).
     FramesPlat plat;
     std::filesystem::path dump_path_;

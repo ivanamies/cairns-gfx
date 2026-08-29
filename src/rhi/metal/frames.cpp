@@ -124,6 +124,11 @@ void Frames::SetDumpPath(const std::filesystem::path& path) {
     dump_path_ = path;
 }
 
+// Metal: drawable resize is implicit per-frame (see frames.cpp:101-120 -- the
+// MSAA + depth targets are reallocated when drawable size changes). Nothing
+// to flush.
+void Frames::OnSurfaceResize() {}
+
 FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
                             const SwapResolveTarget& target) {
     dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(plat.frame_semaphore_),

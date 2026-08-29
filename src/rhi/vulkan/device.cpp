@@ -438,6 +438,12 @@ bool Device::InitSwapChain(SwapChain& sc, const InitConfig& cfg) {
                    true);
 }
 
+void Device::WaitIdle() {
+    if (plat.device_) {
+        vkDeviceWaitIdle(plat.device_);
+    }
+}
+
 }  // namespace cairns::rhi
 
 #endif  // CAIRNS_VULKAN

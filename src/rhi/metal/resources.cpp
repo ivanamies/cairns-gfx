@@ -476,6 +476,76 @@ MTL::Buffer* ResourcesPlat::GetBumpMasterBuffer(Allocator& alloc, Memory mem) co
     return alloc.plat.memory_.HeapMasterBuffer(hi);
 }
 
+// Blit texture into a Shared MTL::Buffer, wait, swizzle BGRA→RGBA into |out|.
+// Apple origin is top-left so no Y-flip (matches the windowed dump contract).
+bool Resources::ReadBackTextureRgba(Handle<Texture> h,
+                                      std::vector<uint8_t>& out_rgba,
+                                      uint32_t& out_w, uint32_t& out_h) {
+    Texture::Hot* hot = textures.GetHot(h);
+    if (!hot || !hot->api_view) {
+        return false;
+    }
+    MTL::Texture* tex = hot->api_view;
+    const NS::UInteger w = tex->width();
+    const NS::UInteger hgt = tex->height();
+    const NS::UInteger bpr = w * 4;
+    const NS::UInteger buf_size = bpr * hgt;
+    MTL::Buffer* readback = plat.device_->newBuffer(
+        buf_size, MTL::ResourceStorageModeShared);
+    if (!readback) {
+        return false;
+    }
+    MTL::CommandBuffer* cb = plat.queue_->commandBuffer();
+    MTL::BlitCommandEncoder* blit = cb->blitCommandEncoder();
+    blit->copyFromTexture(tex, 0, 0, MTL::Origin{0, 0, 0},
+                          MTL::Size{w, hgt, 1}, readback, 0, bpr, 0);
+    blit->endEncoding();
+    cb->commit();
+    cb->waitUntilCompleted();
+    out_rgba.resize(buf_size);
+    const uint8_t* bgra = static_cast<const uint8_t*>(readback->contents());
+    for (NS::UInteger i = 0; i < w * hgt; ++i) {
+        out_rgba[i * 4 + 0] = bgra[i * 4 + 2];
+        out_rgba[i * 4 + 1] = bgra[i * 4 + 1];
+        out_rgba[i * 4 + 2] = bgra[i * 4 + 0];
+        out_rgba[i * 4 + 3] = bgra[i * 4 + 3];
+    }
+    out_w = static_cast<uint32_t>(w);
+    out_h = static_cast<uint32_t>(hgt);
+    readback->release();
+    return true;
+}
+
+// One-shot clear via a render-pass with loadActionClear / storeActionStore.
+bool Resources::ClearColorTexture(Handle<Texture> h, const float color[4]) {
+    Texture::Hot* hot = textures.GetHot(h);
+    if (!hot || !hot->api_view) {
+        return false;
+    }
+    MTL::RenderPassDescriptor* rpd =
+        MTL::RenderPassDescriptor::renderPassDescriptor();
+    MTL::RenderPassColorAttachmentDescriptor* att = rpd->colorAttachments()->object(0);
+    att->setTexture(hot->api_view);
+    att->setLoadAction(MTL::LoadActionClear);
+    att->setStoreAction(MTL::StoreActionStore);
+    att->setClearColor(MTL::ClearColor(color[0], color[1], color[2], color[3]));
+    MTL::CommandBuffer* cb = plat.queue_->commandBuffer();
+    MTL::RenderCommandEncoder* enc = cb->renderCommandEncoder(rpd);
+    enc->endEncoding();
+    cb->commit();
+    cb->waitUntilCompleted();
+    return true;
+}
+
+SwapResolveTarget Resources::MakeSurfacelessSwapResolveTarget(
+    Handle<Texture> h, uint32_t w, uint32_t h_px) {
+    Texture::Hot* hot = textures.GetHot(h);
+    if (!hot || !hot->api_view) {
+        return SwapResolveTarget{};
+    }
+    return MakeSwapResolveTargetFromTexture(hot->api_view, w, h_px);
+}
+
 }  // namespace cairns::rhi
 
 #endif  // CAIRNS_METAL

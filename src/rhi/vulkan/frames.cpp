@@ -427,6 +427,14 @@ void Frames::SetDumpPath(const std::filesystem::path& path) {
     dump_path_ = path;
 }
 
+// Framebuffers in the offscreen cache are sized at create-time against the
+// prior swap dims; the (w, h) check inside get_offscreen_fb wouldn't match
+// the new dims so they'd grow unboundedly. Wipe them on resize; render passes
+// (keyed on format, not dims) survive.
+void Frames::OnSurfaceResize() {
+    plat.offscreen_target_cache_.FlushFramebuffers();
+}
+
 FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
                             const SwapResolveTarget& target) {
     // vk path is window-bound today; target.plat.swap_chain must be set. The

@@ -50,6 +50,10 @@ bool Device::InitSwapChain(SwapChain& sc, const InitConfig& cfg) {
     return sc.plat.Init(plat.device_, cfg.plat.metal_layer);
 }
 
+// Drawable resize is synchronous on Metal (handled at acquireNextDrawable
+// time inside frames.cpp), so no global wait is needed.
+void Device::WaitIdle() {}
+
 }  // namespace cairns::rhi
 
 #endif  // CAIRNS_METAL

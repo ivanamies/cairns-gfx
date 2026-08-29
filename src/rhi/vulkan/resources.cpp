@@ -719,6 +719,201 @@ uint8_t* ResourcesPlat::MappedPtr(Allocator& alloc, Handle<Buffer> h) {
     return base + hot->offset_in_heap;
 }
 
+// Image→host-visible buffer→RGBA8 swizzle. Image is BGRA8 today (matches the
+// engine's final_target_ format). Layout assumed SHADER_READ_ONLY_OPTIMAL on
+// entry (we're reading the engine's last-render output).
+bool Resources::ReadBackTextureRgba(Handle<Texture> h,
+                                      std::vector<uint8_t>& out_rgba,
+                                      uint32_t& out_w, uint32_t& out_h) {
+    Texture::Cold* cold = textures.GetCold(h);
+    if (!cold) {
+        return false;
+    }
+    VkImage img = static_cast<VkImage>(cold->api_image);
+    if (img == VK_NULL_HANDLE) {
+        return false;
+    }
+    const uint32_t w = cold->width;
+    const uint32_t hgt = cold->height;
+    const VkDeviceSize buf_size = static_cast<VkDeviceSize>(w) * hgt * 4;
+
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = buf_size;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VkBuffer buf = VK_NULL_HANDLE;
+    if (vkCreateBuffer(plat.device_, &bci, nullptr, &buf) != VK_SUCCESS) {
+        return false;
+    }
+    VkMemoryRequirements mr{};
+    vkGetBufferMemoryRequirements(plat.device_, buf, &mr);
+    VkPhysicalDeviceMemoryProperties mp{};
+    vkGetPhysicalDeviceMemoryProperties(plat.physical_, &mp);
+    uint32_t type_idx = 0;
+    bool found_type = false;
+    for (uint32_t i = 0; i < mp.memoryTypeCount; ++i) {
+        const auto need = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        if ((mr.memoryTypeBits & (1u << i)) &&
+            (mp.memoryTypes[i].propertyFlags & need) == need) {
+            type_idx = i;
+            found_type = true;
+            break;
+        }
+    }
+    if (!found_type) {
+        vkDestroyBuffer(plat.device_, buf, nullptr);
+        return false;
+    }
+    VkMemoryAllocateInfo mai{};
+    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.allocationSize = mr.size;
+    mai.memoryTypeIndex = type_idx;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    vkAllocateMemory(plat.device_, &mai, nullptr, &mem);
+    vkBindBufferMemory(plat.device_, buf, mem, 0);
+
+    VkCommandBufferAllocateInfo cai{};
+    cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cai.commandPool = plat.command_pool_;
+    cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cai.commandBufferCount = 1;
+    VkCommandBuffer cb = VK_NULL_HANDLE;
+    vkAllocateCommandBuffers(plat.device_, &cai, &cb);
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cb, &bi);
+
+    VkImageMemoryBarrier to_src{};
+    to_src.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    to_src.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    to_src.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    to_src.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_src.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_src.image = img;
+    to_src.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    to_src.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    to_src.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
+                          0, nullptr, 1, &to_src);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {w, hgt, 1};
+    vkCmdCopyImageToBuffer(cb, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                            buf, 1, &region);
+
+    VkImageMemoryBarrier to_shader = to_src;
+    to_shader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    to_shader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    to_shader.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    to_shader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                          0, nullptr, 0, nullptr, 1, &to_shader);
+
+    vkEndCommandBuffer(cb);
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cb;
+    vkQueueSubmit(plat.queue_, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(plat.queue_);
+
+    void* mapped = nullptr;
+    vkMapMemory(plat.device_, mem, 0, buf_size, 0, &mapped);
+    out_rgba.resize(static_cast<size_t>(buf_size));
+    const uint8_t* src = static_cast<const uint8_t*>(mapped);
+    for (uint32_t i = 0; i < w * hgt; ++i) {
+        out_rgba[i * 4 + 0] = src[i * 4 + 2];
+        out_rgba[i * 4 + 1] = src[i * 4 + 1];
+        out_rgba[i * 4 + 2] = src[i * 4 + 0];
+        out_rgba[i * 4 + 3] = src[i * 4 + 3];
+    }
+    vkUnmapMemory(plat.device_, mem);
+    out_w = w;
+    out_h = hgt;
+
+    vkFreeCommandBuffers(plat.device_, plat.command_pool_, 1, &cb);
+    vkDestroyBuffer(plat.device_, buf, nullptr);
+    vkFreeMemory(plat.device_, mem, nullptr);
+    return true;
+}
+
+// vkCmdClearColorImage on a freshly-acquired image; transition into
+// SHADER_READ_ONLY_OPTIMAL so the subsequent dump path can read it.
+bool Resources::ClearColorTexture(Handle<Texture> h, const float color[4]) {
+    Texture::Cold* cold = textures.GetCold(h);
+    if (!cold) {
+        return false;
+    }
+    VkImage img = static_cast<VkImage>(cold->api_image);
+    if (img == VK_NULL_HANDLE) {
+        return false;
+    }
+    VkCommandBufferAllocateInfo cai{};
+    cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cai.commandPool = plat.command_pool_;
+    cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cai.commandBufferCount = 1;
+    VkCommandBuffer cb = VK_NULL_HANDLE;
+    if (vkAllocateCommandBuffers(plat.device_, &cai, &cb) != VK_SUCCESS) {
+        return false;
+    }
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cb, &bi);
+    VkImageMemoryBarrier to_dst{};
+    to_dst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    to_dst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    to_dst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    to_dst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_dst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_dst.image = img;
+    to_dst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    to_dst.srcAccessMask = 0;
+    to_dst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
+                          0, nullptr, 1, &to_dst);
+    VkClearColorValue cc{};
+    cc.float32[0] = color[0];
+    cc.float32[1] = color[1];
+    cc.float32[2] = color[2];
+    cc.float32[3] = color[3];
+    VkImageSubresourceRange r{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdClearColorImage(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          &cc, 1, &r);
+    VkImageMemoryBarrier to_shader = to_dst;
+    to_shader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    to_shader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    to_shader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    to_shader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                          0, nullptr, 0, nullptr, 1, &to_shader);
+    vkEndCommandBuffer(cb);
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cb;
+    vkQueueSubmit(plat.queue_, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(plat.queue_);
+    vkFreeCommandBuffers(plat.device_, plat.command_pool_, 1, &cb);
+    return true;
+}
+
+// vk render-to-texture (#199) not yet wired -- engine bails on surfaceless
+// init before render_thread_ is constructed, so this stub is never reached.
+SwapResolveTarget Resources::MakeSurfacelessSwapResolveTarget(
+    Handle<Texture> /*h*/, uint32_t /*w*/, uint32_t /*h_px*/) {
+    return SwapResolveTarget{};
+}
+
 }  // namespace cairns::rhi
 
 #endif  // CAIRNS_VULKAN
