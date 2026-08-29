@@ -95,6 +95,15 @@ struct SwapChain {
         }
     }
 
+    // Neutral teardown entry (matches Metal SwapChain::Deinit). Device must still
+    // be alive (call before ResourceManager::Deinit destroys it).
+    void Deinit() {
+        if (device != VK_NULL_HANDLE) {
+            vkDeviceWaitIdle(device);
+        }
+        Cleanup();
+    }
+
 private:
     struct QueueFamilyIndices {
         std::optional<uint32_t> graphicsAndComputeFamily;

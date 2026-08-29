@@ -16,9 +16,7 @@
 #include "util/define.hpp"
 #include "util/gltf_loader.hpp"
 
-#include "metal_engine.hpp"
-
-#include "vulkan_engine.hpp"
+#include "engine.hpp"
 
 namespace cairns {
 
@@ -32,24 +30,13 @@ struct AppContext {
     SDL_AudioDeviceID audioDevice;
     MIX_Track* track = nullptr;
     
-#if CAIRNS_METAL
     cairns::Engine* engine = nullptr;
-#endif
-#if CAIRNS_VULKAN
-    cairns::Engine2* engine2 = nullptr;
-#endif
 
     SDL_AppResult app_quit = SDL_APP_CONTINUE;
 
     ~AppContext() {
-#if CAIRNS_METAL
         delete engine;
         engine = nullptr;
-#endif
-#if CAIRNS_VULKAN
-        delete engine2;
-        engine2 = nullptr;
-#endif
     }
 };
 
@@ -70,47 +57,34 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     }
     
     SDL_Window* window = nullptr;
-#if CAIRNS_METAL
     cairns::Engine* engine = nullptr;
-#endif
-#if CAIRNS_VULKAN
-    cairns::Engine2* engine2 = nullptr;
-#endif
 
 #if CAIRNS_METAL
-    window = SDL_CreateWindow("SDL + Metal-cpp Sample", kWindowStartWidth, kWindowStartHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_METAL);
-    if (!window){
+    constexpr SDL_WindowFlags kBackendWindowFlag = SDL_WINDOW_METAL;
+    const char* kWindowTitle = "SDL + Metal-cpp Sample";
+#elif CAIRNS_VULKAN
+    constexpr SDL_WindowFlags kBackendWindowFlag = SDL_WINDOW_VULKAN;
+    const char* kWindowTitle = "SDL + Vulkan Sample";
+#endif
+    window = SDL_CreateWindow(kWindowTitle, kWindowStartWidth, kWindowStartHeight,
+                              SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | kBackendWindowFlag);
+    if (!window) {
         return SDL_Fail();
     }
     engine = new cairns::Engine;
     if ( !engine->GreaterInit(window)) {
         return SDL_Fail();
     }
-#elif CAIRNS_VULKAN
-    window = SDL_CreateWindow("SDL + Vulkan Sample", kWindowStartWidth, kWindowStartHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_VULKAN);
-    if ( !window ) {
-        return SDL_Fail();
-    }
-    engine2 = new cairns::Engine2;
-    if ( !engine2->GreaterInit(window)) {
-        return SDL_Fail();
-    }
-#endif
 
     // Setup App State
     *appstate = new AppContext{
         .window = window,
         .track = nullptr,
-#if CAIRNS_METAL
         .engine = engine,
-#endif
-#if CAIRNS_VULKAN
-        .engine2 = engine2,
-#endif
     };
-    
+
     SDL_ShowWindow(window);
-    SDL_Log("Metal Application started successfully!");
+    SDL_Log("cairns Application started successfully!");
     
     return SDL_APP_CONTINUE;
 }
@@ -122,67 +96,48 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event) {
         app->app_quit = SDL_APP_SUCCESS;
     }
     else if (event->type == SDL_EVENT_KEY_DOWN) {
-#if CAIRNS_METAL
         if (event->key.scancode == SDL_SCANCODE_D && app->engine) {
             app->engine->RequestViewportDump("/tmp/cairns_dump.png");
         }
-#endif
     }
     else if ( event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
         const int newWidth = event->window.data1;
         const int newHeight = event->window.data2;
-#if CAIRNS_METAL
         if ( app->engine) {
             app->engine->requestResizeFrameBuffer(newWidth, newHeight);
         }
-#endif
-#if CAIRNS_VULKAN
-        if ( app->engine2) {
-            app->engine2->RequestResizeFrameBuffer(newWidth, newHeight);
-        }
-#endif
     }
     return SDL_APP_CONTINUE;
 }
 
 SDL_AppResult SDL_AppIterate(void *appstate) {
     auto* app = (AppContext*)appstate;
-    
-    // --- Metal Render Loop ---
-    
+
 #if CAIRNS_METAL
+    // metal-cpp returns autoreleased objects per frame; drain them each iterate.
     NS::AutoreleasePool* pool = NS::AutoreleasePool::alloc()->init();
+#endif
     if ( app->engine) {
         if ( !app->engine->draw()) {
+#if CAIRNS_METAL
+            pool->release();
+#endif
             return SDL_APP_CONTINUE;
         }
     }
+#if CAIRNS_METAL
     pool->release();
 #endif
-#if CAIRNS_VULKAN
-    if (app->engine2 ) {
-        if ( !app->engine2->Draw()) {
-            return SDL_APP_CONTINUE;
-        }
-    }
-#endif
-    
+
     return app->app_quit;
 }
 
 void SDL_AppQuit(void* appstate, [[maybe_unused]] SDL_AppResult result) {
     auto* app = (AppContext*)appstate;
     if (app) {
-#if CAIRNS_METAL
         if ( app->engine ) {
             app->engine->deinit();
         }
-#endif
-#if CAIRNS_VULKAN
-        if ( app->engine2 ) {
-            app->engine2->Deinit();
-        }
-#endif
         delete app;
     }
     if (app->window) SDL_DestroyWindow(app->window);
