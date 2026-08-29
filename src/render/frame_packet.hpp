@@ -63,10 +63,27 @@ struct FramePacket {
     std::span<const rhi::Handle<rhi::Texture>> resident_textures;
     std::span<const rhi::Handle<rhi::Buffer>> resident_buffers;
 
-    // Render graph prebuilt + Baked on the game thread; render thread
-    // Executes. Allocated from the FrameArena slot.
+    // Render graph + the per-frame graph-local handles formerly captured as
+    // `[&]` locals in draw(). The render thread reads these from the packet
+    // when executing the graph, so the values must outlive draw()'s stack.
     rhi::RenderGraph* graph = nullptr;
     rhi::GraphTexture swap_target{};
+    rhi::GraphTexture color_tex{};
+    rhi::GraphTexture depth_tex{};
+    rhi::GraphTexture fwd_depth{};
+    rhi::GraphTexture swap_tex{};
+    rhi::GraphBuffer sim_ssbo{};
+    uint32_t fb_w = 0;
+    uint32_t fb_h = 0;
+    float clear_color[4] = {0, 0, 0, 1};
+    bool draw_imgui = false;
+
+    // Render-thread outputs:
+    //   globals_offset: set by RecordFrame after the per-frame globals bump.
+    //   particle_parity_out: written by the particle_sim execute lambda;
+    //     drained by the game thread before producing the next packet.
+    uint32_t globals_offset = 0;
+    uint32_t particle_parity_out = 0;
 
     // ImGui draw data, deep-copied by CloneImGuiDrawData() on the game thread
     // so the render thread reads stable memory while game thread builds frame
