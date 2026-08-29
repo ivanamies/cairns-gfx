@@ -626,8 +626,6 @@ public:
     // from draw(). Owns: rhi_.frames.Begin/End, the bump-ring EncodeDraws,
     // the compute + render-pass encode. Reads pkt + slots_[pkt.slot].
     void RecordFrame(FramePacket& pkt) {
-        // RAII per-task cleanup -- on Metal, drains autoreleased Cocoa/Metal
-        // objects when the task body ends. No-op elsewhere.
         rhi::TaskGuard task_guard;
 
         PerSlot& s = slots_[pkt.slot];

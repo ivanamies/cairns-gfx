@@ -20,6 +20,7 @@
 #include "imgui_impl_sdl3.h"
 
 #include "engine.hpp"
+#include "rhi/task_guard.hpp"
 
 namespace cairns {
 
@@ -127,21 +128,13 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event) {
 SDL_AppResult SDL_AppIterate(void *appstate) {
     auto* app = (AppContext*)appstate;
 
-#if CAIRNS_METAL
-    // metal-cpp returns autoreleased objects per frame; drain them each iterate.
-    NS::AutoreleasePool* pool = NS::AutoreleasePool::alloc()->init();
-#endif
+    cairns::rhi::TaskGuard task_guard;
+
     if ( app->engine) {
         if ( !app->engine->draw()) {
-#if CAIRNS_METAL
-            pool->release();
-#endif
             return SDL_APP_CONTINUE;
         }
     }
-#if CAIRNS_METAL
-    pool->release();
-#endif
 
     return app->app_quit;
 }
