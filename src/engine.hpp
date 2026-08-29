@@ -24,7 +24,6 @@
 #include "rhi/swap_chain.hpp"
 #include "gpu_scene_registry.hpp"
 #include "util/misc.hpp"
-#include "util/std_allocator.hpp"
 #include "util/render_pass_globals.hpp"
 #include "util/offset_allocator.hpp"
 #include "util/gltf_loader.hpp"
@@ -59,7 +58,6 @@
 
 namespace cairns {
 
-inline static constexpr uint32_t kHotArenaMemorySize = 1 << 29;
 inline static constexpr uint32_t kUboAlign = 32;
 inline static constexpr uint32_t kMeshPosBindSlot = 0;
 
@@ -91,10 +89,8 @@ public:
     static constexpr int kNumViewportsPerSlot = 2;
     struct PerSlot {
         cairns::RenderProxyArrays proxies;
-        std::vector<cairns::Draw, cairns::Allocator<cairns::Draw>> drawList;
-        std::vector<std::pair<cairns::DrawKey, uint32_t>,
-                    cairns::Allocator<std::pair<cairns::DrawKey, uint32_t>>>
-            drawListSorted;
+        std::vector<cairns::Draw> drawList;
+        std::vector<std::pair<cairns::DrawKey, uint32_t>> drawListSorted;
         std::vector<rhi::Handle<rhi::Texture>> resident_textures;
         std::vector<glm::mat4> draw_world_matrices;
         // Per-viewport camera state. One RenderPassGlobals upload per
@@ -109,26 +105,15 @@ public:
         cairns::ImDrawDataSnapshot imgui_snapshot;
         cairns::FramePacket pkt{};
 
-        explicit PerSlot(cairns::Arena& a)
-            : drawList(cairns::Allocator<cairns::Draw>(a)),
-              drawListSorted(
-                  cairns::Allocator<std::pair<cairns::DrawKey, uint32_t>>(a)) {
+        PerSlot() {
             pending_view_matrix.fill(glm::mat4(1.0f));
             pending_near_z.fill(0.1f);
             pending_far_z.fill(100.0f);
         }
     };
 
-    Engine() :
-    hot_arena_mem_(malloc(kHotArenaMemorySize)),
-    hot_arena_(hot_arena_mem_, kHotArenaMemorySize),
-    scenes_(cairns::Allocator<cairns::Scene>(hot_arena_)),
-    root_nodes_stack_cache_(cairns::Allocator<int32_t>(hot_arena_))
-    {
-        slots_.reserve(kFramesInFlight);
-        for (uint32_t i = 0; i < kFramesInFlight; ++i) {
-            slots_.emplace_back(hot_arena_);
-        }
+    Engine() {
+        slots_.resize(kFramesInFlight);
     }
     
     bool initSwapChain(const rhi::InitConfig& cfg) {
@@ -707,7 +692,7 @@ public:
                 instance_count);
 
             for (const std::filesystem::path& filepath : glb_paths) {
-                scenes_.push_back(cairns::Scene(hot_arena_));
+                scenes_.emplace_back();
                 cairns::Scene& scene = scenes_.back();
                 if (!cairns::LoadSceneFromGltf(filepath, scene)) {
                     return false;
@@ -1869,17 +1854,10 @@ public:
     }
     
 private:
-    // todo @iamies
-    // make an engine dtor and delete this
-    void* hot_arena_mem_;
-    cairns::Arena hot_arena_;
-    
-    ////////// DO NOT MOVE ARENA BELOW THIS LINE. because c++.
-    
     uint32_t frame_ = 0;
 
-    std::vector<cairns::Scene, cairns::Allocator<cairns::Scene>> scenes_;
-    std::vector<int32_t, cairns::Allocator<int32_t>> root_nodes_stack_cache_;
+    std::vector<cairns::Scene> scenes_;
+    std::vector<int32_t> root_nodes_stack_cache_;
 
     std::vector<glm::mat4> debugSceneXforms_;
 

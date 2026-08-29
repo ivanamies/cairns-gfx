@@ -3,7 +3,6 @@
 #include "sampler.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/resources.hpp"
-#include "util/std_allocator.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -99,23 +98,10 @@ struct LoadedMaterial {
 };
 
 struct Scene {
-    
-    Scene(Arena& arena) :
-    arena_(arena),
-    meshes(cairns::Allocator<Mesh>(arena_)),
-    nodes(cairns::Allocator<Node>(arena_)),
-    rootNodes(cairns::Allocator<int32_t>(arena_)),
-    textureHandles(cairns::Allocator<rhi::Handle<rhi::Texture>>(arena_)),
-    samplerHandles(cairns::Allocator<rhi::Handle<rhi::Sampler>>(arena_)),
-    materialIds(cairns::Allocator<uint32_t>(arena_))
-    { }
-    
-    Arena& arena_;
-    
-    std::vector<Mesh, cairns::Allocator<Mesh>> meshes;
-    std::vector<Node, cairns::Allocator<Node>> nodes;
-    std::vector<int32_t, cairns::Allocator<int32_t>> rootNodes;
-    
+    std::vector<Mesh> meshes;
+    std::vector<Node> nodes;
+    std::vector<int32_t> rootNodes;
+
     /////////////////
     // temporaries //
     std::vector<LoadedSampler> loaded_samplers;
@@ -123,11 +109,11 @@ struct Scene {
     std::vector<uint32_t> materialToTextureIndex;
     std::vector<uint32_t> materialToSamplerIndex;
     /////////////////
-    
+
     // Bindless Registry Data
-    std::vector<rhi::Handle<rhi::Texture>, cairns::Allocator<rhi::Handle<rhi::Texture>>> textureHandles;
-    std::vector<rhi::Handle<rhi::Sampler>, cairns::Allocator<rhi::Handle<rhi::Sampler>>> samplerHandles;
-    std::vector<uint32_t, cairns::Allocator<uint32_t>> materialIds;
+    std::vector<rhi::Handle<rhi::Texture>> textureHandles;
+    std::vector<rhi::Handle<rhi::Sampler>> samplerHandles;
+    std::vector<uint32_t> materialIds;
 
     void CleanupTmps() {
         for ( size_t i = 0; i < loaded_textures.size(); ++i ) {
