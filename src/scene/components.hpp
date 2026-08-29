@@ -117,7 +117,7 @@ struct SkinRef {
 //
 // is_main: convenience flag for tooling -- the studio surface's
 // Camera.main returns the first entity with is_main = true in the
-// active world. Multiple is_main entities is a configuration error;
+// active scene. Multiple is_main entities is a configuration error;
 // the studio surface complains loudly (no implicit fallback per
 // Refinement 1 of the resizing+cameras plan).
 struct CameraComponent {

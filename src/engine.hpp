@@ -213,7 +213,7 @@ public:
 
     // #269: spawn one hero entity in active_scene_ from a pre-loaded
     // scene. Returns the new entt entity id (0 on failure: bad
-    // scene_idx, no active world, prefab_ids_ not populated, etc.).
+    // scene_idx, no active scene, prefab_ids_ not populated, etc.).
     // Caller supplies the full world transform; rendered immediately
     // next frame. SkinRef is opportunistically attached via
     // TryCreateSkinForScene (so [SKIN-FAIL] logs cover the failure modes).
@@ -516,7 +516,7 @@ public:
     // ===== P4 selection / highlight / pick. Document-side state -- the
     // selection set names "what the user (human or VLM) cares about right
     // now"; the highlight set names "what should glow". Both live on Engine
-    // today; multi-world will move them onto World once #195 lands. The GPU
+    // today; multi-scene will move them onto World once #195 lands. The GPU
     // ID buffer + outline shader + the actual pick readback are a separate
     // follow-up (#206..#208); RequestPick just records the click coordinate
     // so the handler can resolve it once the GPU side is wired. Full
@@ -1127,7 +1127,7 @@ public:
 
         // EnTT scene-layer path. Register each loaded Scene with the
         // AssetRegistry, then create one entity per debug-grid xform in
-        // the active world's registry. SceneEntity / SceneWorld are
+        // the active scene's registry. SceneEntity / SceneWorld are
         // gone -- the entt::registry IS the source of truth.
         if (!prefab_ids_.empty()) {
             // Pre-allocate hot/cold cells up to kMaxScenes so Acquire
@@ -1179,7 +1179,7 @@ public:
             }
             scene_proxies_.resize(1);
 
-            // P6 multi-world coexistence: secondary slot is acquired but
+            // P6 multi-scene coexistence: secondary slot is acquired but
             // left empty. Pre-#269 it received half of the debug-grid.
             secondary_scene_ = scenes_.Acquire();
             if (cairns::Scene::Hot* wh2 = scenes_.GetHot(secondary_scene_)) {
@@ -1376,7 +1376,7 @@ public:
         // viewport.camera_entity == entt::null; FlyController state drives
         // pose. Camera role #2 (placed CameraComponent entity): the entity
         // owns a WorldTransform (pose) + CameraComponent (intrinsics) in
-        // the active world's registry. WorldTransform.world is the camera-
+        // the active scene's registry. WorldTransform.world is the camera-
         // to-world matrix; the view matrix is its inverse.
         cairns::Scene::Cold* wc_cam = scenes_.GetCold(active_scene_);
         for (int v = 0; v < active_viewport_count_; ++v) {
@@ -1432,7 +1432,7 @@ public:
             s.pending_far_z[v] = vp_far;
         }
 
-        // Set the active world's root_transform, run TRS hierarchy
+        // Set the active scene's root_transform, run TRS hierarchy
         // propagation (no-op when no entity carries a Transform; the
         // current scene-load emplaces WorldTransform directly), then
         // extract. Extract composes node.globalTransform * (world *
@@ -1440,7 +1440,7 @@ public:
         // Fan-out: extract from EVERY world that any viewport binds to (set
         // built from viewports_[].world; deduped via the scenes_ pool's
         // contiguous slot indices). The active_scene_'s extract result lives
-        // in s.proxies (the per-slot single draw list); secondary worlds'
+        // in s.proxies (the per-slot single draw list); secondary scenes'
         // proxies land in scene_proxies_[wh->proxy_slot] for downstream
         // per-viewport draw consumers (#194 / #190's two-viewport path uses
         // these). Today s.proxies still drives BuildMeshOpaqueDraws's draw
@@ -2260,7 +2260,7 @@ public:
         graph_->Reset();
 
         // Per-viewport MeshDrawList: same draws, distinct globals_offset.
-        // (Same world for both viewports this commit; multi-world content
+        // (Same world for both viewports this commit; multi-scene content
         // lands in #195.)
         // #222 Phase A.1: id MRT only when something consumes it (outline
         // overlay or a pending pick this frame). Default path uses the
@@ -3031,7 +3031,7 @@ public:
     }
 
     // #221 Phase 5: per-frame skin pipeline (game-thread side). Walks the
-    // active world for SkinRef entities, samples each actor's clip into a
+    // active scene for SkinRef entities, samples each actor's clip into a
     // per-slot palette slab on the arena, buckets visible actors by mesh
     // (flat-array prefix-sum, NO map per standing rule), emits SkinBatchGpu
     // rows + flat InstanceMeta + flat palettes, publishes spans on s.pkt.
@@ -3862,7 +3862,7 @@ private:
     cairns::ResourceManager<cairns::Scene> scenes_;
     std::vector<cairns::RenderProxyArrays> scene_proxies_;
     cairns::SceneId active_scene_;
-    cairns::SceneId secondary_scene_;  // P6 multi-world coexistence test
+    cairns::SceneId secondary_scene_;  // P6 multi-scene coexistence test
 
     // #220 Step 4: handle-pilled Viewport pool. viewports_ owns Hot+Cold;
     // viewport_ids_[0..active_viewport_count_) carry the slot ordering

@@ -1,9 +1,12 @@
-// scene/world.hpp
+// scene/world.hpp  (#225: file kept for include-stability; struct is Scene)
 //
-// A World is a single editable scene: an entt::registry of instances
-// plus a root transform. Pooled in ResourceManager<Scene> on Engine so
-// the editor can open >= 4 of them simultaneously, each referenced by a
-// generational SceneId.
+// A Scene (Unity vocabulary; pre-#225 this was called World) is a
+// container of GameObjects: an entt::registry plus a root transform.
+// Pooled in ResourceManager<Scene> on Engine so the editor can open
+// >= 4 of them simultaneously, each referenced by a generational
+// SceneId. Multi-active by design -- the active_scene_ concept is
+// editor focus, never an implicit instantiate target (the Unity
+// active-scene wart is in the Refuse bin; see docs/studio_notes.md).
 //
 // Cold holds entt::registry BY VALUE. Pointer stability across
 // ResourceManager<Scene>::Acquire growth is guaranteed by

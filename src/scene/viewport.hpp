@@ -1,11 +1,12 @@
 // scene/viewport.hpp
 //
 // A Viewport is the rendered pane: a Camera + offscreen color target
-// looking at a World. Editor-engine vocabulary (Document-View):
-// World = Document (data + edit state); Viewport = the pane onto it;
-// Camera = the math. Editors keep N of these (one per dock pane). The
-// camera is per-viewport, NOT per-world -- multiple panes can show the
-// same world from different angles.
+// bound to a Scene (#225: pre-#225 this was called World).
+// Editor-engine vocabulary (Document-View): Scene = Document (data +
+// edit state); Viewport = the pane onto it; Camera = the math.
+// Editors keep N of these (one per dock pane). The camera is per-
+// viewport, NOT per-scene -- multiple panes can show the same scene
+// from different angles.
 //
 // Target lifetime: PERSISTENT imported texture, NOT a per-frame
 // transient. Allocated on viewport open, sized to the pane; re-allocated
