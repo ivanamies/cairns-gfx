@@ -139,12 +139,12 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
 #if CAIRNS_VULKAN
     uint32_t sdl_ext_count = 0;
     const char* const* sdl_exts = SDL_Vulkan_GetInstanceExtensions(&sdl_ext_count);
-    rhi_cfg.vk_instance_extensions = sdl_exts;
-    rhi_cfg.vk_instance_extension_count = sdl_ext_count;
-    rhi_cfg.vk_create_surface = &ShellVkCreateSurface;
-    rhi_cfg.vk_create_surface_user = window;
-    rhi_cfg.vk_window_size = &ShellVkWindowSize;
-    rhi_cfg.vk_window_size_user = window;
+    rhi_cfg.plat.vk_instance_extensions = sdl_exts;
+    rhi_cfg.plat.vk_instance_extension_count = sdl_ext_count;
+    rhi_cfg.plat.vk_create_surface = &ShellVkCreateSurface;
+    rhi_cfg.plat.vk_create_surface_user = window;
+    rhi_cfg.plat.vk_window_size = &ShellVkWindowSize;
+    rhi_cfg.plat.vk_window_size_user = window;
 #endif
 
 #if CAIRNS_METAL
@@ -152,9 +152,9 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     if (!metal_view) {
         return SDL_Fail();
     }
-    rhi_cfg.metal_layer =
+    rhi_cfg.plat.metal_layer =
         static_cast<CA::MetalLayer*>(SDL_Metal_GetLayer(metal_view));
-    if (!rhi_cfg.metal_layer) {
+    if (!rhi_cfg.plat.metal_layer) {
         return SDL_Fail();
     }
 #endif

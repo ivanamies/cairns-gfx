@@ -202,7 +202,7 @@ bool Device::Init(const InitConfig& cfg) {
 
     // Surface-creation callback is required when not surfaceless. In
     // surfaceless mode there's no swapchain extension, no present queue.
-    if (!cfg.surfaceless && !cfg.vk_create_surface) {
+    if (!cfg.surfaceless && !cfg.plat.vk_create_surface) {
         return false;
     }
 
@@ -225,8 +225,8 @@ bool Device::Init(const InitConfig& cfg) {
         app.apiVersion = VK_API_VERSION_1_2;
 
         std::vector<const char*> extensions(
-            cfg.vk_instance_extensions,
-            cfg.vk_instance_extensions + cfg.vk_instance_extension_count);
+            cfg.plat.vk_instance_extensions,
+            cfg.plat.vk_instance_extensions + cfg.plat.vk_instance_extension_count);
         if (plat.validation_enabled_) {
             extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         }
@@ -262,7 +262,7 @@ bool Device::Init(const InitConfig& cfg) {
     }
 
     if (!cfg.surfaceless) {
-        if (!cfg.vk_create_surface(cfg.vk_create_surface_user, plat.instance_,
+        if (!cfg.plat.vk_create_surface(cfg.plat.vk_create_surface_user, plat.instance_,
                                     &plat.surface_)) {
             return false;
         }
@@ -433,7 +433,7 @@ void Device::Deinit() {
 
 bool Device::InitSwapChain(SwapChain& sc, const InitConfig& cfg) {
     return sc.Init(plat.device_, plat.physical_, plat.surface_,
-                   cfg.vk_window_size, cfg.vk_window_size_user,
+                   cfg.plat.vk_window_size, cfg.plat.vk_window_size_user,
                    plat.command_pool_, plat.graphics_queue_, plat.msaa_samples_,
                    true);
 }
