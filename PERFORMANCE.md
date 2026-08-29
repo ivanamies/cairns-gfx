@@ -5,6 +5,46 @@ Newest first.
 
 ---
 
+## `<222 session 1 wrap>` (2026-06-11) — post-skinning remediation, 24 commits
+
+Numbers are Debug builds on macOS at N=9 unless noted; S22 Release perf
+verification deferred to a focused session.
+
+**Per-pass deltas at the N=9 demo workload (metal Debug, post-session):**
+
+| slot              | T+A+S baseline (us avg) | post-session (us avg) | notes |
+|-------------------|------------------------:|---------------------:|-------|
+| frame             | ~20800                  | ~20800               | gated on present_pacing |
+| build_draws       | ~80                     | ~170                 | +90us = S.3 per-actor cull math (9 actors * AABB transform) |
+| record            | ~100                    | ~240                 | +140us = +debug build noise + the slightly chattier recorder loop |
+| skinning_compute  | ~870                    | ~870                 | flat (S.1 LDS palette no-op at this scale) |
+| skin_eval         | ~5                      | ~140                 | +130us = S.3 frustum + AABB transform (9 actors); release should ~10x |
+| forward_vp0       | ~170                    | ~170                 | A.1 no-id path active (no outline / pick) |
+| outline_vp0       | n/a / 1500              | n/a / 1500           | only fires when highlights or pick |
+
+**Headline observations:**
+- T.2's FIF=3 flip added zero per-pass cost (memory only).
+- A.1's no-id MRT skip saves the R32U store every fragment — measurable on
+  S22 only; macOS Debug hides it.
+- S.1 LDS palette: kernel time unchanged at N=9 (4-bone gather per thread was
+  already UCHE-resident); S22 expected to see the win.
+- S.3 frustum cull: pure overhead today (all 9 in frustum). Real payoff at
+  500+ actors when 30-60% can be culled.
+- E.6 alias retired Draw::pos_buffer_byte_offset — Draw shrinks 4 B, recorder
+  loop drops the add.
+
+**Caveats:**
+- Headless byte-gate uses a static-only golden; missed the imgui crash, the
+  particle PSO no-id mismatch, AND the E.6 dangling-pointer regression.
+  Windowed launches surfaced all three.
+- ResourceManager::Acquire reallocates the underlying vector (`hot_.emplace
+  _back()`); any prior Hot* becomes dangling. Snapshot fields to locals
+  before any Acquire on the same pool.
+- vk skin Group B palette range was 65536 (4 instances at 256 joints);
+  bumped to 1 MB (64 inst); D.3 will retire the binding entirely.
+
+---
+
 ## `<222 phase T>` (2026-06-11) — triple buffering: kFramesInFlight 2 -> 3
 
 **Driver:** product requirement (30 FPS phone-camera applications).
