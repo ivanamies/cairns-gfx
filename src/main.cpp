@@ -50,7 +50,7 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     constexpr uint32_t kWindowStartWidth = 720;
     constexpr uint32_t kWindowStartHeight = 1280;
 
-    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "Portrait");
     
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)){
         return SDL_Fail();

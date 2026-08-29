@@ -11,7 +11,6 @@
 #include "util/define.hpp"
 
 #include <cstdint>
-#include <span>
 
 #include "rhi/resource_manager.hpp"  // ResourceManager<T>, Handle<>, resource types, Descs
 
@@ -31,8 +30,6 @@ public:
     void Deinit();
 
     Handle<Buffer> CreateBuffer(Allocator& alloc, const BufferDesc& desc);
-    void UploadBuffer(Allocator& alloc, Handle<Buffer> h, uint32_t dst_offset,
-                      std::span<const uint8_t> data);
     Handle<Texture> CreateTexture(Allocator& alloc, const TextureDesc& desc);
     Handle<Sampler> CreateSampler(const SamplerDesc& desc);
     Handle<BindGroup> CreateBindGroup(const BindGroupDesc& desc);

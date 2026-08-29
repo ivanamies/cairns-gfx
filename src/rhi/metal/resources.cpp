@@ -214,58 +214,49 @@ Handle<Buffer> Resources::CreateBuffer(Allocator& alloc, const BufferDesc& d) {
     cold->debug_name = d.debug_name;
 
     if (!d.initial_data.empty()) {
-        UploadBuffer(alloc, h, 0, d.initial_data);
+        if (is_host_visible(d.memory)) {
+            uint8_t* dst = MappedPtr(alloc, h);
+            if (dst) {
+                std::memcpy(dst, d.initial_data.data(), d.initial_data.size());
+            }
+        } else {
+            const uint32_t saved_cursor =
+                alloc.memory_.BumpSaveCursor(Memory::kUpload);
+            const uint32_t ring_bytes =
+                alloc.memory_.BumpRingBytes(Memory::kUpload);
+            const uint32_t cap = (ring_bytes > saved_cursor + 16u)
+                                     ? (ring_bytes - saved_cursor - 16u)
+                                     : 0u;
+            const size_t total = d.initial_data.size();
+            MTL::Buffer* dst_buf = alloc.memory_.HeapMasterBuffer(r.heap_index);
+            size_t done = 0;
+            while (done < total && cap > 0u) {
+                const uint32_t chunk =
+                    static_cast<uint32_t>(std::min<size_t>(total - done, cap));
+                uint32_t src_off = 0;
+                void* staging = alloc.memory_.BumpAllocate(chunk, 16,
+                                                           Memory::kUpload,
+                                                           &src_off);
+                if (!staging) {
+                    break;
+                }
+                std::memcpy(staging, d.initial_data.data() + done, chunk);
+                uint32_t src_hi =
+                    alloc.memory_.BumpMasterHeapIndex(Memory::kUpload);
+                MTL::Buffer* src = alloc.memory_.HeapMasterBuffer(src_hi);
+                MTL::CommandBuffer* cmd = queue_->commandBuffer();
+                MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
+                blit->copyFromBuffer(src, src_off, dst_buf, r.offset + done,
+                                     chunk);
+                blit->endEncoding();
+                cmd->commit();
+                cmd->waitUntilCompleted();
+                alloc.memory_.BumpRestoreCursor(Memory::kUpload, saved_cursor);
+                done += chunk;
+            }
+        }
     }
     return h;
-}
-
-void Resources::UploadBuffer(Allocator& alloc, Handle<Buffer> h,
-                              uint32_t dst_offset,
-                              std::span<const uint8_t> data) {
-    if (data.empty()) {
-        return;
-    }
-    Buffer::Hot* hot = GetHot(h);
-    Buffer::Cold* cold = buffers.GetCold(h);
-    assert(hot && cold && "UploadBuffer: bad handle");
-    if (is_host_visible(cold->mem_type)) {
-        uint8_t* dst = MappedPtr(alloc, h);
-        if (dst) {
-            std::memcpy(dst + dst_offset, data.data(), data.size());
-        }
-        return;
-    }
-    const uint32_t saved_cursor = alloc.memory_.BumpSaveCursor(Memory::kUpload);
-    const uint32_t ring_bytes = alloc.memory_.BumpRingBytes(Memory::kUpload);
-    const uint32_t cap = (ring_bytes > saved_cursor + 16u)
-                             ? (ring_bytes - saved_cursor - 16u)
-                             : 0u;
-    const size_t total = data.size();
-    MTL::Buffer* dst_buf =
-        alloc.memory_.HeapMasterBuffer(hot->heap_buffer_index);
-    size_t done = 0;
-    while (done < total && cap > 0u) {
-        const uint32_t chunk =
-            static_cast<uint32_t>(std::min<size_t>(total - done, cap));
-        uint32_t src_off = 0;
-        void* staging = alloc.memory_.BumpAllocate(chunk, 16, Memory::kUpload,
-                                                   &src_off);
-        if (!staging) {
-            break;
-        }
-        std::memcpy(staging, data.data() + done, chunk);
-        uint32_t src_hi = alloc.memory_.BumpMasterHeapIndex(Memory::kUpload);
-        MTL::Buffer* src = alloc.memory_.HeapMasterBuffer(src_hi);
-        MTL::CommandBuffer* cmd = queue_->commandBuffer();
-        MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
-        blit->copyFromBuffer(src, src_off, dst_buf,
-                             hot->offset_in_heap + dst_offset + done, chunk);
-        blit->endEncoding();
-        cmd->commit();
-        cmd->waitUntilCompleted();
-        alloc.memory_.BumpRestoreCursor(Memory::kUpload, saved_cursor);
-        done += chunk;
-    }
 }
 
 Handle<Texture> Resources::CreateTexture(Allocator& alloc, const TextureDesc& d) {

@@ -185,36 +185,23 @@ public:
                 }
             }
 
-            const int kHeroSlices = 33;
-            const int kCols = 20;
-            const int kRows = 5;
-            const int per_slice = kCols * kRows;
-            const int instance_count = per_slice * kHeroSlices;
-            const float dx = 0.7f;
-            const float dy = 0.7f;
-            const float dz = 2.0f;
+            const int kHeroSlices = 66;
+            const int loaded_heroes = static_cast<int>(glb_paths.size());
+            const int instance_count =
+                std::getenv("CAIRNS_N") ? std::atoi(std::getenv("CAIRNS_N"))
+                                        : loaded_heroes * kHeroSlices;
+            const int grid_n = std::max(
+                1, static_cast<int>(std::ceil(std::sqrt(
+                       static_cast<float>(instance_count)))));
+            const float spacing = 4.0f / static_cast<float>(grid_n);
             const float scale =
                 std::getenv("CAIRNS_SCALE")
                     ? static_cast<float>(std::atof(std::getenv("CAIRNS_SCALE")))
-                    : 0.01f;
-            const float start_x = -dx * static_cast<float>(kCols - 1) * 0.5f;
-            const float start_y = -dy * static_cast<float>(kRows - 1) * 0.5f;
-            const float start_z = -4.0f;
-            debugSceneXforms_.clear();
-            debugSceneXforms_.reserve(instance_count);
-            for (int i = 0; i < instance_count; ++i) {
-                const int layer = i / per_slice;
-                const int rem = i % per_slice;
-                const int row = rem / kCols;
-                const int col = rem % kCols;
-                const glm::vec3 translation(
-                    start_x + static_cast<float>(col) * dx,
-                    start_y + static_cast<float>(row) * dy,
-                    start_z - static_cast<float>(layer) * dz);
-                glm::mat4 m = glm::translate(glm::mat4(1.0f), translation);
-                m = glm::scale(m, glm::vec3(scale));
-                debugSceneXforms_.push_back(m);
-            }
+                    : 0.013f / static_cast<float>(grid_n);
+            const float start = -spacing * static_cast<float>(grid_n - 1) * 0.5f;
+            debugSceneXforms_ = cairns::GenerateDebugGridTransforms(
+                glm::vec3(start, start, -3), grid_n, spacing, spacing, 1.0f, scale,
+                instance_count);
 
             for (const std::filesystem::path& filepath : glb_paths) {
                 scenes_.push_back(cairns::Scene(hot_arena_));
@@ -498,7 +485,7 @@ public:
         particle_parity_ ^= 1;
         t_frame.End();
         if (frame_ % 120 == 0) {
-            CAIRNS_PRINT("draws: %zu\n", drawList_.size());
+            printf("draws: %zu\n", drawList_.size());
             cairns::Timer::PrintReport();
             cairns::Timer::Reset();
         }
