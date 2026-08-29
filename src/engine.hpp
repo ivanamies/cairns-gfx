@@ -218,8 +218,7 @@ public:
         // sees this slot's arena exclusively during RecordFrame; main
         // thread resets at slot Acquire (already blocked on render
         // exclusivity). No mutex, no shared ptr.
-        std::vector<uint8_t> arena_storage;
-        cairns::BumpArena arena{};
+        cairns::BumpArena arena{};  // #229 M0b: slab from cpu_block_ (kRegionFrame).
         // Per-slot mutex. std::lock_guard / std::unique_lock are the RAII
         // discipline; blocks the second acquirer instead of asserting.
         // SLOT IS THE LOCK -- the state machine already serialises slot
@@ -2079,8 +2078,14 @@ public:
         const cairns::MemoryBudget mb = cairns::MemoryBudget::Default();
         cpu_block_.InitReserved(mb.cpu_persistent_bytes);
         for (PerSlot& s : slots_) {
-            s.arena_storage.assign(kArenaBytesPerSlot, 0);
-            s.arena.Init(s.arena_storage.data(), kArenaBytesPerSlot);
+            // #229 M0b: carve the per-frame slab from the block (kRegionFrame)
+            // instead of a per-slot std::vector, so the arena's [0,Used) lands
+            // in the hashable block. (16 MB > chunk_bytes -> the block routes it
+            // to its own malloc; folding oversize into the reservation is a
+            // follow-on. The arena data is hashed directly regardless.)
+            void* slab = cpu_block_.Allocate(
+                static_cast<uint32_t>(kArenaBytesPerSlot), 16, kRegionFrame);
+            s.arena.Init(slab, kArenaBytesPerSlot);
         }
         return true;
     }
