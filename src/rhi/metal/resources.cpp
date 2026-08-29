@@ -424,6 +424,7 @@ Handle<BindGroup> Resources::CreateBindGroup(const BindGroupDesc& desc) {
 
 Handle<BindGroup> Resources::CreateSkinGroupA(Allocator& /*alloc*/,
                                                 Frames& /*frames*/,
+                                                Pipelines& /*pipelines*/,
                                                 const BindGroupDesc& /*desc*/) {
     // Metal: compute path binds buffers directly per batch via
     // setBuffer:offset:atIndex: in DispatchSkinBatches; no descriptor sets.

@@ -14,6 +14,7 @@
 #include "rhi/device.hpp"
 #include "rhi/allocator.hpp"
 #include "rhi/frames.hpp"
+#include "rhi/pipelines.hpp"
 #include "rhi/resource_manager.hpp"
 
 namespace cairns::rhi {
@@ -671,6 +672,7 @@ Handle<BindGroup> Resources::CreateBindGroup(const BindGroupDesc& desc) {
 
 Handle<BindGroup> Resources::CreateSkinGroupA(Allocator& alloc,
                                                 Frames& frames,
+                                                Pipelines& pipelines,
                                                 const BindGroupDesc& desc) {
     if (desc.buffers.size() != 2) {
         return Handle<BindGroup>::Null;
@@ -679,7 +681,7 @@ Handle<BindGroup> Resources::CreateSkinGroupA(Allocator& alloc,
     ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     ai.descriptorPool = frames.plat.descriptor_pool_;
     ai.descriptorSetCount = 1;
-    ai.pSetLayouts = &frames.plat.skin_group_a_layout_;
+    ai.pSetLayouts = &pipelines.plat.skin_group_a_layout_;
     VkDescriptorSet set = VK_NULL_HANDLE;
     if (vkAllocateDescriptorSets(plat.device_, &ai, &set) != VK_SUCCESS) {
         return Handle<BindGroup>::Null;

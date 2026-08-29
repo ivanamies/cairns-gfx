@@ -30,6 +30,7 @@ class Allocator;
 class GpuProfiler;
 class FrameCapture;
 class OffscreenTargets;
+class Pipelines;
 struct SwapChain;
 
 class Frames {
@@ -40,8 +41,10 @@ public:
     Frames& operator=(const Frames&) = delete;
 
     // CALLER: ENGINE. Stateless wrt the sibling subsystems --
-    // GpuProfiler / FrameCapture are passed per-call to Begin/EndSubmit.
-    [[nodiscard]] bool Init(Device& device);
+    // GpuProfiler / FrameCapture / OffscreenTargets are passed per-call
+    // to Begin/EndSubmit. Pipelines is passed only because Frames needs
+    // its descriptor set layouts to alloc per-FIF sets here; not stored.
+    [[nodiscard]] bool Init(Device& device, Pipelines& pipelines);
     // CALLER: ENGINE.
     void Deinit();
 

@@ -15,6 +15,7 @@
 #include "rhi/frame_capture.hpp"
 #include "rhi/gpu_profiler.hpp"
 #include "rhi/offscreen_targets.hpp"
+#include "rhi/pipelines.hpp"
 #include "rhi/resources.hpp"
 #include "rhi/resource_manager.hpp"  // kFramesInFlight
 #include "rhi/swap_chain.hpp"
@@ -75,7 +76,7 @@ void update_render_pass_desc(MTL::RenderPassDescriptor* rpd,
 
 Frames::~Frames() { Deinit(); }
 
-bool Frames::Init(Device& device) {
+bool Frames::Init(Device& device, Pipelines& /*pipelines*/) {
     if (inited_) {
         return true;
     }

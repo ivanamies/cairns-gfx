@@ -15,6 +15,7 @@
 #include "rhi/frame_capture.hpp"
 #include "rhi/gpu_profiler.hpp"
 #include "rhi/offscreen_targets.hpp"
+#include "rhi/pipelines.hpp"
 #include "rhi/resources.hpp"
 #include "rhi/resource_manager.hpp"  // kFramesInFlight
 #include "rhi/swap_chain.hpp"
@@ -156,7 +157,8 @@ void dump_swapchain_image(VkDevice device, VkPhysicalDevice phys,
 
 Frames::~Frames() { Deinit(); }
 
-bool Frames::Init(Device& device) {
+bool Frames::Init(Device& device, Pipelines& pipelines) {
+    PipelinesPlat& pp = pipelines.plat;
     if (inited_) {
         return true;
     }
@@ -212,151 +214,12 @@ bool Frames::Init(Device& device) {
         }
     }
 
-    {  // descriptor layouts + pool + per-frame sets (non-bindless)
+    // #222 Phase F.4: descriptor set layouts moved to Pipelines::Init;
+    // Frames only owns per-FIF sets + the pool below.
+    {  // pool + per-frame sets (layouts read from PipelinesPlat).
         VkDevice dev = plat.device_;
         const uint32_t n = kFramesInFlight;
 
-        {  // point layout (empty: particle render reads ssbo as a vertex buffer)
-            VkDescriptorSetLayoutCreateInfo li{};
-            li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &plat.point_layout_) !=
-                VK_SUCCESS) {
-                return false;
-            }
-        }
-        // #222 Phase D.3/D.4 cleanup: compute_layout_ (particle) retired
-        // -- engine creates dyn_particle_parity_ before the kernel so the
-        // PSO sources its layout from there. skin_group_b_layout_ +
-        // anim_eval_layout_ kept: their consumer kernels are built BEFORE
-        // the matching DynamicBuffers exist (uploadAnimTablesGpu hasn't
-        // run yet). The DynamicBuffers sets allocated post-scene-load are
-        // layout-compatible with these.
-        {  // skin Group B (frame-global skin kernel set 0): dynUBO Params
-           // @0, dynSSBO palettes @1, dynSSBO InstanceMeta @2, SSBO output
-           // pool whole @3.
-            VkDescriptorSetLayoutBinding b[4]{};
-            b[0].binding = 0;
-            b[0].descriptorCount = 1;
-            b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-            b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            b[1].binding = 1;
-            b[1].descriptorCount = 1;
-            b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
-            b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            b[2].binding = 2;
-            b[2].descriptorCount = 1;
-            b[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
-            b[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            b[3].binding = 3;
-            b[3].descriptorCount = 1;
-            b[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            b[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            VkDescriptorSetLayoutCreateInfo li{};
-            li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            li.bindingCount = 4;
-            li.pBindings = b;
-            if (vkCreateDescriptorSetLayout(dev, &li, nullptr,
-                                            &plat.skin_group_b_layout_) !=
-                VK_SUCCESS) {
-                return false;
-            }
-        }
-        {  // anim_eval set layout (13 bindings; DYNAMIC_UBO records @0,
-           // 12 SSBO scene tables + scratch + palette out @1..12).
-            VkDescriptorSetLayoutBinding b[13]{};
-            b[0].binding = 0;
-            b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-            for (uint32_t i = 1; i < 13; ++i) {
-                b[i].binding = i;
-                b[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            }
-            for (uint32_t i = 0; i < 13; ++i) {
-                b[i].descriptorCount = 1;
-                b[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            }
-            VkDescriptorSetLayoutCreateInfo li{};
-            li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            li.bindingCount = 13;
-            li.pBindings = b;
-            if (vkCreateDescriptorSetLayout(dev, &li, nullptr,
-                                            &plat.anim_eval_layout_) !=
-                VK_SUCCESS) {
-                return false;
-            }
-        }
-        {  // #221 Skinning Phase 4 -- Group A (per-mesh). Set 1 of the
-           // skin kernel: SSBO positions slice @ 0, SSBO skin-attrs slice
-           // @ 1. Built at load via Resources::CreateBindGroup; one set
-           // per skinned mesh.
-            VkDescriptorSetLayoutBinding b[2]{};
-            b[0].binding = 0;
-            b[0].descriptorCount = 1;
-            b[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            b[1].binding = 1;
-            b[1].descriptorCount = 1;
-            b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            VkDescriptorSetLayoutCreateInfo li{};
-            li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            li.bindingCount = 2;
-            li.pBindings = b;
-            if (vkCreateDescriptorSetLayout(dev, &li, nullptr,
-                                            &plat.skin_group_a_layout_) !=
-                VK_SUCCESS) {
-                return false;
-            }
-        }
-        // Per-frequency single dynamic-UBO layouts (Aaltonen split): set 0 globals
-        // (once/frame), set 2 drawtmp (per draw). Structurally identical but kept as
-        // distinct named layouts.
-        auto make_dyn_ubo_layout = [&](VkDescriptorSetLayout* out) -> bool {
-            VkDescriptorSetLayoutBinding b{};
-            b.binding = 0;
-            b.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-            b.descriptorCount = 1;
-            b.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-            VkDescriptorSetLayoutCreateInfo li{};
-            li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            li.bindingCount = 1;
-            li.pBindings = &b;
-            return vkCreateDescriptorSetLayout(dev, &li, nullptr, out) == VK_SUCCESS;
-        };
-        if (!make_dyn_ubo_layout(&plat.globals_set_layout_) ||
-            !make_dyn_ubo_layout(&plat.drawtmp_set_layout_)) {
-            return false;
-        }
-
-        // Composite descriptor set layout: 3 COMBINED_IMAGE_SAMPLER frag.
-        // Binding 0 = primary color (all of composite_pip, depthviz, outline).
-        // Binding 1 = secondary tex (id_off for outline). Binding 2 =
-        // highlights texture (R32U 1xN; outline-only). composite_pip and
-        // depthviz don't statically access bindings 1/2 so writing them is
-        // a no-op for those pipelines.
-        {
-            VkDescriptorSetLayoutBinding b[3]{};
-            b[0].binding = 0;
-            b[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            b[0].descriptorCount = 1;
-            b[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-            b[1].binding = 1;
-            b[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            b[1].descriptorCount = 1;
-            b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-            b[2].binding = 2;
-            b[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            b[2].descriptorCount = 1;
-            b[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-            VkDescriptorSetLayoutCreateInfo li{};
-            li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            li.bindingCount = 3;
-            li.pBindings = b;
-            if (vkCreateDescriptorSetLayout(dev, &li, nullptr,
-                                            &plat.composite_set_layout_) !=
-                VK_SUCCESS) {
-                return false;
-            }
-        }
 
         // Pool sizing post-D cleanup:
         //   UBO: point_sets_ (n).
@@ -406,9 +269,9 @@ bool Frames::Init(Device& device) {
             out.resize(n);
             return vkAllocateDescriptorSets(dev, &ai, out.data()) == VK_SUCCESS;
         };
-        if (!alloc_sets(plat.point_layout_, plat.point_sets_) ||
-            !alloc_sets(plat.globals_set_layout_, plat.globals_sets_) ||
-            !alloc_sets(plat.drawtmp_set_layout_, plat.drawtmp_sets_)) {
+        if (!alloc_sets(pp.point_layout_, plat.point_sets_) ||
+            !alloc_sets(pp.globals_set_layout_, plat.globals_sets_) ||
+            !alloc_sets(pp.drawtmp_set_layout_, plat.drawtmp_sets_)) {
             return false;
         }
         // #222 Phase D.3/D.4 cleanup: per-step compute_sets_ + per-FIF
@@ -417,7 +280,7 @@ bool Frames::Init(Device& device) {
         plat.composite_sets_.resize(n);
         {
             const uint32_t total = n * kCompositeRingSize;
-            std::vector<VkDescriptorSetLayout> layouts(total, plat.composite_set_layout_);
+            std::vector<VkDescriptorSetLayout> layouts(total, pp.composite_set_layout_);
             std::vector<VkDescriptorSet> flat(total);
             VkDescriptorSetAllocateInfo ai{};
             ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -458,30 +321,11 @@ void Frames::Deinit() {
     if (plat.descriptor_pool_) {
         vkDestroyDescriptorPool(dev, plat.descriptor_pool_, nullptr);
     }
-    if (plat.globals_set_layout_) {
-        vkDestroyDescriptorSetLayout(dev, plat.globals_set_layout_, nullptr);
-    }
-    if (plat.drawtmp_set_layout_) {
-        vkDestroyDescriptorSetLayout(dev, plat.drawtmp_set_layout_, nullptr);
-    }
-    if (plat.skin_group_b_layout_) {
-        vkDestroyDescriptorSetLayout(dev, plat.skin_group_b_layout_, nullptr);
-    }
-    if (plat.anim_eval_layout_) {
-        vkDestroyDescriptorSetLayout(dev, plat.anim_eval_layout_, nullptr);
-    }
-    if (plat.skin_group_a_layout_) {
-        vkDestroyDescriptorSetLayout(dev, plat.skin_group_a_layout_, nullptr);
-    }
-    if (plat.point_layout_) {
-        vkDestroyDescriptorSetLayout(dev, plat.point_layout_, nullptr);
-    }
-    if (plat.composite_set_layout_) {
-        vkDestroyDescriptorSetLayout(dev, plat.composite_set_layout_, nullptr);
-    }
     // #222 Phase F.1: profiler teardown moved to GpuProfiler::Deinit.
     // #222 Phase F.3: offscreen-target cache teardown moved to
     // OffscreenTargets::Deinit.
+    // #222 Phase F.4: descriptor set layout teardown moved to
+    // Pipelines::Deinit.
     inited_ = false;
 }
 

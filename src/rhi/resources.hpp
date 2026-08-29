@@ -29,6 +29,7 @@ namespace cairns::rhi {
 class Device;
 class Allocator;
 class Frames;
+class Pipelines;
 
 // Compile-time backend capability flag. Today: metal renders the full scene
 // into final_target_ via the swap pass; vk's render-to-texture (#199) isn't
@@ -58,7 +59,10 @@ public:
     // slice). Vulkan: allocates from the descriptor_pool + writes both
     // SSBO descriptors. Metal: returns Null (Metal compute binds buffers
     // directly per-batch via setBuffer:offset:atIndex:).
+    // #222 Phase F.4: takes Pipelines& for the layout, Frames& for the
+    // descriptor pool (one stays per-FIF; the other is global to PSOs).
     Handle<BindGroup> CreateSkinGroupA(Allocator& alloc, Frames& frames,
+                                        Pipelines& pipelines,
                                         const BindGroupDesc& desc);
     Handle<DynamicBuffers> CreateDynamicBuffers(const DynamicBuffersDesc& desc);
     // #222 Phase D.2: full impl variant. Vulkan builds VkDescriptorSetLayout

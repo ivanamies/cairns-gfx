@@ -785,13 +785,18 @@ public:
                 return false;
             }
         }
-        // #222 Phase F.1/F.3: sibling subsystems init before frames.
+        // #222 Phase F.1/F.3/F.4: sibling subsystems init before frames.
+        // Pipelines moves up here too (owns descriptor set layouts post-F.4).
         if (!rhi_.gpu_profiler.Init(rhi_.device)) {
             CAIRNS_PRINT("GreaterInit: gpu_profiler.Init failed\n");
             return false;
         }
         rhi_.offscreen_targets.Init(rhi_.device);
-        if (!rhi_.frames.Init(rhi_.device)) {
+        if (!rhi_.pipelines.Init(rhi_.device)) {
+            CAIRNS_PRINT("GreaterInit: pipelines.Init failed\n");
+            return false;
+        }
+        if (!rhi_.frames.Init(rhi_.device, rhi_.pipelines)) {
             CAIRNS_PRINT("GreaterInit: frames.Init failed\n");
             return false;
         }
@@ -829,10 +834,8 @@ public:
                 return false;
             }
         }
-        if (!rhi_.pipelines.Init(rhi_.device)) {
-            CAIRNS_PRINT("GreaterInit: pipelines.Init failed\n");
-            return false;
-        }
+        // #222 Phase F.4: pipelines.Init moved earlier (now happens
+        // before frames.Init); second call is the idempotent guard.
         if (!cfg.surfaceless) {
             if ( !initSwapChain(cfg)) {
                 CAIRNS_PRINT("GreaterInit: initSwapChain failed\n");
@@ -962,7 +965,7 @@ public:
                     bgd.buffers = std::span<const cairns::rhi::BufferBinding>(
                         bb, 2);
                     mhot.skin_group_a = rhi_.resources.CreateSkinGroupA(
-                        rhi_.alloc, rhi_.frames, bgd);
+                        rhi_.alloc, rhi_.frames, rhi_.pipelines, bgd);
                 });
 
             {
