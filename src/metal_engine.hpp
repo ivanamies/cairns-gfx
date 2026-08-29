@@ -372,8 +372,9 @@ public:
                 sizeof(cairns::rhi::RenderPassGlobals), dyn_align,
                 rhi::Memory::kDynamic);
             memcpy(gptr, &render_pass_globals, sizeof(render_pass_globals));
+            globals_offset_ = rm_.BumpOffset(gptr);
         }
-        
+
         //        cairns::Timer timer2("timer2", 2);
         for ( size_t scene_xform_idx = 0; scene_xform_idx < debugSceneXforms_.size(); ++scene_xform_idx ) {
             size_t scene_idx = scene_xform_idx % scenes_.size();
@@ -555,7 +556,7 @@ public:
             rhi::Span<const uint32_t>(sorted_draw_indices_.data(), sorted_draw_indices_.size());
         ml.pipeline = unlit_;
         ml.bindless = bindless_bg_handle_;
-        ml.globals_offset = 0;
+        ml.globals_offset = globals_offset_;
         ml.resident_textures = rhi::Span<const rhi::Handle<rhi::Texture>>(
             resident_textures_.data(), resident_textures_.size());
         fc.cmd.DrawMeshes(ml);
@@ -788,6 +789,7 @@ private:
     rhi::Handle<rhi::Shader> particle_render_pso_;
     rhi::Handle<rhi::Buffer> particle_ssbo_[2];
     uint32_t particle_parity_ = 0;
+    uint32_t globals_offset_ = 0;
     uint64_t last_ticks_ = 0;
     // render pass
     static constexpr size_t sampleCount = 4;

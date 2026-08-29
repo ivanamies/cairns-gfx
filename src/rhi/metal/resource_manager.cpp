@@ -841,7 +841,7 @@ void CommandRecorder::DrawMeshes(const MeshDrawList& list) {
     enc->useResource(impl_->fr.mesh_master, MTL::ResourceUsageRead, MTL::RenderStageVertex);
     enc->setVertexBuffer(impl_->fr.mesh_master, 0, 0);
     MTL::Buffer* dyn_master = impl_->rm->GetBumpMasterBuffer(Memory::kDynamic);
-    enc->setVertexBuffer(dyn_master, 0, cairns::kRenderPassGlobalBindSlot);
+    enc->setVertexBuffer(dyn_master, list.globals_offset, cairns::kRenderPassGlobalBindSlot);
     enc->setVertexBuffer(dyn_master, 0, cairns::kMaterialBindSlot);
     enc->setVertexBuffer(dyn_master, 0, cairns::kDrawTmpBindSlot);
 
