@@ -174,12 +174,19 @@ struct Mesh {
         // #222 Phase H.4: skin_attrs_buffer retired from Mesh::Hot
         // (same handle on every skinned mesh from one LoadPrefabsGpu).
         // Now returned via LoadPrefabsGpu's out_shared_skin and stashed on
-        // Engine::shared_skin_attrs_buf_; recorder reads from engine.
+        // Engine::per_batch_shared_skin_; recorder resolves via batch_id.
         // #221 Skinning Phase 9 (vk): Group A descriptor set for this
         // skinned mesh (positions slice + skin-attrs slice). Allocated at
         // scene load via Resources::CreateSkinGroupA. Null on Metal (Metal's
         // compute path binds buffers directly per batch).
         rhi::Handle<rhi::BindGroup> skin_group_a;
+        // #224 L1: index into Engine::per_batch_shared_skin_ identifying
+        // which LoadPrefabBatch upload produced this mesh's shared skin
+        // attrs buffer. 0 for unskinned meshes (never read) and for the
+        // single boot-time batch. Group A binding 1 reads the buffer via
+        // engine.per_batch_shared_skin_[batch_id]; the H.4 dedup is now
+        // *within* a batch, not across the program.
+        uint16_t batch_id = 0;
     };
     struct Cold {
         std::string name;

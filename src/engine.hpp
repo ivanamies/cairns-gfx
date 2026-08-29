@@ -257,6 +257,144 @@ public:
         return static_cast<uint32_t>(prefab_ids_.size());
     }
 
+    // #224 L1: resolve the shared skin attrs buffer for a mesh from its
+    // batch_id. Null on out-of-range or unset (= unskinned mesh).
+    rhi::Handle<rhi::Buffer> ResolvedSharedSkin(const cairns::Mesh::Hot& mhot) const {
+        if (mhot.batch_id >= per_batch_shared_skin_.size()) {
+            return rhi::Handle<rhi::Buffer>::Null;
+        }
+        return per_batch_shared_skin_[mhot.batch_id];
+    }
+
+    // #224 L1: append one batch of GLBs to the live Prefab / Mesh pools.
+    // Returns {first_prefab_idx, count} = the span [first, first+count)
+    // into prefab_ids_ where this batch's prefabs landed. Bad parses are
+    // skipped + logged (not fatal). The caller is responsible for:
+    //   (a) calling Device::WaitIdle() before this if frames are in flight
+    //   (b) re-calling uploadAnimTablesGpu() after this if the batch added
+    //       skinned prefabs (the GPU anim table is a flat per-prefab array
+    //       that must be rebuilt; cheap, scales with total prefabs)
+    // Append-only contract: pre-existing Prefabs / Meshes / buffer handles
+    // are NOT touched; only new pool slots are written.
+    struct LoadPrefabBatchResult {
+        uint32_t first_prefab_idx = 0;
+        uint32_t count = 0;
+    };
+    LoadPrefabBatchResult LoadPrefabBatch(
+            std::span<const std::filesystem::path> glbs) {
+        LoadPrefabBatchResult r{};
+        r.first_prefab_idx = static_cast<uint32_t>(prefab_ids_.size());
+
+        // ── parse + prepare resources per glb (no GPU upload yet) ──
+        for (const std::filesystem::path& p : glbs) {
+            cairns::PrefabId sid = prefabs_.Acquire();
+            cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
+            cairns::Prefab::Cold* scold = prefabs_.GetCold(sid);
+            if (!shot || !scold ||
+                !cairns::LoadPrefabFromGltf(p, *shot, *scold, meshes_)) {
+                CAIRNS_PRINT_ERR("[LoadPrefabBatch] parse failed: %s\n",
+                                  p.string().c_str());
+                prefabs_.Release(sid);
+                continue;
+            }
+            cairns::PreparePrefabResources(*shot, *scold, rhi_.resources,
+                                            rhi_.alloc, materials_);
+            prefab_ids_.push_back(sid);
+            ++r.count;
+        }
+        if (r.count == 0) {
+            return r;
+        }
+
+        // ── upload the new batch's prefabs to NEW kDefault buffers ──
+        rhi::Handle<rhi::Buffer> batch_shared_skin =
+            rhi::Handle<rhi::Buffer>::Null;
+        std::span<const cairns::PrefabId> new_span(
+            prefab_ids_.data() + r.first_prefab_idx, r.count);
+        if (!cairns::rhi::LoadPrefabsGpu(new_span, prefabs_, meshes_,
+                                          rhi_.resources, rhi_.alloc,
+                                          &batch_shared_skin)) {
+            CAIRNS_PRINT_ERR(
+                "[LoadPrefabBatch] LoadPrefabsGpu failed for %u prefabs\n",
+                r.count);
+            return r;
+        }
+
+        // ── stamp batch_id + append shared-skin handle ──
+        const uint16_t batch_id =
+            static_cast<uint16_t>(per_batch_shared_skin_.size());
+        per_batch_shared_skin_.push_back(batch_shared_skin);
+        for (cairns::PrefabId sid : new_span) {
+            cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
+            if (!shot) {
+                continue;
+            }
+            for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
+                if (cairns::Mesh::Hot* mhot = meshes_.GetHot(mid)) {
+                    mhot->batch_id = batch_id;
+                }
+            }
+        }
+
+        // ── Group A descriptor set for each new skinned mesh ──
+        for (cairns::PrefabId sid : new_span) {
+            cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
+            if (!shot) {
+                continue;
+            }
+            for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
+                cairns::Mesh::Hot* mhot = meshes_.GetHot(mid);
+                if (!mhot || mhot->attr_skinned_alias.IsNull() ||
+                    batch_shared_skin.IsNull() || mhot->vert_count == 0) {
+                    continue;
+                }
+                cairns::rhi::BufferBinding bb[2]{};
+                bb[0].slot = 0;
+                bb[0].buffer = mhot->posHandle;
+                bb[0].offset = mhot->global_base_vertex *
+                    static_cast<uint32_t>(sizeof(glm::vec4));
+                bb[0].range = mhot->vert_count *
+                    static_cast<uint32_t>(sizeof(glm::vec4));
+                bb[0].kind = cairns::rhi::BufferKind::kStorage;
+                bb[1].slot = 1;
+                bb[1].buffer = batch_shared_skin;
+                bb[1].offset = mhot->skin_attr_base_vertex *
+                    static_cast<uint32_t>(sizeof(cairns::PackedSkinVertex));
+                bb[1].range = mhot->vert_count *
+                    static_cast<uint32_t>(sizeof(cairns::PackedSkinVertex));
+                bb[1].kind = cairns::rhi::BufferKind::kStorage;
+                cairns::rhi::BindGroupDesc bgd{};
+                bgd.debug_name = "skin_group_a";
+                bgd.buffers = std::span<const cairns::rhi::BufferBinding>(
+                    bb, 2);
+                mhot->skin_group_a = rhi_.resources.CreateSkinGroupA(
+                    rhi_.alloc, rhi_.frames, rhi_.pipelines, bgd);
+            }
+        }
+
+        // ── per-new-prefab CleanupTmps + per-new-mesh cpu temp clear ──
+        for (cairns::PrefabId sid : new_span) {
+            if (cairns::Prefab::Cold* sc = prefabs_.GetCold(sid)) {
+                sc->CleanupTmps();
+            }
+        }
+        for (cairns::PrefabId sid : new_span) {
+            cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
+            if (!shot) {
+                continue;
+            }
+            for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
+                if (cairns::Mesh::Cold* mc = meshes_.GetCold(mid)) {
+                    mc->cpuPositions.clear();
+                    mc->cpuAttrs.clear();
+                    mc->cpuIndices.clear();
+                }
+            }
+        }
+
+        return r;
+    }
+
     // #269: bind-pose extent (max axis component of aabb_max - aabb_min)
     // of the scene's first skinned mesh -- the unit a caller normalizes
     // to when picking per-actor scale so heroes occupy a uniform cell
@@ -1001,62 +1139,11 @@ public:
                 }
             }
 
-            for (const std::filesystem::path& filepath : glb_paths) {
-                // #220 Step 3: Acquire PrefabId, write Hot+Cold via pool.
-                cairns::PrefabId sid = prefabs_.Acquire();
-                prefab_ids_.push_back(sid);
-                cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
-                cairns::Prefab::Cold* scold = prefabs_.GetCold(sid);
-                if (!cairns::LoadPrefabFromGltf(filepath, *shot, *scold, meshes_)) {
-                    return false;
-                }
-                cairns::PreparePrefabResources(*shot, *scold, rhi_.resources,
-                                              rhi_.alloc, materials_);
-            }
-
-            if (!cairns::rhi::LoadPrefabsGpu(
-                    std::span<const cairns::PrefabId>(prefab_ids_.data(),
-                                                       prefab_ids_.size()),
-                    prefabs_, meshes_, rhi_.resources, rhi_.alloc,
-                    &shared_skin_attrs_buf_)) {
-                return false;
-            }
-            // #222 Phase H.4: skin_attrs_buffer no longer rides on
-            // Mesh::Hot -- LoadPrefabsGpu returns it via out param.
-
-            // #221 Phase 9 (vk): per-skinned-mesh Group A descriptor set.
-            // Allocates one set + writes 2 SSBO descriptors per skinned
-            // mesh from the resources descriptor pool. Metal returns Null
-            // (binds buffers directly per batch in DispatchSkinBatches).
-            meshes_.ForEachLive(
-                [&](cairns::Mesh::Hot& mhot, cairns::Mesh::Cold&) {
-                    if (mhot.attr_skinned_alias.IsNull() ||
-                        shared_skin_attrs_buf_.IsNull() ||
-                        mhot.vert_count == 0) {
-                        return;
-                    }
-                    cairns::rhi::BufferBinding bb[2]{};
-                    bb[0].slot = 0;
-                    bb[0].buffer = mhot.posHandle;
-                    bb[0].offset = mhot.global_base_vertex *
-                        static_cast<uint32_t>(sizeof(glm::vec4));
-                    bb[0].range = mhot.vert_count *
-                        static_cast<uint32_t>(sizeof(glm::vec4));
-                    bb[0].kind = cairns::rhi::BufferKind::kStorage;
-                    bb[1].slot = 1;
-                    bb[1].buffer = shared_skin_attrs_buf_;
-                    bb[1].offset = mhot.skin_attr_base_vertex *
-                        static_cast<uint32_t>(sizeof(cairns::PackedSkinVertex));
-                    bb[1].range = mhot.vert_count *
-                        static_cast<uint32_t>(sizeof(cairns::PackedSkinVertex));
-                    bb[1].kind = cairns::rhi::BufferKind::kStorage;
-                    cairns::rhi::BindGroupDesc bgd{};
-                    bgd.debug_name = "skin_group_a";
-                    bgd.buffers = std::span<const cairns::rhi::BufferBinding>(
-                        bb, 2);
-                    mhot.skin_group_a = rhi_.resources.CreateSkinGroupA(
-                        rhi_.alloc, rhi_.frames, rhi_.pipelines, bgd);
-                });
+            // #224 L1: parse + upload + Group A build now go through
+            // LoadPrefabBatch (the same method runtime cairns.prefab.loadBatch
+            // will call). GreaterInit's call is just the boot-time batch.
+            LoadPrefabBatch(std::span<const std::filesystem::path>(
+                glb_paths.data(), glb_paths.size()));
 
             {
                 uint64_t total_skin_verts = 0;
@@ -1065,7 +1152,7 @@ public:
                 meshes_.ForEachLive(
                     [&](cairns::Mesh::Hot& mhot, cairns::Mesh::Cold&) {
                         if (mhot.attr_skinned_alias.IsNull() ||
-                            shared_skin_attrs_buf_.IsNull() ||
+                            ResolvedSharedSkin(mhot).IsNull() ||
                             mhot.vert_count == 0) {
                             return;
                         }
@@ -1099,20 +1186,8 @@ public:
                     max_vert_per_mesh, max_joints, max_nodes);
             }
 
-            // #220 Step 3: per-Scene Cold CleanupTmps via the pool sweep.
-            prefabs_.ForEachLive(
-                [](cairns::Prefab::Hot&, cairns::Prefab::Cold& c) {
-                    c.CleanupTmps();
-                });
-            // #220 Step 2: clear every Mesh's CPU temporaries in the pool
-            // after upload. Used to live inside Scene::CleanupTmps, but
-            // mesh data now lives in the engine-owned pool, not Scene.
-            meshes_.ForEachLive(
-                [](cairns::Mesh::Hot&, cairns::Mesh::Cold& c) {
-                    c.cpuPositions.clear();
-                    c.cpuAttrs.clear();
-                    c.cpuIndices.clear();
-                });
+            // #224 L1: CleanupTmps + per-mesh CPU clear moved into
+            // LoadPrefabBatch so subsequent batches get the same hygiene.
         }
         if (!prefab_ids_.empty()) {
             cairns::Prefab::Hot* s0_hot =
@@ -2395,9 +2470,12 @@ public:
                             meshes_.GetHot(sbg.mesh);
                         rhi::SkinDispatchBatch& db = dbatches[bi];
                         db = rhi::SkinDispatchBatch{};
+                        const rhi::Handle<rhi::Buffer> mesh_skin_buf =
+                            mhot ? ResolvedSharedSkin(*mhot)
+                                  : rhi::Handle<rhi::Buffer>::Null;
                         if (!mhot ||
                             mhot->posHandle.IsNull() ||
-                            shared_skin_attrs_buf_.IsNull()) {
+                            mesh_skin_buf.IsNull()) {
                             continue;
                         }
                         struct SkinParamsCpu {
@@ -2448,7 +2526,7 @@ public:
                         db.pos_byte_offset =
                             mhot->global_base_vertex *
                             static_cast<uint32_t>(sizeof(glm::vec4));
-                        db.skin_attr_buffer = shared_skin_attrs_buf_;
+                        db.skin_attr_buffer = mesh_skin_buf;
                         db.skin_attr_byte_offset =
                             mhot->skin_attr_base_vertex *
                             static_cast<uint32_t>(
@@ -3788,9 +3866,15 @@ private:
     std::vector<rhi::Handle<rhi::Texture>> resident_textures_;
     // #222 Phase H.4 partial: the skin-attr SSBO is the SAME handle on every
     // skinned mesh from one LoadPrefabsGpu call -- it does not belong on
-    // Mesh::Hot. Engine reads from here; per-mesh field stays as a stop-gap
-    // until the gltf_loader API takes a buffer-handle out-param.
-    rhi::Handle<rhi::Buffer> shared_skin_attrs_buf_ = rhi::Handle<rhi::Buffer>::Null;
+    // Mesh::Hot.
+    // #224 L1: was a single handle; now a per-batch list. Each
+    // LoadPrefabBatch call pushes ONE handle (the batch's shared skin
+    // attrs buffer) and stamps the batch index on every Mesh::Hot it
+    // creates. The H.4 dedup still holds *within* a batch (every
+    // skinned mesh in the batch reads the same handle) -- only across
+    // batches do they differ. Per-mesh resolution:
+    //   ResolvedSharedSkin(mhot) == per_batch_shared_skin_[mhot.batch_id]
+    std::vector<rhi::Handle<rhi::Buffer>> per_batch_shared_skin_;
     std::vector<int32_t> root_nodes_stack_cache_;
 
     // #220 Step 1: handle-pilled pool. Bind group lives on Hot;
