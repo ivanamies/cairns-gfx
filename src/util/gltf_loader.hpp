@@ -27,7 +27,9 @@
 #include <glm/gtx/string_cast.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 
+#include "util/alloc_tags.hpp"
 #include "util/gpu_anim_types.hpp"
+#include "util/print_allocator.hpp"
 
 #include <memory>
 
@@ -142,7 +144,10 @@ struct Mesh {
         rhi::Handle<rhi::Buffer> posHandle;
         rhi::Handle<rhi::Buffer> attrHandle; // shared vertex-stream attrs
         rhi::Handle<rhi::Buffer> indexHandle;
-        std::vector<Primitive> primitives;
+        std::vector<Primitive,
+                    cairns::print_allocator<Primitive,
+                                              cairns::tags::MeshHotPrimitives>>
+            primitives;
         // #221 Skinning F5: snapshot of LoadPrefabsGpu's running_vert at the
         // patch site. Skinned draws subtract this to get the mesh-local
         // baseVertex (vkCmdDrawIndexed has ONE vertexOffset, which today
@@ -189,28 +194,44 @@ struct Mesh {
         uint16_t batch_id = 0;
     };
     struct Cold {
-        std::string name;
-        // CPU load-time temporaries. Cleared post-upload by
-        // Engine's mesh-pool sweep (was scene.CleanupTmps's job).
-        std::vector<glm::vec4> cpuPositions;
-        std::vector<VertexAttribute> cpuAttrs;
-        std::vector<uint32_t> cpuIndices;
-        // #221 Skinning Phase 1: per-vertex joint indices + weights aligned
-        // with cpuPositions/cpuAttrs (size() == cpuPositions.size() when
-        // mesh is skinned; empty when not).
-        std::vector<SkinVertex> cpuSkinAttrs;
+        std::basic_string<char, std::char_traits<char>,
+                          cairns::print_allocator<char,
+                                                    cairns::tags::MeshColdName>>
+            name;
+        std::vector<glm::vec4,
+                    cairns::print_allocator<glm::vec4,
+                                              cairns::tags::MeshColdCpuPositions>>
+            cpuPositions;
+        std::vector<VertexAttribute,
+                    cairns::print_allocator<VertexAttribute,
+                                              cairns::tags::MeshColdCpuAttrs>>
+            cpuAttrs;
+        std::vector<uint32_t,
+                    cairns::print_allocator<uint32_t,
+                                              cairns::tags::MeshColdCpuIndices>>
+            cpuIndices;
+        std::vector<SkinVertex,
+                    cairns::print_allocator<SkinVertex,
+                                              cairns::tags::MeshColdCpuSkinAttrs>>
+            cpuSkinAttrs;
     };
 };
 
 struct Node {
-    std::string name;
+    std::basic_string<char, std::char_traits<char>,
+                      cairns::print_allocator<char,
+                                                cairns::tags::NodeName>>
+        name;
     glm::mat4 localTransform = glm::mat4(1.0f);
     glm::mat4 globalTransform = glm::mat4(1.0f);
 
     int32_t meshIndex = -1; // Index into Scene.meshes
     // #221 Skinning Phase 1: per-glTF node skin reference. -1 = no skin.
     int32_t skinIndex = -1; // Index into Prefab::Cold::skins.
-    std::vector<int32_t> children;
+    std::vector<int32_t,
+                cairns::print_allocator<int32_t,
+                                          cairns::tags::NodeChildren>>
+        children;
 };
 
 // #221 Skinning Phase 1: per-glTF skin (joint set + inverse binds). Joints
@@ -218,8 +239,14 @@ struct Node {
 // in the same order. skeletonRoot is the glTF "skeleton" hint (-1 if absent;
 // not used by the runtime — joint world matrices come from the node walk).
 struct Skin {
-    std::vector<int32_t> jointNodes;
-    std::vector<glm::mat4> inverseBinds;
+    std::vector<int32_t,
+                cairns::print_allocator<int32_t,
+                                          cairns::tags::SkinJointNodes>>
+        jointNodes;
+    std::vector<glm::mat4,
+                cairns::print_allocator<glm::mat4,
+                                          cairns::tags::SkinInverseBinds>>
+        inverseBinds;
     int32_t skeletonRoot = -1;
 };
 
@@ -244,8 +271,14 @@ struct AnimationSampler {
     // For T/S/weights: x/y/z in .xyz (w ignored). For R: full quat in .xyzw.
     // Packing as vec4 keeps the sampler payload backend-agnostic and avoids
     // a tagged union; readers branch on the channel's path.
-    std::vector<float> times;
-    std::vector<glm::vec4> values;
+    std::vector<float,
+                cairns::print_allocator<float,
+                                          cairns::tags::AnimSamplerTimes>>
+        times;
+    std::vector<glm::vec4,
+                cairns::print_allocator<glm::vec4,
+                                          cairns::tags::AnimSamplerValues>>
+        values;
     AnimationInterpolation interp = AnimationInterpolation::kLinear;
 };
 
@@ -256,9 +289,18 @@ struct AnimationChannel {
 };
 
 struct Clip {
-    std::string name;
-    std::vector<AnimationSampler> samplers;
-    std::vector<AnimationChannel> channels;
+    std::basic_string<char, std::char_traits<char>,
+                      cairns::print_allocator<char,
+                                                cairns::tags::AnimClipName>>
+        name;
+    std::vector<AnimationSampler,
+                cairns::print_allocator<AnimationSampler,
+                                          cairns::tags::AnimClipSamplers>>
+        samplers;
+    std::vector<AnimationChannel,
+                cairns::print_allocator<AnimationChannel,
+                                          cairns::tags::AnimClipChannels>>
+        channels;
     float duration = 0.0f;
 };
 
@@ -303,37 +345,85 @@ struct Prefab {
     struct Hot {
         // #220 Step 2: was std::vector<Mesh>. Mesh data is engine-owned
         // via cairns::ResourceManager<Mesh>; Scene only holds the handles.
-        std::vector<cairns::Handle<Mesh>> meshes;
-        std::vector<int32_t> rootNodes;
+        std::vector<cairns::Handle<Mesh>,
+                    cairns::print_allocator<cairns::Handle<Mesh>,
+                                              cairns::tags::PrefabHotMeshes>>
+            meshes;
+        std::vector<int32_t,
+                    cairns::print_allocator<int32_t,
+                                              cairns::tags::PrefabHotRootNodes>>
+            rootNodes;
         // Renamed from materialIds (legacy uint32_t name). Each element
         // is a Handle<Material> into Engine::materials_.
-        std::vector<cairns::Handle<Material>> materials;
+        std::vector<cairns::Handle<Material>,
+                    cairns::print_allocator<cairns::Handle<Material>,
+                                              cairns::tags::PrefabHotMaterials>>
+            materials;
 
         // #221 Phase 5b: index into engine's flat scene_headers array.
         // UINT32_MAX = scene not registered with anim_eval (no skin/clip).
         uint32_t gpu_prefab_header_idx = UINT32_MAX;
     };
     struct Cold {
-        std::vector<Node> nodes;
-        std::vector<AnimatedTRS> bind_pose;
+        std::vector<Node,
+                    cairns::print_allocator<Node,
+                                              cairns::tags::PrefabColdNodes>>
+            nodes;
+        std::vector<AnimatedTRS,
+                    cairns::print_allocator<AnimatedTRS,
+                                              cairns::tags::PrefabColdBindPose>>
+            bind_pose;
         // #222 Phase H.6 finish: per-scene texture/sampler registry. Only
         // read at material setup (PreparePrefabResources) + resident_textures
         // population (Engine::resident_textures_ built once post-upload).
         // Demoted from Hot since no per-frame reader exists.
-        std::vector<rhi::Handle<rhi::Texture>> textureHandles;
-        std::vector<rhi::Handle<rhi::Sampler>> samplerHandles;
+        std::vector<rhi::Handle<rhi::Texture>,
+                    cairns::print_allocator<rhi::Handle<rhi::Texture>,
+                                              cairns::tags::PrefabColdTextureHandles>>
+            textureHandles;
+        std::vector<rhi::Handle<rhi::Sampler>,
+                    cairns::print_allocator<rhi::Handle<rhi::Sampler>,
+                                              cairns::tags::PrefabColdSamplerHandles>>
+            samplerHandles;
         // #221 Phase 5b: per-scene flat tables for GPU palette eval.
         // Populated at load by LoadPrefabFromGltf and consumed by
         // engine's anim-table upload sweep.
-        std::vector<int32_t> gpu_parent;
-        std::vector<int32_t> gpu_topo;
-        std::vector<GpuTRS> gpu_bind_pose;
-        std::vector<GpuChannel> gpu_channels;
-        std::vector<GpuSampler> gpu_samplers;
-        std::vector<float> gpu_times;
-        std::vector<glm::vec4> gpu_values;
-        std::vector<int32_t> gpu_joint_nodes;
-        std::vector<glm::mat4> gpu_inverse_binds;
+        std::vector<int32_t,
+                    cairns::print_allocator<int32_t,
+                                              cairns::tags::PrefabColdGpuParent>>
+            gpu_parent;
+        std::vector<int32_t,
+                    cairns::print_allocator<int32_t,
+                                              cairns::tags::PrefabColdGpuTopo>>
+            gpu_topo;
+        std::vector<GpuTRS,
+                    cairns::print_allocator<GpuTRS,
+                                              cairns::tags::PrefabColdGpuBindPose>>
+            gpu_bind_pose;
+        std::vector<GpuChannel,
+                    cairns::print_allocator<GpuChannel,
+                                              cairns::tags::PrefabColdGpuChannels>>
+            gpu_channels;
+        std::vector<GpuSampler,
+                    cairns::print_allocator<GpuSampler,
+                                              cairns::tags::PrefabColdGpuSamplers>>
+            gpu_samplers;
+        std::vector<float,
+                    cairns::print_allocator<float,
+                                              cairns::tags::PrefabColdGpuTimes>>
+            gpu_times;
+        std::vector<glm::vec4,
+                    cairns::print_allocator<glm::vec4,
+                                              cairns::tags::PrefabColdGpuValues>>
+            gpu_values;
+        std::vector<int32_t,
+                    cairns::print_allocator<int32_t,
+                                              cairns::tags::PrefabColdGpuJointNodes>>
+            gpu_joint_nodes;
+        std::vector<glm::mat4,
+                    cairns::print_allocator<glm::mat4,
+                                              cairns::tags::PrefabColdGpuInverseBinds>>
+            gpu_inverse_binds;
         int32_t gpu_mesh_node = -1;
         float gpu_clip_duration = 0.0f;
         // #221 Skinning Phase 1: glTF skins + clips for this scene. Per
@@ -341,8 +431,14 @@ struct Prefab {
         // the existing shape (proper Tier-1 bump migration is a separate
         // sweep). Clips are kept long-lived (not in CleanupTmps) since
         // animation playback needs them past load.
-        std::vector<Skin> skins;
-        std::vector<Clip> clips;
+        std::vector<Skin,
+                    cairns::print_allocator<Skin,
+                                              cairns::tags::PrefabColdSkins>>
+            skins;
+        std::vector<Clip,
+                    cairns::print_allocator<Clip,
+                                              cairns::tags::PrefabColdClips>>
+            clips;
         // Load-time temporaries cleared post-upload via CleanupTmps.
         std::vector<LoadedSampler> loaded_samplers;
         std::vector<LoadedTexture> loaded_textures;
@@ -369,7 +465,7 @@ using PrefabId = cairns::Handle<Prefab>;
 inline bool LoadMeshFromGltf(const fastgltf::Asset& asset,
                              const fastgltf::Mesh& gltfMesh,
                              Mesh::Hot& outHot, Mesh::Cold& outCold) {
-    outCold.name = std::string(gltfMesh.name);
+    outCold.name.assign(gltfMesh.name.data(), gltfMesh.name.size());
     outCold.cpuPositions.clear();
     outCold.cpuAttrs.clear();
     outCold.cpuIndices.clear();
@@ -634,7 +730,7 @@ inline bool LoadPrefabFromGltf(const std::filesystem::path& path,
         cold.nodes.push_back(Node());
         auto& gn = asset.nodes[i];
         auto& on = cold.nodes[i];
-        on.name = std::string(gn.name);
+        on.name.assign(gn.name.data(), gn.name.size());
         if (const auto* trs = std::get_if<fastgltf::TRS>(&gn.transform)) {
             glm::vec3 t(trs->translation[0], trs->translation[1], trs->translation[2]);
             glm::quat r(trs->rotation[3], trs->rotation[0], trs->rotation[1], trs->rotation[2]);
@@ -684,7 +780,7 @@ inline bool LoadPrefabFromGltf(const std::filesystem::path& path,
     for (size_t ci = 0; ci < asset.animations.size(); ++ci) {
         const auto& ganim = asset.animations[ci];
         Clip out;
-        out.name = std::string(ganim.name);
+        out.name.assign(ganim.name.data(), ganim.name.size());
         out.samplers.reserve(ganim.samplers.size());
         for (const auto& gs : ganim.samplers) {
             AnimationSampler s;
@@ -810,7 +906,7 @@ inline bool LoadPrefabFromGltf(const std::filesystem::path& path,
 
     int32_t walk_clip = -1;
     {
-        auto contains_ci = [](const std::string& s, const char* needle) {
+        auto contains_ci = [](std::string_view s, const char* needle) {
             const size_t n = std::strlen(needle);
             if (s.size() < n) return false;
             for (size_t i = 0; i + n <= s.size(); ++i) {
