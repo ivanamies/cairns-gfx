@@ -113,8 +113,19 @@ Handle<Texture> Resources::CreateTexture(Allocator& alloc, const TextureDesc& d)
 Handle<Sampler> Resources::CreateSampler(const SamplerDesc& d) { (void)d; return Handle<Sampler>::Null; }
 Handle<BindGroup> Resources::CreateBindGroup(const BindGroupDesc& d) { (void)d; return Handle<BindGroup>::Null; }
 Handle<BindGroup> Resources::CreateSkinGroupA(Allocator& a, Frames& f, Pipelines& p, const BindGroupDesc& d) { (void)a; (void)f; (void)p; (void)d; return Handle<BindGroup>::Null; }
-Handle<DynamicBuffers> Resources::CreateDynamicBuffers(const DynamicBuffersDesc& d) { (void)d; return Handle<DynamicBuffers>::Null; }
-Handle<DynamicBuffers> Resources::CreateDynamicBuffers(Allocator& a, Frames& f, const DynamicBuffersDesc& d) { (void)a; (void)f; (void)d; return Handle<DynamicBuffers>::Null; }
+Handle<DynamicBuffers> Resources::CreateDynamicBuffers(const DynamicBuffersDesc& d) {
+    Handle<DynamicBuffers> h = dynamic_buffers.Acquire();
+    DynamicBuffers::Cold* cold = dynamic_buffers.GetCold(h);
+    cold->layout.assign(d.bindings.begin(), d.bindings.end());
+    cold->debug_name = d.debug_name;
+    DynamicBuffers::Hot* hot = dynamic_buffers.GetHot(h);
+    hot->binding_count = static_cast<uint8_t>(d.bindings.size());
+    return h;
+}
+Handle<DynamicBuffers> Resources::CreateDynamicBuffers(Allocator& a, Frames& f, const DynamicBuffersDesc& d) {
+    (void)a; (void)f;
+    return CreateDynamicBuffers(d);
+}
 
 void Resources::Destroy(Allocator& a, Handle<Buffer> h) { (void)a; (void)h; }
 void Resources::Destroy(Allocator& a, Handle<Texture> h) { (void)a; (void)h; }
