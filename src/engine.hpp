@@ -43,6 +43,7 @@
 #include "rhi/rhi.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/command_recorder.hpp"
+#include "rhi/task_guard.hpp"
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 
@@ -625,11 +626,10 @@ public:
     // from draw(). Owns: rhi_.frames.Begin/End, the bump-ring EncodeDraws,
     // the compute + render-pass encode. Reads pkt + slots_[pkt.slot].
     void RecordFrame(FramePacket& pkt) {
-#if CAIRNS_METAL
-        // Render thread needs its own autorelease pool; main-thread iterate
-        // pool only covers game-thread code.
-        NS::AutoreleasePool* rt_pool = NS::AutoreleasePool::alloc()->init();
-#endif
+        // RAII per-task cleanup -- on Metal, drains autoreleased Cocoa/Metal
+        // objects when the task body ends. No-op elsewhere.
+        rhi::TaskGuard task_guard;
+
         PerSlot& s = slots_[pkt.slot];
 
         // Publish parity early -- it's a pure function of pkt.particle_parity_in
@@ -707,9 +707,6 @@ public:
         fc.cmd.PassTimerEnd();
         t_record.End();
         rhi_.frames.End(swapchain_, fc);
-#if CAIRNS_METAL
-        rt_pool->release();
-#endif
     }
     
     bool initRenderPipeline() {
