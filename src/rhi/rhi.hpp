@@ -21,16 +21,14 @@ struct Rhi {
     Device device;
     Allocator alloc;
     Resources resources;
-    // #222 Phase F.1: GPU timing extracted out of Frames. Init runs
-    // after device + before frames (frames stamps the query pool onto
-    // CommandRecorderPlat::profiler_ during Begin).
+    // GPU per-pass timing. Must init after device and before frames:
+    // Frames::Begin stamps the query pool onto the recorder.
     GpuProfiler gpu_profiler;
-    // #222 Phase F.2: one-shot swap-image dump request. Frames reads
-    // via per-call param; engine writes via Rhi::frame_capture.
+    // One-shot swap-image dump request. Engine writes it; Frames reads
+    // it via per-call param.
     FrameCapture frame_capture;
-    // #222 Phase F.3: offscreen render-pass + framebuffer cache. vk
-    // owns the cache; metal stub. Frames::Begin stamps cache pointer
-    // onto the recorder via per-call param.
+    // Offscreen render-pass + framebuffer cache (vk owns it; other
+    // backends stub). Frames::Begin stamps it onto the recorder.
     OffscreenTargets offscreen_targets;
     Frames frames;
     Pipelines pipelines;

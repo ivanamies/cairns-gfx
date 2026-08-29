@@ -44,11 +44,10 @@ struct Draw {
     // todo @iamies figure out what this does
     std::array<uint32_t,2> dynamic_buffer_offsets = {};
     uint32_t triangle_count = 0;
-    // #222 Phase E.6: Draw::pos_buffer_byte_offset retired. Skinned actors
-    // now point vertex_buffers[0] at SkinnedAttachment::Hot::pos_stream, an
-    // O(1) freelist alias of skin_output_pool_buffer_ pre-offset by the
-    // actor's slice start. Recorders read pos_off from handle resolution
-    // alone -- same byte cost on the wire, honest field on the struct.
+    // Skinned actors point vertex_buffers[0] at
+    // SkinnedAttachment::Hot::pos_stream, an O(1) freelist alias of
+    // skin_output_pool_buffer_ pre-offset by the actor's slice start;
+    // recorders read pos_off from handle resolution alone.
 };
 
 } // namespace cairns

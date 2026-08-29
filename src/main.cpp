@@ -1,4 +1,4 @@
-#define SDL_MAIN_USE_CALLBACKS  // This is necessary for the new callbacks API. To use the legacy API, don't define this.
+#define SDL_MAIN_USE_CALLBACKS
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_init.h>
@@ -51,10 +51,6 @@
 #include "util/json.hpp"
 #include "util/misc.hpp"  // GetBasePathSafe
 
-// ScenarioLauncher + DrawScenarioPanel now live in shell/scenario_launcher.hpp,
-// shared with the web app (web_main.cpp) so both windowed targets draw one UI.
-
-
 struct AppContext {
     SDL_Window* window = nullptr;
     // Backend-specific shell handle (metal: SDL_MetalView; vk: nullptr).
@@ -84,12 +80,12 @@ struct AppContext {
 #endif
     bool agent_quit = false;
 
-    // #229 imgui scenario picker (boots blank; user clicks to run a scripts/*.js).
+    // Imgui scenario picker (boots blank; user clicks to run a scripts/*.js).
     cairns::ScenarioLauncher launcher;
 
     SDL_AppResult app_quit = SDL_APP_CONTINUE;
 
-    // P1 fly-cam: RMB held => mouse-look + WASD/hjkl/QE/Shift drive
+    // Fly-cam: RMB held => mouse-look + WASD/hjkl/QE/Shift drive
     // engine->ApplyFlyMovement each iterate. last_iter_ns_ is the timestamp
     // of the previous SDL_AppIterate so the per-frame dt is wall-time.
     bool rmb_look = false;
@@ -150,10 +146,9 @@ void cairns_free(char* p) { std::free(p); }
 SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
 
 #ifdef __ANDROID__
-    // Android app launches via SDLActivity wrapper -- no shell to pass
-    // env vars. Default to a small entity count so the S22's MoltenVK/
-    // Adreno tile budget isn't blown by the 3300-hero benchmark; mirrors
-    // the CAIRNS_N=9 setting the macOS user used to test pick + outline.
+    // Android launches via the SDLActivity wrapper -- no shell to pass env
+    // vars. Default to a small entity count so the Adreno tile budget isn't
+    // blown by the 3300-hero benchmark.
     setenv("CAIRNS_N", "500", 0);
 #endif
 
@@ -195,7 +190,6 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
         return SDL_Fail();
     }
 
-    // Build the platform-handle InitConfig the RHI consumes.
     cairns::rhi::InitConfig rhi_cfg{};
     rhi_cfg.surfaceless = false;
     rhi_cfg.width = kWindowStartWidth;
@@ -209,7 +203,7 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     if (!engine->GreaterInit(rhi_cfg, ecfg)) {
         return SDL_Fail();
     }
-    // #229 blank boot: no particles until a scenario asks for them (the perf
+    // Blank boot: no particles until a scenario asks for them (the perf
     // smokes do). The launcher reset also disables them between scenarios.
     engine->EnableParticles(false);
     // Surfaceless webgpu (web) renders offscreen then copies to the canvas, so it
@@ -217,7 +211,6 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     // cairns_serve stays imgui-free). Harmless on native.
     engine->SetImguiEnabled(true);
 
-    // Setup App State
     *appstate = new AppContext{
         .window = window,
         .shell_handle = shell_handle,
@@ -228,7 +221,6 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
         .engine = engine,
     };
 
-    // Live agent transport setup (no-op unless CAIRNS_AGENT_STDIN is set).
     AppContext* app_ctx = static_cast<AppContext*>(*appstate);
     auto& registry = app_ctx->registry;
     cairns::control::RegisterLifecycleOps(registry, app_ctx->agent_quit);
@@ -241,16 +233,13 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     cairns::control::RegisterEntityOps(registry, *engine);
     cairns::control::RegisterSelectionOps(registry, *engine);
     // Script ops LAST so tools.list inside script.eval reflects every
-    // other op already registered. Mirrors serve_main's ordering.
+    // other op already registered.
     cairns::control::RegisterScriptOps(registry, app_ctx->script_host);
 #ifdef __EMSCRIPTEN__
-    // Wire the window.cairns.dispatch bridge to this app's registry.
     g_web_registry = &registry;
 #endif
-    // #229: boot BLANK -- no run.js auto-load. Everything starts empty except
-    // the perf HUD + the scenario picker; the user clicks to run a scripts/*.js
-    // (perf_smoke.js is the old 500-actor benchmark). Enumerate the scripts and
-    // hand the engine the imgui panel hook.
+    // Boot blank -- no script auto-load. Everything starts empty except the
+    // perf HUD + the scenario picker; the user clicks to run a scripts/*.js.
     app_ctx->launcher.Enumerate();
     engine->SetImguiPanel(&cairns::DrawScenarioPanel, &app_ctx->launcher);
 #ifndef __EMSCRIPTEN__
@@ -293,10 +282,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event) {
             app->rmb_look = true;
         } else if (event->button.button == SDL_BUTTON_LEFT &&
                     !ImGui::GetIO().WantCaptureMouse && app->engine) {
-            // P2 click-to-focus + P4 click-to-pick. Plain LMB picks both
-            // the viewport for input routing AND records the pick intent;
-            // the Shift modifier requirement was dropped after #207 went
-            // green so every click immediately highlights a glb.
+            // Plain LMB both picks the viewport for input routing AND
+            // records the pick intent.
             // SDL3 mouse events are in window units (points); with
             // SDL_WINDOW_HIGH_PIXEL_DENSITY the framebuffer / id_target_
             // is in pixels (2x on Retina). Scale to pixel space.
@@ -386,7 +373,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         app->app_quit = SDL_APP_SUCCESS;
     }
 
-    // #229 scenario picker: if the user clicked a scenario last frame, reset to
+    // Scenario picker: if the user clicked a scenario last frame, reset to
     // blank and eval its script -- same safe pre-draw point as the agent drain.
     // The reset is fixed (scene + prefabs + render modes), not per-scenario.
     if (app->launcher.pending >= 0) {
@@ -409,7 +396,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         }
     }
 
-    // P1 fly-cam: sample keyboard state once per iterate and drive the
+    // Fly-cam: sample keyboard state once per iterate and drive the
     // active viewport's FlyController. Skipped under CAIRNS_CAM_POSE (the
     // engine bails inside ApplyFlyMovement) so byte-gate dumps stay
     // deterministic regardless of any held keys. WASD + vim hjkl share a

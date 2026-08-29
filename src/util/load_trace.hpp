@@ -1,12 +1,11 @@
-// #224 L3: loading-system instrumentation PODs.
+// Loading-system instrumentation PODs.
 //
 // Populated by Engine::LoadPrefabBatch (per-stage timings + counts) and
-// surfaced via NDJSON cairns.loader.{trace,counters}. The whole point
-// of P0 loading is the instrument: you cannot debug or measure an
-// engine you can't deterministically get content into. Timer values
-// are wall-clock chrono::steady, so they vary run-to-run -- byte-gate
-// goldens never reference them, and the L7 determinism check asserts
-// identical counts and transforms but NOT identical trace timings.
+// surfaced via NDJSON cairns.loader.{trace,counters}: you cannot debug or
+// measure an engine you can't deterministically get content into. Timer
+// values are wall-clock chrono::steady, so they vary run-to-run --
+// byte-gate goldens never reference them, and the load-determinism check
+// asserts identical counts and transforms but NOT identical trace timings.
 
 #pragma once
 
@@ -73,12 +72,12 @@ struct ValidationReport {
     }
 };
 
-// #224 L2: validate a parsed Prefab::Cold against engine caps before
-// GPU upload. Returns true iff no errors (warnings allowed). Currently
-// checks: joint_count <= kAnimMaxJoints, node_count <= kAnimMaxNodes,
-// per-skin weight_sum ~= 1 (within 1e-3). prefab_idx is stamped on
-// every issue for the agent's "which GLB?" lookup; pass UINT32_MAX
-// when validating pre-acquire.
+// Validate a parsed Prefab::Cold against engine caps before GPU upload.
+// Returns true iff no errors (warnings allowed). Checks:
+// joint_count <= kAnimMaxJoints, node_count <= kAnimMaxNodes, per-skin
+// weight_sum ~= 1 (within 1e-3). prefab_idx is stamped on every issue for
+// the agent's "which GLB?" lookup; pass UINT32_MAX when validating
+// pre-acquire.
 //
 // Header-only declaration; the body lives in engine.hpp's translation
 // unit so it can see Prefab::Cold's full type without dragging the

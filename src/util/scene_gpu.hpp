@@ -16,13 +16,11 @@ namespace cairns::rhi {
 // gives the upload bump ring a chance to recycle. The final on-GPU layout is
 // unchanged: ONE shared vertex buffer [positions | attributes] + ONE shared
 // index buffer, with primitives' vertexOffset / firstIndex patched to global.
-// #220 Step 3: scenes are engine-owned via cairns::ResourceManager<Prefab>;
-// caller passes a span of SceneIds + the pool. Mesh pool also threaded
-// (Step 2 invariant).
-// #222 Phase H.4: out_shared_skin returns the per-call shared skin-attrs
-// SSBO so the engine can stash it on shared_skin_attrs_buf_ without
-// stamping every Mesh::Hot. Null when no scene in prefab_ids has any
-// skinned mesh.
+// Prefabs are engine-owned via cairns::ResourceManager<Prefab>; caller
+// passes a span of PrefabIds + the pools. out_shared_skin returns the
+// per-call shared skin-attrs SSBO so the engine can stash it per batch
+// without stamping every Mesh::Hot; Null when no prefab in prefab_ids has
+// a skinned mesh.
 inline bool LoadPrefabsGpu(std::span<const cairns::PrefabId> prefab_ids,
                           cairns::ResourceManager<Prefab>& prefabs_pool,
                           cairns::ResourceManager<Mesh>& meshes_pool,
@@ -32,9 +30,8 @@ inline bool LoadPrefabsGpu(std::span<const cairns::PrefabId> prefab_ids,
 
     size_t total_verts = 0;
     size_t total_indices = 0;
-    // #221 Skinning Phase 1: total skin verts = sum over SKINNED meshes
-    // (cpuSkinAttrs is empty for unskinned meshes). Drives the shared
-    // skin-attr storage buffer below.
+    // Total skin verts = sum over SKINNED meshes (cpuSkinAttrs is empty for
+    // unskinned meshes). Drives the shared skin-attr storage buffer below.
     size_t total_skin_verts = 0;
     for (cairns::PrefabId sid : prefab_ids) {
         Prefab::Hot* shot = prefabs_pool.GetHot(sid);
@@ -52,7 +49,7 @@ inline bool LoadPrefabsGpu(std::span<const cairns::PrefabId> prefab_ids,
     const size_t pos_bytes = total_verts * sizeof(glm::vec4);
     const size_t attr_bytes = total_verts * sizeof(VertexAttribute);
     const size_t idx_bytes = total_indices * sizeof(uint32_t);
-    // #222 Phase S.2: GPU side packs to PackedSkinVertex (8 B) at upload.
+    // GPU side packs to PackedSkinVertex (8 B) at upload.
     const size_t skin_bytes = total_skin_verts * sizeof(PackedSkinVertex);
 
     BufferDesc vd{};
@@ -75,9 +72,8 @@ inline bool LoadPrefabsGpu(std::span<const cairns::PrefabId> prefab_ids,
         return false;
     }
 
-    // #221 Skinning Phase 1: shared skin-attr SSBO. Storage usage (read by
-    // the skin compute kernel as a flat array). Only created when at least
-    // one scene actually has a skinned mesh.
+    // Shared skin-attr SSBO, read by the skin compute kernel as a flat
+    // array. Only created when at least one prefab has a skinned mesh.
     Handle<Buffer> shared_skin;
     if (skin_bytes > 0) {
         BufferDesc sd{};
@@ -92,8 +88,8 @@ inline bool LoadPrefabsGpu(std::span<const cairns::PrefabId> prefab_ids,
 
     // Patch primitive offsets to all-GLBs-global ahead of upload so per-batch
     // state stays simple. Walk in the same order as the upload loop.
-    // #221 Skinning F5: snapshot running_vert into Mesh::Hot::global_base_vertex
-    // so skinned draws can recover the mesh-local baseVertex
+    // Snapshot running_vert into Mesh::Hot::global_base_vertex so skinned
+    // draws can recover the mesh-local baseVertex
     // (prim.vertexOffset - global_base_vertex). Track skin verts separately
     // since unskinned meshes don't contribute.
     size_t running_vert = 0;
@@ -123,8 +119,7 @@ inline bool LoadPrefabsGpu(std::span<const cairns::PrefabId> prefab_ids,
 
     // Upload in batches of kBatchSize scenes. Local vectors fall out of scope
     // at the end of each iteration -> CPU temps released between batches.
-    // #221 Skinning Phase 1: skin attrs (when present) batch alongside the
-    // existing pos/attr/idx streams.
+    // Skin attrs (when present) batch alongside the pos/attr/idx streams.
     size_t cur_vert_off_bytes = 0;
     size_t cur_attr_off_bytes = 0;
     size_t cur_idx_off_bytes = 0;
@@ -139,8 +134,8 @@ inline bool LoadPrefabsGpu(std::span<const cairns::PrefabId> prefab_ids,
         std::vector<uint32_t> idx_batch;
         std::vector<PackedSkinVertex> skin_batch;
         std::vector<SkinVertex> skin_raw;
-        // #229 M3: pre-pass the batch's meshes for the total vert/index/skin
-        // counts, then reserve once -- the insert/push_back loop below does one
+        // Pre-pass the batch's meshes for the total vert/index/skin counts,
+        // then reserve once -- the insert/push_back loop below does one
         // alloc per stream instead of a doubling chain per mesh.
         size_t batch_verts = 0;
         size_t batch_indices = 0;
@@ -168,8 +163,8 @@ inline bool LoadPrefabsGpu(std::span<const cairns::PrefabId> prefab_ids,
                                   mcold->cpuAttrs.end());
                 idx_batch.insert(idx_batch.end(), mcold->cpuIndices.begin(),
                                  mcold->cpuIndices.end());
-                // #222 Phase S.2: pack u8 joints + u8 unorm weights with
-                // largest-remainder renorm at upload.
+                // Pack u8 joints + u8 unorm weights with largest-remainder
+                // renorm at upload.
                 for (const SkinVertex& sv : mcold->cpuSkinAttrs) {
                     skin_batch.push_back(PackSkinVertex(sv));
                 }
@@ -227,11 +222,11 @@ inline bool LoadPrefabsGpu(std::span<const cairns::PrefabId> prefab_ids,
             mhot->posHandle = shared_vtx;
             mhot->attrHandle = attr_alias;
             mhot->indexHandle = shared_idx;
-            // #221 Skinning F5: per-skinned-mesh alias of the shared attr
-            // region pre-offset by global_base_vertex * sizeof(VertexAttribute).
-            // Skinned stream 1 binds this; the recorder's mesh-local
-            // vertex_offset then indexes correctly. Same trick as attr_alias
-            // above, just per-mesh and at a different offset.
+            // Per-skinned-mesh alias of the shared attr region pre-offset by
+            // global_base_vertex * sizeof(VertexAttribute). Skinned stream 1
+            // binds this; the recorder's mesh-local vertex_offset then
+            // indexes correctly. Same trick as attr_alias above, just
+            // per-mesh and at a different offset.
             if (!mcold->cpuSkinAttrs.empty()) {
                 Handle<Buffer> skinned_attr_alias = rm.buffers.Acquire();
                 Buffer::Hot* vh = rm.buffers.GetHot(shared_vtx);

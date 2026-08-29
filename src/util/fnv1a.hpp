@@ -1,6 +1,6 @@
 // util/fnv1a.hpp
 //
-// #229 M0b determinism hash: streaming FNV-1a 64. Order-stable byte hashing for
+// Determinism hash: streaming FNV-1a 64. Order-stable byte hashing for
 // the per-frame state-hash (sim + render). Cheap, no allocation, no statics.
 // Feed POD byte spans only -- never pointers, capacity tails, or padding that
 // isn't deterministically initialized (the block is 0xCC-prefilled).

@@ -1,7 +1,7 @@
 // src/util/frustum.hpp
 //
-// PURE frustum cull math, lifted out of the inline lambda in BuildSkinFrame
-// (#222 Phase S.3). No GPU, no entt, no engine -- glm in, bool/AABB out.
+// PURE frustum cull math used by BuildSkinFrame's per-actor cull. No GPU,
+// no entt, no engine -- glm in, bool/AABB out.
 //
 // Convention matches the engine verbatim: Gribb-Hartmann planes from the
 // transpose of view_proj (row3 +/- rowK), normalized; AABB tested with the

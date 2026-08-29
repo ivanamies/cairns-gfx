@@ -1,26 +1,15 @@
-// cairns_serve -- headless NDJSON control plane host.
-//
-// P0c: CommandRegistry + stdio transport + lifecycle ops.
-// P1B: Engine::GreaterInit({.surfaceless=true,...}) attempted before the
-// transport loop. If it succeeds, the engine is owned for the session and
-// torn down on quit. If it fails, an [Engine] line goes to stderr and we
-// continue (lifecycle ops still work; engine-bound ops would return
-// "engine_not_initialized" once they exist).
-//
-// Asset paths: SDL_GetBasePath() returns the binary's parent dir on Apple
-// for an unbundled executable. CMake POST_BUILD copies the shaders +
-// smoke-test GLB next to cairns_serve so the existing
-// GetStaticResourceFilepath path resolves.
-//
-// stdout = protocol only (JSON responses). stderr = logs.
-//
-// **W1 watchdog (#228)**: a background thread monitors a heartbeat the
-// transport loop ticks before/after each op-dispatch. If the gap
-// exceeds kWatchdogTimeoutSec, the engine is wedged (e.g. metal's
-// dispatch_semaphore_wait blocking forever on a stalled completion
-// handler) and the watchdog calls std::abort to dump a crash report
-// instead of waiting for an external SIGKILL. Tunable via the
-// CAIRNS_SERVE_WATCHDOG_SEC env var (0 disables).
+// cairns_serve -- headless NDJSON control-plane host (R1: headless drive).
+//  - Engine boots surfaceless before the transport loop; on failure only
+//    lifecycle ops are served and the session continues.
+//  - Asset paths: SDL_GetBasePath() is the binary's parent dir for an
+//    unbundled Apple executable; CMake copies shaders + smoke GLB next to
+//    the binary so GetStaticResourceFilepath resolves.
+//  - stdout = protocol only (JSON responses). stderr = logs.
+//  - Watchdog: a background thread monitors a heartbeat the transport ticks
+//    around each dispatch; a stalled op (e.g. metal dispatch_semaphore_wait
+//    wedged on a dead completion handler) aborts for a crash report instead
+//    of waiting on an external SIGKILL. CAIRNS_SERVE_WATCHDOG_SEC tunes it
+//    (0 disables).
 
 #include <atomic>
 #include <chrono>
@@ -91,11 +80,10 @@ int main() {
         cairns::control::RunBootScript(registry);
     }
 
-    // W1 watchdog: monitor the transport's heartbeat. The transport
-    // stamps steady_clock ns BEFORE Dispatch and AFTER the response is
-    // flushed. If the gap exceeds the threshold while an op is in
-    // flight, the engine is wedged and we abort -- noisier than a
-    // SIGKILL, leaves a coredump for debugging.
+    // Watchdog: the transport stamps steady_clock ns BEFORE Dispatch and
+    // AFTER the response is flushed. If the gap exceeds the threshold while
+    // an op is in flight, the engine is wedged and we abort -- noisier than
+    // a SIGKILL, leaves a coredump for debugging.
     double timeout_sec = 30.0;
     if (const char* s = std::getenv("CAIRNS_SERVE_WATCHDOG_SEC")) {
         timeout_sec = std::atof(s);

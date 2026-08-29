@@ -19,7 +19,8 @@ struct GpuSceneHeader {
     uint32_t sampler_count = 0;
 
     // Offsets into the 3 PACKED gpu buffers, in that buffer's ELEMENT units
-    // (#231 12->6 SSBO pack). i32-element into ae_i32_buf_: parent/topo/
+    // (tables folded by element type to fit WebGPU's per-stage
+    // storage-buffer limit). i32-element into ae_i32_buf_: parent/topo/
     // joint_nodes/times. vec4-element into ae_vec4_buf_: bind_pose (3 vec4/
     // joint T,R,S), values (1 vec4/key), inverse_binds (4 vec4/joint = mat4
     // columns). uvec4-element into ae_word16_buf_: channel/sampler (16B each).

@@ -1,10 +1,17 @@
 #pragma once
 
+// Render graph -- a partial copy of Themaister's Granite render graph.
+//  - Passes declare reads/writes; Bake prunes unreachable passes,
+//    topo-sorts, aliases transients by lifetime, and resolves physical
+//    textures.
+//  - Execute emits Granite-style invalidate/flush barriers; the backend
+//    executes them (vk pipeline barriers / metal fences).
+
 #include "render/worker_context.hpp"
 #include "rhi/command_recorder.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/swap_resolve_target.hpp"
-#include "util/inplace_function.hpp"  // #229 M2: no per-frame std::function malloc
+#include "util/inplace_function.hpp"  // No per-frame std::function malloc.
 
 #include <array>
 #include <cstdint>
@@ -62,9 +69,9 @@ private:
     const std::vector<Handle<Buffer>>* buffers_ = nullptr;
 };
 
-// #229 M2: InplaceFunction (fixed inline buffer) instead of std::function so
-// the per-frame pass rebuild never heap-allocates the closures. 128 B fits all
-// current pass closures (largest measured ~80 B); the ctor static_asserts fit.
+// InplaceFunction (fixed inline buffer) instead of std::function so the
+// per-frame pass rebuild never heap-allocates the closures. 128 B fits all
+// current pass closures; the ctor static_asserts fit.
 using SetupFn = cairns::InplaceFunction<void(class PassBuilder&)>;
 using ExecuteFn =
     cairns::InplaceFunction<void(CommandRecorder&, const PassResources&)>;
@@ -85,12 +92,14 @@ public:
     void ReadBuffer(GraphBuffer b);
     void WriteBuffer(GraphBuffer b);
 
+    // StoreOp is part of pass identity (hashed into RpKey) so
+    // store-incompatible passes cannot alias a render pass object.
     void AddColorOutput(const char* name, GraphTexture t, LoadOp load,
                         const float clear[4],
-                        StoreOp store = StoreOp::kStore);  // #222 Phase A.2
+                        StoreOp store = StoreOp::kStore);
     void AddDepthOutput(const char* name, GraphTexture t, LoadOp load,
                         float clear_depth,
-                        StoreOp store = StoreOp::kStore);  // #222 Phase A.2
+                        StoreOp store = StoreOp::kStore);
     void AddAttachmentInput(GraphTexture t);
 
 private:

@@ -124,7 +124,7 @@ one small op still to add so "left" composes from the current pose.)
 | **macOS Vulkan** | ✅ identical (one binary per backend) | ✅ identical | identical |
 | **iOS (sim/device, Metal)** | ✅ goldens on the simulator (xcodebuild) | ⚠ transport gap — no on-device stdin; needs a socket/USB NDJSON bridge | in-test PNG dump |
 | **Android (Vulkan)** | ✅ goldens via `adb` on AVD/device | ⚠ transport gap — `adb forward` socket NDJSON not yet wired | PNG pulled via `adb` |
-| **WebGPU native (macOS)** | ✅ surfaceless wgpu-native + NDJSON (`CAIRNS_GFX_BACKEND=webgpu`); golden gate renders triangle + die/two-die/viking, matches macos-metal | 🟡 M5: `SDL_WINDOW_METAL` + metal-layer surface (sdl3webgpu glue) + present-by-copy; `dev_drive.sh start wgpu`. Builds + boots clean (surface/device/pipelines OK); on-screen render unconfirmed in headless CI — verify interactively | offscreen readback → PNG |
+| **WebGPU native (macOS)** | ✅ surfaceless wgpu-native + NDJSON (`CAIRNS_GFX_BACKEND=webgpu`); golden gate renders triangle + die/two-die/viking, matches macos-metal | 🟡 `SDL_WINDOW_METAL` + metal-layer surface (sdl3webgpu glue) + present-by-copy; `dev_drive.sh start wgpu`. Builds + boots clean (surface/device/pipelines OK); on-screen render unconfirmed in headless CI — verify interactively | offscreen readback → PNG |
 | **Web / Chrome (WASM)** | ✅ the SAME `src/main.cpp` SDL shell; boots + renders in headed AND headless Chrome (WebGPU via emdawnwebgpu); `[Timer]`/`[STEADY]` over the CDP console | ✅ headed Chrome: CDP `Input.dispatchMouseEvent` → SDL event → ImGui picker → scenario; `window.cairns.dispatch` bridge for sync ops (picker click needs headed) | CDP `Page.captureScreenshot` → PNG |
 
 ✅ wired · ⚠ partial (transport gap) · 🔭 planned (see `~/dev/plans/2026-06-21_gfx_webgpu-wgpu-native-standup.md`).
@@ -451,10 +451,10 @@ own `-UNDEBUG`, so optimization + asserts coexist). Two tiers:
 - **Tier G — golden / divergence tests.** Two categories, both per-platform
   image refs + a few per-platform buffer/state refs:
   - **`[scenarios]`** (`test_golden_scenarios.cpp`) — correctness. The rendered
-    subjects formerly called "the ladder" (triangle, one/two die, viking_room,
-    three static/animated champions) are now flat `[subject]` SCENARIOs, plus
-    the targeted subsystem scenarios (particles state-hash, hot reload, two
-    scenes/two heroes, nested graph, frustum cull, imgui stability).
+    subjects (triangle, one/two die, viking_room, three static/animated
+    champions) as flat `[subject]` SCENARIOs, plus the targeted subsystem
+    scenarios (particles state-hash, hot reload, two scenes/two heroes,
+    nested graph, frustum cull, imgui stability).
   - **`[stress]`** (`test_golden_stress.cpp`) — scale (100 distinct animated
     champions). Heavy; kept out of `[scenarios]` so the fast pass stays fast.
   Image refs live under `tests/refs/` as `{name}.f09.{platform}.imghash`
@@ -527,8 +527,8 @@ cmake --build build/spec-mac-metal --target cairns_golden_tests -j
 # Filtered subsets (binary lands under Release/ in a Release build dir):
 ./build/spec-mac-metal/Release/cairns_golden_tests "[scenarios]"  # correctness
 ./build/spec-mac-metal/Release/cairns_golden_tests "[stress]"     # 100 champs
-./build/spec-mac-metal/Release/cairns_golden_tests "[subject]"    # former ladder rungs only
-./build/spec-mac-metal/Release/cairns_golden_tests "[particles]"  # G1 state-hash alone
+./build/spec-mac-metal/Release/cairns_golden_tests "[subject]"    # rendered subjects only
+./build/spec-mac-metal/Release/cairns_golden_tests "[particles]"  # particle state-hash alone
 
 # Same shape for vk:
 ./build/spec-mac-vk/Release/cairns_golden_tests --reporter compact
@@ -542,7 +542,7 @@ Assets bundle into `.app/Resources/` via the CMake glob.
 cmake --build build/spec-ios-sim --target cairns_golden_tests -j
 xcrun simctl spawn booted \
   ./build/spec-ios-sim/cairns_golden_tests.app/cairns_golden_tests \
-  "[ladder]" --reporter compact
+  "[subject]" --reporter compact
 ```
 
 ### Tier G — Android (S22 device or Pixel AVD)
@@ -569,7 +569,7 @@ adb -s $DEV shell "cd /data/local/tmp/cairns_test && \
   CAIRNS_PLATFORM_KEY=$PLATFORM_KEY \
   CAIRNS_BASE_PATH=/data/local/tmp/cairns_test \
   CAIRNS_TEST_REFS_DIR=/data/local/tmp/cairns_test/refs \
-  LD_LIBRARY_PATH=. ./cairns_golden_tests '[ladder]' --reporter compact"
+  LD_LIBRARY_PATH=. ./cairns_golden_tests '[subject]' --reporter compact"
 
 # Pull baked refs back into the repo
 adb -s $DEV pull /data/local/tmp/cairns_test/refs/. tests/refs/
@@ -580,7 +580,7 @@ adb -s $DEV pull /data/local/tmp/cairns_test/refs/. tests/refs/
 ```sh
 # Dump rendered PNGs alongside the hash check.
 CAIRNS_DUMP_PNGS=/tmp/cairns-pngs \
-  ./build/spec-mac-vk/cairns_golden_tests "[ladder]"
+  ./build/spec-mac-vk/cairns_golden_tests "[subject]"
 
 # A tiny stb-image-based pixel sampler lives at /tmp/png_inspect.c
 # (rebuild with: clang -std=c11 /tmp/png_inspect.c -o /tmp/png_inspect)
@@ -602,26 +602,26 @@ CAIRNS_GFX_BAKE_REFS=1 ./build/.../cairns_golden_tests
 
 ### Known caveats
 
-- `[scenarios]` full-suite run flakes the G1 and G6 image hashes
+- `[scenarios]` full-suite run flakes the particles and imgui image hashes
   intermittently (shared ImGui static state across SCENARIOs; tracked in
   modularization-notes #9b). Run `[particles]` and `[imgui]` separately
   for stable results.
 - S22 device must be physically connected for the `android-vk` refs to
   be writable; otherwise only AVD (`android-vk-emu`) bakes.
 - iOS sim runs require a booted simulator (`xcrun simctl boot <UDID>`).
-- Desktop `[ladder]` runs from build dir (assets staged alongside the
+- Desktop goldens run from the build dir (assets staged alongside the
   binary); `cd build/<dir>` first if running with a relative path.
-- G5 frustum-cull counters SKIP until a production cull stage lands
+- Frustum-cull counter scenarios SKIP until a production cull stage lands
   (engine does not call `cairns::AabbOutsideFrustum`); tracked in
   modularization-notes #10b.
-- G1 buffer / G4 resolved-depth / L6+L7 skin-buffer SECTIONs SKIP until
+- Particle-buffer / resolved-depth / skin-buffer SECTIONs SKIP until
   `Resources::ReadBackBuffer` lands on both backends (open task).
 
-## WebGPU backend — build & run (in progress: W0–W3 done, W4 next)
+## WebGPU backend — build & run
 
-A third RHI backend via gfx-rs **wgpu-native** C bindings. Boots the full engine
-surfaceless and renders a clear → PNG. Plan:
-`~/dev/plans/2026-06-21_gfx_webgpu-wgpu-native-standup.md`; live state in task list / git log.
+The third RHI backend: gfx-rs **wgpu-native** C bindings headless/native,
+emdawnwebgpu in the browser. At parity with metal/vk on the golden subjects;
+stand-up history in `~/dev/plans/2026-06-21_gfx_webgpu-wgpu-native-standup.md`.
 
 ### Build + run
 
@@ -633,15 +633,15 @@ third_party/wgpu-native/fetch.sh   # macOS-arm64 prebuilt, pinned v29.0.0.0
 cmake -S . -B build/spec-mac-webgpu -DCAIRNS_GFX_BACKEND=webgpu -DCMAKE_BUILD_TYPE=Release -G Ninja
 cmake --build build/spec-mac-webgpu --target cairns_serve
 
-# render the red triangle (W4) + dump final_target_ to a PNG:
+# render the procedural triangle + dump final_target_ to a PNG:
 cd build/spec-mac-webgpu/Release
-( echo '{"op":"cairns.render.tinyTriangle","args":{"on":true}}'
+( echo '{"op":"cairns.primitive.create","args":{"type":"triangle"}}'
   echo '{"op":"cairns.render.frame"}'
   echo '{"op":"cairns.io.dumpTexture","args":{"target":"final","path":"out.png"}}'
   echo '{"op":"cairns.app.quit"}'; sleep 4 ) | timeout 30 ./cairns_serve
 # -> out.png (1280x720): a centered red triangle on the clear color.
 
-# W5 forward goldens (die / two-die / viking). Build the golden test, then bake
+# Forward goldens (die / two-die / viking). Build the golden test, then bake
 # or compare the macos-webgpu refs. CAIRNS_DUMP_PNGS=<dir> also writes per-frame
 # PNGs (eyeball them); they should visually match the macos-metal renders.
 cmake -S . -B build/spec-mac-webgpu -DCAIRNS_GFX_BACKEND=webgpu \
@@ -713,12 +713,9 @@ navigate → boot-wait → Input click → long wait for load+steady → drain c
 > the WebGPU backend — only the CPU-side slots (`frame`, `build_draws`,
 > `record`, `skin_eval`, `present_wait`) are valid. See PERFORMANCE.md.
 
-> W-state: W0–W5 done. Headless renders triangle + die/two-die/viking,
-> matching macos-metal. NOT yet ported (consumers no-op): the id-MRT unlit
-> variant (pick/outline), particle/compute, imgui, skinning. After adding a new
-> `assets/*.wgsl`, RE-RUN cmake configure -- `file(GLOB)` only re-globs at
-> configure time, so a freshly added shader isn't copied next to the binary
-> until you reconfigure (a "missing wgsl" stderr line is this).
+> After adding a new `assets/*.wgsl`, RE-RUN cmake configure — `file(GLOB)`
+> only re-globs at configure time, so a freshly added shader isn't copied next
+> to the binary until you reconfigure (a "missing wgsl" stderr line is this).
 
 ### Smokes (de-risk, off by default; binaries land in the build-dir ROOT, not Release/)
 
@@ -758,24 +755,10 @@ cmake --build build/spec-mac-metal --target cairns_golden_tests
   at device creation. Without this, GreaterInit FATALs on the skin-pool fit check.
 - **A `Null` graphics-pipeline handle HANGS GreaterInit.** `CreateGraphicsPipeline` must
   `Acquire` a real handle (a null `api_pso` is fine for not-yet-implemented pipelines) — never
-  return `Handle<Shader>::Null`. This was the W3→W4 unblock.
+  return `Handle<Shader>::Null`.
 - Bundled `run.js` runs at boot (`serve_main.cpp RunBootScript`); it loads GLBs (the
   `wgpuQueueWriteBuffer` traffic you see). `engine_ok` gates render/scene ops registration —
   if GreaterInit fails, `cairns.render.frame` is `unknown_op`.
-
-### State + W4 next
-
-W0 (vendor+smoke) · W1 (de-bindless) · W2 (links+boots) · W3 (real device/alloc/resources/
-readback → boots the full engine; `render.frame` → clear → PNG) — all done.
-**W4:** real WGSL pipelines so draws appear. The triangle (`01_triangle.js` →
-`cairns.render.tinyTriangle`, drawn via `DrawFullscreen(red_triangle_pip_)`) needs the
-forward+composite chain — `red_triangle.wgsl` + real pipeline drawing 3 verts into the
-forward MSAA target, then `composite.wgsl` + a texture-sampler bind group sampling that into
-`final_target_`. Both pipelines are currently null-PSO handles → draws no-op → the PNG is the
-bare clear. Wire both → red triangle in the PNG → bake `triangle.macos-webgpu`. Then W5
-(unlit + die/two-die/viking), W6 (Emscripten→Chrome), W7 (CDP drive/capture).
-
----
 
 ## Known deferrals (acknowledged, not bugs)
 

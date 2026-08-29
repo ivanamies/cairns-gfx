@@ -1,32 +1,19 @@
 // src/util/device_caps.hpp
 //
 // PURE device-fit arithmetic. No Vulkan, no Metal, no GPU. Plain integers in,
-// bool out. This is the CPU-side root of both failure modes from the
-// 2026-06-17 S22 bisect:
+// bool out. Guards the two mobile failure modes:
 //
-//   * GARBLE  -- a storage-buffer binding addressed past the device's
-//                maxStorageBufferRange. On Adreno 730 that range is 256 MB;
-//                writes past it silently no-op (validation layers stay quiet).
-//                kSkinOutputBytes was 1 GB, so every slice whose byte offset
-//                landed >= 256 MB was dropped -> "half the grid garbled."
+//   * GARBLE -- a storage-buffer binding addressed past the device's
+//               maxStorageBufferRange: writes past it silently no-op on
+//               Adreno (validation layers stay quiet).
+//   * OOM    -- total resident GPU+CPU memory exceeding the OS (lmkd)
+//               budget; FIF-replicated tiers multiply fast.
 //
-//   * OOM     -- total resident GPU+CPU memory exceeded the S22 lmkd budget.
-//                kFramesInFlight=3 replicated the 104 MB GPU bump ring three
-//                times; dropping to 2 freed ~104 MB.
-//
-// WHY THIS FILE EXISTS (and why it is a free function, not a method on Device):
-//
-//   Dependency Inversion onto *data*, not onto a vtable. SkinPoolFitsDevice
-//   depends on a POD `DeviceCaps`, never on VkPhysicalDevice or MTLDevice. That
-//   buys two concrete engineering wins:
-//     1. It runs in a unit test with zero GPU. The 4 hours of speculation in
-//        the bisect were spent re-deriving, by hand, the inequality on line
-//        `SkinPoolFitsDevice` below. Now it is one assert.
-//     2. All four platforms (macOS Metal, macOS MoltenVK, Android Adreno vk,
-//        iOS Metal) feed the SAME function. The arithmetic therefore *cannot*
-//        diverge across platforms -- only the queried cap values can. That
-//        collapses the cross-platform-divergence surface down to "did each
-//        backend fill DeviceCaps correctly," which is itself checkable.
+// Free functions over a POD DeviceCaps, never VkPhysicalDevice/MTLDevice:
+// they run in unit tests with zero GPU, and every platform (macOS Metal,
+// MoltenVK, Android Adreno vk, iOS Metal) feeds the SAME arithmetic -- only
+// the queried cap values can diverge, and filling DeviceCaps correctly is
+// itself checkable.
 
 #ifndef CAIRNS_UTIL_DEVICE_CAPS_HPP
 #define CAIRNS_UTIL_DEVICE_CAPS_HPP
@@ -39,11 +26,10 @@ namespace cairns {
 // units (kSkinOutputBytes / 16) and the engine binds at slice.offset * 16.
 inline constexpr uint32_t kSkinVertexStride = 16u;
 
-// The four-to-six limits the bisect taught us to care about. Backends fill it;
-// the predicates below consume it.
+// The device limits the fit predicates consume. Backends fill it.
 struct DeviceCaps {
-    // VkPhysicalDeviceLimits::maxStorageBufferRange (vk) / the MTL buffer-length
-    // ceiling (metal). The 256 MB Adreno floor lives here.
+    // VkPhysicalDeviceLimits::maxStorageBufferRange (vk) / the MTL
+    // buffer-length ceiling (metal).
     uint32_t max_storage_buffer_range = 0;
     // VkPhysicalDeviceLimits::maxUniformBufferRange. UBO-bound data must fit this.
     uint32_t max_uniform_buffer_range = 0;

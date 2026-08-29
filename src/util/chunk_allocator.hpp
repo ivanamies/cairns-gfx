@@ -1,19 +1,15 @@
-// src/util/chunk_allocator.hpp
-//
-// Allocator B (per ALLOCATOR_HANDOFF.md §4): the root CPU memory source. A
-// segregated-free-list (size-class) pool backed by large malloc'd chunks, with a
-// malloc fallback for oversize requests. Every other CPU allocator borrows from
-// here: per-frame bump (A) gets its slab from B; load-time bump arenas (a
-// BumpArena around a B chunk) are freed wholesale at asset unload by returning
-// the chunk to B; std::vector sites use `ChunkStdAllocator<T>`.
-//
-// O(1) Free with NO side table: each user pointer is preceded by a 16-byte
-// header carrying the size class + region tag, so `Free(p)` reads `p - 16` and
-// pushes the cell back onto its class's free list. This is the concrete fix for
-// the std::map<void*, Allocation> wart in std_allocator.hpp.
-//
-// SINGLE THREADED. Honor the existing convention -- carve per-thread arenas
-// rather than locking when CAIRNS_RG_PARALLEL / physics eventually go MT.
+// ChunkAllocator: allocator archetype B (README "Memory management") -- the
+// root CPU memory source.
+//  - Segregated-free-list (size-class) pool backed by large malloc'd chunks;
+//    oversize requests fall back to malloc. Every other CPU allocator
+//    borrows from here: the per-frame bump (A) slab, load-time BumpArenas
+//    (one B chunk, returned wholesale at unload), ChunkStdAllocator<T>
+//    vector sites.
+//  - O(1) Free with NO side table: each user pointer is preceded by a
+//    16-byte header carrying the size class + region tag; Free(p) reads
+//    p - 16 and pushes the cell back onto its class's free list.
+//  - SINGLE THREADED: carve per-thread arenas rather than locking if
+//    CAIRNS_RG_PARALLEL / physics go MT.
 
 #pragma once
 
@@ -29,8 +25,8 @@
 namespace cairns {
 
 inline constexpr uint16_t kNoRegion = 0;
-// #229 M0b region tags: every block allocation carries one so the determinism
-// hash + diagnostics can attribute live bytes to a sub-region.
+// Region tags: every block allocation carries one so the determinism hash +
+// diagnostics can attribute live bytes to a sub-region.
 inline constexpr uint16_t kRegionPersistent = 1;
 inline constexpr uint16_t kRegionFrame = 2;
 inline constexpr uint16_t kRegionLoadScratch = 3;
@@ -73,15 +69,13 @@ public:
 #endif
     }
 
-    // #229 M0b: fixed-reservation mode. The chunk pool is HARD-CAPPED at
+    // Fixed-reservation mode: the chunk pool is hard-capped at
     // ceil(total_bytes / block_bytes) chunks -- "allocate X GB, chop it up,
-    // only ever use that X GB." Chunks stay block_bytes each (chunked backing,
-    // no single giant OS alloc -> Android-safe) and grow lazily up to the cap;
-    // AddChunk fails (-> caller fails loud) once the cap is hit, instead of
-    // silently mallocing past the budget. Oversize (> block_bytes single
-    // allocs) still routes to malloc -- folding those into the reservation is
-    // a follow-on. The migration that routes the load vectors through here
-    // (and activates a real reservation) is the M0b payoff.
+    // only ever use that X GB." Chunks stay block_bytes each (no single
+    // giant OS alloc -> Android-safe) and grow lazily up to the cap;
+    // AddChunk fails loud at the cap instead of silently mallocing past the
+    // budget. Oversize (> block_bytes single allocs) routes to malloc,
+    // outside the reservation.
     void InitReserved(uint64_t total_bytes,
                       uint32_t block_bytes = kDefaultBlockBytes) {
         Init(block_bytes);
@@ -149,11 +143,10 @@ public:
         uint8_t* user = static_cast<uint8_t*>(p);
         Header* h = reinterpret_cast<Header*>(user - kHeaderBytes);
         if (h->flags & kFlagOversize) {
-            // #229: read EVERY header field BEFORE std::free -- the header lives
+            // Read EVERY header field BEFORE std::free -- the header lives
             // inside the malloc'd block, and large oversize allocs are mmap-
-            // backed, so std::free munmaps the page and any later h->... read
-            // faults (the 100-GLB teardown crash). Recover the malloc base from
-            // the stored prefix, stash the size, THEN free.
+            // backed, so a later h->... read faults. Recover the malloc base
+            // from the stored prefix, stash the size, THEN free.
             const uint64_t freed_bytes = h->cell_bytes;
             uint8_t* malloc_base = user - h->prefix_bytes;
             std::free(malloc_base);
@@ -177,9 +170,9 @@ public:
 #endif
     }
 
-    // #229 M7: realloc for the QuickJS allocator. Reuses the existing cell when
-    // the new size still fits its (power-of-two) capacity -- the common JS
-    // realloc -- otherwise allocates, copies, frees. null ptr => Allocate;
+    // Realloc for the QuickJS allocator. Reuses the existing cell when the
+    // new size still fits its (power-of-two) capacity -- the common JS
+    // realloc -- otherwise allocates, copies, frees. Null ptr => Allocate;
     // size 0 => Free + null.
     void* Reallocate(void* p, uint32_t new_bytes, uint32_t align = kDefaultAlign) {
         if (p == nullptr) {
@@ -206,8 +199,8 @@ public:
         return np;
     }
 
-    // #229 M7: usable bytes behind a pointer we handed out, read from its
-    // header. QuickJS's js_malloc_usable_size hook (ptr-only, no allocator).
+    // Usable bytes behind a pointer we handed out, read from its header.
+    // QuickJS's js_malloc_usable_size hook (ptr-only, no allocator).
     static uint64_t UsableSize(const void* p) {
         if (p == nullptr) {
             return 0;
@@ -217,8 +210,8 @@ public:
         return h->cell_bytes - kHeaderBytes;
     }
 
-    // FreeRegion: bulk free everything tagged with `region`. Hooked for future
-    // per-asset unload; not exercised in this pass. Asserting-stub keeps
+    // Bulk free everything tagged with `region`. Unimplemented -- no
+    // per-asset unload exists yet to need it; the asserting stub keeps
     // accidental use from silently leaking.
     void FreeRegion(uint16_t region) {
         (void)region;
@@ -277,8 +270,8 @@ private:
 
     bool AddChunk() {
         if (reserved_ && chunks_.size() >= max_chunks_) {
-            // #229 M0b: out of the fixed reservation -- fail loud (the caller,
-            // e.g. ChunkStdAllocator, aborts on the null return). No silent
+            // Out of the fixed reservation -- fail loud (the caller, e.g.
+            // ChunkStdAllocator, aborts on the null return). No silent
             // malloc past the budget; the fix is to raise the reservation.
             std::fprintf(stderr,
                          "[ALLOC] ChunkAllocator reservation exhausted: "
@@ -339,7 +332,7 @@ private:
 
     uint32_t block_bytes_ = 0;
     uint32_t max_class_log_ = 0;
-    bool reserved_ = false;        // #229 M0b fixed-reservation mode
+    bool reserved_ = false;        // Fixed-reservation mode.
     uint32_t max_chunks_ = 0;      // chunk-pool cap when reserved_
     FreeCell* free_lists_[kNumClasses] = {};
     std::vector<Chunk> chunks_;
@@ -351,17 +344,18 @@ private:
 #endif
 };
 
-// STL adapter so existing `std::vector<T, cairns::Allocator<T>>` sites can route
-// through B. Holds a non-owning pointer to a ChunkAllocator; deallocate() does a
-// real Free (unlike the bump-arena adapter, which is no-op).
+// STL adapter routing std::vector sites through B. Holds a non-owning
+// pointer to a ChunkAllocator; deallocate() does a real Free (unlike the
+// bump-arena adapter, which is a no-op).
 template <typename T>
 class ChunkStdAllocator {
 public:
     using value_type = T;
-    // #229 M0b: a stateful allocator must PROPAGATE on container move/copy/swap
-    // so ResourceManager::Reserve(block) -- which move-assigns a block-allocated
-    // temporary into the default-constructed member -- actually adopts the block
-    // (else the target keeps its own allocator and elements land elsewhere).
+    // A stateful allocator must PROPAGATE on container move/copy/swap so
+    // ResourceManager::Reserve(block) -- which move-assigns a block-allocated
+    // temporary into the default-constructed member -- actually adopts the
+    // block (else the target keeps its own allocator and elements land
+    // elsewhere).
     using propagate_on_container_move_assignment = std::true_type;
     using propagate_on_container_copy_assignment = std::true_type;
     using propagate_on_container_swap = std::true_type;

@@ -1,14 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
 
-# set the output directory for built objects.
-# This makes sure that the dynamic library goes into the build directory automatically.
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIGURATION>")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIGURATION>")
 
-# prevent installing to system directories.
+# Prevent installing to system directories.
 set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}" CACHE INTERNAL "")
 
-# Declare the project
 project(sdl-min)
 
 # Tests (and everything) build + run in Release by default. Single-config
@@ -41,9 +38,9 @@ if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/run.js")
         "platform. Add it to assets/ or fix the asset pipeline.")
 endif()
 
-# GPU backend is a true compile-time feature: pick exactly one.
-# No silent default -- forgetting the flag once cost a chunk-bisect session
-# (built metal while debugging a vk regression). Hard-fail at configure time.
+# GPU backend is a true compile-time feature: pick exactly one. No silent
+# default -- hard-fail at configure time so a build never quietly targets the
+# wrong backend.
 if(NOT DEFINED CAIRNS_GFX_BACKEND)
   message(FATAL_ERROR
     "CAIRNS_GFX_BACKEND is not set. Pass -DCAIRNS_GFX_BACKEND=metal "
@@ -69,7 +66,7 @@ else()
   message(FATAL_ERROR "CAIRNS_GFX_BACKEND must be 'metal', 'vulkan', or 'webgpu', got '${CAIRNS_GFX_BACKEND}'")
 endif()
 
-# #229 allocation receipts. When ON, alloc_count.cpp replaces the global
+# Allocation receipts. When ON, alloc_count.cpp replaces the global
 # operator new/delete set to count every heap (de)allocation and the engine
 # prints per-phase deltas at the [LOAD]/[RELOAD] fences. Diagnostic only;
 # default OFF leaves the operators untouched (zero overhead). Applied globally
@@ -147,12 +144,10 @@ target_link_libraries(imgui PUBLIC SDL3::SDL3)
 
 # QuickJS: vendored copy of quickjs-ng (third_party/QuickJS). Minimal static
 # lib over the core C TUs; we don't pull the vendor's CMakeLists because it
-# also builds qjs/qjsc/wasm/test executables we don't need. quickjs-libc is
-# included so script.eval can use stdlib bindings (console.log etc).
-# quickjs-libc binds OS facilities (environ, signals, popen) absent in the
-# browser; the engine never calls its helpers (no js_std_add_helpers), so it's
-# native-only. The core JS engine (quickjs.c + regexp/unicode/cutils) is enough
-# for script.eval.
+# also builds qjs/qjsc/wasm/test executables we don't need. quickjs-libc
+# (console.log etc) binds OS facilities (environ, signals, popen) absent in
+# the browser, so it's native-only; the core JS engine is enough for
+# script.eval.
 add_library(quickjs STATIC
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/QuickJS/quickjs.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/QuickJS/cutils.c"
@@ -173,7 +168,7 @@ target_compile_options(quickjs PRIVATE -Wno-everything)
 # ── wgpu-native (vendored prebuilt C bindings) ──────────────────────────────
 # third_party/wgpu-native/ holds the v29.0.0.0 macOS static lib + webgpu.h (see
 # its VENDORED.md). INTERFACE target so any consumer pulls the static lib + the
-# macOS framework deps + the include dir. Consumed by the WebGPU backend (W2+).
+# macOS framework deps + the include dir. Consumed by the WebGPU backend.
 add_library(wgpu_native INTERFACE)
 target_include_directories(wgpu_native INTERFACE
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/wgpu-native/include")
@@ -196,7 +191,7 @@ if(EMSCRIPTEN)
   target_link_options(wgpu_web INTERFACE "--use-port=emdawnwebgpu")
 endif()
 
-# W0 link smoke (off by default): proves the vendored lib + headers + frameworks
+# Link smoke (off by default): proves the vendored lib + headers + frameworks
 # resolve and a GPU adapter is reachable.
 option(CAIRNS_BUILD_WGPU_SMOKE "Build the wgpu-native link smoke" OFF)
 if(CAIRNS_BUILD_WGPU_SMOKE)
@@ -277,10 +272,6 @@ endif()
 # cairns_core -- the engine library. Everything in src/ except the entry-point
 # translation units (main.cpp for the SDL app, serve_main.cpp for the headless
 # host) and the already-separated render_thread.cpp.
-#
-# P0a: still transitively links SDL because rhi/vulkan/device.cpp and
-# rhi/swap_chain.hpp (Metal) call SDL_* directly. P0b will lift those out so
-# cairns_core no longer needs SDL.
 # =============================================================================
 
 file(GLOB_RECURSE CAIRNS_CORE_SOURCES CONFIGURE_DEPENDS

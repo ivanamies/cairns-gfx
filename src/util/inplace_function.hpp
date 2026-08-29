@@ -4,11 +4,10 @@
 // lives in an INLINE buffer and NEVER heap-allocates. Construction
 // static_asserts that the callable fits. Used for the render-graph pass
 // closures (RenderGraph::SetupFn / ExecuteFn): the graph rebuilds its passes
-// every frame, and std::function's small-buffer overflow was mallocing the
-// closures (~4+/frame) and freeing them at the next Reset() -- #229 M2. This
-// type makes that rebuild allocation-free.
+// every frame, and these closures overflow std::function's small buffer --
+// this type keeps the per-frame rebuild allocation-free.
 //
-// Movable + copyable to match the std::function it replaces. No exceptions, no
+// Movable + copyable, matching std::function semantics. No exceptions, no
 // RTTI (cairns_core forbids both). The dispatch vtable is a per-callable
 // compile-time constant (constexpr) -- not mutable global state.
 #pragma once

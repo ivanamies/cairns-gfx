@@ -1,7 +1,8 @@
 // src/util/cpu_arena.hpp
 //
-// CPU bump (linear) arenas -- OFFSET-NATIVE, to match the GPU bump ring
-// (rhi::Allocator::BumpAllocate returns a uint32 offset) and the repo's
+// Allocator archetype A (README "Memory management"): CPU bump (linear)
+// arenas -- OFFSET-NATIVE, to match the GPU bump ring
+// (rhi::Allocator::BumpAllocate returns a uint32 offset) and the Acton
 // handle/index/offset-over-pointer discipline.
 //
 // The unit of currency is a uint32 byte offset into the arena's slab. You STORE
@@ -183,10 +184,10 @@ private:
     uint32_t slot_ = 0;
 };
 
-// #219 Chunk B: minimal arena-backed fixed-capacity growable list. POD
-// (T* + size + cap), no allocator template, no STL fight. push_back asserts
-// on cap so the producer commits to a known upper bound; bulk-reset via
-// BumpArena::Reset (clear() just zeroes size). Use this instead of
+// Minimal arena-backed fixed-capacity growable list. POD (T* + size + cap),
+// no allocator template, no STL fight. push_back asserts on cap so the
+// producer commits to a known upper bound; bulk-reset via BumpArena::Reset
+// (clear() just zeroes size). Use this instead of
 // std::vector<T, BumpStdAllocator<T>> whenever you don't need STL allocator
 // composition -- it sidesteps the "construct vector before arena exists"
 // problem.
@@ -222,7 +223,7 @@ private:
     uint32_t cap_ = 0;
 };
 
-// #229 M0b: a POINTER-FREE block-relative array -- {byte offset, count} into a
+// A POINTER-FREE block-relative array -- {byte offset, count} into a
 // BumpArena. Unlike ArenaList (which stores a raw T*), ArenaSlice stores an
 // OFFSET, so a struct embedding it is raw-hashable (the pointer quarantine).
 // Resolve transiently via the backing arena; never store the pointer. Count is
@@ -256,8 +257,8 @@ struct ArenaSlice {
     }
 };
 
-// STL-compatible adapter so existing std::vector<T, cairns::Allocator<T>> sites
-// can ride a BumpArena. STL mandates a pointer interface, so this is the one
+// STL-compatible adapter so std::vector<T, cairns::Allocator<T>> sites can
+// ride a BumpArena. STL mandates a pointer interface, so this is the one
 // sanctioned pointer-returning path -- it is contained: the vector is the owner,
 // referenced by handle/index one layer up, never raw-pointered across systems.
 // deallocate() is a no-op (bulk reclaim via BumpArena::Reset). Reserve up front so

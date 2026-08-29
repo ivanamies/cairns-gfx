@@ -1,12 +1,5 @@
-// #221 Skinning Phase 2: animation runtime (sampler + node walk + palette).
-//
-// Three pure functions over flat arrays. No classes, no virtuals. Scratch
-// comes from a caller-provided BumpArena. By design these do NOT mutate
-// gltf_loader's Node::globalTransform: per plan-v7 decision 1, mutating
-// that field would move the static golden, so the world matrices are
-// written into caller-provided spans instead. A later "wire-in" commit
-// can choose to populate Node::globalTransform from the same routine if
-// the golden is re-baked.
+// Animation runtime helpers: TRS compose/decompose + walk-clip selection.
+// Pure functions over flat arrays; no classes, no virtuals.
 
 #pragma once
 
@@ -45,19 +38,11 @@ inline glm::mat4 ComposeTRS(const AnimatedTRS& trs) {
     return m;
 }
 
-// #229 P3: ComputeNodeWorldMatrices + ComputeSkinningPalette (CPU node walk +
-// CPU palette build) were dead -- superseded by the GPU anim_eval/palette path
-// (no callers anywhere). Removed here because they read Node::children /
-// Skin::{jointNodes,inverseBinds} as std::vector, which are now pointer-free
-// ArenaSlice (need the prefab arena to resolve). If a CPU fallback is ever
-// needed, restore from git and thread Engine::prefab_arena_ through.
-
-// #221 Phase 9: pick the "walking" clip in a Scene. Case-insensitive
-// substring match against common animation names; falls back to clip 0
-// when no match. Returns -1 only when clips is empty. The user-curated
-// rule: prefer "walk", then "run", then first.
-// #229 P3: allocator-templated (std + ChunkStdAllocator clip vectors) and
-// takes the prefab arena to resolve the interned NameRef clip names.
+// Pick the "walking" clip in a prefab: case-insensitive substring match,
+// preferring "walk", then "run", then "idle", then the clip with the most
+// channels. Returns -1 only when clips is empty. Allocator-templated so
+// std and ChunkStdAllocator clip vectors both work; takes the prefab arena
+// to resolve the interned NameRef clip names.
 template <typename Alloc>
 inline int SelectWalkingClip(const std::vector<Clip, Alloc>& clips,
                              cairns::BumpArena& arena) {

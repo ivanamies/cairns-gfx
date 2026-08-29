@@ -1,9 +1,10 @@
 // src/util/cpu_pool.hpp
 //
-// Persistent tier (Tier 2): objects with individual lifetimes -- born and freed
-// one at a time as skinned entities spawn / despawn. This is the ONE skinning
-// tier that needs a real suballocator with a free list, so it wraps Sebastian
-// Aaltonen's OffsetAllocator (the same allocator rhi's GPU heap blocks use).
+// Allocator archetype C (README "Memory management") -- the persistent tier:
+// objects with individual lifetimes, born and freed one at a time as skinned
+// entities spawn / despawn. The one tier that needs a real suballocator with
+// a free list, so it wraps Sebastian Aaltonen's OffsetAllocator (the same
+// allocator rhi's GPU heap blocks use).
 //
 // The unit of currency is an OFFSET, not a pointer. That is deliberate: the
 // canonical user is skin_output_pool -- a single persistent GPU buffer whose
@@ -15,8 +16,7 @@
 // The handle (PoolSlice) carries its own OffsetAllocator::Allocation, so Free
 // needs nothing but the slice back. There is no void*->Allocation side table --
 // the metadata lives with the owner (store the slice in the skin's cold record),
-// the way Acton-style hot/cold layouts keep each record's own indices. This is
-// the std_allocator.hpp Arena's std::map<void*,Allocation> done away with.
+// the way Acton-style hot/cold layouts keep each record's own indices.
 
 #pragma once
 
@@ -50,7 +50,7 @@ struct RangePool {
         max_allocs_ = max_allocs;
     }
 
-    // #229: free every outstanding slice at once, reusing the same capacity.
+    // Free every outstanding slice at once, reusing the same capacity.
     // Safe only at a teardown point where no live PoolSlice is subsequently
     // Free'd or dereferenced (e.g. after the render thread is drained and all
     // owning actors are gone).

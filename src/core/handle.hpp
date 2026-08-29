@@ -1,6 +1,9 @@
 // core/handle.hpp
 //
-// Generic typed generational pool.
+// Allocator archetype D (README "Memory management"): Handle<T> +
+// ResourceManager<T>, a generic typed generational pool over dense Hot/Cold
+// arrays. Currency is the generational Handle -- a stale deref returns null,
+// not UB.
 
 #pragma once
 
@@ -13,7 +16,7 @@
 #include <new>
 #include <vector>
 
-#include "util/chunk_allocator.hpp"  // #229 M0b: block-backed pool storage.
+#include "util/chunk_allocator.hpp"  // Block-backed pool storage.
 
 namespace cairns {
 
@@ -67,8 +70,8 @@ public:
         } else {
             // The pool must not grow, or else all hot*/cold* break.
             // DO NOT STORE hot*/cold* pointers. capacity_==0 means the pool
-            // was never Reserve'd: abort rather than grow (there is no growable
-            // storage anymore -- the arrays are fixed-capacity chunk blocks).
+            // was never Reserve'd: abort rather than grow (the arrays are
+            // fixed-capacity chunk blocks).
             if (size_ >= capacity_) {
                 std::fprintf(
                     stderr,
@@ -93,7 +96,7 @@ public:
         freelist_[freelist_count_++] = h.index;
     }
 
-    // #229: recycle every live slot back to empty, reusing the backing (no
+    // Recycle every live slot back to empty, reusing the backing (no
     // realloc). Bumps generations so any outstanding handle goes dead, and
     // re-default-constructs each slot so a later size_++ Acquire (which assumes
     // Reserve-fresh slots) sees clean state. Teardown-only: no live Handle may

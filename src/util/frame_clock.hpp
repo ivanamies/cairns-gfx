@@ -36,8 +36,7 @@ inline constexpr double   kFixedDt          = 1.0 / 60.0;
 inline constexpr uint32_t kMaxStepsPerFrame = 5;
 inline constexpr double   kMaxFrameDt       = 0.250;
 inline constexpr uint64_t kGoldenDumpFrame  = 60;
-// #221 Phase 9 (vk): budget for skin Group A bind groups (one per
-// skinned mesh in residence). Plan v7 § sizing -- 1024.
+// Budget for skin Group A bind groups (one per skinned mesh in residence).
 inline constexpr uint32_t kMaxSkinnedMeshes = 1024;
 
 class FrameClock {

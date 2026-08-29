@@ -1,13 +1,12 @@
 // util/material_map.hpp
 //
-// #229 loader: the material->texture index mapping, extracted as a pure
-// function so it is unit-testable without a GPU / a .glb fixture. The invariant
-// it enforces is subtle and was a real bug: the output arrays must stay 1:1
-// with glTF material indices. The draw path binds hot.materials[prim
-// .materialIndex]; if a material with no resolvable baseColorTexture is SKIPPED
-// (the old behaviour) the list compacts and every later material's slot shifts
-// -> off-by-N texture binds. So an unresolvable material emits kNoMaterialTexture
-// in place (PreparePrefabResources maps that to a placeholder), never a skip.
+// The material->texture index mapping, a pure function so it is unit-testable
+// without a GPU / a .glb fixture. Invariant: the output arrays stay 1:1 with
+// glTF material indices. The draw path binds hot.materials[prim
+// .materialIndex]; skipping a material with no resolvable baseColorTexture
+// would compact the list and shift every later material's slot -> off-by-N
+// texture binds. So an unresolvable material emits kNoMaterialTexture in
+// place (PreparePrefabResources maps that to a placeholder), never a skip.
 
 #pragma once
 

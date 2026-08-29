@@ -1,5 +1,8 @@
-// engine.cpp -- out-of-line Engine method bodies (C2 body-move).
-// Declarations stay in engine.hpp; templates + trivial accessors stay inline.
+// Out-of-line Engine method bodies. Declarations stay in engine.hpp;
+// templates + trivial accessors stay inline there.
+//  - Product: one Engine hosts the demo scene (100 GLBs x 32 slices across
+//    two viewports, click->pick->eval->move), headless or windowed, driven
+//    over the NDJSON / script.eval op surface.
 
 #include "engine.hpp"
 
@@ -14,16 +17,16 @@ void Engine::uploadAnimTablesGpu() {
         if (prefab_ids.empty()) {
             return;
         }
-        // #228 H4b: Aaltonen delta path. Walk only the trailing window
+        // Aaltonen delta path: walk only the trailing window
         // [skinning_.uploaded_prefab_count..end) and upload the new data at
-        // an OFFSET into each buffer past what was uploaded previously.
-        // The steady-state cost is O(batch). Buffer growth is rare (only
-        // when a new batch's totals exceed the existing buffer capacity);
-        // when it happens, fall back to a full rebuild that re-uploads
-        // every prefab from scratch.
+        // an offset past what was uploaded previously -- steady-state cost
+        // O(batch). If a batch outgrows a buffer, fall back to a full
+        // rebuild that re-uploads every prefab.
         bool full_rebuild = (skinning_.uploaded_prefab_count == 0) ||
                             (skinning_.uploaded_prefab_count > prefab_ids.size());
-        // #231 SSBO pack: 3 packed flat vectors by element type + headers.
+        // Anim tables packed into 3 flat SSBOs by element type (+ headers)
+        // so the anim_eval pipeline fits WebGPU's per-stage storage-buffer
+        // limit.
         // i32_flat: parent | topo | joint_nodes | times(int bits).
         // vec4_flat: bind_pose(T,R,S per joint) | values | inverse_binds(cols).
         // word16_flat: channels | samplers (each GpuChannel/GpuSampler is 16B).
@@ -66,7 +69,7 @@ void Engine::uploadAnimTablesGpu() {
                     static_cast<uint32_t>(cold->gpu_channels.size());
                 sh.sampler_count =
                     static_cast<uint32_t>(cold->gpu_samplers.size());
-                // #231 packed offsets, in each packed buffer's ELEMENT units.
+                // Offsets are in each packed buffer's ELEMENT units.
                 // i32 block (parent | topo | joint_nodes | times):
                 sh.parent_off =
                     base.i32 + static_cast<uint32_t>(i32_flat.size());
@@ -110,9 +113,8 @@ void Engine::uploadAnimTablesGpu() {
                 // word16 block (channels | samplers), each 16B = 1 uvec4:
                 sh.mesh_node = cold->gpu_mesh_node;
                 sh.duration = cold->gpu_clip_duration;
-                // Sampler local offsets fold in the per-scene i32/vec4 bases
-                // (times now i32-element, values now vec4-element) before the
-                // reinterpret.
+                // Sampler offsets are prefab-local; fold in this prefab's
+                // i32/vec4 bases before the reinterpret.
                 const uint32_t local_times_base = sh.times_off;
                 const uint32_t local_values_base = sh.values_off;
                 sh.channel_off =
@@ -177,8 +179,8 @@ void Engine::uploadAnimTablesGpu() {
         }
         // Upload helper: writes `bytes` of `data` into `out` at byte
         // offset `byte_off`. Allocates / grows `out` so it can hold at
-        // least `total_bytes`. Recycles the existing handle when its
-        // capacity is sufficient (H4a leak fix preserved).
+        // least `total_bytes`; recycles the existing handle when its
+        // capacity suffices.
         auto upload_at = [&](const void* data, size_t bytes,
                              size_t byte_off, size_t total_bytes,
                              rhi::Handle<rhi::Buffer>& out) -> bool {
@@ -195,11 +197,8 @@ void Engine::uploadAnimTablesGpu() {
                     rhi_.device.WaitIdle();
                     rhi_.resources.Destroy(rhi_.alloc, out);
                 }
-                // #228 H4b: growth pad so subsequent appends don't immediately
-                // re-trigger growth. 4x current need (Aaltonen reserve-
-                // and-grow); clamp small allocations up to 4 KB. Covers
-                // typical hero-size variance so steady-state delta fires
-                // for most appends.
+                // Growth pad: 4x need (Aaltonen reserve-and-grow), min 4 KB,
+                // so steady-state appends stay on the delta path.
                 rhi::BufferDesc bd{};
                 uint32_t alloc_size = need * 4;
                 if (alloc_size < 4096) {
@@ -212,9 +211,8 @@ void Engine::uploadAnimTablesGpu() {
                 if (out.IsNull()) {
                     return false;
                 }
-                // Handle changed -- vk's skinning_.dyn_anim_eval descriptor set
-                // captures buffer handles at creation time, so it now
-                // points at a freed handle. Mark for recreation.
+                // The dyn_anim_eval descriptor set captured the old buffer
+                // handle at creation time; mark it for recreation.
                 skinning_.dyn_dirty = true;
             }
             if (data && bytes > 0) {
@@ -252,10 +250,9 @@ void Engine::uploadAnimTablesGpu() {
         skinning_.uploaded_prefab_count =
             static_cast<uint32_t>(prefab_ids.size());
         skinning_.eval_tables_uploaded = true;
-        // #228 H4b vk fix: if any buffer was destroyed-and-recreated this
-        // call, the skinning_.dyn_anim_eval descriptor set holds stale handles --
-        // recreate it. Also recreates on first-ever upload because the
-        // GreaterInit gate left it Null post-L9.
+        // Any destroy-and-recreate above left stale buffer handles in the
+        // anim descriptor sets; recreate them. Also covers the first-ever
+        // upload, where init left them null (no boot-time bulk load).
         if (skinning_.dyn_dirty) {
             recreateAnimDynBindings();
             recreateSkinGroupB();
@@ -268,13 +265,9 @@ void Engine::uploadAnimTablesGpu() {
                      i32_flat.size(), target.i32,
                      vec4_flat.size(), target.vec4,
                      word16_flat.size(), target.word16);
-        // The pack concatenates several tables into one buffer, so each packed
-        // SSBO is bigger than the unpacked parts were -- and upload_at pads to 4x.
-        // The anim kernel binds these whole (VK_WHOLE_SIZE), so a packed buffer
-        // larger than max_storage_buffer_range would garble (the S22 class of
-        // bug). Report the allocated sizes vs the device range and abort if any
-        // overflows -- packing must not push a buffer past what the unpacked set
-        // would have.
+        // Packing concatenates tables and upload_at pads 4x; the anim kernel
+        // binds these whole (VK_WHOLE_SIZE), so a packed buffer past
+        // max_storage_buffer_range silently garbles. Abort instead.
         const uint32_t i32_sz = rhi_.resources.GetBufferByteSize(skinning_.ae_i32_buf);
         const uint32_t vec4_sz = rhi_.resources.GetBufferByteSize(skinning_.ae_vec4_buf);
         const uint32_t w16_sz = rhi_.resources.GetBufferByteSize(skinning_.ae_word16_buf);
@@ -309,17 +302,16 @@ bool Engine::deinit() {
         present_.swapchain.Deinit();
         rhi_.pipelines.Deinit(rhi_.resources);
         rhi_.frames.Deinit();
-        // #222 Phase F.1/F.3: sibling subsystem teardown after frames.
         rhi_.gpu_profiler.Deinit();
         rhi_.offscreen_targets.Deinit();
         rhi_.resources.Deinit();
         rhi_.alloc.Deinit();
         rhi_.device.Deinit();
-        // Return the oversize BumpArena slabs carved from cpu_block_ (the
-        // per-slot frame arenas + the prefab interning arena). BumpArena doesn't
-        // own its slab, and cpu_block_'s Deinit reclaims only the chunk pool --
-        // NOT oversize mallocs -- so without this they leak (Release) and trip
-        // cpu_block_'s outstanding-balance assert (Debug) when it destructs.
+        // Free the oversize BumpArena slabs carved from cpu_block_ (per-slot
+        // frame arenas + prefab interning arena): BumpArena is non-owning and
+        // cpu_block_.Deinit reclaims only the chunk pool, not oversize
+        // mallocs -- unfreed they leak (Release) and trip the
+        // outstanding-balance assert (Debug).
         for (PerSlot& s : slots_) {
             cpu_block_.Free(s.arena.Base());
             s.arena.Init(nullptr, 0);  // idempotent if deinit() runs twice
@@ -334,15 +326,11 @@ bool Engine::deinit() {
 namespace cairns {
 
 bool Engine::initParticleSsbos() {
-        // A.1: portable mt19937 + hand-rolled [0,1) mapping. std::rand is
-        // implementation-defined (libc++ vs NDK vs glibc all differ), and
-        // its consumption order depended on heap layout, which is what was
-        // flaking macOS triangle hashes. ParticleRng (cairns::ParticleRng,
-        // src/render/particle_emitter.hpp) is the spec-test path -- same
-        // engine, same (NextU32()>>8) * (1/16777216) mapping. Byte-stable
-        // across runs and across libc++ flavors.
-        // Override via Engine::SetRandomSeed before GreaterInit if you need
-        // a different starting state (e.g. the rng.seed NDJSON op).
+        // Portable mt19937 + hand-rolled (NextU32()>>8) * (1/16777216)
+        // mapping: std::rand differs per libc (libc++/NDK/glibc), so golden
+        // hashes would diverge per platform. ParticleRng keeps particle init
+        // byte-stable across runs and libc flavors. Seed override:
+        // Engine::SetRandomSeed before GreaterInit (the rng.seed NDJSON op).
         cairns::ParticleRng rng(particles_.random_seed);
         std::vector<Particle> particles(ParticleSystem::kParticleCount);
         for (uint32_t i = 0; i < ParticleSystem::kParticleCount; ++i) {
@@ -382,14 +370,13 @@ namespace cairns {
 
 bool Engine::initParticles() {
         const std::string shader_dir = cairns::GetBasePathSafe();
-        // #222 Phase D.4: SSBOs created first so the parity DynamicBuffers
-        // can write their bindings 1+2 at create time. Particle kernel
-        // then references the parity layout (set 0) instead of the
-        // legacy frames.plat.compute_layout_.
+        // SSBOs created first so the parity DynamicBuffers can write their
+        // bindings 1+2 at create time; the particle kernel references the
+        // parity layout (set 0).
         if (!initParticleSsbos()) {
             return false;
         }
-        {  // #222 Phase D.4: 2 parity DynamicBuffers, one per (src,dst) order.
+        {  // Two parity DynamicBuffers, one per (src,dst) ping-pong order.
            // Binding 0 = UBO_DYN dt over kDynamic master (per-dispatch dyn off).
            // Bindings 1+2 = SSBO over particles_.ssbo[A]/[B] no-dyn.
             for (uint32_t p = 0; p < 2; ++p) {
@@ -431,9 +418,9 @@ bool Engine::initParticles() {
             desc.shader_dir = shader_dir.c_str();
             desc.debug_name = "particle_compute";
             desc.layout = rhi::ComputePipelineLayout::kParticle;
-            // #222 Phase D.4: pipeline layout reads from parity[0]'s
-            // DynamicBuffers Hot layout (UBO_DYN @0 + 2 SSBO). Both
-            // parity sets share the same layout shape.
+            // Pipeline layout reads from parity[0]'s DynamicBuffers Hot
+            // layout (UBO_DYN @0 + 2 SSBO); both parity sets share the
+            // same layout shape.
             desc.dyn_set_0 = dyn_particle_parity_[0];
             particles_.kernel = rhi_.pipelines.CreateComputePipeline(rhi_.resources, rhi_.frames, desc);
             if (particles_.kernel.IsNull()) {
@@ -477,18 +464,18 @@ bool Engine::initParticles() {
             if (particles_.render_shader.IsNull()) {
                 return false;
             }
-            // Offscreen variant for the render-graph forward pass. #206 the
-            // forward pass is MRT (BGRA color + R32U id); pipeline declares
-            // both attachments so the offscreen-target-cache renderpass
-            // matches the pipeline's compat renderpass.
+            // Offscreen variant for the render-graph forward pass, which is
+            // MRT (BGRA color + R32U id); pipeline declares both attachments
+            // so the offscreen-target-cache renderpass matches the
+            // pipeline's compat renderpass.
             rhi::GraphicsPipelineDesc opd = desc;
             opd.sample_count = 1;
             opd.swap_chain = nullptr;
             opd.color_formats[0] = rhi::Format::kBgra8Unorm;
             opd.color_formats[1] = rhi::Format::kR32Uint;
             opd.color_count = 2;
-            // #242: particle frag writes only outColor (location 0); the
-            // R32U id attachment exists for renderpass-compat but gets
+            // Particle frag writes only outColor (location 0); the R32U id
+            // attachment exists for renderpass-compat but gets
             // colorWriteMask=0 so we don't undef-stomp it.
             opd.frag_color_output_count = 1;
             opd.debug_name = "particle_render_offscreen";
@@ -497,9 +484,9 @@ bool Engine::initParticles() {
             if (particles_.render_offscreen.IsNull()) {
                 return false;
             }
-            // #222 Phase A.1 fix: id-less variant for the no-id forward
-            // pass. Same shaders; the frag's location-1 write to the id
-            // attachment becomes a no-op write to a discarded location.
+            // Id-less variant for the no-id forward pass. Same shaders; the
+            // frag's location-1 write to the id attachment becomes a no-op
+            // write to a discarded location.
             rhi::GraphicsPipelineDesc npd = opd;
             npd.color_formats[1] = rhi::Format::kBgra8Unorm;  // unused
             npd.color_count = 1;
@@ -669,8 +656,8 @@ bool Engine::recreateAnimDynBindings() {
         if (!skinning_.eval_tables_uploaded) {
             return true;
         }
-        // #231 SSBO pack: bindings 1-6 = i32 / vec4 / word16 / headers /
-        // world_scratch / palette_out (matching the kernel binding numbers).
+        // Bindings 1-6 = i32 / vec4 / word16 / headers / world_scratch /
+        // palette_out (matching the kernel binding numbers).
         const rhi::Handle<rhi::Buffer> ae_ssbo[6] = {
             skinning_.ae_i32_buf, skinning_.ae_vec4_buf, skinning_.ae_word16_buf,
             skinning_.scene_headers_buf, skinning_.world_scratch_buf, skinning_.palette_out_buf,
@@ -694,10 +681,9 @@ bool Engine::recreateAnimDynBindings() {
         ae_d.debug_name = "dyn_anim_eval";
         ae_d.bindings =
             std::span<const cairns::rhi::DynamicBinding>(ae_b, 7);
-        // #228 F1 user: enqueue the old set for kFIF-frame fenced deletion
-        // instead of WaitIdle+Destroy. The new set is created+used
-        // immediately; the old one persists in-flight one more frame and
-        // then gets Released when the slot's bucket drains. No GPU drain.
+        // Fenced deferred deletion, not WaitIdle+Destroy: the new set is
+        // used immediately; the old one stays alive until its in-flight
+        // frame's fence bucket drains. No GPU stall.
         if (!skinning_.dyn_anim_eval.IsNull()) {
             rhi_.resources.DeferFree(skinning_.dyn_anim_eval);
         }
@@ -749,12 +735,10 @@ void Engine::BuildSkinFrame(uint32_t slot) {
         if (!wc) {
             return;
         }
-        // #222 Phase S.3 step 2: cull skinned actors against the active
-        // viewport frustum. Extract 6 planes from view_proj (clip-space
-        // boundary planes mapped back: row3 ± rowK). Per-actor: transform
-        // bind-pose AABB corners by WorldTransform.world, pad by 1.5x for
-        // animation motion, test each plane. Skip the actor's anim_eval
-        // record AND skinning_compute batch when fully outside.
+        // Cull skinned actors against the active viewport frustum: 6 planes
+        // from view_proj (row3 +- rowK), bind-pose AABB in world space
+        // padded 1.5x for animation motion. A fully-outside actor is
+        // skipped in BOTH the anim_eval record and the skin batch.
         const glm::mat4& vp_for_cull =
             s.pending_globals[viewport_mgr_.active_index].view_proj;
         glm::vec4 cull_planes[6];
@@ -953,12 +937,10 @@ void Engine::BuildSkinFrame(uint32_t slot) {
         cairns::GpuActorRecord* actor_records =
             s.arena.AllocateArray<cairns::GpuActorRecord>(meta_running);
 
-        // #222 Phase 0.3: wide-base anim clock. (sim_frame_ * kFixedDt) +
-        // scale/offset in double, fmod by double(clip duration), narrow to
-        // float. The kernel's own wrap (anim_eval.comp.glsl) still runs on
-        // the narrowed value as a no-op safety. float sim time loses
-        // sub-frame precision after about 17 minutes; double holds it
-        // beyond any plausible camera-app session.
+        // Wide-base anim clock: accumulate + wrap in double, narrow once.
+        // float sim time loses sub-frame precision after ~17 minutes. The
+        // kernel's own wrap (anim_eval.comp.glsl) still runs on the
+        // narrowed value as a no-op safety.
         const double anim_t_d =
             static_cast<double>(sim_frame_) * cairns::kFixedDt;
         for (uint32_t k = 0; k < total_actors; ++k) {
@@ -987,8 +969,8 @@ void Engine::BuildSkinFrame(uint32_t slot) {
             instance_meta[actor_idx] =
                 glm::uvec2(cursor * b.joint_count, sh->slice_offset);
 
-            // #222 Phase H.5: duration cached on Hot at skin-create; no
-            // per-actor prefab_store_.prefabs.GetCold this frame.
+            // Duration cached on Hot at skin-create; no per-actor Cold
+            // fetch on the frame path.
             const double dur = static_cast<double>(sh->gpu_clip_duration);
             const double scaled =
                 anim_t_d * static_cast<double>(sh->time_scale) +
@@ -1018,16 +1000,14 @@ namespace cairns {
 
 bool Engine::initRenderPipeline() {
         {
-            // #220 Step 1: set-2 per-material bind groups now live IN the
-            // material's Hot record (cairns::ResourceManager<Material>).
-            // Walk every live material; build its BindGroup from Cold's
-            // texture+sampler; store into Hot.set2. Replaces the parallel
-            // material_bind_groups_ vector that had a fragile size-parity
-            // invariant with prefab_store_.materials.
+            // Per-material set-2 bind groups live in Material::Hot
+            // (resolved per-draw), not a parallel array. Walk every live
+            // material; build its BindGroup from Cold's texture+sampler;
+            // store into Hot.set2.
             prefab_store_.materials.ForEachLive(
                 [&](cairns::Material::Hot& hot,
                     cairns::Material::Cold& cold) {
-                    // #229: skip untextured-material placeholders (null color).
+                    // Skip untextured-material placeholders (null color).
                     if (cold.color.IsNull()) {
                         return;
                     }
@@ -1067,17 +1047,11 @@ bool Engine::initRenderPipeline() {
             desc.color_format = rhi::Format::kBgra8Unorm;
             desc.depth_format = rhi::Format::kD32F;
             desc.sample_count = sampleCount;
-            desc.push_constant_bytes = 0;  // base_vertex no longer needed (attrs are a vertex stream)
-            // #242: unlit_ swap-PSO retired -- it used the swapchain
-            // renderpass (1 color) with unlit.frag (writes outId at
-            // location 1), tripping VUID Undefined-Value-ShaderOutputNotConsumed.
-            // The forward pass uses the offscreen variants
-            // (unlit_offscreen_ / unlit_offscreen_noid_) instead; this
-            // PSO never made it to a vkCmdDraw.
+            desc.push_constant_bytes = 0;  // attrs are a vertex stream; no base_vertex
 
             // Offscreen variant: single-sample, no swapchain compat. Same shaders
             // + vertex layout as unlit; targets a render-graph color_off+depth_off.
-            // #206 MRT: forward pass writes {BGRA color, R32U id} -- pipeline
+            // MRT: forward pass writes {BGRA color, R32U id} -- pipeline
             // declares both formats so vk renderpass compat matches the
             // 2-attachment offscreen renderpass cache key.
             rhi::GraphicsPipelineDesc ofd = desc;
@@ -1094,9 +1068,9 @@ bool Engine::initRenderPipeline() {
                 std::exit(0);
             }
 
-            // #222 Phase A.1: id-less variant. Single color attachment, no
-            // R32U write in the fragment shader. Selected by RecordFrame
-            // when no consumer wants the id channel this frame.
+            // Id-less variant: single color attachment, no R32U write in
+            // the fragment shader. Selected by RecordFrame when no consumer
+            // wants the id channel this frame.
             rhi::GraphicsPipelineDesc nid = desc;
             nid.logical_shader = "unlit_offscreen_noid";
             nid.sample_count = 1;
@@ -1138,7 +1112,7 @@ bool Engine::initRenderPipeline() {
             depthviz_ = rhi_.pipelines.CreateGraphicsPipeline(
                 rhi_.resources, rhi_.frames, dvd);
 
-            // #207 outline: same shape; samples color_off + id_off (2 textures
+            // Outline: same shape; samples color_off + id_off (2 textures
             // via the shared composite descriptor layout), renders into
             // outline_off (BGRA, same dims as color_off). Surfaceless: targets
             // a 1-sample / no-depth render pass. Windowed: still 1-sample /
@@ -1226,29 +1200,21 @@ void Engine::RecordFrame(FramePacket& pkt) {
 
         if (!graph_) {
             graph_ = std::make_unique<rhi::RenderGraph>(rhi_.resources, rhi_.alloc);
-            // #210 wire per-slot scratch arenas into the graph's slot table.
+            // Wire per-slot scratch arenas into the graph's slot table:
             // Bake(slot) resolves slot_arenas_[slot] -> this slot's BumpArena.
             for (uint32_t s = 0; s < kFramesInFlight; ++s) {
                 graph_->BindSlotArena(s, slots_[s].arena);
             }
-            // #229 GPU-determinism: golden mode disables intra-frame transient
-            // aliasing (the top suspect for the three_champ flake -- aliased
-            // memory is undefined until written, so a read-before-write is
-            // bistable). Behaviour-preserving (pure layout); pool auto-grows.
-            // #229 golden-mode determinism INSURANCE for future multi-pass
-            // graphs. NOTE: measured 0 aliasing across the entire golden suite
-            // today (all graphs are forward[+vp1]/swap with overlapping-lifetime
-            // transients), so this does NOT affect three_champ -- the aliasing
-            // hypothesis is refuted for the current flake. Kept as correct
-            // hardening for when transient graphs grow.
+            // Golden mode disables intra-frame transient aliasing: aliased
+            // memory is undefined until written, so any read-before-write
+            // would be bistable and poison golden hashes. No current graph
+            // aliases; hardening for when multi-pass transient graphs grow.
             graph_->SetDisableTransientAliasing(golden_);
         }
         graph_->Reset();
 
         // Per-viewport MeshDrawList: same draws, distinct globals_offset.
-        // (Same world for both viewports this commit; multi-scene content
-        // lands in #195.)
-        // #222 Phase A.1: id MRT only when something consumes it (outline
+        // Id MRT only when something consumes it (outline
         // overlay or a pending pick this frame). Default path uses the
         // no-id PSO and a single-color forward render pass, saving the
         // R32U store + flat-interp on every visible fragment.
@@ -1257,10 +1223,10 @@ void Engine::RecordFrame(FramePacket& pkt) {
             id_path ? unlit_offscreen_ : unlit_offscreen_noid_;
         std::array<rhi::MeshDrawList, kNumViewports> mls{};
         for (int v = 0; v < viewport_mgr_.active_count; ++v) {
-            // #195 per-viewport scene: draws stays the FULL list (sorted_draws
-            // holds global indices into it); sorted_draws is the sub-span for
-            // this viewport's bound scene, so each viewport renders only its
-            // own scene's content.
+            // draws stays the FULL list (sorted_draws holds global indices
+            // into it); sorted_draws is the sub-span for this viewport's
+            // bound scene, so each viewport renders only its own scene's
+            // content.
             mls[v].draws = pkt.draws;
             const int sk = s.viewport_scene_idx[v];
             if (sk >= 0 && static_cast<uint32_t>(sk) < s.scene_ranges_count) {
@@ -1271,20 +1237,16 @@ void Engine::RecordFrame(FramePacket& pkt) {
                 mls[v].sorted_draws = pkt.sorted;
             }
             mls[v].pipeline = forward_pso;
-            // #222 Phase D.2: route set 0 (pass globals) through dyn_globals_.
+            // Set 0 (pass globals) routes through dyn_globals_.
             mls[v].dyn_globals = dyn_globals_;
             mls[v].globals_offset = s.globals_offset[v];
             mls[v].resident_textures = pkt.resident_textures;
-            // #228 H3: resident_buffers left empty (was a 1-element span
-            // over mesh_master_handle_ -- field deleted, span never read
-            // by the recorder).
-            mls[v].resident_buffers = {};
+            mls[v].resident_buffers = {};  // never read by the recorder
         }
 
         rhi::PointDraw pd{};
-        // #222 Phase A.1 fix: particle PSO must match the forward pass's
-        // attachment count -- the id_path branch already swapped the
-        // forward unlit PSO; mirror it for the points pipeline.
+        // Particle PSO must match the forward pass's attachment count --
+        // mirror the id_path PSO swap for the points pipeline.
         pd.pipeline = id_path ? particles_.render_offscreen
                               : particles_.render_offscreen_noid;
         pd.vertex_buffer = particles_.ssbo[pkt.particle_parity_out];
@@ -1294,30 +1256,25 @@ void Engine::RecordFrame(FramePacket& pkt) {
         const float clear[4] = {41.0f / 255.0f, 42.0f / 255.0f, 48.0f / 255.0f, 1.0f};
         const uint32_t fb_w = swap_target.width;
         const uint32_t fb_h = swap_target.height;
-        // #194 vp_w/vp_h were sized off kNumViewports (uniform horizontal
-        // tiling cap). Now viewport_mgr_.active_count at runtime; layout_rect
-        // owns the per-viewport region. Today's default keeps vp_w = full
-        // when active=1 -- byte-identical to the pre-#194 single-viewport
-        // path.
+        // Uniform horizontal split across the active viewports; layout_rect
+        // owns each viewport's region.
         const int n_live = std::max(1, viewport_mgr_.active_count);
         const uint32_t vp_w = fb_w / static_cast<uint32_t>(n_live);
         const uint32_t vp_h = fb_h;
-        // #222 Phase A.1: id targets only allocated when this frame writes
-        // them (outline overlay or pending pick). The lazy alloc inside
-        // EnsureIdTargets is cheap to skip when no one consumes it.
+        // Id targets only allocated when this frame writes them (outline
+        // overlay or pending pick).
         if (!picking_.highlights.empty() || picking_.pending) {
             EnsureIdTargets(vp_w, vp_h);
         }
         EnsureHighlightsTex();
 
-        // #221 Skinning P5: pre-skin compute pass. Added BEFORE particle_sim
-        // so its output ssbo is ready when the forward pass binds stream 0
-        // as a vertex stream (free vertex-fetch sync via the existing
-        // compute -> graphics semaphore @ VERTEX_INPUT on Vulkan; encoder
-        // boundary handles it on Metal). Gated on non-empty batches AND
-        // a valid skin kernel -- absent either, the pass is omitted and
-        // the static path is bit-for-bit unchanged. The graph timer wraps
-        // this pass with the "skinning_compute" Timer slot (README ratchet).
+        // Pre-skin compute pass, BEFORE particle_sim so its output ssbo is
+        // ready when the forward pass binds stream 0 as a vertex stream
+        // (free vertex-fetch sync via the existing compute -> graphics
+        // semaphore @ VERTEX_INPUT on Vulkan; encoder boundary handles it
+        // on Metal). Gated on non-empty batches AND a valid skin kernel --
+        // absent either, the pass is omitted and the static path is
+        // bit-for-bit unchanged.
         if (!pkt.skin_batches.empty() && !skinning_.skin_kernel.IsNull() &&
             !skinning_.output_pool_buffer.IsNull()) {
             graph_->AddPass(
@@ -1330,8 +1287,8 @@ void Engine::RecordFrame(FramePacket& pkt) {
                     b.WriteBuffer(pool);
                 },
                 [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
-                    // #221 Phase 5b: dispatch anim_eval first to fill the
-                    // persistent skinning_.palette_out_buf + skinning_.world_scratch_buf.
+                    // Dispatch anim_eval first to fill the persistent
+                    // skinning_.palette_out_buf + skinning_.world_scratch_buf.
                     // Then SkinDispatchBatch reads palettes from binding 1
                     // pointing at skinning_.palette_out_buf, with per-batch dynamic
                     // offset = batch.first_palette_mat4 * sizeof(mat4).
@@ -1348,9 +1305,8 @@ void Engine::RecordFrame(FramePacket& pkt) {
                         static_cast<uint32_t>(pkt.actor_records.size());
                     if (n_actors > 0 && !skinning_.eval_kernel.IsNull() &&
                         skinning_.eval_tables_uploaded) {
-                        // #222 Phase 0.2: belt-and-braces. BuildSkinFrame
-                        // clamps; this catches any future caller that skips
-                        // the clamp.
+                        // BuildSkinFrame clamps; this catches any caller
+                        // that skips the clamp.
                         assert(n_actors <= kAnimActorsCap);
                         const uint32_t records_bytes = n_actors *
                             static_cast<uint32_t>(sizeof(cairns::GpuActorRecord));
@@ -1368,9 +1324,9 @@ void Engine::RecordFrame(FramePacket& pkt) {
                             ae.scene_headers = skinning_.scene_headers_buf;
                             ae.world_scratch = skinning_.world_scratch_buf;
                             ae.palette_out = skinning_.palette_out_buf;
-                            // #222 Phase D.3: dyn_set_0 = anim_eval per-FIF
-                            // DynamicBuffers set (binding 0 dyn UBO + 1..6
-                            // SSBO over backing). vk reads it; metal ignored.
+                            // dyn_set_0 = per-FIF DynamicBuffers set
+                            // (binding 0 dyn UBO + 1..6 SSBO over backing).
+                            // vk reads it; metal ignores it.
                             ae.dyn_set_0 = skinning_.dyn_anim_eval;
                             ae.records_byte_offset = records_off;
                             ae.actor_count = n_actors;
@@ -1416,7 +1372,7 @@ void Engine::RecordFrame(FramePacket& pkt) {
                         }
                         memcpy(params_ptr, &params, sizeof(SkinParamsCpu));
 
-                        // #221 Phase 5b: palettes live in skinning_.palette_out_buf;
+                        // Palettes live in skinning_.palette_out_buf; the
                         // per-batch dynamic offset selects the bucket window
                         // in mat4 stride. instance_meta.x stays
                         // bucket-relative (cursor * joint_count).
@@ -1455,10 +1411,8 @@ void Engine::RecordFrame(FramePacket& pkt) {
                         db.workgroups = sbg.workgroups;
                         db.instance_count = sbg.instance_count;
                     }
-                    // #222 Phase D.3: skinning_.palette_out_buf threaded as param;
-                    // SkinDispatchBatch::palette_buffer retired.
-                    // skinning_.dyn_skin_group_b owns the per-FIF set (vk) +
-                    // is ignored on metal.
+                    // skinning_.dyn_skin_group_b owns the per-FIF set (vk);
+                    // metal ignores it.
                     cmd.DispatchSkinBatches(
                         rhi_.resources, rhi_.alloc, skinning_.skin_kernel,
                         skinning_.output_pool_buffer, skinning_.palette_out_buf,
@@ -1468,12 +1422,11 @@ void Engine::RecordFrame(FramePacket& pkt) {
                 });
         }
 
-        // pass 1: particle_sim kCompute. import the writer ssbo so prune keeps
-        // it (external side effect -- game thread reads particle_parity_out).
-        // A.2 gate: when particles_.enabled=false the pass is omitted entirely;
-        // sim_out stays default-null, no readers downstream so prune drops it.
-        // #229 C3: emitter-component presence gates the sim (was the global
-        // particles_.enabled flag). Computed once; the draw pass reuses it.
+        // pass 1: particle_sim kCompute. Import the writer ssbo so prune
+        // keeps it (external side effect -- game thread reads
+        // particle_parity_out). Emitter-component presence gates the sim:
+        // no emitter -> pass omitted, sim_out stays default-null, prune
+        // drops it. Computed once; the draw pass reuses the gate.
         const bool particles_active = AnyBoundSceneHasEmitter();
         rhi::GraphBuffer sim_out;
         if (particles_active) {
@@ -1497,8 +1450,8 @@ void Engine::RecordFrame(FramePacket& pkt) {
                 for (uint32_t k = 0; k < pkt.sim_steps_this_frame; ++k) {
                     const uint32_t step_src =
                         pkt.particle_parity_in ^ (k & 1u);
-                    // #222 Phase D.4: parity DynamicBuffers holds bindings
-                    // 1+2 pre-bound; dyn offset carries dt only.
+                    // Parity DynamicBuffers holds bindings 1+2 pre-bound;
+                    // the dyn offset carries dt only.
                     cd.dyn_set_0 = dyn_particle_parity_[step_src];
                     cd.dyn_offset_0 = s.dt_off;
                     cd.step_index = k;
@@ -1534,13 +1487,13 @@ void Engine::RecordFrame(FramePacket& pkt) {
                     depth_off[vp_idx] = b.CreateDepthTarget(dd);
                     b.AddColorOutput("color", color_off[vp_idx], rhi::LoadOp::kClear, clear);
                     if (id_path) {
-                        // #207 R32U id buffer (MRT). Persistent (engine-owned via
+                        // R32U id buffer (MRT). Persistent (engine-owned via
                         // id_target_[vp]) so end-of-frame pick can copyImageToBuffer
                         // a 1x1 region after the render thread drains. Importing
                         // skips the transient pool aliasing race that would
-                        // otherwise reuse the texture before readback.
-                        // #222 Phase A.1: only attached when outline or pick
-                        // wants it -- frees the per-frag R32U store otherwise.
+                        // otherwise reuse the texture before readback. Only
+                        // attached when outline or pick wants it -- frees
+                        // the per-frag R32U store otherwise.
                         rhi::GraphTextureDesc id_desc{};
                         id_desc.width = vp_w;
                         id_desc.height = vp_h;
@@ -1556,10 +1509,9 @@ void Engine::RecordFrame(FramePacket& pkt) {
                 },
                 [&, vp_idx](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
                     cmd.DrawMeshes(rhi_.resources, rhi_.alloc, mls[vp_idx]);
-                    // A.2 + A.5 gate: global particles_.enabled gates the
-                    // compute sim above; per-viewport
-                    // Viewport::Cold::particles_enabled gates each
-                    // viewport's particle draw. G3 drives the per-vp split.
+                    // Emitter presence gates the compute sim above;
+                    // per-viewport Viewport::Cold::particles_enabled gates
+                    // each viewport's particle draw.
                     bool vp_particles = true;
                     if (auto* vc = viewport_mgr_.pool.GetCold(viewport_mgr_.ids[vp_idx])) {
                         vp_particles = vc->particles_enabled;
@@ -1570,29 +1522,21 @@ void Engine::RecordFrame(FramePacket& pkt) {
                 });
         }
 
-        // #207 pass 2.5: outline. Per viewport, fullscreen tri samples
-        // color_off + id_off, edge-detects on the id channel, tints yellow on
-        // discontinuities. Today unlit emits id=0 for every fragment so
-        // outline is a structural no-op (every pixel passes the centre==0
-        // early-out); when per-draw {type|id} encoding lands this pass
-        // produces visible silhouettes. We only insert the pass when the
-        // engine carries highlights, so the no-op cost is zero by default.
+        // pass 2.5: outline. Per viewport, fullscreen tri samples color_off
+        // + id_off, edge-detects on the id channel, tints on highlight
+        // match. Only inserted when the engine carries highlights, so the
+        // default cost is zero.
         std::array<rhi::GraphTexture, kNumViewports> outline_off{};
-        // #229 C3: per-viewport "did the outline pass run" (chrome gate is now
-        // per-viewport, so the swap read can't use one global outline_on).
+        // Per-viewport "did the outline pass run": the chrome gate is
+        // per-viewport, so the swap read can't use one global flag.
         std::array<bool, kNumViewports> outline_ran{};
-        // #224 L8: editor-chrome separation. The selection outline IS
-        // editor chrome -- meta-UI that marks "this entity is selected
-        // *in the editor*", drawn on top of the scene. Stylized
-        // highlight (rim light / toon / ink) is IN-CANVAS ART, lives
-        // in the material path, and is unaffected by this gate. The
-        // remixer canvas calls cairns.editor.chrome({on:false}) before
-        // a capture or scroll so the selection outline drops out but
-        // the stylized look survives. selection STATE (picking_.highlights) is
-        // preserved -- only the outline-pass DRAWING is suppressed.
-        // #229 C3: editor-chrome is now per-viewport (Viewport::Cold::
-        // chrome_enabled). Selection STATE (picking_.highlights) is global;
-        // each viewport draws the outline only when its own chrome is on.
+        // The selection outline IS editor chrome -- meta-UI marking "this
+        // entity is selected in the editor". Stylized highlight (rim/toon/
+        // ink) is in-canvas art in the material path, unaffected by this
+        // gate; cairns.editor.chrome({on:false}) drops the outline before a
+        // capture or scroll. Selection STATE (picking_.highlights) is
+        // global and preserved -- each viewport draws the outline only when
+        // its own Viewport::Cold::chrome_enabled is on.
         const bool have_highlights = !picking_.highlights.empty();
         if (have_highlights) {
             for (int v = 0; v < viewport_mgr_.active_count; ++v) {
@@ -1677,8 +1621,8 @@ void Engine::RecordFrame(FramePacket& pkt) {
                 swap_tex = b.ImportTexture(swap_handle, td);
                 b.AddColorOutput("swapchain", swap_tex, rhi::LoadOp::kClear, clear);
                 for (int v = 0; v < viewport_mgr_.active_count; ++v) {
-                    // #207 swap reads outline_off when the outline pass ran
-                    // this frame, else color_off. Both are sampled-readonly.
+                    // Swap reads outline_off when the outline pass ran this
+                    // frame, else color_off. Both are sampled-readonly.
                     b.AddAttachmentInput(outline_ran[v] ? outline_off[v]
                                                     : color_off[v]);
                     b.AddAttachmentInput(depth_off[v]);
@@ -1695,8 +1639,8 @@ void Engine::RecordFrame(FramePacket& pkt) {
                 const float fb_fw = static_cast<float>(fb_w);
                 const float fb_fh = static_cast<float>(fb_h);
                 if (viewport_mgr_.composition_count > 0) {
-                  // #229 C3: draw exactly the installed composition panes. Each
-                  // pane blits a source viewport's resolved color or depth into
+                  // Draw exactly the installed composition panes. Each pane
+                  // blits a source viewport's resolved color or depth into
                   // its NDC rect. The render.nestedGraph op installs the two
                   // canonical entries (color full + depth PIP); the shape is
                   // general (any viewport -> any rect).
@@ -1737,11 +1681,11 @@ void Engine::RecordFrame(FramePacket& pkt) {
                     }
                   }
                 } else {
-                // #194 composite each LIVE viewport into its layout_rect
-                // region of the swap pane. layout_rect = (x,y,w,h) in NDC
-                // [0..1]. Default for vp 0 is full pane (1,1); follow-up
-                // viewports set their own rects via cairns.viewport.setLayout.
-                // Skip zero-area rects (uninitialised / disabled).
+                // Composite each LIVE viewport into its layout_rect region
+                // of the swap pane. layout_rect = (x,y,w,h) in NDC [0..1].
+                // Default for vp 0 is full pane (1,1); follow-up viewports
+                // set their own rects via cairns.viewport.setLayout. Skip
+                // zero-area rects (uninitialised / disabled).
                 for (int v = 0; v < viewport_mgr_.active_count; ++v) {
                     const glm::vec4& rect =
                         viewport_mgr_.pool.GetHot(viewport_mgr_.ids[v])->layout_rect;
@@ -1761,9 +1705,8 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                        std::span<const rhi::Handle<rhi::Texture>>(&vp_color[v], 1),
                                        composite_sampler_);
                 }
-                // #229: the depthviz only appears in nested mode (above) now --
-                // the old always-on bottom-right debug PIP is gone, so ordinary
-                // scenarios render clean color with no depth overlay.
+                // depthviz appears only via composition panes (above);
+                // ordinary scenarios render clean color, no depth overlay.
                 }  // end else (non-nested multi-viewport composite)
                 // Restore full extent before the ui draw.
                 cmd.SetViewport(0.0f, 0.0f, static_cast<float>(fb_w),
@@ -1819,11 +1762,11 @@ void Engine::RecordFrame(FramePacket& pkt) {
 namespace cairns {
 
 bool Engine::draw() {
-        // Phase D: steady-frame marker. Throttled to once per 60 frames
-        // so the log scanner can see "engine is in steady state" without
-        // drowning out the [LOAD]/[RELOAD] markers. Pair with the
-        // Instruments signpost on this scope; the time profiler shows
-        // each frame as a 16ms band under "Points of Interest".
+        // Steady-frame marker, throttled to once per 60 frames so the log
+        // scanner can see "engine is in steady state" without drowning out
+        // the [LOAD]/[RELOAD] markers. Pairs with the Instruments signpost
+        // on this scope; the time profiler shows each frame as a 16ms band
+        // under "Points of Interest".
         CAIRNS_SIGNPOST_INTERVAL_SCOPED("frame", "draw");
         if ((frame_ % 60) == 0) {
             size_t ec = 0;
@@ -1835,8 +1778,8 @@ bool Engine::draw() {
 #if CAIRNS_ALLOC_TRACE
             // Allocs over the trailing 60-frame steady window. First print is
             // the window since boot; read the later windows. Includes the
-            // command-dispatch path (per-frame NDJSON parse) -- isolate
-            // render-thread allocs via the M2 audit, not this total.
+            // command-dispatch path (per-frame NDJSON parse), so this is
+            // not a render-thread-only number.
             cairns::alloc_count::PrintDelta("[STEADY-60]", alloc_steady_prev_);
             alloc_steady_prev_ = cairns::alloc_count::Now();
 #endif
@@ -1881,9 +1824,9 @@ bool Engine::draw() {
         // throws.
         std::unique_lock<std::mutex> slot_lock(s.slot_mutex);
         render_thread_->Acquire(slot);
-        // #210 reset this slot's CPU bump arena. Safe here because
-        // Acquire blocked until the render thread finished its prior
-        // use of slot S -- no reader still inside the bytes.
+        // Reset this slot's CPU bump arena. Safe here because Acquire
+        // blocked until the render thread finished its prior use of slot
+        // S -- no reader still inside the bytes.
         s.arena.Reset();
 
         const uint64_t cpu_now_ns = cairns::timestamp_ns();
@@ -1941,7 +1884,7 @@ bool Engine::draw() {
             return false;
         }
         t_build.End();
-        // #195: sort PER-SCENE-RANGE so each viewport's sorted sub-span orders
+        // Sort PER-SCENE-RANGE so each viewport's sorted sub-span orders
         // (and indexes) only its own scene's draws.
         for (uint32_t k = 0; k < s.scene_ranges_count; ++k) {
             const PerSlot::SceneDrawRange& r = s.scene_ranges[k];
@@ -1949,20 +1892,13 @@ bool Engine::draw() {
                       s.drawListSorted.begin() + r.draw_hi);
         }
 
-        // #219 Chunk A: count-then-allocate the resident-textures gather on
-        // the per-slot BumpArena. prefab_store_.prefabs + textureHandles are persistent
-        // engine state, so two-pass costs nothing.
-        // #222 Phase H.6: resident_textures hoisted to the engine-owned
-        // prefab_store_.resident_textures vector built once at scene-load (uploadAnim
-        // TablesGpu). draw() drops the per-frame arena alloc + copy.
+        // resident_textures is built once at load (uploadAnimTablesGpu);
+        // no per-frame gather.
 
-        // #221 Skinning P5/P8: BuildSkinFrame populates the per-frame skin
-        // payload (palettes, InstanceMeta, SkinBatchGpu list) on the per-
-        // slot arena and publishes spans on s.pkt. Today (no skinned content
-        // + skinning_.skin_kernel Null) it writes empty spans -- the static path
-        // stays bit-for-bit; the call site is wired so a future content
-        // commit (load CesiumMan + attach SkinRef) flips the switch
-        // without touching draw().
+        // BuildSkinFrame populates the per-frame skin payload (palettes,
+        // InstanceMeta, SkinBatchGpu list) on the per-slot arena and
+        // publishes spans on s.pkt; with no skinned content it writes
+        // empty spans and the static path stays bit-for-bit unchanged.
         {
             cairns::Timer t_skin("skin_eval", 8);
             BuildSkinFrame(slot);
@@ -1993,13 +1929,9 @@ bool Engine::draw() {
         s.pkt.resident_textures = std::span<const rhi::Handle<rhi::Texture>>(
             prefab_store_.resident_textures.data(), prefab_store_.resident_textures.size());
 
-        // A.9: imgui-in-golden opt-in. The original guard skipped imgui
-        // whenever golden_=true OR when present_.final_target was non-null
-        // (surfaceless). Tests now ask for imgui in golden mode (G6) via
-        // SetImguiInGolden(true). The SDL3 NewFrame call still gets skipped
-        // in surfaceless because cairns_serve doesn't init SDL3; ImGui
-        // proper runs (CreateContext done by test harness, NewFrame on
-        // ImGui itself, font atlas already built).
+        // Imgui in golden mode is opt-in (SetImguiInGolden) so the overlay
+        // golden can gate it. Surfaceless still skips the SDL3 NewFrame --
+        // cairns_serve doesn't init SDL3 -- but ImGui proper runs.
         const bool surfaceless = !present_.final_target.IsNull();
         // Windowed native draws imgui; surfaceless cairns_serve does NOT. The web
         // app is also surfaceless (renders offscreen then copies to the canvas)
@@ -2110,7 +2042,7 @@ bool Engine::draw() {
             ImGui::End();
             ImGui::PopStyleColor(4);
             }  // hud_visible_
-            // #229 app-provided imgui panel (e.g. the scenario launcher), drawn
+            // App-provided imgui panel (e.g. the scenario launcher), drawn
             // into the same frame as the HUD. Raw fn ptr + ctx -- no singleton,
             // no std::function alloc; the app owns the panel + does any dispatch.
             if (imgui_panel_fn_) {
@@ -2133,13 +2065,11 @@ bool Engine::draw() {
             dst->FramebufferScale = src->FramebufferScale;
             dst->OwnerViewport = src->OwnerViewport;
             dst->Textures = src->Textures;
-            // #222 windowed-crash fix: ImDrawData::AddDrawList ->
-            // AddDrawListToDrawDataEx asserts _VtxWritePtr == VtxBuffer.Data
-            // + VtxBuffer.Size on the input draw list. ImDrawList::CloneOutput()
-            // only copies CmdBuffer/IdxBuffer/VtxBuffer/Flags -- it does NOT
-            // restore _VtxWritePtr / _IdxWritePtr / _VtxCurrentIdx on the
-            // freshly-constructed clone, so the assertion fires. Bypass
-            // AddDrawList and replicate its bookkeeping ourselves.
+            // ImDrawData::AddDrawList asserts _VtxWritePtr == VtxBuffer.Data
+            // + VtxBuffer.Size on the input list, but ImDrawList::CloneOutput()
+            // does NOT restore _VtxWritePtr / _IdxWritePtr / _VtxCurrentIdx
+            // on the freshly-constructed clone, so the assertion fires.
+            // Bypass AddDrawList and replicate its bookkeeping ourselves.
             for (int i = 0; i < src->CmdLists.Size; ++i) {
                 ImDrawList* cloned = src->CmdLists[i]->CloneOutput();
                 dst->CmdLists.push_back(cloned);
@@ -2158,7 +2088,7 @@ bool Engine::draw() {
             }
         }
 
-        // #229 M0b determinism probe (SIM): hash the per-frame sim input -- the
+        // Determinism probe (SIM): hash the per-frame sim input -- the
         // arena's [0,Used) (drawList/sorted/matrices/entity_ids/proxies, all POD
         // in the block) + the sim drivers. Under FixedClock + a static scene this
         // MUST be byte-identical every frame AND run-to-run; a diverging sim hash
@@ -2216,18 +2146,17 @@ bool Engine::draw() {
         // Also drain in surfaceless mode (cairns_serve) so the next
         // io.dumpTexture op sees the rendered pixels rather than reading
         // present_.final_target while the render thread is still working on it.
-        // #207 also drain when a pick is pending so the id_target_ readback
-        // sees the just-rendered frame -- windowed sdl-min normally lets
-        // the render thread run async, but Shift+LMB stalls one frame to
-        // resolve the pick (acceptable cost for an interactive event).
+        // Also drain when a pick is pending so the pick resolve sees the
+        // just-rendered frame -- windowed sdl-min normally lets the render
+        // thread run async, but Shift+LMB stalls one frame to resolve the
+        // pick (acceptable cost for an interactive event).
         if (golden_ || !present_.final_target.IsNull() || picking_.pending) {
             render_thread_->Drain();
         }
 
-        // #207 pick: read one R32U texel from id_target_[vp]. The forward
-        // pass writes entt::to_integral(entity)+1 there; value 0 = clear
-        // background (clicked empty space). Drop the result into picking_.highlights
-        // so the outline pass activates on the next frame.
+        // Resolve the pending pick: entity id + 1, 0 = clicked empty space.
+        // The result lands in picking_.highlights so the outline pass
+        // activates on the next frame.
         if (picking_.pending && picking_.viewport < kNumViewports) {
             // CPU ray-cast pick -- synchronous + identical on metal/vulkan/webgpu,
             // no GPU id-buffer readback (the browser can't read back synchronously).
@@ -2236,8 +2165,8 @@ bool Engine::draw() {
                 picking_.viewport, picking_.x, picking_.y,
                 s.pending_globals[picking_.viewport].inv_view_proj);
             const bool ok = true;
-            // #267: resolve hero name + world AABB from the clicked id so
-            // the [PICK] line answers "which hero + where" in one printf.
+            // Resolve hero name + world AABB from the clicked id so the
+            // [PICK] line answers "which hero + where" in one printf.
             const char* hero_name = "<none>";
             std::string hero_name_storage;
             uint32_t hero_scene_idx = 0xFFFFFFFFu;
@@ -2260,10 +2189,9 @@ bool Engine::draw() {
                         scene_mgr_.pool.GetCold(scene_mgr_.active)) {
                     entt::entity ent{eid};
                     if (wcc->registry.valid(ent)) {
-                        // #222: animated? entity gets a SkinRef when
-                        // TryCreateSkinForScene succeeded at init.
-                        // Absence -> static bind pose; check [SKIN-FAIL]
-                        // logs at init time for the reason.
+                        // An entity gets a SkinRef when TryCreateSkinForScene
+                        // succeeded at init. Absence -> static bind pose;
+                        // check [SKIN-FAIL] logs at init for the reason.
                         hero_animated =
                             wcc->registry.all_of<cairns::SkinRef>(ent);
                         const auto* wt =
@@ -2415,13 +2343,13 @@ void Engine::EncodeDraws(const FramePacket& pkt) {
         // at a constant rate regardless of frame timing.
         *dt_ptr = pkt.fixed_dt;
 
-        // #229 P7 RENDER hash: the bytes we just encoded for the GPU this frame
+        // RENDER hash: the bytes we just encoded for the GPU this frame
         // -- per-viewport globals UBO content + bump offsets, per-draw model
         // matrix + entity id + the two dynamic offsets, and the dt offset. A
         // SEMANTIC hash of the encode outputs (not a raw ring dump), so it is
         // immune to the bump ring's alignment padding and is identical metal/vk.
-        // Stable run-to-run => the GPU input is deterministic; when pixels still
-        // flake the divergence is pure GPU execution (the next-phase target).
+        // Stable run-to-run => the GPU input is deterministic; any remaining
+        // pixel flake is pure GPU execution.
         if (golden_) {
             cairns::Fnv1a render;
             for (int v = 0; v < viewport_mgr_.active_count; ++v) {
@@ -2531,29 +2459,19 @@ bool Engine::BuildMeshOpaqueDraws(uint32_t slot) {
             s.pending_far_z[v] = vp_far;
         }
 
-        // Set the active scene's root_transform, run TRS hierarchy
-        // propagation (no-op when no entity carries a Transform; the
-        // current scene-load emplaces WorldTransform directly), then
-        // extract. Extract composes node.globalTransform * (world *
-        // root_transform).
-        // Fan-out: extract from EVERY world that any viewport binds to (set
-        // built from viewport_mgr_.pool[].world; deduped via the scene_mgr_.pool pool's
-        // contiguous slot indices). The scene_mgr_.active's extract result lives
-        // in s.proxies (the per-slot single draw list); secondary scenes'
-        // proxies land in scene_mgr_.proxies[wh->proxy_slot] for downstream
-        // per-viewport draw consumers (#194 / #190's two-viewport path uses
-        // these). Today s.proxies still drives BuildMeshOpaqueDraws's draw
-        // list -- per-viewport draw fan-out lands when the multi-pass split
-        // does (depends on #206's per-pass globals being per-viewport too).
-        // #219 Chunk B: bind s.proxies' meshes + primitives lists to this
-        // slot's BumpArena. Capacity headroom for the 3300-hero benchmark
-        // (~3300 / ~11220); pushes beyond cap assert. Other 6 ProxyArrays
-        // stay on default heap (untouched in current code).
-        // #195 multi-scene fan-out: extract EVERY distinct scene any viewport
-        // binds into the ONE s.proxies union (appended), recording each scene's
-        // [mesh) range. Viewports on the same scene share its range (dedup).
-        // The draw build later carves a per-viewport [draw) sub-range from
-        // these, so two viewports on two scenes render different content.
+        // Set each scene's root_transform, run TRS hierarchy propagation
+        // (no-op when no entity carries a Transform; scene-load emplaces
+        // WorldTransform directly), then extract. Extract composes
+        // node.globalTransform * (world * root_transform).
+        // Multi-scene fan-out: extract EVERY distinct scene any viewport
+        // binds into the ONE s.proxies union (appended), recording each
+        // scene's [mesh) range. Viewports on the same scene share its range
+        // (dedup). The draw build later carves a per-viewport [draw)
+        // sub-range from these, so two viewports on two scenes render
+        // different content.
+        // s.proxies' meshes + primitives lists live on this slot's
+        // BumpArena; pushes beyond cap assert (headroom sized for the
+        // 3300-hero benchmark, ~3300 / ~11220).
         s.proxies.Reset(s.arena);
         s.scene_ranges_count = 0;
         for (int v = 0; v < viewport_mgr_.active_count; ++v) {
@@ -2603,10 +2521,10 @@ bool Engine::BuildMeshOpaqueDraws(uint32_t slot) {
         for (const cairns::MeshProxy& mp : s.proxies.meshes) {
             total_draws += mp.primitive_count;
         }
-        // #219 Chunk A: count-then-allocate on the per-slot BumpArena. The
-        // arena was reset at slot Acquire and is exclusively ours until
-        // the render thread submits this slot's frame. No std::vector
-        // heap; no .resize() pump-and-shrink.
+        // Count-then-allocate on the per-slot BumpArena. The arena was
+        // reset at slot Acquire and is exclusively ours until the render
+        // thread submits this slot's frame. No std::vector heap; no
+        // .resize() pump-and-shrink.
         using DrawKeyPair = std::pair<cairns::DrawKey, uint32_t>;
         s.drawList = {
             s.arena.AllocateArray<cairns::Draw>(total_draws), total_draws};
@@ -2631,7 +2549,7 @@ bool Engine::BuildMeshOpaqueDraws(uint32_t slot) {
                 acc += s.proxies.meshes[i].primitive_count;
             }
         }
-        // #195: convert each scene's [mesh) range into its [draw) range via the
+        // Convert each scene's [mesh) range into its [draw) range via the
         // shared, spec-tested CarveSceneDrawRanges, so each viewport's sorted
         // sub-span covers only its own scene.
         {
@@ -2652,7 +2570,7 @@ bool Engine::BuildMeshOpaqueDraws(uint32_t slot) {
             }
         }
 
-        // #221 multithreaded fill. Each worker takes a disjoint proxy range
+        // Multithreaded fill. Each worker takes a disjoint proxy range
         // [proxy_lo, proxy_hi) and writes draws starting at
         // proxy_first_draw[proxy_lo]. Subchunks are non-overlapping by
         // construction so there's no shared writer state -- the only shared
@@ -2667,9 +2585,9 @@ bool Engine::BuildMeshOpaqueDraws(uint32_t slot) {
                 const glm::mat4& world_mat = mp.world_matrix;
                 const uint32_t index_base_off =
                     rhi_.resources.BufferBaseOffset(rhi_.alloc, index);
-                // #221 Phase 9c: skinned-branch resolves once per proxy.
-                // mp.skin packs {generation, index} into uint32; resolve via
-                // skinning_.skins pool. F5 fix: pos stream rebinds to the per-actor
+                // Skinned branch resolves once per proxy. mp.skin packs
+                // {generation, index} into uint32; resolve via the
+                // skinning_.skins pool. Pos stream rebinds to the per-actor
                 // skinning_.output_pool slice (mesh-local), attr stream rebinds
                 // to mhot->attr_skinned_alias (pre-offset by
                 // global_base_vertex * sizeof(VertexAttribute)), and
@@ -2692,8 +2610,8 @@ bool Engine::BuildMeshOpaqueDraws(uint32_t slot) {
                             !mhot_s->attr_skinned_alias.IsNull() &&
                             !sh->pos_stream.IsNull()) {
                             skinned = true;
-                            // #222 Phase E.6: pos_stream is the per-actor
-                            // pre-offset alias of skinning_.output_pool_buffer.
+                            // pos_stream is the per-actor pre-offset alias
+                            // of skinning_.output_pool_buffer.
                             skin_pos_buf = sh->pos_stream;
                             skin_attr_buf = mhot_s->attr_skinned_alias;
                             skin_global_base_vertex =
@@ -2708,9 +2626,9 @@ bool Engine::BuildMeshOpaqueDraws(uint32_t slot) {
                     const MatId mat_id = prim.material_id;
 
                     cairns::Draw draw{};
-                    // #220 Step 1: bind group lives in Material::Hot.
+                    // Per-material set-2 bind group lives in Material::Hot.
                     draw.bind_groups[1] = prefab_store_.materials.GetHot(mat_id)->set2;
-                    // #222 Phase D.2: route set 2 (per-draw drawtmp UBO).
+                    // Set 2 (per-draw drawtmp UBO) routes through dyn_drawtmp_.
                     draw.dynamic_buffers = dyn_drawtmp_;
                     draw.index_buffer = index;
                     draw.index_offset =
@@ -2719,8 +2637,8 @@ bool Engine::BuildMeshOpaqueDraws(uint32_t slot) {
                         draw.vertex_offset =
                             prim.vertex_offset -
                             static_cast<int32_t>(skin_global_base_vertex);
-                        // #222 Phase E.6: stream-0 alias pre-baked; no
-                        // side-channel pos_buffer_byte_offset.
+                        // Stream-0 alias is pre-baked; no side-channel
+                        // byte offset on Draw.
                         draw.vertex_buffers
                             [cairns::Draw::kVertexBufferPosSlot] =
                             skin_pos_buf;
@@ -2742,14 +2660,14 @@ bool Engine::BuildMeshOpaqueDraws(uint32_t slot) {
                     assert(prim.index_count % 3 == 0);
                     draw.triangle_count = prim.index_count / 3;
 
-                    // P2: depth_q dropped from the sort key (pass 0). Including
-                    // it would make the sort camera-dependent and force a per-
-                    // viewport re-sort. Material + pipeline ordering still
-                    // preserves batching across both viewports.
+                    // No depth_q in the sort key: a camera-dependent sort
+                    // would force a per-viewport re-sort. Material +
+                    // pipeline ordering still preserves batching across
+                    // both viewports.
                     s.drawListSorted[stable_idx] = std::make_pair(
-                        // #220 Step 1: BuildDrawKey wants a uint32 material id;
-                        // feed it Handle::index (uint16; 0x3FFFFFFF mask is a
-                        // no-op but kept for shape parity with prior code).
+                        // BuildDrawKey wants a uint32 material id; feed it
+                        // Handle::index (uint16, so the 0x3FFFFFFF mask is
+                        // a no-op).
                         cairns::BuildDrawKey(
                             static_cast<uint32_t>(mat_id.index) & 0x3FFFFFFFu,
                             /*depth=*/0, kMockTranslucency, kMockViewport,
@@ -2785,9 +2703,9 @@ bool Engine::BuildMeshOpaqueDraws(uint32_t slot) {
             });
         }
 
-        // A.7: stamp FrameStats at end of build. cull_stage_implemented stays
-        // false until a real per-proxy frustum cull lands (Phase G). G5 reads
-        // this flag and SKIPs honestly when cull isn't real.
+        // Stamp FrameStats at end of build. cull_stage_implemented stays
+        // false until a real per-proxy frustum cull lands; the cull-counter
+        // test reads this flag and skips honestly when cull isn't real.
         {
             FrameStats fs{};
             fs.submitted = n_proxies;
@@ -2812,9 +2730,9 @@ namespace cairns {
 bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
         engine_cfg_ = ecfg;
 
-        // #221 build_draws worker pool. The thread count is a platform concern
-        // (native caps at 4 P-cores; the browser returns 0 -> the pool runs the
-        // fan-out inline). W6a keeps the browser single-threaded; -pthread is W6b.
+        // build_draws worker pool. The thread count is a platform concern:
+        // native caps at 4 P-cores; the browser returns 0 -> the pool runs
+        // the fan-out inline (web build is single-threaded, no -pthread).
         build_pool_ = std::make_unique<cairns::WorkerPool>(
             cairns::platform::WorkerThreadCount());
         // Clock selection: a dump_path OR an explicit use_fixed_clock => the
@@ -2824,7 +2742,7 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
         // determinism without being killed.
         dump_and_exit_ = !engine_cfg_.dump_path.empty();
         golden_ = engine_cfg_.use_fixed_clock || dump_and_exit_;
-        // #229 C3: particles_enabled config -> emitter on the active scene,
+        // particles_enabled config -> emitter component on the active scene,
         // installed after InitInitialViewport() below (the scene must exist).
 
         if (golden_) {
@@ -2833,15 +2751,6 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
             clock_ = std::make_unique<cairns::WallClock>();
         }
 
-        // these initializations are wrong.
-        // there is a dependency graph
-        // alloc gpu mem -> upload cpu to gpu mem -> draw on gpu
-        // but it should be:
-        // generate commands to alloc gpu mem -> upload cpu to gpu mem -> generate draw commands
-        // and this can be parallelized:
-        // thread 1: generate commands to alloc gpu mem -> signal fence1 -> generate draw commands -> wait for fence2 -> execute draw commands
-        // thread 2: wait for fence1 -> upload cpu to gpu mem -> signal fence2
-        
         if ( !initCpuAllocators() ) {
             CAIRNS_PRINT("GreaterInit: initCpuAllocators failed\n");
             return false;
@@ -2851,22 +2760,20 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
             return false;
         }
 
-        // #220 Step 4: viewport pool must be set up BEFORE the cam_pose
-        // override walks it. InitInitialViewport acquires vp0 and primes its
+        // Viewport pool must be set up BEFORE the cam_pose override walks
+        // it. InitInitialViewport acquires vp0 and primes its
         // layout / viewport_mgr_.active / name table. Runs AFTER initResourceManagers
         // so viewport_mgr_.pool is already Reserve'd onto cpu_block_ (chunk-backed).
         InitInitialViewport();
 
-        // #229 C3: config-driven default emitter (CLI/serve `particles_enabled`)
-        // now that the active scene + viewport exist.
+        // Config-driven default emitter (CLI/serve `particles_enabled`);
+        // the active scene + viewport exist by this point.
         if (engine_cfg_.particles_enabled) {
             EnableParticles(true);
         }
 
-        // Pin every viewport's fly controller to the override pose so byte-
-        // gate dumps are deterministic. Pre-P1 reference pose is
-        // (0,0,0,0,0). Diverging viewports for multi-pose byte-gates is the
-        // P3 follow-up.
+        // Pin every viewport's fly controller to the override pose so
+        // byte-gate dumps are deterministic.
         if (engine_cfg_.cam_pose.has_value()) {
             const EngineConfig::CamPose& p = *engine_cfg_.cam_pose;
             for (int vi = 0; vi < viewport_mgr_.active_count; ++vi) {
@@ -2895,16 +2802,10 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
                 cairns::kMinStorageBuffersPerStage);
             std::abort();
         }
-        // Boot device-cap invariant. The 2026-06-17 S22 garble (Adreno 730
-        // maxStorageBufferRange = 256 MB, 1 GB pool bound past it -> silent
-        // no-op writes) would have aborted right here with the exact log
-        // line the bisect spent ~4 hours speculating toward. Android already
-        // sizes kSkinOutputBytes at 256 MB (the landed fix); this is the
-        // belt-and-braces check that survives a desktop-pool slip onto a
-        // mobile device.
-        // #229 M5: the skin-pool size is now sourced from MemoryBudget (the
-        // single per-platform reservation table) -- 128 MB mobile / 1 GB
-        // desktop, same values, one place to tune.
+        // Boot device-cap invariant: a pool bound past
+        // maxStorageBufferRange (256 MB on Adreno 730) is silent no-op
+        // writes -- abort loudly instead. The skin-pool size is sourced
+        // from MemoryBudget, the single per-platform reservation table.
         const uint32_t kSkinOutputBytes = static_cast<uint32_t>(
             cairns::MemoryBudget::Default().gpu_skin_pool_bytes);
         {
@@ -2930,11 +2831,10 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
             CAIRNS_PRINT("GreaterInit: resources.Init failed\n");
             return false;
         }
-        // #221 Skinning Phase 3: persistent 256 MB skin output pool. Buffer
-        // is private-heap (kDefault); RangePool measures slices in vec4
-        // vertex units. Sized once at init; Phase 5 fails loudly on
-        // exhaustion (Alloc returns invalid slice). >kHeapBlockBytes (128
-        // MB) drops into the dedicated-block path in
+        // Persistent skin output pool. Buffer is private-heap (kDefault);
+        // RangePool measures slices in vec4 vertex units. Sized once at
+        // init; exhaustion fails loudly (Alloc returns an invalid slice).
+        // >kHeapBlockBytes (128 MB) drops into the dedicated-block path in
         // MemoryAllocator::AllocBuffer, so we land in our own VkDeviceMemory.
         {
             // kSkinOutputBytes from MemoryBudget (above). 128 MB mobile (Adreno
@@ -2955,9 +2855,8 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
                           "on bind.");
             skinning_.output_pool.Init(kSkinOutputBytes / 16u);
         }
-        // #221 Phase 5b: persistent palette out + world scratch for GPU
-        // palette eval. 1024 actors * 256 mat4 = 16 MB each.
-        // #222 Phase 0.2: caps hoisted to class scope (kAnimActorsCap etc).
+        // Persistent palette out + world scratch for GPU palette eval.
+        // 1024 actors * 256 mat4 = 16 MB each.
         {
             rhi::BufferDesc bd{};
             bd.usage = rhi::kUsageStorage;
@@ -2971,8 +2870,8 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
                 return false;
             }
         }
-        // #222 Phase F.1/F.3/F.4: sibling subsystems init before frames.
-        // Pipelines moves up here too (owns descriptor set layouts post-F.4).
+        // Sibling subsystems init before frames; Pipelines owns the
+        // descriptor set layouts, so it must precede frames.Init.
         if (!rhi_.gpu_profiler.Init(rhi_.device)) {
             CAIRNS_PRINT("GreaterInit: gpu_profiler.Init failed\n");
             return false;
@@ -2986,8 +2885,8 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
             CAIRNS_PRINT("GreaterInit: frames.Init failed\n");
             return false;
         }
-        // #222 Phase D.2: dyn_globals_ + dyn_drawtmp_ — per-FIF descriptor
-        // sets for unlit's set 0 + set 2, backed by the kDynamic master.
+        // dyn_globals_ + dyn_drawtmp_: per-FIF descriptor sets for unlit's
+        // set 0 + set 2, backed by the kDynamic master.
         // Must run AFTER frames.Init (needs descriptor_pool_) and BEFORE
         // initRenderPipeline (the unlit PSO references their layout).
         {
@@ -3020,8 +2919,6 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
                 return false;
             }
         }
-        // #222 Phase F.4: pipelines.Init moved earlier (now happens
-        // before frames.Init); second call is the idempotent guard.
         if (!cfg.surfaceless) {
             if ( !initSwapChain(cfg)) {
                 CAIRNS_PRINT("GreaterInit: initSwapChain failed\n");
@@ -3029,7 +2926,7 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
             }
         }
         { // init debug assets
-            // #228 H3: prefab_store_.glb_paths now appended by LoadPrefabBatch via
+            // prefab_store_.glb_paths is appended by LoadPrefabBatch via
             // AppendGlbPaths (the manifest line). GreaterInit just
             // builds a local list of paths from CAIRNS_GLB overrides
             // (if any) and hands them to LoadPrefabBatch; the
@@ -3053,10 +2950,9 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
                     }
                 }
             }
-            // #224 L9: NO IMPLICIT BOOT LOAD. Default (empty
-            // glb_overrides) leaves the prefab pool empty; the agent
-            // calls cairns.prefab.load when it needs a Prefab. Boot is
-            // sub-second.
+            // NO IMPLICIT BOOT LOAD: default (empty glb_overrides) leaves
+            // the prefab pool empty; the agent calls cairns.prefab.load
+            // when it needs a Prefab. Boot is sub-second.
             if (!glb_paths.empty()) {
                 LoadPrefabBatch(std::span<const std::filesystem::path>(
                     glb_paths.data(), glb_paths.size()));
@@ -3103,35 +2999,24 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
                     max_vert_per_mesh, max_joints, max_nodes);
             }
 
-            // #224 L1: CleanupTmps + per-mesh CPU clear moved into
-            // LoadPrefabBatch so subsequent batches get the same hygiene.
+            // CleanupTmps + per-mesh CPU clear happen inside
+            // LoadPrefabBatch so every batch gets the same hygiene.
         }
-        // #228 H3: mesh_master_handle_ deleted (mole #5). The field's
-        // only consumer was the unread `MeshDrawList::resident_buffers`
-        // field, itself dead code. Field + reader gone; this gate
-        // (which was the last if(!prefab_store_.prefab_ids.empty()) block at engine
-        // init) vanishes.
 
         // EnTT scene-layer path. Acquire scene_mgr_.active + scene_mgr_.secondary
-        // ALWAYS (regardless of prefab count), because InstantiatePrefab
-        // looks up scene_mgr_.pool.GetCold(scene_mgr_.active) and bails to entity:0
-        // if it's null. #224 L9 follow-up: was gated by
-        // `if (!prefab_store_.prefab_ids.empty())` which is now false at boot.
-        // Pre-allocate hot/cold cells up to kMaxScenes so Acquire doesn't
-        // trigger a vector growth that would move Scene::Cold and
-        // invalidate any cached pointers. The unique_ptr<entt::registry>
-        // inside Cold is the second safety layer.
-        // #229 M0b: scene_mgr_.pool is Reserved(cpu_block_, kMaxScenes) in
-        // initResourceManagers -- block-backed, Cold* stable (no realloc up to
-        // the cap), hashable. (Was an Acquire/Release pre-grow loop here.)
+        // ALWAYS (regardless of prefab count): InstantiatePrefab looks up
+        // scene_mgr_.pool.GetCold(scene_mgr_.active) and bails to entity:0
+        // if it's null. scene_mgr_.pool is Reserved(cpu_block_, kMaxScenes)
+        // in initResourceManagers -- block-backed, Cold* stable (no realloc
+        // up to the cap), hashable.
         scene_mgr_.active = scene_mgr_.pool.Acquire();
         scene_mgr_.primary = scene_mgr_.active;  // index-0; UseScene may move active_
         if (cairns::Scene::Hot* wh = scene_mgr_.pool.GetHot(scene_mgr_.active)) {
             if (cairns::Scene::Cold* wc =
                     scene_mgr_.pool.GetCold(scene_mgr_.active)) {
                 *wc = cairns::Scene::Cold{};
-                // #229 M0b: re-seat the entt registry onto cpu_block_ (the
-                // default Cold{} gives it the null-arena malloc fallback).
+                // Re-seat the entt registry onto cpu_block_ (the default
+                // Cold{} gives it the null-arena malloc fallback).
                 wc->registry = cairns::Scene::Registry(
                     cairns::ChunkStdAllocator<entt::entity>(cpu_block_));
                 wh->proxy_slot = 0;
@@ -3140,7 +3025,7 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
         }
         // InitInitialViewport() acquired vp0 BEFORE scene_mgr_.active existed, so
         // its scene handle is stale-null. Bind it now that scene_mgr_.active is
-        // real -- the per-viewport draw fan-out (#195) extracts each viewport's
+        // real -- the per-viewport draw fan-out extracts each viewport's
         // bound scene, so a stale bind renders nothing.
         for (int v = 0; v < viewport_mgr_.active_count; ++v) {
             if (cairns::Viewport::Hot* vh =
@@ -3150,8 +3035,8 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
         }
         scene_mgr_.proxies.resize(1);
 
-        // P6 multi-scene coexistence: secondary slot is acquired but
-        // left empty. Pre-#269 it received half of the debug-grid.
+        // Multi-scene coexistence: the secondary slot is acquired but
+        // left empty.
         scene_mgr_.secondary = scene_mgr_.pool.Acquire();
         if (cairns::Scene::Hot* wh2 = scene_mgr_.pool.GetHot(scene_mgr_.secondary)) {
             if (cairns::Scene::Cold* wc2 =
@@ -3200,9 +3085,9 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
         initSkinKernel();  // best-effort; missing shader doesn't fail GreaterInit.
         initAnimEvalKernel();  // best-effort; failure -> GPU palette eval off.
         uploadAnimTablesGpu();  // flattens + uploads all scene tables.
-        // #222 Phase H.5: skins were Acquired BEFORE this call, so their
-        // cached gpu_prefab_header_idx (UINT32_MAX) is stale. Backfill from
-        // each skin's scene now that the headers exist.
+        // Skins were Acquired BEFORE this call, so their cached
+        // gpu_prefab_header_idx (UINT32_MAX) is stale. Backfill from each
+        // skin's scene now that the headers exist.
         skinning_.skins.ForEachLive(
             [&](cairns::SkinnedAttachment::Hot& h,
                 cairns::SkinnedAttachment::Cold& c) {
@@ -3211,10 +3096,9 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
                     h.gpu_prefab_header_idx = sht->gpu_prefab_header_idx;
                 }
             });
-        // #222 Phase H.6: textureHandles never change after scene load;
-        // build the engine-side prefab_store_.resident_textures once here. Per-frame
-        // draw() drops its arena alloc + copy and just points the packet
-        // span at this vector. Same content, just hoisted.
+        // textureHandles never change after scene load; build the
+        // engine-side prefab_store_.resident_textures once here. Per-frame
+        // draw() just points the packet span at this vector.
         prefab_store_.resident_textures.clear();
         for (cairns::PrefabId sid : prefab_store_.prefab_ids) {
             cairns::Prefab::Cold* scold = prefab_store_.prefabs.GetCold(sid);
@@ -3225,17 +3109,16 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
                 prefab_store_.resident_textures.push_back(th);
             }
         }
-        // #222 Phase D.3: skin Group B + anim_eval routed through
-        // DynamicBuffers. Created post-scene-load (now: backing handles
-        // ready). Descriptor sets allocated here are layout-compatible
-        // with the pipeline's set 0 layout (built earlier from
-        // frames.plat.skin_group_b_layout_ / anim_eval_layout_) because
-        // the per-binding (type, count, stage) tuple matches exactly.
-        // #221 Phase 5b: binding 1 (palettes) backed by persistent
-        // skinning_.palette_out_buf (anim_eval writes it); per-batch dynamic
-        // offset still selects the bucket's palette window. When
-        // skinning_.eval_tables_uploaded is false, no backing => kDynamic
-        // master fallback.
+        // Skin Group B + anim_eval route through DynamicBuffers, created
+        // post-scene-load so the backing handles exist. Descriptor sets
+        // allocated here are layout-compatible with the pipeline's set 0
+        // layout (built earlier from frames.plat.skin_group_b_layout_ /
+        // anim_eval_layout_) because the per-binding (type, count, stage)
+        // tuple matches exactly. Binding 1 (palettes) is backed by the
+        // persistent skinning_.palette_out_buf (anim_eval writes it);
+        // the per-batch dynamic offset still selects the bucket's palette
+        // window. When skinning_.eval_tables_uploaded is false, no backing
+        // => kDynamic master fallback.
         if (!skinning_.skin_kernel.IsNull() && !skinning_.output_pool_buffer.IsNull()) {
             cairns::rhi::DynamicBinding gb[4]{};
             for (uint32_t i = 0; i < 4; ++i) {
@@ -3272,27 +3155,27 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
                 return false;
             }
         }
-        // #228 H4b: skinning_.dyn_anim_eval creation moved into recreateAnimDynBindings()
-        // so the same path runs at GreaterInit AND after the first runtime
-        // load (skinning_.eval_tables_uploaded flips false->true) AND after any
-        // anim buffer is destroyed+recreated on growth. Post-L9 / H1, this
-        // call at GreaterInit is a no-op (skinning_.eval_tables_uploaded is
-        // false at boot); the helper is called from uploadAnimTablesGpu
-        // once buffers exist.
+        // recreateAnimDynBindings() is the ONE creation path for
+        // skinning_.dyn_anim_eval: here, after the first runtime load
+        // (skinning_.eval_tables_uploaded flips false->true), and after any
+        // anim buffer is destroyed+recreated on growth. At boot this call
+        // is a no-op (eval_tables_uploaded is false); uploadAnimTablesGpu
+        // calls the helper once buffers exist.
         if (!recreateAnimDynBindings()) {
             return false;
         }
-        // #237 fix: globals + drawtmp DYNAMIC UBO descriptors point at
-        // the master kDynamic buffer with sizeof(struct) range; per-pass
-        // bind supplies the offset. Write once here.
+        // Globals + drawtmp DYNAMIC UBO descriptors point at the master
+        // kDynamic buffer with sizeof(struct) range; per-pass bind supplies
+        // the offset. Written ONCE here, never per frame.
         rhi_.frames.WriteUnlitDescriptors(rhi_.resources, rhi_.alloc);
         if ( !initParticles() ) {
             CAIRNS_PRINT("GreaterInit: initParticles failed\n");
             return false;
         }
-        // A background render worker on native; inline (record at Submit on the
-        // calling thread) when the platform runs single-threaded (the browser,
-        // W6a -- same signal as the build pool: 0 worker threads => fully inline).
+        // A background render worker on native; inline (record at Submit on
+        // the calling thread) when the platform runs single-threaded (the
+        // browser -- same signal as the build pool: 0 worker threads =>
+        // fully inline).
         const bool background_render = cairns::platform::WorkerThreadCount() > 0;
         render_thread_ = std::make_unique<cairns::RenderThread>(
             [this](cairns::FramePacket& pkt) { this->RecordFrame(pkt); },
@@ -3307,24 +3190,22 @@ namespace cairns {
 bool Engine::initResourceManagers() {
         using namespace cairns;
         using namespace cairns::rhi;
-        // #229 M4: reserve the engine's order-stable parallel lists to the
-        // 500-GLB residency target up front, so the boot batch load doesn't
-        // walk a vector-doubling chain. (Caps centralize into MemoryBudget at
-        // M0b.) The ResourceManager hot/cold pools are Aaltonen-canon and have
-        // no Reserve() -- not pre-sized here (would need permission to add one).
+        // Reserve the engine's order-stable parallel lists to the residency
+        // target up front, so a batch load doesn't walk a vector-doubling
+        // chain.
         constexpr size_t kPrefabResidencyCap = 600;
-        // #229 M0b: POD loose vectors -> cpu_block_ (re-seat + reserve).
+        // POD loose vectors re-seat + reserve onto cpu_block_.
         ReseatOnBlock(prefab_store_.prefab_ids, kPrefabResidencyCap);
         ReseatOnBlock(prefab_store_.per_prefab_asset, kPrefabResidencyCap);
         ReseatOnBlock(prefab_store_.resident_textures, kPrefabResidencyCap * 4);
-        prefab_store_.glb_paths.reserve(kPrefabResidencyCap);  // path strings stay heap (interning is a follow-on)
+        prefab_store_.glb_paths.reserve(kPrefabResidencyCap);  // path strings stay heap (not interned)
         prefab_store_.per_batch_shared_skin.reserve(64);
 
-        // #229 M0b: Reserve the persistent ResourceManager pools onto cpu_block_
+        // Reserve the persistent ResourceManager pools onto cpu_block_
         // (size==capacity -> span-hashable; counted in the budget). Caps are
         // upper bounds for the 600-GLB residency ceiling; exceeding one aborts
-        // in Acquire (chunk-backed, never grows). InitInitialViewport now runs
-        // AFTER this (GreaterInit order) so viewport_mgr_.pool is chunk-backed too.
+        // in Acquire (chunk-backed, never grows). InitInitialViewport runs
+        // AFTER this so viewport_mgr_.pool is chunk-backed too.
         prefab_store_.prefabs.Reserve(cpu_block_, static_cast<uint16_t>(kPrefabResidencyCap));
         prefab_store_.meshes.Reserve(cpu_block_, 8192);
         prefab_store_.materials.Reserve(cpu_block_, 8192);
@@ -3365,27 +3246,24 @@ void Engine::InitInitialViewport() {
 namespace cairns {
 
 bool Engine::initCpuAllocators() {
-        // #229 M0b: reserve the one CPU block up front (fail-loud, no silent
-        // malloc past budget). Sub-regions are carved from it in later phases.
+        // Reserve the one CPU block up front (fail-loud, no silent malloc
+        // past budget); sub-regions are carved from it below.
         const cairns::MemoryBudget mb = cairns::MemoryBudget::Default();
         cpu_block_.InitReserved(mb.cpu_persistent_bytes);
         for (PerSlot& s : slots_) {
-            // #229 M0b: carve the per-frame slab from the block (kRegionFrame)
-            // instead of a per-slot std::vector, so the arena's [0,Used) lands
-            // in the hashable block. (16 MB > chunk_bytes -> the block routes it
-            // to its own malloc; folding oversize into the reservation is a
-            // follow-on. The arena data is hashed directly regardless.)
+            // Carve the per-frame slab from the block (kRegionFrame) so the
+            // arena's [0,Used) lands in the hashable block. 16 MB >
+            // chunk_bytes -> the block routes it to its own malloc; the
+            // arena data is hashed directly regardless.
             void* slab = cpu_block_.Allocate(
                 static_cast<uint32_t>(kArenaBytesPerSlot), 16, kRegionFrame);
-            // Zero the slab so the arena's alignment padding (bytes never written
-            // by AllocateArray) is deterministic 0 -- else the [0,Used) hash picks
-            // up fresh-malloc garbage and diverges run-to-run. (Restores the old
-            // arena_storage.assign(..,0) behavior; oversize block allocs aren't
-            // 0xCC-prefilled like the chunk pool.)
+            // Zero the slab: alignment padding is hashed with [0,Used), so
+            // it must be deterministic, not fresh-malloc garbage (oversize
+            // block allocs aren't 0xCC-prefilled like the chunk pool).
             std::memset(slab, 0, kArenaBytesPerSlot);
             s.arena.Init(slab, kArenaBytesPerSlot);
         }
-        // #229 P3: carve the persistent prefab interning arena (names + nested
+        // Carve the persistent prefab interning arena (names + nested
         // load tables). Fixed 96 MB (the measured 100-GLB footprint is ~58 MB);
         // oversize => its own malloc, so it does NOT eat the 256 MB mobile chunk
         // reservation. Overflow fails loud via AllocSliceOrDie. Fail loud here
@@ -3421,7 +3299,7 @@ namespace cairns {
 
 cairns::SkinId Engine::TryCreateSkinForScene(cairns::PrefabId scene_id,
                                           float time_offset) {
-        // #222: loud reason for every Null return so we don't silently
+        // Loud reason for every Null return so we don't silently
         // drop heroes to bind pose. Names the scene so the user can map
         // back to a GLB filename via prefab_store_.prefab_ids[scene_idx].
         auto fail = [&](const char* why) -> cairns::SkinId {
@@ -3463,7 +3341,7 @@ cairns::SkinId Engine::TryCreateSkinForScene(cairns::PrefabId scene_id,
         }
         cairns::PoolSlice slice = skinning_.output_pool.Alloc(vert_count);
         if (!slice.IsValid()) {
-            // #229: graceful, not fatal -- over-cap actors render in bind pose
+            // Graceful, not fatal -- over-cap actors render in bind pose
             // (the caller skips SkinRef on a Null skin) instead of aborting the
             // whole app. 256 MB = Adreno maxStorageBufferRange floor.
             return fail("skinning output pool exhausted (256 MB cap) -- "
@@ -3471,10 +3349,10 @@ cairns::SkinId Engine::TryCreateSkinForScene(cairns::PrefabId scene_id,
         }
         cairns::SkinId sid = skinning_.skins.Acquire();
         cairns::Prefab::Hot* scene_hot = prefab_store_.prefabs.GetHot(scene_id);
-        // #222 Phase E.6: build the per-actor pos_stream alias of
+        // Build the per-actor pos_stream alias of
         // skinning_.output_pool_buffer, pre-offset to slice.offset * 16 B.
-        // Skinned draws point Draw::vertex_buffers[0] at this handle;
-        // Draw::pos_buffer_byte_offset retires.
+        // Skinned draws point Draw::vertex_buffers[0] at this handle; no
+        // side-channel byte offset on Draw.
         rhi::Handle<rhi::Buffer> pos_stream_h =
             rhi::Handle<rhi::Buffer>::Null;
         if (!skinning_.output_pool_buffer.IsNull()) {
@@ -3510,7 +3388,7 @@ cairns::SkinId Engine::TryCreateSkinForScene(cairns::PrefabId scene_id,
             h->time_offset = time_offset;
             h->time_scale = 1.0f;
             h->mesh = skinned_mesh;
-            // #222 Phase H.5: cache the per-frame double-resolve.
+            // Cached at create so the frame path skips a double-resolve.
             h->gpu_prefab_header_idx =
                 scene_hot ? scene_hot->gpu_prefab_header_idx : UINT32_MAX;
             h->gpu_clip_duration =
@@ -3523,7 +3401,7 @@ cairns::SkinId Engine::TryCreateSkinForScene(cairns::PrefabId scene_id,
             c->scene = scene_id;
             c->skin_index = 0;
             c->clip_index = clip_idx;
-            c->slice = slice;  // #222 Phase H.5 finish: Free metadata here.
+            c->slice = slice;  // full slice lives Cold; only Free reads it
         }
         return sid;
     }
@@ -3653,9 +3531,9 @@ namespace cairns {
 
 uint32_t Engine::ResolvePickRaycast(int vp, uint32_t px, uint32_t py,
                                 const glm::mat4& inv_view_proj) {
-        // #229 C6 [N-node]: pick the CLICKED viewport's bound scene, not the
-        // globally-active one -- clicking node J must resolve against node J's
-        // document. Falls back to active for an out-of-range vp.
+        // Pick the CLICKED viewport's bound scene, not the globally-active
+        // one -- clicking node J must resolve against node J's document.
+        // Falls back to active for an out-of-range vp.
         cairns::SceneId pick_scene = scene_mgr_.active;
         if (vp >= 0 && vp < viewport_mgr_.active_count) {
             if (auto* vh = viewport_mgr_.pool.GetHot(viewport_mgr_.ids[vp])) {
@@ -3686,9 +3564,9 @@ uint32_t Engine::ResolvePickRaycast(int vp, uint32_t px, uint32_t py,
             if (!ac) { continue; }
             cairns::Prefab::Hot* sh = prefab_store_.prefabs.GetHot(ac->cpu_graph);
             if (!sh || sh->meshes.empty()) { continue; }
-            // #229 C6: union EVERY mesh's bind AABB (was meshes[0] only, so a
-            // multi-mesh prefab's picking box was just its first mesh -> the
-            // rest were unclickable). Local-space union; transformed below.
+            // Union EVERY mesh's bind AABB -- a first-mesh-only box leaves
+            // the rest of a multi-mesh prefab unclickable. Local-space
+            // union; transformed below.
             glm::vec3 lmin(1.0e30f);
             glm::vec3 lmax(-1.0e30f);
             for (cairns::Handle<cairns::Mesh> mid : sh->meshes) {
@@ -4127,14 +4005,13 @@ uint32_t Engine::UnloadAllPrefabs() {
             render_thread_->Drain();
         }
         rhi_.device.WaitIdle();
-        // #229: free the per-actor skin slices + skin pool. TryCreateSkinForScene
-        // Alloc's an output_pool slice per actor and never Free's it (the Hot
-        // keeps only slice_offset, not the alloc metadata), and the skins
-        // ResourceManager grows one entry per actor -- so without this BOTH leak
-        // across scenario switches (perf_smoke_300 after a prior scene overflowed
-        // the 256 MB pool -> abort). Safe here: render thread drained + WaitIdle
-        // above, and the caller clears the scene before UnloadAllPrefabs so no
-        // live SkinRef remains (a stale one resolves to a null skin -> bind pose).
+        // Free the per-actor skin slices + skin pool. TryCreateSkinForScene
+        // Allocs an output_pool slice per actor and never Frees it, and the
+        // skins ResourceManager grows one entry per actor -- without this
+        // BOTH leak across scenario switches until the pool overflows.
+        // Safe here: render thread drained + WaitIdle above, and the caller
+        // clears the scene first so no live SkinRef remains (a stale one
+        // resolves to a null skin -> bind pose).
         skinning_.skins.Clear();
         skinning_.output_pool.Reset();
         for (cairns::PrefabId pid : prefab_store_.prefab_ids) {
@@ -4181,11 +4058,11 @@ uint32_t Engine::UnloadAllPrefabs() {
         prefab_store_.per_prefab_asset.clear();
         prefab_store_.glb_paths.clear();
         prefab_store_.resident_textures.clear();
-        // #229: every per-material set-2 descriptor set is now dead (all
-        // materials released above). Bulk-free them from the fixed vk material
-        // pool -- Destroy(BindGroup) only recycles the handle slot, so without
-        // this the pool leaked a set per material across scenario reloads and
-        // eventually failed to allocate -> null set2 -> WHITE actors (vk-only).
+        // Every per-material set-2 descriptor set is dead (all materials
+        // released above). Bulk-free them from the fixed vk material pool --
+        // Destroy(BindGroup) only recycles the handle slot; without this the
+        // pool leaks a set per material across scenario reloads until
+        // allocation fails -> null set2 -> white actors (vk-only).
         rhi_.resources.ResetMaterialBindGroups();
         // Anim: reset cursors so the next upload starts fresh against
         // unallocated capacity. The 4x growth pad still holds so the
@@ -4276,9 +4153,8 @@ bool Engine::ReloadPrefab(uint32_t idx, const std::filesystem::path& path) {
         if (idx >= prefab_store_.prefab_ids.size()) {
             return false;
         }
-        // Phase D / R1 instrumentation. Pair with the Instruments
-        // signpost so the time profiler bands reload work distinctly
-        // from steady-state frames.
+        // Instrumentation: pairs with the Instruments signpost so the time
+        // profiler bands reload work distinctly from steady-state frames.
         CAIRNS_PRINT_ERR("[RELOAD] begin idx=%u path=%s\n", idx,
                           path.filename().c_str());
         CAIRNS_SIGNPOST_INTERVAL_SCOPED("reload_prefab",
@@ -4301,8 +4177,8 @@ bool Engine::ReloadPrefab(uint32_t idx, const std::filesystem::path& path) {
             if (!oldH || !oldC) {
                 return false;
             }
-            // #229 P3: pool vectors are now block-backed (ChunkStdAllocator);
-            // copy element-wise into the std-allocator snapshot locals.
+            // Pool vectors are block-backed (ChunkStdAllocator); copy
+            // element-wise into the std-allocator snapshot locals.
             old_meshes.assign(oldH->meshes.begin(), oldH->meshes.end());
             old_materials.assign(oldH->materials.begin(), oldH->materials.end());
             old_textures.assign(oldC->textureHandles.begin(), oldC->textureHandles.end());
@@ -4330,9 +4206,9 @@ bool Engine::ReloadPrefab(uint32_t idx, const std::filesystem::path& path) {
         prefab_store_.per_prefab_asset.pop_back();
         prefab_store_.glb_paths.pop_back();
         prefab_store_.glb_paths[idx] = path;
-        // DeferFree the snapshotted old resources. F1 (v2) stamps
-        // retire_frame = current_frame_index + kFIF; drain happens at
-        // frame >= retire_frame's start, after the fence proves the
+        // DeferFree the snapshotted old resources: retire_frame =
+        // current_frame_index + kFIF; drain happens at frame >=
+        // retire_frame's start, after the fence proves the
         // last-referencing frame is GPU-done.
         for (rhi::Handle<rhi::Texture> th : old_textures) {
             rhi_.resources.DeferFree(rhi_.alloc, th);
@@ -4361,8 +4237,8 @@ bool Engine::ReloadPrefab(uint32_t idx, const std::filesystem::path& path) {
         }
         // prefab_store_.resident_textures was populated by AppendGlbPaths' sibling
         // BuildResidentTextures during boot/load. The old prefab's
-        // texture handles are now stale (Release happens at F1 drain
-        // kFIF frames later); per-frame draw uses prefab_store_.resident_textures
+        // texture handles are now stale (Release happens at the deferred
+        // drain kFIF frames later); per-frame draw uses prefab_store_.resident_textures
         // verbatim, so we must rebuild it from the current set of live
         // prefab textureHandles before the next render reads it.
         prefab_store_.resident_textures.clear();
@@ -4397,8 +4273,8 @@ bool Engine::SetEntityTransform(uint32_t entity_int, const glm::mat4& world) {
         if (!reg.valid(e) || !reg.all_of<cairns::Transform>(e)) {
             return false;
         }
-        // #229 C4.1: author TRS (was WorldTransform). Extract t+s from the
-        // translate*scale world; rotation stays as authored (set via the C4.2
+        // Author TRS, not WorldTransform: extract t+s from the
+        // translate*scale world; rotation stays as authored (set via the
         // entity ops). PropagateTransforms recomposes WorldTransform.
         cairns::Transform& tr = reg.get<cairns::Transform>(e);
         tr.t = glm::vec3(world[3]);
@@ -4514,9 +4390,8 @@ std::vector<glm::mat4> Engine::FitGridToViewport(
             std::max(1.0f, std::ceil(std::sqrt(
                               static_cast<float>(n_total)))));
         const uint32_t rows = (n_total + cols - 1u) / cols;
-        // Camera: y-axis FOV default 90deg (matches engine.hpp:~1370).
-        // Aspect = active viewport target dims; depth Z = -4 world units
-        // (matches the pre-#224 GenerateDebugGridTransforms convention).
+        // Camera: y-axis FOV 90deg (the engine default). Aspect = active
+        // viewport target dims; depth Z = -4 world units.
         const float fov_y = static_cast<float>(M_PI) * 0.5f;
         float aspect = 16.0f / 9.0f;
         if (present_.final_target_h > 0) {
@@ -4787,7 +4662,7 @@ uint32_t Engine::InstantiatePrefabImpl(uint32_t scene_idx, const glm::mat4& worl
         }
         auto& reg = wc->registry;
         const entt::entity e = reg.create();
-        // #229 C4.1 (P7): author TRS, not a baked WorldTransform.
+        // Author TRS, not a baked WorldTransform.
         // PropagateTransforms composes WorldTransform each frame (identity
         // root; the scene root is applied in Extract). Every current caller
         // passes translate(t)*scale(s), so extract t (col 3) + s (diagonal)
@@ -4885,9 +4760,9 @@ namespace cairns {
 
 Engine::LoadPrefabBatchResult Engine::LoadPrefabBatch(
             std::span<const std::filesystem::path> glbs) {
-        // Phase D: bracket every load with a printf + an Instruments
-        // signpost so the time profiler distinguishes load work from
-        // steady-state frames.
+        // Bracket every load with a printf + an Instruments signpost so
+        // the time profiler distinguishes load work from steady-state
+        // frames.
         const char* first_path =
             glbs.empty() ? "<empty>" : glbs.front().filename().c_str();
         CAIRNS_PRINT_ERR("[LOAD] begin batch n=%zu first=%s\n",
@@ -4901,8 +4776,8 @@ Engine::LoadPrefabBatchResult Engine::LoadPrefabBatch(
         LoadPrefabBatchResult r{};
         r.first_prefab_idx = static_cast<uint32_t>(prefab_store_.prefab_ids.size());
 
-        // #224 L3: per-stage timing. steady_clock so the trace numbers
-        // are wall-clock; the byte-gate doesn't reference them.
+        // Per-stage timing. steady_clock so the trace numbers are
+        // wall-clock; the byte-gate doesn't reference them.
         using Clock = std::chrono::steady_clock;
         const auto t_total = Clock::now();
         cairns::LoadTrace trace{};
@@ -4922,7 +4797,7 @@ Engine::LoadPrefabBatchResult Engine::LoadPrefabBatch(
                 prefab_store_.prefabs.Release(sid);
                 continue;
             }
-            // #224 L2: validate against engine caps before upload.
+            // Validate against engine caps before upload.
             const uint32_t prefab_idx_for_log =
                 static_cast<uint32_t>(prefab_store_.prefab_ids.size());
             if (!ValidatePrefab(*scold, vreport, prefab_idx_for_log)) {
@@ -4971,11 +4846,11 @@ Engine::LoadPrefabBatchResult Engine::LoadPrefabBatch(
                    0, r.count);
 
         // ══════════════════════════════════════════════════════════════
-        // #228 H0: THE MANIFEST. The runtime/post-upload state-agreement
+        // THE MANIFEST. The runtime/post-upload state-agreement
         // transformation, written as an explicit ordered list of named
         // one-liners. Adding engine state that depends on prefabs =
         // add a line here AND its matching invariant in
-        // CheckPrefabStateInvariants (H2). There is no other site.
+        // CheckPrefabStateInvariants. There is no other site.
         // A forgotten member is a visible hole in this list, not a
         // silent fallback discovered overnight.
         // ══════════════════════════════════════════════════════════════
@@ -5000,9 +4875,8 @@ Engine::LoadPrefabBatchResult Engine::LoadPrefabBatch(
         BuildResidentTextures(new_span);
         StampPerPrefabAsset(new_span);
         AppendGlbPaths(new_span, glbs);  // [PICK] log
-        // AppendAnimTables(new_span)  -- H4 (Aaltonen delta, replaces
-        //                                  RuntimeLoadBatch's full
-        //                                  uploadAnimTablesGpu re-call)
+        // Anim tables: RuntimeLoadBatch re-runs uploadAnimTablesGpu
+        // (delta upload) after this returns.
 
         // ── finalize trace + bump counters ──
         trace.total_ms = std::chrono::duration<double, std::milli>(
@@ -5018,12 +4892,12 @@ Engine::LoadPrefabBatchResult Engine::LoadPrefabBatch(
         if (trace.total_ms > prefab_store_.loader_counters.peak_batch_ms) {
             prefab_store_.loader_counters.peak_batch_ms = trace.total_ms;
         }
-        // Phase D close: end-of-batch marker. Pair with [LOAD] begin
-        // so log scanning can compute per-batch wall time without
-        // hunting for the LoadTrace summary.
+        // End-of-batch marker: pairs with [LOAD] begin so log scanning
+        // can compute per-batch wall time without hunting for the
+        // LoadTrace summary.
         CAIRNS_PRINT_ERR("[LOAD] end batch ms=%.3f count=%u\n",
                           trace.total_ms, r.count);
-        // #229: arena/block high-water -- visible in logcat so the S22's 256 MB
+        // Arena/block high-water -- visible in logcat so the mobile 256 MB
         // budget headroom is observable. prefab_arena (names/children/skin/clip
         // slices) and the cpu_block_ in-class total (pools + prefab tables +
         // entt; mesh cpu* are malloc, not here).
