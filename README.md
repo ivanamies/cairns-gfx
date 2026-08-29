@@ -1,5 +1,15 @@
 # cairns-gfx
 
+**Building and recording 10k raw draw calls — no batching, no MDI, no
+instancing — from scene representation to rendering hardware interface, in
+3 ms on the M2 Max, < 10 ms on the iPhone 16 Pro, < 20 ms on a Samsung S22.
+100 skinned meshes (4M vertices, 130 joints/mesh) animate with no instancing
+at 10 ms, v-synced at 60 Hz, on the Samsung S22.**
+
+![100 distinct animated champions](docs/hundred_champions.png)
+
+*100 distinct animated GLBs, one uninstanced draw path.*
+
 A Metal + Vulkan rendering engine, brought up in a strict canonical order
 (below), with handle-pilled / array-pilled data design. Single repo, two
 backends, byte-gated per-commit. SDL3 + ImGui + EnTT + Taskflow + custom
@@ -9,11 +19,11 @@ RHI.
 
 ## Product spec / north star
 
-> User is sick of everyone else's proprietary and/or copy-left (bad)
-> GUI-driven human-first slow and frail editor engines not immanentizing
-> the glorious eschaton of tool-calling VLM recursive self-improvement.
-> **Editor-engine must be fast, must be extensible, must be HEADLESS,
-> must be AI-first.**
+> Editor engines are built GUI-first and human-first: the fast paths assume
+> a person clicking, and automation is bolted on afterwards. **This one is
+> AI-first and HEADLESS — every operation is reachable by a program before
+> it is reachable by a mouse — and it has to stay fast and extensible while
+> being so.**
 
 Concretely: the engine binary stays C++ + an embedded QuickJS host (no
 libpython, no GIL, no `pip` deps). Every operation is reachable both
