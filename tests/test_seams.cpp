@@ -34,14 +34,25 @@ namespace {
 void EnsureImguiContextImpl() {
     if (ImGui::GetCurrentContext() == nullptr) {
         ImGui::CreateContext();
+        // Never touch imgui.ini in golden runs. With it enabled, the HUD
+        // window's SetNextWindowPos(..., FirstUseEver) defers to whatever
+        // position a prior run saved on disk, so G6 imgui.overlay hashed
+        // differently run-to-run. nullptr => FirstUseEver lands at (20,20)
+        // and the imgui render is run-to-run deterministic (#9b). Shared
+        // (not per-scenario) context: see ResetImguiContextImpl below.
+        ImGui::GetIO().IniFilename = nullptr;
     }
 }
-// ResetImguiContextImpl tried as the G1/G6 flake fix; turned out to abort
-// in G6 because the engine holds ImGui handles from its previous lifecycle
-// and the new context invalidates them. Left here in case a future change
-// destroys ImGui context together with the Engine. For now: BootHeadless
-// uses Ensure (idempotent on first call) and the [scenarios] full-suite
-// G1+G6 flake stays an open item (modularization-notes #9b).
+// ResetImguiContextImpl (destroy+recreate per SCENARIO) DOES make G6 pass both
+// solo and full-suite -- it no longer aborts (engine teardown since releases
+// its imgui handles before the next scenario). The shared context's font atlas
+// (built by the FIRST scenario's engine, not G6's) is the only cross-scenario
+// imgui state that changes G6's hash -- only G6 ever opens the "cairns" window.
+// Not wired yet: it needs G6 re-baked to the clean a9e932d1 hash, AND the full
+// [scenarios] gate still flakes ~1/6 on the three_champ_static GPU bug
+// (FLAKY_TESTS.md #2) regardless, so robust G6 alone won't make the gate green.
+// Fix #2 first, then wire this + re-bake as the finishing step. (Measured: the
+// per-scenario atlas re-upload does NOT change the three_champ flake rate.)
 void ResetImguiContextImpl() {
     if (ImGui::GetCurrentContext() != nullptr) {
         ImGui::DestroyContext();
