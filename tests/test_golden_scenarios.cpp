@@ -507,3 +507,74 @@ SCENARIO("studio.js: Transform setters + name/Find/Destroy lower to entity ops",
     REQUIRE(out["foundEnt"].get<uint32_t>() == ent);
     REQUIRE(out["gone"] == true);              // Destroy -> entity.destroy
 }
+
+// #229 C3: the flag->component conversions' TOGGLE behaviour (the goldens only
+// prove default-on neutrality). Particle sim/draw gate follows the per-scene
+// ParticleEmitterComponent; editor chrome follows the per-viewport flag.
+SCENARIO("C3 flag->component toggles: particle emitter + editor chrome",
+         "[spec][scenarios][flags]") {
+    seam::EnsureImguiContext();
+    cairns::rhi::InitConfig icfg{};
+    icfg.surfaceless = true;
+    icfg.width = 128;
+    icfg.height = 128;
+    cairns::EngineConfig ecfg{};
+    ecfg.use_fixed_clock = true;
+    cairns::Engine e;
+    REQUIRE(e.GreaterInit(icfg, ecfg));
+
+    // Particles: gate = any bound scene carries a ParticleEmitterComponent.
+    REQUIRE(e.ParticlesEnabled() == false);       // no emitter at boot
+    e.EnableParticles(true);
+    REQUIRE(e.ParticlesEnabled() == true);         // emitter added to scene
+    e.EnableParticles(false);
+    REQUIRE(e.ParticlesEnabled() == false);        // emitter removed
+
+    // Editor chrome: per-viewport Viewport::Cold::chrome_enabled, default on.
+    REQUIRE(e.EditorChromeEnabled() == true);
+    e.SetEditorChromeEnabled(false);
+    REQUIRE(e.EditorChromeEnabled() == false);
+    e.SetEditorChromeEnabled(true);
+    REQUIRE(e.EditorChromeEnabled() == true);
+}
+
+// #229 C6: end-to-end pick regression -- spawn one centred champion, click the
+// frame centre, resolve, consume. Exercises the whole CPU ray-cast path
+// (RequestPick -> ResolvePickRaycast union-AABB slab test -> consume) that had
+// zero coverage. A hit (id != 0 background) with the resolved entity is the
+// contract.
+SCENARIO("C6 pick: centre-click resolves to the spawned champion (end-to-end)",
+         "[spec][scenarios][pick]") {
+    if (!seam::AssetsPresent({"aatrox.glb"})) {
+        SKIP("assets absent");
+    }
+    seam::EnsureImguiContext();
+    cairns::rhi::InitConfig icfg{};
+    icfg.surfaceless = true;
+    icfg.width = 256;
+    icfg.height = 256;
+    cairns::EngineConfig ecfg{};
+    ecfg.use_fixed_clock = true;
+    cairns::Engine e;
+    REQUIRE(e.GreaterInit(icfg, ecfg));
+    cairns::control::CommandRegistry& reg = cairns::golden::SetupJs(e);
+    auto disp = [&](const char* op, const cairns::json& args) -> cairns::json {
+        return reg.Dispatch({{"op", op}, {"args", args}});
+    };
+    disp("cairns.scene.spawnFitted",
+         {{"glbs", {"aatrox.glb"}}, {"instances", 1}});
+    disp("cairns.render.advanceFrames", {{"count", 1}});  // populate inv_view_proj
+    const cairns::json l =
+        disp("cairns.scene.listEntities", cairns::json::object());
+    REQUIRE(l["result"]["entities"].size() >= 1);
+    const uint32_t ent = l["result"]["entities"][0].get<uint32_t>();
+
+    disp("cairns.pick", {{"viewport", 0}, {"x", 128}, {"y", 128}});
+    disp("cairns.render.advanceFrames", {{"count", 1}});  // resolve
+    const cairns::json r = disp("cairns.pick.consume", cairns::json::object());
+    INFO("pick.consume: " << r.dump());
+    REQUIRE(r["result"]["resolved"] == true);
+    const uint32_t id = r["result"]["id"].get<uint32_t>();
+    REQUIRE(id != 0u);         // hit the champion, not empty background (id 0)
+    REQUIRE(id == ent + 1u);   // pick ids are 1-based (entity+1; 0 = background)
+}
