@@ -196,8 +196,7 @@ void RegisterSelectionOps(CommandRegistry& registry, cairns::Engine& engine) {
         /*doc=*/"Poll for the most recent resolved pick. {resolved:false} "
                 "until the engine has run a frame post-request. On success: "
                 "{resolved:true, viewport, x, y, type, id, raw}. raw is the "
-                "stub source value (BGRA at the texel) until the R32U ID "
-                "buffer lands; id swaps to the decoded value with #206.",
+                "undecoded id-buffer texel; id is the decoded pick id.",
         [engine = &engine](const json&) -> json {
             cairns::headless::PickResultExport r =
                 cairns::headless::ConsumePickResult(engine);

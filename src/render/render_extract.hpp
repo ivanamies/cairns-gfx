@@ -14,14 +14,11 @@
 namespace cairns {
 
 // EnTT-driven extract. Iterates entities that have
-// WorldTransform + AssetRef + Renderable; resolves Asset::Cold->cpu_graph
-// for the DFS; emits the same MeshProxy/PrimitiveProxy shape as the old
-// Extract above. Sets proxy.skin = kInvalidSkin unconditionally
-// (matches old extract; skinning lands at P8).
-// #220 Steps 2+3: meshes and scenes are engine-owned pools. Pool
-// references threaded through so the inner walk can resolve each
-// Asset::cpu_graph (now PrefabId) to Prefab::Hot+Cold and each Scene
-// mesh entry (MeshId) to Mesh::Hot.
+// WorldTransform + AssetRef + Renderable; DFS-walks each prefab's node
+// graph into MeshProxy/PrimitiveProxy arrays. Meshes and prefabs are
+// engine-owned pools; the pool references are threaded through so the
+// inner walk can resolve each Asset::cpu_graph (PrefabId) to
+// Prefab::Hot+Cold and each mesh entry (MeshId) to Mesh::Hot.
 inline void ExtractFromScene(Scene::Cold& wc, const glm::mat4& root,
                              AssetRegistry& assets,
                              cairns::ResourceManager<Prefab>& prefabs_pool,
@@ -54,10 +51,10 @@ inline void ExtractFromScene(Scene::Cold& wc, const glm::mat4& root,
         const AssetRef& ref = view.get<const AssetRef>(entity);
         const Renderable& rdr = view.get<const Renderable>(entity);
 
-        // #221 Phase 9a: per-entity SkinRef -> packed SkinId for the
-        // skinned mesh nodes below. {generation,index} packed into the
-        // uint32 proxy.skin field; kInvalidSkin (0xFFFFFFFF) means
-        // "static draw path", matching the unskinned default.
+        // Per-entity SkinRef -> packed SkinId for the skinned mesh nodes
+        // below. {generation,index} packed into the uint32 proxy.skin
+        // field; kInvalidSkin (0xFFFFFFFF) means "static draw path",
+        // matching the unskinned default.
         uint32_t packed_skin = kInvalidSkin;
         if (const SkinRef* sr = wc.registry.try_get<const SkinRef>(entity)) {
             if (!sr->id.IsNull()) {
@@ -71,7 +68,6 @@ inline void ExtractFromScene(Scene::Cold& wc, const glm::mat4& root,
         if (!ac || ac->cpu_graph.IsNull()) {
             continue;
         }
-        // #220 Step 3: cpu_graph is a PrefabId; resolve to Hot+Cold.
         Prefab::Hot* shot = prefabs_pool.GetHot(ac->cpu_graph);
         Prefab::Cold* scold = prefabs_pool.GetCold(ac->cpu_graph);
         if (!shot || !scold) {
@@ -87,9 +83,9 @@ inline void ExtractFromScene(Scene::Cold& wc, const glm::mat4& root,
             const int32_t node_idx = stack[--top];
             const Node& node = scold->nodes[node_idx];
             if (node.meshIndex < 0) {
-                // #212 explicit pointer+size iteration. RelWithDebInfo doesn't
-            // inline std::vector<int32_t>::begin()/end() reliably -- shows
-            // up as ~5% self-time in the profile.
+            // Explicit pointer+size iteration: RelWithDebInfo doesn't
+            // reliably inline the container begin()/end() -- shows up as
+            // ~5% self-time in the profile.
             const int32_t* cp = node.children.data(prefab_arena);
             const size_t cn = node.children.size();
             for (size_t ci = 0; ci < cn; ++ci) {
@@ -98,8 +94,6 @@ inline void ExtractFromScene(Scene::Cold& wc, const glm::mat4& root,
                 continue;
             }
 
-            // #220 Step 2: scene.meshes is std::vector<MeshId>; resolve
-            // to the engine's pool Hot record for the GPU handles.
             const cairns::Handle<Mesh> mid = shot->meshes[node.meshIndex];
             const Mesh::Hot* mhot = meshes_pool.GetHot(mid);
             MeshProxy proxy;
@@ -112,7 +106,7 @@ inline void ExtractFromScene(Scene::Cold& wc, const glm::mat4& root,
             proxy.skin = (node.skinIndex >= 0) ? packed_skin : kInvalidSkin;
             proxy.layer_mask = rdr.layer_mask;
             proxy.flags = rdr.flags;
-            // #207 +1 so the value 0 (the id_off clear color) means
+            // +1 so the value 0 (the id_off clear color) means
             // "background" rather than entity index 0.
             proxy.entity_id =
                 static_cast<uint32_t>(entt::to_integral(entity)) + 1u;

@@ -4,8 +4,7 @@
 # dumps `final` and cmp's against tmp/golden_headless_<backend>.png.
 #
 # NEVER launches sdl-min -- the windowed app steals focus and makes the
-# laptop unusable while it is up. This is the canonical byte-gate during
-# the #219 allocator sweep and beyond. See
+# laptop unusable while it is up. This is the canonical byte-gate. See
 # memory/feedback-headless-only-verify.md.
 #
 # Usage:
@@ -19,9 +18,8 @@ cd "$(dirname "$0")/.."
 
 drive=tmp/_headless_drive.ndjson
 mkdir -p tmp
-# #269: entity spawn moved off engine init to NDJSON. Spawn loop lives
-# in scripts/_headless_spawn.js (editable JS); python3 JSON-encodes it
-# into the cairns.script.eval op below.
+# The spawn loop lives in scripts/_headless_spawn.js (editable JS);
+# python3 JSON-encodes it into the cairns.script.eval op below.
 spawn_op=$(python3 -c 'import json,sys;print(json.dumps({"op":"cairns.script.eval","args":{"code":open(sys.argv[1]).read()}}))' scripts/_headless_spawn.js)
 {
   # printf %s (not echo) -- zsh echo interprets \n in the JSON-encoded

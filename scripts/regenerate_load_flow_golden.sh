@@ -1,6 +1,6 @@
 #!/bin/zsh
-# #228 H5: re-bake the load_flow runtime golden (committed PNG; gated to
-# metal until #296 fixes vk's render of this workload).
+# Re-bake the load_flow runtime golden (committed PNG; gated to metal
+# until vk's render of this workload is fixed).
 #
 # Usage: scripts/regenerate_load_flow_golden.sh
 #

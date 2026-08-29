@@ -1,9 +1,9 @@
 // rhi/frames.hpp
 //
-// Fork C frame lifecycle: owns per-frame sync + command buffers + the per-frame
-// descriptor sets (Vulkan) / render-pass + MSAA/depth targets (Metal) + the
-// one-shot swapchain dump. Begin() returns a FrameContext whose CommandRecorder
-// records into the frame; End() submits + presents. Depends on Device + Resources.
+// Frame lifecycle: owns per-frame sync + command buffers + the per-frame
+// descriptor sets (Vulkan) / render-pass + MSAA/depth targets (Metal).
+// Begin() returns a FrameContext whose CommandRecorder records into the frame;
+// End() submits + presents. Depends on Device + Resources.
 
 #pragma once
 
@@ -56,9 +56,9 @@ public:
     [[nodiscard]] bool InitTargets(Resources& resources, Allocator& alloc,
                                     uint32_t width, uint32_t height);
 
-    // CALLER: ENGINE (per-frame draw loop). #222 Phase F.1/F.3:
-    // sibling subsystems (profiler, offscreen targets) passed per-call
-    // so Frames doesn't stash pointers between Init and Begin.
+    // CALLER: ENGINE (per-frame draw loop). Sibling subsystems (profiler,
+    // offscreen targets) passed per-call so Frames doesn't stash pointers
+    // between Init and Begin.
     FrameContext Begin(Resources& resources, Allocator& alloc,
                        GpuProfiler& gpu_profiler,
                        OffscreenTargets& offscreen_targets,
@@ -79,26 +79,16 @@ public:
     //
     // Vulkan: vkQueueSubmit is thread-safe; vkQueuePresentKHR on MoltenVK
     // touches CALayer and MUST run on main.
-    // #222 Phase F.2: frame_capture passed per-call so the dump path
-    // doesn't live as engine-side back-pointer state. vk fires the dump
-    // inside Present (post vkQueuePresentKHR); metal inside EndSubmit
-    // (after the blit + waitUntilCompleted). The unused side ignores it.
+    // frame_capture passed per-call so the dump path doesn't live as
+    // engine-side back-pointer state. vk fires the dump inside Present
+    // (post vkQueuePresentKHR); metal inside EndSubmit (after the blit +
+    // waitUntilCompleted). The unused side ignores it.
     void EndSubmit(const SwapResolveTarget& target,
                     FrameCapture& frame_capture, FrameContext& fc);
     void Present(const SwapResolveTarget& target,
                   FrameCapture& frame_capture, FrameContext& fc);
 
-    // #222 Phase F.2: SetDumpPath retired -- call
-    // Rhi::frame_capture.SetDumpPath() instead. The dump still fires
-    // inside EndSubmit (needs the backend swap image), but the request
-    // surface lives on FrameCapture.
-
-    // #222 Phase D.3 cleanup: WriteSkinGroupBDescriptors +
-    // WriteAnimEvalDescriptors retired -- skin Group B + anim_eval set 0
-    // now flow through dyn_skin_group_b_ / dyn_anim_eval_ DynamicBuffers
-    // created in engine.
-
-    // #237 fix: write the per-frame globals_sets_ + drawtmp_sets_ ONCE
+    // Write the per-frame globals_sets_ + drawtmp_sets_ ONCE
     // at engine init. Both bindings are UNIFORM_BUFFER_DYNAMIC pointing
     // at the master kDynamic buffer with a fixed sizeof(struct) range;
     // the dynamic offset selects the per-pass / per-draw window at bind
@@ -106,10 +96,8 @@ public:
     // buffers (VUID-vkUpdateDescriptorSets-None-03047). Metal: no-op.
     void WriteUnlitDescriptors(Resources& resources, Allocator& alloc);
 
-    // #222 Phase F.3: framebuffer flush retired -- engine calls
-    // rhi.offscreen_targets.FlushFramebuffers() directly on resize.
-
-    // Backend state. Pipelines reads plat.*_set_layout_ (vk pipeline layouts).
+    // Backend state. Resources allocates descriptor sets from
+    // plat.descriptor_pool_ (vk).
     FramesPlat plat;
 
 private:

@@ -36,12 +36,9 @@ void RegisterPerfOps(CommandRegistry& registry, cairns::Engine& engine) {
             return {{"slots", slots}};
         });
 
-    // rng.seed is wired engine-side: updates Engine::random_seed_ which
-    // initParticles reads via std::srand. Note: GreaterInit's initParticles
-    // already ran, so the seed change takes effect on the NEXT particle
-    // (re-)init -- not retroactive on the current particle state. For a
-    // truly seeded boot, call rng.seed BEFORE the first render.frame and
-    // expect the engine init flow to evolve to apply it.
+    // rng.seed updates Engine::random_seed_, which initParticles reads via
+    // std::srand. Init-time particles already ran, so the seed applies at
+    // the NEXT particle (re-)init -- not retroactive on the current state.
     registry.Register(
         "cairns.rng.seed",
         /*schema=*/json::object(),
@@ -54,9 +51,8 @@ void RegisterPerfOps(CommandRegistry& registry, cairns::Engine& engine) {
             return {{"seed", n32}, {"engine_bound", true}};
         });
 
-    // time.set still a stub: FixedClock advancement isn't directly
-    // settable -- the headless render path will grow a `dt` arg on
-    // render.frame instead. For now the op records the intent.
+    // time.set is a stub: FixedClock advancement isn't directly settable
+    // (render.frame({dt}) is the planned shape). The op records intent only.
     registry.Register(
         "cairns.time.set",
         /*schema=*/json::object(),
@@ -67,8 +63,8 @@ void RegisterPerfOps(CommandRegistry& registry, cairns::Engine& engine) {
             return {{"t", t}, {"note", "stub; render.frame({dt}) planned"}};
         });
 
-    // #229 C4.2: deterministic sim clock (Unity Time.{time,deltaTime,
-    // frameCount}). Fixed timestep; read-only.
+    // Deterministic sim clock (Unity Time.{time,deltaTime,frameCount}).
+    // Fixed timestep; read-only.
     registry.Register(
         "cairns.time.get",
         /*schema=*/json::object(),

@@ -115,17 +115,16 @@ public:
     void Reset();
     void AddPass(const char* name, PassType type, SetupFn setup, ExecuteFn execute);
     void SetOutput(GraphTexture t);
-    // #210: caller passes ITS SLOT INDEX. RenderGraph looks up that slot's
+    // Caller passes ITS SLOT INDEX. RenderGraph looks up that slot's
     // arena from its pre-registered slot table (BindSlotArena). Slot index
     // is the lock -- no two callers can ever hand the same slot to Bake
     // concurrently because the slot was Acquire'd exclusively.
     void BindSlotArena(uint32_t slot, BumpArena& arena);
-    // #229 GPU-determinism: when set, Bake gives every created transient its own
-    // physical texture instead of intra-frame aliasing a slot whose lifetime
-    // ended. Aliased memory is UNDEFINED until written -> a read-before-write is
-    // bistable + sync-sensitive (the top suspect for the three_champ flake).
-    // Behaviour-preserving (pure memory layout); the pool auto-grows. Set in
-    // golden mode.
+    // When set, Bake gives every created transient its own physical texture
+    // instead of intra-frame aliasing a slot whose lifetime ended. Aliased
+    // memory is UNDEFINED until written -> a read-before-write is bistable +
+    // sync-sensitive, so golden mode disables aliasing for determinism.
+    // Pure memory layout; the pool auto-grows.
     void SetDisableTransientAliasing(bool on) { disable_aliasing_ = on; }
     bool Bake(uint32_t slot);
     bool Execute(FrameContext& fc, const SwapResolveTarget& target);
@@ -153,14 +152,14 @@ private:
     struct ColorOutput {
         uint16_t tex = 0xFFFF;
         LoadOp load = LoadOp::kClear;
-        StoreOp store = StoreOp::kStore;  // #222 Phase A.2
+        StoreOp store = StoreOp::kStore;
         float clear[4] = {0, 0, 0, 1};
     };
 
     struct DepthOutput {
         uint16_t tex = 0xFFFF;
         LoadOp load = LoadOp::kClear;
-        StoreOp store = StoreOp::kStore;  // #222 Phase A.2
+        StoreOp store = StoreOp::kStore;
         float clear_depth = 1.0f;
     };
 
@@ -180,7 +179,7 @@ private:
                   "can copy without a second push_or_die");
 
     struct PassRecord {
-        std::string_view name;  // #214 callers pass string literals
+        std::string_view name;  // non-owning; callers pass string literals
         PassType type = PassType::kGraphics;
         SetupFn setup;
         ExecuteFn execute;
@@ -199,9 +198,8 @@ private:
         uint8_t color_outputs_count = 0;
         bool has_depth = false;
         DepthOutput depth_output;
-        // Bounded by GraphicsPipelineDesc::kMaxColorFormats (=4, #206 MRT).
-        // Fixed cap on the stack -> no per-frame std::vector reallocation
-        // (was ~77 KB / 1849 grows in the 3300-hero trace).
+        // Bounded by GraphicsPipelineDesc::kMaxColorFormats. Fixed cap on
+        // the stack -> no per-frame std::vector reallocation.
         std::array<ColorAttachment, GraphicsPipelineDesc::kMaxColorFormats>
             baked_color{};
         uint8_t baked_color_count = 0;
@@ -240,9 +238,9 @@ private:
     std::vector<Handle<Buffer>> resolved_buf_;
     std::vector<PooledTex> tex_pool_;
     std::vector<PooledBuf> buf_pool_;
-    bool disable_aliasing_ = false;  // #229 golden-mode determinism
+    bool disable_aliasing_ = false;  // golden-mode determinism
 
-    // #210 per-slot arena table. Engine binds once at init; Bake(slot)
+    // Per-slot arena table. Engine binds once at init; Bake(slot)
     // resolves slot_arenas_[slot] -> the BumpArena that owns Bake's
     // scratch. nullptr until BindSlotArena fires for that slot.
     static constexpr uint32_t kMaxBoundSlots = 4;

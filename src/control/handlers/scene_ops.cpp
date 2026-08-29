@@ -11,14 +11,9 @@
 
 namespace cairns::control {
 
-// #229 M0b: the synthetic-id counters were process-global `std::atomic<uint64_t>`
-// (g_scene/asset/entity_counter) -> two Engine instances shared them, breaking
-// run-to-run determinism (and the no-statics rule). asset/entity were unused
-// (deleted); scene_counter is now Engine::NextSceneId() (per-instance).
-
 void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     // ──────────────────────────────────────────────────────────────────
-    // #225 R3: Unity-shaped op surface. cairns.scene.* = Scene (the
+    // Unity-shaped op surface. cairns.scene.* = Scene (the
     // container, Unity sense); cairns.prefab.* = Prefab (the loaded GLB,
     // Unity Instantiate target). Old cairns.world.* + cairns.asset.load
     // names register as deprecated aliases (one release; delete after).
@@ -50,7 +45,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.pipeline.reload",
         json::object({{"name", "<anim_eval|skin|particle>"}}),
-        "#228 R2: hot-reload a compute kernel by logical name. "
+        "Hot-reload a compute kernel by logical name. "
         "KEEP-LAST-GOOD: on failure the existing pipeline stays bound "
         "and rendering continues. Returns {ok, name}.",
         [&engine](const json& args) -> json {
@@ -63,9 +58,9 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.prefab.reload",
         json::object({{"path", "<glb path>"}}),
-        "#228 R1: reload a Prefab in place behind its stable PrefabId. "
+        "Reload a Prefab in place behind its stable PrefabId. "
         "Re-parses the GLB at args.path, swaps the pool slot's contents, "
-        "and DeferFrees the previous GPU resources through the F1 (v2) "
+        "and DeferFrees the previous GPU resources through the "
         "per-resource retire-frame ring. Entities holding AssetRef "
         "remain valid and render the new mesh next frame. Returns "
         "{ok, path}.",
@@ -79,8 +74,8 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.prefab.unloadAll",
         json::object(),
-        "#228 F2: drop every resident prefab. DeferFrees each prefab's "
-        "textures/samplers/meshes/materials through the F1 ring (released "
+        "Drop every resident prefab. DeferFrees each prefab's "
+        "textures/samplers/meshes/materials through the retire ring (released "
         "kFIF frames later, no GPU drain). ClearActiveScene runs first "
         "so post-Unload the active scene is empty. Returns {unloaded:N}. "
         "Engine is fully ready for fresh loads immediately after.",
@@ -116,7 +111,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.scene.instantiateGrid",
         json::object(),
-        "#224 L5: instantiate `prefab_count` resident prefabs starting "
+        "Instantiate `prefab_count` resident prefabs starting "
         "at `first_prefab_idx` into the active scene; slide all existing "
         "actors to the new fitted grid (no flash). Args: "
         "{first_prefab_idx, prefab_count}. Returns: {entities:[ids], count}.",
@@ -171,7 +166,8 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.prefab.load",
         json::object(),
-        "#224 L9: load ONE GLB at `path` as a Prefab. Path is absolute "
+        "Load ONE GLB at `path` as a Prefab (APPENDS; never replaces). "
+        "Path is absolute "
         "or a short name resolved via the engine's static resource "
         "lookup. Returns: {prefab, path, ok}. The JS catalog script "
         "loops + calls this per file -- the engine does NOT take a "
@@ -189,8 +185,9 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.prefab.loadBatch",
         json::object(),
-        "#224 L5: parse + upload `count` GLBs from the kDebugGlbs "
-        "window starting at `cursor`. Runs Device::WaitIdle first; "
+        "Parse + upload `count` GLBs from the kDebugGlbs window "
+        "starting at `cursor` (APPENDS; never replaces). "
+        "Runs Device::WaitIdle first; "
         "re-uploads anim tables after. Args: {cursor, count, source}. "
         "Returns: {first_prefab_idx, count, prefabs:[{id,name,extent}]}.",
         [&engine](const json& args) -> json {
@@ -237,7 +234,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
                     {"prefab", prefab}};
         });
 
-    // ── #224 L8: editor-chrome (selection outline) toggle ──
+    // ── editor-chrome (selection outline) toggle ──
     registry.Register(
         "cairns.editor.chrome",
         json::object(),
@@ -252,7 +249,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
             return {{"on", cairns::headless::EditorChromeEnabled(&engine)}};
         });
 
-    // ── #224 L6: APPEND-only debug pair ──
+    // ── APPEND-only debug pair ──
     registry.Register(
         "cairns.debug.snapshotPrefabHandles",
         json::object(),
@@ -267,7 +264,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.debug.checkInvariants",
         json::object(),
-        "#228 H2: walk the LoadPrefabBatch manifest's contract. Returns "
+        "Walk the LoadPrefabBatch manifest's contract. Returns "
         "{violations:N, messages:[…]}. 0 == every manifest line agrees "
         "with its invariant (per_prefab_asset_.size() == prefab_ids_.size(), "
         "every live Material has set2, resident_textures_ == sum of all "
@@ -298,7 +295,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.debug.loadTwice",
         json::object(),
-        "#224 L7: load the same {cursor,count} GLB window twice, fit "
+        "Load the same {cursor,count} GLB window twice, fit "
         "transforms each time, count mismatches (modulo trace timing). "
         "0 mismatches == deterministic. Returns: {mismatches, cursor, count}.",
         [&engine](const json& args) -> json {
@@ -311,7 +308,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
                     {"count",      count}};
         });
 
-    // ── #224 L3: the instrument (`cairns.loader.*`) ──
+    // ── the loading instrument (`cairns.loader.*`) ──
     registry.Register(
         "cairns.loader.trace",
         json::object(),
@@ -342,7 +339,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.prefab.validate",
         json::object(),
-        "#224 L2: return the validation report from the LAST "
+        "Return the validation report from the LAST "
         "LoadPrefabBatch call (issues + ok flag). No args. Returns: "
         "{ok, issue_count, issues:[{sev, what, prefab_idx}]}.",
         [&engine](const json&) -> json {
@@ -387,7 +384,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.viewport.open",
         json::object(),
-        "Open a new viewport on the swap pane (#194). Caps at the "
+        "Open a new viewport on the swap pane. Caps at the "
         "engine's kNumViewports. Returns {viewport: 'vpN'} on success "
         "(engine-assigned monotonic name; never reused) or "
         "{error:'capped'} when full.",
@@ -472,7 +469,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         "cairns.viewport.setScene",
         json::object(),
         "Bind viewport `viewport` (index) to scene `scene` (0 primary, "
-        "1 secondary). Each viewport renders only its bound scene (#195).",
+        "1 secondary). Each viewport renders only its bound scene.",
         [engine = &engine](const json& args) -> json {
             const int vp = static_cast<int>(args.value("viewport", 0));
             const uint32_t scene = args.value("scene", 0u);
@@ -616,7 +613,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         json::object(),
         "Resize the render target. Routes through Engine::ApplyResize -- the "
         "unified drain+WaitIdle+flush+realloc path shared with the windowed "
-        "ApplyPendingResize (was a raw realloc that skipped the drain).",
+        "ApplyPendingResize.",
         [engine = &engine](const json& args) -> json {
             const uint64_t w64 = args.value("w", uint64_t{1280});
             const uint64_t h64 = args.value("h", uint64_t{720});
@@ -631,11 +628,10 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     // ──────────────────────────────────────────────────────────────────
     // Deprecated aliases (one release, then delete).
     //
-    // Per #225 R3: legacy cairns.world.* (a misnomer -- the container is
-    // Unity's Scene) + cairns.asset.load (Prefab is the right noun for a
-    // loaded GLB) + cairns.viewport.setWorld + the studio.* drops still
-    // dispatch to the new ops above. Existing JS/NDJSON callers keep
-    // working until they migrate.
+    // Legacy cairns.world.* (a misnomer -- the container is Unity's
+    // Scene) + cairns.asset.load (Prefab is the right noun for a loaded
+    // GLB) + cairns.viewport.setWorld still dispatch to the new ops
+    // above. Existing JS/NDJSON callers keep working until they migrate.
     // ──────────────────────────────────────────────────────────────────
     registry.RegisterAlias("cairns.world.create",        "cairns.scene.create");
     registry.RegisterAlias("cairns.world.clear",         "cairns.scene.clear");
@@ -649,14 +645,13 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.RegisterAlias("cairns.asset.load",          "cairns.prefab.load");
     registry.RegisterAlias("cairns.viewport.setWorld",   "cairns.viewport.setScene");
 
-    // Pre-#225 top-level names (also deprecated).
+    // Legacy un-prefixed names (also deprecated).
     registry.RegisterAlias("world.create",         "cairns.scene.create");
     registry.RegisterAlias("world.clear",          "cairns.scene.clear");
     registry.RegisterAlias("world.instantiate",    "cairns.scene.instantiate");
     registry.RegisterAlias("world.instantiateGrid","cairns.scene.instantiateGrid");
     registry.RegisterAlias("asset.load",           "cairns.prefab.load");
-    // #229 C4.2 CAP-1: enumerate Camera-component entities; studio.js
-    // Camera.main is loud-strict over the is_main ones.
+    // studio.js Camera.main is loud-strict over the is_main entries here.
     registry.Register(
         "cairns.scene.listCameras",
         /*schema=*/json::object(),

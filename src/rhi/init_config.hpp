@@ -2,7 +2,7 @@
 //
 // Platform-handle init config for the RHI. The SDL shell (cairns_app) fills
 // these in from its SDL window; the headless host (cairns_serve) sets
-// `surfaceless = true` and leaves the rest zero. RHI no longer references SDL.
+// `surfaceless = true` and leaves the rest zero. Keeps SDL out of the RHI.
 //
 // Backend-specific handles live on plat, populated by the shell. Today:
 //  vk: instance extensions list + surface-creation callback + window-size

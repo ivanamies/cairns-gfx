@@ -1,4 +1,4 @@
-// #269 dev-drive scene-manipulation helpers. Loaded once per
+// dev-drive scene-manipulation helpers. Loaded once per
 // dev_drive.sh start; subsequent commands call spawnTotal(N) etc.
 //
 // Functions published on globalThis:
@@ -39,8 +39,8 @@ function _sceneScale(scene_idx, cell) {
     const r = _call("cairns.world.sceneDims", { scene_idx });
     const extent = r.extent_max;
     if (!extent || extent <= 0) {
-        // Fallback if bind-pose AABB wasn't captured; matches the
-        // pre-#269 uniform-scale heuristic.
+        // Fallback if bind-pose AABB wasn't captured: uniform-scale
+        // heuristic.
         return 0.013 / Math.max(1, Math.round(WORLD_SPAN / cell));
     }
     return cell / extent;

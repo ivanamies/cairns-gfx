@@ -29,8 +29,8 @@ bool ResizeFinalTarget(Engine* engine, uint32_t w, uint32_t h) {
     if (!engine) {
         return false;
     }
-    // #229 C7: route through the unified drain+flush+realloc path (was a raw
-    // ResizeFinalTarget that skipped the render-thread drain).
+    // Route through the unified drain+flush+realloc resize path -- the
+    // render-thread drain must precede the realloc.
     return engine->ApplyResize(w, h);
 }
 
@@ -471,8 +471,8 @@ std::vector<uint32_t> InstantiateGridFitted(Engine* engine,
     const uint32_t n_total =
         static_cast<uint32_t>(existing.size()) + prefab_count;
 
-    // per-actor extents: existing actors first (we don't have their
-    // source prefab handy; treat as fallback 100), then new prefabs.
+    // Per-actor extents: existing actors first (source prefab not
+    // tracked; 0 falls back to the engine default), then new prefabs.
     std::vector<float> extents;
     extents.reserve(n_total);
     for (size_t i = 0; i < existing.size(); ++i) {

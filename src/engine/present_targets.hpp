@@ -1,11 +1,9 @@
 // engine/present_targets.hpp
 //
-// Swap / present / final-target state, grouped out of the Engine god class
-// (C2 S7): the swapchain, the cross-thread present handshake (mutex/cv/queue),
-// the surfaceless offscreen final target, and the resize lifecycle. Engine owns
-// one, declared AFTER rhi_ so its swapchain tears down before the device.
-//
-// The resize fields are the seam C7 (unified resize) reworks.
+// Swap / present / final-target state: the swapchain, the cross-thread
+// present handshake (mutex/cv/queue), the surfaceless offscreen final
+// target, and the resize lifecycle. Engine owns one, declared AFTER rhi_ so
+// its swapchain tears down before the device.
 
 #pragma once
 

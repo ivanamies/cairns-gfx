@@ -1,7 +1,7 @@
 // tests/test_memory_budget.cpp
 //
-// Tier S. #229 M0b: the MemoryBudget single-source-of-sizes + the
-// ChunkAllocator fixed-reservation hard cap ("only ever use that X GB").
+// Tier S. The MemoryBudget single-source-of-sizes + the ChunkAllocator
+// fixed-reservation hard cap ("only ever use that X GB").
 // TAGS: [spec][memory]
 
 #include <catch2/catch_test_macros.hpp>

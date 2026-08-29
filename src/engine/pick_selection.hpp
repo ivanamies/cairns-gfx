@@ -1,8 +1,7 @@
 // engine/pick_selection.hpp
 //
-// Selection + highlight document state and the pick request/result handshake,
-// grouped out of the Engine god class (C2 S6). Pure state; Engine's pick +
-// selection systems operate on it.
+// Selection + highlight document state and the pick request/result
+// handshake. Pure state; Engine's pick + selection systems operate on it.
 //
 // NOTE: the per-viewport R32U id_target render targets stay on Engine -- they
 // are kNumViewports-coupled GPU resources (a render-pipeline concern), not
@@ -25,8 +24,9 @@ struct PickResult {
     uint32_t y = 0;
     cairns::SelectionType type = cairns::SelectionType::kEntity;
     uint32_t id = 0;
-    // Today's stub source: final_target_ BGRA at (x, y). Swap to the R32U
-    // id_target once the dedicated ID buffer lands; the {type,id} decode too.
+    // Picking is a CPU ray-cast (identical on every backend; the browser
+    // cannot read back synchronously), so raw == id. The R32U id buffer
+    // serves only the GPU-side outline pass.
     uint32_t raw = 0;
 };
 

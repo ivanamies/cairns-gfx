@@ -1,6 +1,6 @@
 // tests/test_top_risks.cpp
 //
-// SPEC: G.9 top risks named in the audit.
+// SPEC: cross-subsystem top-risk consolidation.
 // TAGS: [spec][risks][regression]
 //
 // (1) render_graph_schedule.hpp::SchedulePasses is a sibling of
@@ -34,7 +34,7 @@ SCENARIO("kFramesInFlight is 2 (spec mirror)",
 SCENARIO("SchedulePasses behaves deterministically on the canonical "
          "single-resource chain",
          "[spec][risks][schedule][regression]") {
-    // Phase G.9 #83: schedule must match Bake. Spec the deterministic
+    // Schedule must match Bake. Spec the deterministic
     // output for a known 3-pass chain; cairns_golden_tests is responsible
     // for verifying RenderGraph::Bake produces the same order.
     std::vector<SchedPass> passes;
@@ -51,9 +51,8 @@ SCENARIO("SchedulePasses behaves deterministically on the canonical "
 
 SCENARIO("the regression-class arithmetic invariants are all live",
          "[spec][risks][regression]") {
-    // Audit's hardest-to-detect class: numeric invariants that don't
-    // belong to any single subsystem. Putting them in one place makes
-    // them grep-able and review-able.
+    // Numeric invariants that don't belong to any single subsystem,
+    // kept in one grep-able, review-able place.
     REQUIRE(kSkinVertexStride == 16u);
     REQUIRE(cairns::rhi::kFramesInFlight == 2u);
 

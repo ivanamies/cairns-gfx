@@ -1,6 +1,6 @@
 // tests/test_state_hash.cpp
 //
-// #229 P7 -- determinism tests for the per-frame SIM state hash
+// Determinism tests for the per-frame SIM state hash
 // (Engine::LastSimHash: FNV-1a over the block-backed frame arena [0,Used) plus
 // the sim drivers). The digest advances every frame BY DESIGN (sim_frame_ /
 // accumulator_ / render_angle_deg_ are folded in), so the invariant is
@@ -8,9 +8,9 @@
 // equality. Asserts:
 //   (1) two independent Engine instances in ONE process produce byte-identical
 //       hash SEQUENCES (also the JS-pristine / no-surviving-process-global
-//       check from P0c -- a leaked static would diverge the second engine),
+//       check -- a leaked static would diverge the second engine),
 //   (2) the same holds with a real GLB scene loaded through the block-backed
-//       Mesh/Prefab pools (P2/P3),
+//       Mesh/Prefab pools,
 //   (3) perturbing the scene changes the sequence (discrimination -- the hash
 //       is a real projection of state, not a constant).
 // TAGS: [golden][statehash]
@@ -90,7 +90,7 @@ SCENARIO("sim hash is reproducible run-to-run (two engines, one process)",
 }
 
 // (2) Reproducibility with a real GLB scene loaded through the block-backed
-// Mesh/Prefab pools (P2/P3). The strongest run-to-run check: the draw list,
+// Mesh/Prefab pools. The strongest run-to-run check: the draw list,
 // world matrices, and pool contents all flow through cpu_block_.
 SCENARIO("sim hash is reproducible with a loaded scene (two engines)",
          "[golden][statehash]") {

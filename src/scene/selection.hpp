@@ -1,10 +1,9 @@
 // scene/selection.hpp
 //
 // Document-side selection + highlight state. NOT a Viewport concern: the
-// selection set lives on the world (the Document); each Viewport just shows
-// it. Type is one of {entity, material, draw}; the GPU ID buffer (P4 GPU
-// follow-up) reads back a packed `{type<<24 | id}` integer that maps 1:1 to
-// SelectionTarget.
+// selection set lives on the scene (the Document); each Viewport just shows
+// it. Type is one of {entity, material, draw}; the GPU ID buffer reads back
+// a packed `{type<<24 | id}` integer that maps 1:1 to SelectionTarget.
 
 #pragma once
 
@@ -23,7 +22,7 @@ struct SelectionTarget {
     uint32_t id = 0;
     // SceneId.index, packed flat so selection/highlight ops over the protocol
     // can name a target without a typed handle. 0 today; non-zero once
-    // multi-scene rendering past two lands (#195).
+    // multi-scene rendering goes past two scenes.
     uint32_t scene = 0;
 };
 

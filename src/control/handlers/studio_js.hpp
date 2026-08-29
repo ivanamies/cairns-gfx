@@ -95,12 +95,8 @@ const Mathf = {
 };
 
 // =====================================================================
-// Entity wrappers. Today's stub-id world: GameObject wraps an entity
-// id (returned by cairns.scene.instantiate). Transform setters store
-// the value on the wrapper -- the cairns side doesn't yet honor
-// per-entity transforms, so dispatching today would be a no-op. When
-// `cairns.entity.setTransform` lands the setter body becomes a single
-// cairns.dispatch and the call sites don't change.
+// Entity wrappers: GameObject wraps an entity id (returned by
+// cairns.scene.instantiate) plus the scene it lives in.
 // =====================================================================
 
 class Transform {
@@ -110,9 +106,9 @@ class Transform {
         this._rotation = new Quaternion(0, 0, 0, 1);
         this._localScale = new Vector3(1, 1, 1);
     }
-    // #229 C4.3: setters write through to cairns.entity.setTRS (the cache is
-    // the JS-side value, write-through only). [N-node] every op carries
-    // this._go._scene so a Transform edits its own document, not "the" scene.
+    // Setters write through to cairns.entity.setTRS; the JS-side value is
+    // only a cache. Every op carries this._go._scene so a Transform edits
+    // its own document, never an implicit active scene (N-scene model).
     _apply() {
         cairns.dispatch("cairns.entity.setTRS", {
             scene: this._go._scene, entity: this._go._entity,
@@ -145,7 +141,7 @@ class Transform {
 }
 
 class GameObject {
-    // #225 R4: `scene_id` IS the composition binding (Unity Scene == cairns
+    // `scene_id` IS the composition binding (Unity Scene == cairns
     // container of GameObjects). Old `world_id` parameter kept as a positional
     // alias for one release.
     constructor(entity_id, scene_id) {
@@ -159,10 +155,10 @@ class GameObject {
     static InstantiateAsync(prefab_or_asset_id, scene_id = 0) {
         // Refused-wart compatibility shim: Unity's global Instantiate
         // silently targets the active scene, which is the multi-scene wart
-        // cairns refuses (§4 of the rename plan). Use Scene.instantiate
-        // (a method on a specific Scene handle) instead. Kept for one
-        // release for legacy call sites; lowers to cairns.scene.instantiate
-        // with the active scene's NDJSON-side id.
+        // cairns refuses. Use Scene.instantiate (a method on a specific
+        // Scene handle) instead. Kept for one release for legacy call
+        // sites; lowers to cairns.scene.instantiate with the active
+        // scene's NDJSON-side id.
         const r = cairns.dispatch("cairns.scene.instantiate", {
             scene: scene_id, prefab: prefab_or_asset_id,
         });
@@ -173,9 +169,9 @@ class GameObject {
         return new GameObject(r.result.entity, scene_id);
     }
 
-    // #229 C4.2/C4.3: lower onto the generic component ops (was a JS-only Map).
-    // props optional (type-specific; see cairns.entity.componentTypes). Returns
-    // a Component handle caching the engine-side data.
+    // Lowers onto the generic component ops. props optional (type-specific;
+    // see cairns.entity.componentTypes). Returns a Component handle caching
+    // the engine-side data.
     AddComponent(typeName, props) {
         cairns.dispatch("cairns.entity.addComponent", {
             scene: this._scene, entity: this._entity,
@@ -217,7 +213,6 @@ class GameObject {
     // Legacy alias (one release).
     get world()       { return this._scene; }
 
-    // #229 C4.3: lower the lifecycle/name/find surface onto the entity ops.
     Destroy() {
         cairns.dispatch("cairns.entity.destroy",
                         { scene: this._scene, entity: this._entity });
@@ -228,7 +223,7 @@ class GameObject {
         cairns.dispatch("cairns.entity.setName",
                         { scene: this._scene, entity: this._entity, name: n });
     }
-    // Unity GameObject.Find, but explicit-scene ([N-node]); default scene 0.
+    // Unity GameObject.Find, but explicit-scene (N-scene model); default 0.
     static Find(name, scene = 0) {
         const r = cairns.dispatch("cairns.entity.find",
                                   { scene: scene, name: name });
@@ -250,8 +245,8 @@ class Component {
     get type()       { return this._type; }
 }
 
-// #229 C4.2: Unity Time, lowered onto cairns.time.get (deterministic sim
-// clock, fixed timestep). Read each access -- no client-side caching.
+// Unity Time, lowered onto cairns.time.get (deterministic sim clock,
+// fixed timestep). Read each access -- no client-side caching.
 const Time = {
     _snap() {
         const r = cairns.dispatch("cairns.time.get", {});
@@ -263,15 +258,15 @@ const Time = {
 };
 
 // =====================================================================
-// Static surfaces. Camera.main is loud-strict (Refinement 1): no
-// silent return-first-or-tagged. Cairns.onFrame is reserved so it
-// doesn't get back-named to a refused MonoBehaviour-style Update().
+// Static surfaces. Camera.main is loud-strict: no silent
+// return-first-or-tagged. Cairns.onFrame is reserved so it doesn't
+// get back-named to a refused MonoBehaviour-style Update().
 // =====================================================================
 
 const Camera = {
-    // #229 C4.2: real over cairns.scene.listCameras. Loud-strict: exactly one
-    // is_main Camera or throw. Unity property, so scene 0 by default; [N-node]
-    // power users call cairns.scene.listCameras({scene}) directly for others.
+    // Loud-strict over cairns.scene.listCameras: exactly one is_main
+    // Camera or throw. Unity property, so scene 0 implicit; multi-scene
+    // callers use cairns.scene.listCameras({scene}) directly.
     get main() {
         const r = cairns.dispatch("cairns.scene.listCameras", { scene: 0 });
         const all = (r.ok && r.result && r.result.cameras) ? r.result.cameras
@@ -301,7 +296,7 @@ const Cairns = {
             "Cairns.onFrame: events.frame channel not yet wired. " +
             "Surface reserved; lands when the event/subscribe channel ships.");
     },
-    // #224 L3: the loading-system instrument.
+    // The loading-system instrument (batch trace + residency counters).
     loader: {
         trace()    { const r = cairns.dispatch("cairns.loader.trace", {});
                      return r && r.ok ? r.result : null; },
@@ -311,7 +306,7 @@ const Cairns = {
 };
 
 // =====================================================================
-// #225 R4: Unity-shaped Prefab + Scene + Editor surface.
+// Unity-shaped Prefab + Scene + Editor surface.
 //
 //   Prefab  = a loaded GLB (Unity's Instantiate target).
 //   Scene   = a container of GameObjects (Unity Scene == cairns container).
@@ -322,9 +317,8 @@ const Cairns = {
 //             concept to clone, not to signal a divergence.
 //
 // Instantiate is a METHOD ON A SCENE -- there is no global Instantiate()
-// (the active-scene Unity wart is the one Unity feature cairns refuses;
-// see plan §4 "Refuse" bin). Every Instantiate() carries an explicit
-// scene target.
+// (the active-scene Unity wart is the one Unity feature cairns refuses).
+// Every Instantiate() carries an explicit scene target.
 // =====================================================================
 
 function _dispatchOk(op, args, fnName) {
@@ -379,12 +373,11 @@ class Scene {
                            "Scene.clear");
     }
 
-    // Camera entities: per the plan worked example (§4b), cameras are
-    // entities IN the scene. Stub today (#226 CAP-1 wires up real cameras
-    // as entities); throws loud so call sites don't silently succeed.
+    // Cameras are entities IN the scene. Stub reserving the API shape;
+    // throws loud so call sites don't silently succeed.
     addCamera(/*lookAtOrPose*/) {
         throw new Error(
-            "Scene.addCamera: per-scene camera entities not wired yet (#226 CAP-1)");
+            "Scene.addCamera: per-scene camera entities not wired yet");
     }
 }
 
@@ -403,9 +396,8 @@ const Prefabs = {
         return Prefabs.load(source, 1, index)[0];
     },
 
-    // Snapshot of the pre-loaded Prefab pool (cairns init populated this
-    // from kDebugGlbs[]). Useful while cairns.prefab.loadBatch is still
-    // a stub: lets a script enumerate what's already there.
+    // Snapshot of the resident Prefab pool -- lets a script enumerate
+    // what's already loaded.
     list() {
         const count = _dispatchOk(
             "cairns.prefab.count", {}, "Prefabs.list").count || 0;
@@ -443,16 +435,16 @@ const Editor = {
         }, "Editor.show");
     },
 
-    // #225 R6 stubs reserving #226 capabilities. Loud throws so the
-    // Unity prior (active scene; SceneManager.LoadScene) never fires
-    // here and nothing silently half-works (the Cairns.onFrame precedent).
+    // Stubs reserving planned capabilities. Loud throws so the Unity
+    // prior (active scene; SceneManager.LoadScene) never fires here and
+    // nothing silently half-works.
     thumbnails(/*scene, opts*/) {
         throw new Error(
-            "Editor.thumbnails: virtualized RT pool not wired yet (#226 CAP-2)");
+            "Editor.thumbnails: virtualized RT pool not wired yet");
     },
     compose(/*scene, viewport, opts*/) {
         throw new Error(
-            "Editor.compose: multi-target composition pass not wired yet (#226 CAP-3)");
+            "Editor.compose: multi-target composition pass not wired yet");
     },
 };
 
@@ -469,7 +461,6 @@ globalThis.Component  = Component;
 globalThis.Camera     = Camera;
 globalThis.Application= Application;
 globalThis.Cairns     = Cairns;
-// #225 R4: Unity-shaped Prefab/Scene/Prefabs + the non-Unity Editor.
 globalThis.Prefab     = Prefab;
 globalThis.Scene      = Scene;
 globalThis.Prefabs    = Prefabs;

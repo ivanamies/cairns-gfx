@@ -24,9 +24,9 @@
 namespace seam = cairns::test_seams;
 namespace refs = cairns::test_refs;
 
-// ---- Rendered-subject goldens (formerly the escalating "ladder"): each is one
-// scene captured to a per-platform image ref at frame 9 + frame 55. Now flat
-// SCENARIOs; the 100-actor scale workload lives in test_golden_stress.cpp. ----
+// ---- Rendered-subject goldens: each is one scene captured to a per-platform
+// image ref at frame 9 + frame 55. The 100-actor scale workload lives in
+// test_golden_stress.cpp. ----
 SCENARIO("subject: red triangle (procedural mesh)",
          "[scenarios][golden][subject]") {
     cairns::golden::RunJsSubject("triangle", 512, 512, {}, R"JS(
@@ -82,9 +82,8 @@ SCENARIO("subject: three animated champions (skinning path)",
 // 1) PARTICLES -- VK-tutorial style compute particles. NO render output: the
 //    sim runs headless and we hash the particle STATE buffer (CPU-side
 //    readback) after a fixed number of fixed-dt steps. Deterministic by the
-//    portable ParticleRng seed + fixed clock, so a SHARED cross-platform ref --
-//    a divergence is a real GPU-sim difference, not an RNG or render-readback
-//    flake. Building block: [spec][particles][determinism].
+//    portable ParticleRng seed + fixed clock; refs are per-platform (see
+//    below). Building block: [spec][particles][determinism].
 SCENARIO("particles simulate deterministically (no render, state hash)",
          "[golden][scenarios][particles]") {
     seam::EnsureImguiContext();
@@ -122,12 +121,11 @@ SCENARIO("particles simulate deterministically (no render, state hash)",
 }
 
 // 2) HOT LOAD / RELOAD -- spawn 4, check; spawn 5 different, check; clear, check.
-//    Building block: [spec][core][handle] (#228 reuse-not-reset) + asset dedup.
+//    Building block: [spec][core][handle] (reuse-not-reset) + asset dedup.
 SCENARIO("hot reload: spawn, replace, and clear stay correct",
          "[golden][scenarios][hot_reload]") {
-    // Real assets from the project tree (the amalgam's lol_a..i.glb didn't
-    // exist). 4 + 5 distinct heroes; the 5-after-4 path exercises the
-    // ResourceManager generation-bump recycle (#228 regression).
+    // 4 + 5 distinct heroes; the 5-after-4 path exercises the
+    // ResourceManager generation-bump recycle on slot reuse.
     const std::vector<std::string> first  = {"aatrox.glb","ahri.glb","akali.glb","alistar.glb"};
     const std::vector<std::string> second = {"amumu.glb","aatrox_drx.glb","aatrox_blood_moon.glb","ahri_academy.glb","akali_2022_prestige_k_da.glb"};
     if (!seam::AssetsPresent(first) || !seam::AssetsPresent(second)) {
@@ -172,7 +170,7 @@ SCENARIO("hot reload: spawn, replace, and clear stay correct",
 
 // 3) RENDER GRAPH 1 -- two viewports bound to two DISTINCT scenes: a different
 //    hero in each (vp0 left = scene A, vp1 right = scene B + particles). This is
-//    the multi-scene per-viewport draw fan-out (#195) -- a single-scene engine
+//    the multi-scene per-viewport draw fan-out -- a single-scene engine
 //    renders the SAME hero in both halves, which is exactly the gap this catches.
 //    Building block: [spec][draw_key] (viewport ordering) + [spec][schedule].
 SCENARIO("two viewports, two scenes: a different hero in each (JS-driven)",
@@ -192,7 +190,7 @@ SCENARIO("two viewports, two scenes: a different hero in each (JS-driven)",
 
     // The whole scenario is composed in JS via cairns.dispatch -- no bespoke
     // C++ seam. Left hero -> scene 0 (vp0); right hero -> scene 1 (vp1) with
-    // particles; the per-viewport draw fan-out (#195) renders each scene.
+    // particles; the per-viewport draw fan-out renders each scene.
     cairns::golden::DriveJs(e, R"JS(
         cairns.dispatch("cairns.scene.spawnFitted",
                         { glbs: ["aatrox.glb"], instances: 1, animated: false });
@@ -338,9 +336,9 @@ SCENARIO("imgui overlay is stable when fed mocked numbers",
     REQUIRE(seam::AdvanceToGoldenFrame(e));
 
     SECTION("captured screen matches the per-platform overlay reference") {
-        // A.1 + A.9: particle non-determinism is gone (ParticleRng), and the
-        // imgui-in-golden guard is dropped via SetImguiInGolden. The overlay
-        // image is now a real regression check.
+        // Deterministic: particle init is portable ParticleRng and imgui
+        // renders in golden mode (SetImguiInGolden), so the overlay image is
+        // a real regression check.
         std::vector<uint8_t> rgba;
         uint32_t w = 0;
         uint32_t h = 0;
@@ -354,15 +352,12 @@ SCENARIO("imgui overlay is stable when fed mocked numbers",
         REQUIRE(observed == ref);
     }
     SECTION("two captures from the settled engine state are bit-identical") {
-        // The amalgam's original phrasing was "two captures with the same
-        // mocked stats" with AdvanceToGoldenFrame in between -- but the
-        // engine's particle compute kernel runs unconditionally every frame
-        // and flips the parity bit, so frame N and frame N+60 are NOT
-        // pixel-identical for an empty scene. This SECTION tests the
-        // weaker but still useful invariant: readback of the same final
-        // target twice is byte-stable. When particle_sim gains a
-        // "freeze in golden mode" knob, restore the AdvanceToGoldenFrame
-        // between captures.
+        // The particle compute kernel runs unconditionally every frame and
+        // flips the parity bit, so frame N and frame N+60 are NOT
+        // pixel-identical for an empty scene. Assert the weaker but still
+        // useful invariant: readback of the same final target twice is
+        // byte-stable. When particle_sim gains a "freeze in golden mode"
+        // knob, advance frames between the captures.
         std::vector<uint8_t> a;
         std::vector<uint8_t> b;
         uint32_t w = 0;
@@ -373,7 +368,7 @@ SCENARIO("imgui overlay is stable when fed mocked numbers",
     }
 }
 
-// #229 C4.2/C4.4: entity-op contract driven through the real op path
+// Entity-op contract driven through the real op path
 // (dispatch -> headless -> engine). No pixels -- pure state assertions. Covers
 // the TRS round-trip, the parent cycle guard, the destroy selection-scrub, and
 // [N-node] per-scene isolation (an explicit-scene setTRS must not perturb a
@@ -456,8 +451,8 @@ SCENARIO("entity ops: TRS round-trip + cycle guard + destroy + N-node isolation"
     REQUIRE(f2["result"]["found"] == false);
 }
 
-// #229 C4.3: the studio.js Unity surface must LOWER onto the entity ops (was
-// JS-only caches / stubs). Drives the real path: script.eval runs GameObject /
+// The studio.js Unity surface must LOWER onto the entity ops, not JS-only
+// caches / stubs. Drives the real path: script.eval runs GameObject /
 // Transform / GameObject.Find|Destroy inside QuickJS, which dispatches
 // cairns.entity.* -- we assert on the engine-side result.
 SCENARIO("studio.js: Transform setters + name/Find/Destroy lower to entity ops",
@@ -509,7 +504,7 @@ SCENARIO("studio.js: Transform setters + name/Find/Destroy lower to entity ops",
     REQUIRE(out["gone"] == true);              // Destroy -> entity.destroy
 }
 
-// #229 C3: the flag->component conversions' TOGGLE behaviour (the goldens only
+// The flag->component conversions' TOGGLE behaviour (the goldens only
 // prove default-on neutrality). Particle sim/draw gate follows the per-scene
 // ParticleEmitterComponent; editor chrome follows the per-viewport flag.
 SCENARIO("C3 flag->component toggles: particle emitter + editor chrome",
@@ -539,11 +534,10 @@ SCENARIO("C3 flag->component toggles: particle emitter + editor chrome",
     REQUIRE(e.EditorChromeEnabled() == true);
 }
 
-// #229 C6: end-to-end pick regression -- spawn one centred champion, click the
+// End-to-end pick regression -- spawn one centred champion, click the
 // frame centre, resolve, consume. Exercises the whole CPU ray-cast path
-// (RequestPick -> ResolvePickRaycast union-AABB slab test -> consume) that had
-// zero coverage. A hit (id != 0 background) with the resolved entity is the
-// contract.
+// (RequestPick -> ResolvePickRaycast union-AABB slab test -> consume). A hit
+// (id != 0 background) with the resolved entity is the contract.
 SCENARIO("C6 pick: centre-click resolves to the spawned champion (end-to-end)",
          "[spec][scenarios][pick]") {
     if (!seam::AssetsPresent({"aatrox.glb"})) {
@@ -580,7 +574,7 @@ SCENARIO("C6 pick: centre-click resolves to the spawned champion (end-to-end)",
     REQUIRE(id == ent + 1u);   // pick ids are 1-based (entity+1; 0 = background)
 }
 
-// #229 C4.2/C4.3: the generic component-type table + its studio.js lowering.
+// The generic component-type table + its studio.js lowering.
 // Covers the op path (add/get/remove + unknown-type reject + componentTypes)
 // and the Unity GameObject.AddComponent/GetComponent path (script.eval).
 SCENARIO("C4.2 generic component ops: table round-trip + studio.js lowering",
@@ -652,7 +646,7 @@ SCENARIO("C4.2 generic component ops: table round-trip + studio.js lowering",
     REQUIRE(out["camNull"] == true);
 }
 
-// #229 C4.2: cairns.time.get is a read-only deterministic sim clock (fixed
+// cairns.time.get is a read-only deterministic sim clock (fixed
 // timestep; time == frame * dt), and studio.js Time lowers onto it.
 SCENARIO("C4.2 time.get: deterministic sim clock + studio.js Time",
          "[spec][scenarios][time]") {
@@ -693,7 +687,7 @@ SCENARIO("C4.2 time.get: deterministic sim clock + studio.js Time",
     REQUIRE(out["t"].get<double>() == time1);
 }
 
-// #229 C4.2 CAP-1: the camera surface -- cairns.scene.listCameras,
+// The camera surface -- cairns.scene.listCameras,
 // cairns.viewport.setCameraEntity, and loud-strict studio.js Camera.main
 // (0 or >1 is_main throws, exactly 1 resolves).
 SCENARIO("C4.2 CAP-1 camera surface: listCameras + Camera.main + setCameraEntity",
@@ -757,7 +751,7 @@ SCENARIO("C4.2 CAP-1 camera surface: listCameras + Camera.main + setCameraEntity
     REQUIRE(lc["result"]["cameras"].size() == 2u);
 }
 
-// #229 C7: deterministic headless resize. Renders a champion, cycles the
+// Deterministic headless resize. Renders a champion, cycles the
 // final target down/up/odd, and asserts correct dims + non-black at each size.
 // Catches the two real resize bugs: wrong (stale) dims, and the black-screen
 // on a size mismatch. Bit-exact round-trip invariance is intentionally NOT
@@ -817,11 +811,11 @@ SCENARIO("C7 resize: headless final-target resize cycle (dims + non-black)",
     render_at(320, 240);   // restore
 }
 
-// HEADLESS TEST #1 (user directive): the scenario picker must render CLEAN.
+// The scenario picker must render CLEAN:
 // (1) the scenario picker window, (2) NO perf HUD, (3) NO particles, (4) NO
 // depth PIP bottom-right. The windowed app hides the picker behind the HUD;
 // this proves it draws, deterministically, and dumps a viewable
-// scenario_picker.png. Joins the goldens.
+// scenario_picker.png.
 SCENARIO("scenario picker renders clean: picker only, no HUD/particles/depth",
          "[golden][scenarios][picker]") {
     seam::EnsureImguiContext();

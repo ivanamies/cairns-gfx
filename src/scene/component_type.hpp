@@ -1,11 +1,11 @@
 // scene/component_type.hpp
 //
-// #229 C4.2: a plain component-type id shared by the generic
-// add/get/removeComponent ops (control side), engine_headless, and Engine. Kept
-// dependency-free (no entt/glm) so the control layer can name a component type
-// without pulling the engine in. This is the extension seam: CV-tool / effect /
-// diffusion-stage components add an enumerator + a table row + typed accessors,
-// and tools.list advertises them automatically -- no bespoke ops.
+// A plain component-type id shared by the generic add/get/removeComponent
+// ops (control side), engine_headless, and Engine. Kept dependency-free (no
+// entt/glm) so the control layer can name a component type without pulling
+// the engine in. This is the extension seam: CV-tool / effect /
+// diffusion-stage components add an enumerator + a table row + typed
+// accessors, and tools.list advertises them automatically -- no bespoke ops.
 
 #pragma once
 

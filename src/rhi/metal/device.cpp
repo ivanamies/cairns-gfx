@@ -1,9 +1,9 @@
 // rhi/metal/device.cpp
 //
-// Metal platform device lifetime: MTL::Device + command queue. Created here
-// out of resource_manager.cpp (Phase 0e). ResourceManager mirrors these handle
-// values during InitDevice; Device owns their teardown (released after the
-// memory allocator frees device heaps — see Engine deinit order).
+// Metal platform device lifetime: MTL::Device + command queue.
+// Subsystems mirror these handle values during their Init; Device owns
+// their teardown (released after the memory allocator frees device
+// heaps — see Engine deinit order).
 
 #include "util/define.hpp"
 

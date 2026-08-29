@@ -1,16 +1,15 @@
 // scene/transform_propagation.hpp
 //
-// PropagateTransforms walks a world's hierarchy shallow->deep and
+// PropagateTransforms walks a scene's hierarchy shallow->deep and
 // populates WorldTransform for every entity that has a Transform.
 // Roots compose root * compose(Transform); children compose
-// parent.WorldTransform * compose(Transform). v1 recompute-all per
-// dirty world; DirtyTransform subtree-only is the v2 optimization.
+// parent.WorldTransform * compose(Transform). Recompute-all per dirty
+// scene; DirtyTransform subtree-only pruning is not wired yet.
 //
 // No-op for entities that don't have a Transform component -- the
-// current scene-load path emplaces WorldTransform directly on each
-// entity (the leaf-instance matrix) without Transform, and Extract
-// reads WorldTransform * root_transform. P8+ wires authored TRS via
-// Transform with this propagation as the bridge.
+// scene-load path emplaces WorldTransform directly on each entity
+// (the leaf-instance matrix) without Transform, and Extract reads
+// WorldTransform * root_transform.
 
 #pragma once
 
@@ -83,9 +82,9 @@ inline void PropagateTransforms(Scene::Cold& wc, const glm::mat4& root) {
         }
     }
 
-    // Children: shallow->deep via depth-bounded fixpoint. v2 will
-    // sort by depth (Aaltonen "topo sort once, walk many times")
-    // when DirtyTransform subtrees land.
+    // Children: shallow->deep via depth-bounded fixpoint. Depth-sorting
+    // (Aaltonen "topo sort once, walk many times") is the upgrade once
+    // DirtyTransform subtrees land.
     auto child_view = reg.view<const Transform, const Parent>();
     bool changed = true;
     int iter = 0;

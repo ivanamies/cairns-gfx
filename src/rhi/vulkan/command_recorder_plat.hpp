@@ -16,19 +16,17 @@ inline constexpr uint32_t kMaxPasses = 16;
 inline constexpr uint32_t kMaxComputePasses = 4;
 // Per-frame ring of composite descriptor sets. Lets a single pass issue
 // multiple DrawFullscreen calls with different texture bindings without
-// last-bound-wins aliasing (the 997af20 fix).
+// last-bound-wins aliasing.
 inline constexpr uint32_t kCompositeRingSize = 4;
 // Persistent (owned by Frames) cache of offscreen VkRenderPass + VkFramebuffer
 // objects keyed by attachment formats/load-ops and image views. Swapchain
 // passes keep using sc.renderPass; only graph-created offscreen targets land
 // here.
 struct OffscreenTargetCache {
-    // #206 multi-color: colors[0..color_count) describe each color
-    // attachment (kMaxColors hard cap). color_load applies to attachment
-    // 0; secondaries share the same load op for now (no use case for
-    // mixed yet). When color_count == 0 the renderpass has no color
-    // attachment (depth-only). Back-compat: color_count == 1 matches the
-    // pre-MRT shape exactly.
+    // colors[0..color_count) describe each color attachment (kMaxColors
+    // hard cap). color_load applies to attachment 0; secondaries share
+    // the same load op (no use case for mixed yet). When color_count == 0
+    // the renderpass has no color attachment (depth-only).
     static constexpr uint32_t kMaxColors = 4;
     struct RpKey {
         VkFormat colors[kMaxColors] = {VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED,
@@ -36,9 +34,9 @@ struct OffscreenTargetCache {
         VkFormat depth = VK_FORMAT_UNDEFINED;
         VkAttachmentLoadOp color_load = VK_ATTACHMENT_LOAD_OP_CLEAR;
         VkAttachmentLoadOp depth_load = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        // #222 Phase A.2: store-ops part of the renderpass-compat key.
-        // CRITICAL: without these, two passes that differ only in storeOp
-        // would alias the same VkRenderPass and lose the DONT_CARE elision.
+        // Store-ops are part of the renderpass-compat key: without them,
+        // two passes differing only in storeOp would alias the same
+        // VkRenderPass and lose the DONT_CARE elision.
         VkAttachmentStoreOp color_store[kMaxColors] = {
             VK_ATTACHMENT_STORE_OP_STORE, VK_ATTACHMENT_STORE_OP_STORE,
             VK_ATTACHMENT_STORE_OP_STORE, VK_ATTACHMENT_STORE_OP_STORE};
@@ -78,19 +76,16 @@ struct CommandRecorderPlat {
     VkDevice device_ = VK_NULL_HANDLE;
     VkDescriptorSet globals_set_ = VK_NULL_HANDLE;
     VkDescriptorSet drawtmp_set_ = VK_NULL_HANDLE;
-    // #222 Phase D.3/D.4 cleanup: compute_sets_ + skin_group_b_set_ +
-    // anim_eval_set_ retired. Particle, skin Group B, anim_eval all read
-    // set 0 from a DynamicBuffers handle passed at dispatch time.
-    // #222 Phase E.2: point_set_ retired (particle PSO has zero
-    // descriptor sets in its pipeline layout).
+    // Particle, skin Group B, anim_eval read set 0 from a DynamicBuffers
+    // handle passed at dispatch time.
     // Composite descriptor ring for DrawFullscreen (multiple per-pass draws
     // with distinct textures). Advanced by composite_next_idx_ on each
     // DrawFullscreen.
     std::array<VkDescriptorSet, kCompositeRingSize> composite_sets_{};
     uint32_t composite_next_idx_ = 0;
     OffscreenTargetCache* offscreen_ = nullptr;  // owned by Frames
-    // #222 Phase F.1: Per-pass timing (populated by Frames::Begin; written
-    // by PassTimerBegin). Grouped into a profiler_ sub-struct so the GPU
+    // Per-pass timing (populated by Frames::Begin; written by
+    // PassTimerBegin). Grouped into a profiler_ sub-struct so the GPU
     // profiler state is named as a unit on both Frames + CommandRecorder.
     struct Profiler {
         VkQueryPool ts_pool_ = VK_NULL_HANDLE;

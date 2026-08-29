@@ -10,7 +10,7 @@ namespace cairns::rhi {
 
 struct PipelinesPlat {
     VkDevice device_ = VK_NULL_HANDLE;  // mirrored from Device
-    // #222 Phase F.4: descriptor set layouts moved out of Frames.
+    // Descriptor set layouts.
     // Created at Pipelines::Init; read by CreateGraphicsPipeline +
     // CreateComputePipeline for VkPipelineLayout; read by
     // Frames::Init to alloc per-FIF sets + by Resources::CreateSkinGroupA

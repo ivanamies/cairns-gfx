@@ -1,10 +1,9 @@
 // control/handlers/script_ops.hpp
 //
-// P5 stub: registers script.eval against an embedded QuickJS context.
-// Every previously-registered CommandRegistry op is bound as a JS function
-// on a `cairns` global so a snippet can call e.g. `cairns.app_ping()`
-// instead of issuing one NDJSON line per op (matters for scenes that need
-// thousands of instantiate calls -- one script.eval roundtrip vs 3200 lines).
+// Registers script.eval against an embedded QuickJS context. A snippet
+// calls any registered op via `cairns.dispatch(op, args)` instead of
+// issuing one NDJSON line per op (matters for scenes that need thousands
+// of instantiate calls -- one script.eval roundtrip vs 3200 lines).
 
 #pragma once
 
@@ -38,8 +37,7 @@ struct ScriptHost {
     ScriptHost& operator=(const ScriptHost&) = delete;
 };
 
-// Call AFTER all other ops are registered: the binder snapshots the current
-// registry contents and exposes each name as `cairns.<name_safe>` in JS.
+// Binds `cairns.dispatch` into a fresh JSContext and autoloads studio_js.
 // |host| is bound into each JSContext via JS_SetContextOpaque so the JS->C++
 // dispatch bridge reaches it without any static state.
 void RegisterScriptOps(CommandRegistry& registry, ScriptHost& host);

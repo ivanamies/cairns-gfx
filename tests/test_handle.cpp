@@ -10,12 +10,12 @@
 // (resolves to nullptr instead of aliasing a recycled slot).
 //
 // The two production bugs this contract exists to forbid:
-//   * #228 R1.x  -- a reused slot carried the previous occupant's data.
-//                   => Acquire MUST hand back zero-initialized Hot/Cold.
-//   * #222       -- a Hot* fetched before an Acquire dangled after the
-//                   underlying vector reallocated.
-//                   => GetHot's result is a TRANSIENT view, invalid across the
-//                   next Acquire. The safe pattern is "snapshot, then Acquire."
+//   * A reused slot carried the previous occupant's data.
+//     => Acquire MUST hand back zero-initialized Hot/Cold.
+//   * A Hot* fetched before an Acquire dangled after the underlying vector
+//     reallocated.
+//     => GetHot's result is a TRANSIENT view, invalid across the next
+//        Acquire. The safe pattern is "snapshot, then Acquire."
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -200,9 +200,8 @@ SCENARIO("GetHot pointers stay put across Acquire -- fixed storage (#222)",
                 (void)pool.Acquire();
             }
             THEN("the original pointer is unmoved and still holds its data") {
-                // #222 inverted: storage is fixed-capacity chunk-backed, so a
-                // Hot* no longer dangles across Acquire (it used to, when the
-                // vector reallocated). Still DON'T store it -- a Release +
+                // Storage is fixed-capacity chunk-backed, so a Hot* stays put
+                // across Acquire. Still DON'T store it -- a Release +
                 // re-Acquire of this slot would alias a new occupant.
                 Widget::Hot* after = pool.GetHot(keep);
                 REQUIRE(after == before);

@@ -33,13 +33,13 @@ struct FramesPlat {
     std::vector<VkFence> in_flight_;
     std::vector<VkFence> compute_in_flight_;
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
-    // #222 Phase F.4: descriptor set layouts moved to PipelinesPlat;
-    // Frames only owns per-FIF sets + the pool below.
+    // Per-FIF sets allocated from descriptor_pool_; their layouts live
+    // on PipelinesPlat.
     std::vector<VkDescriptorSet> globals_sets_;
     std::vector<VkDescriptorSet> drawtmp_sets_;
     // Per-frame ring of composite descriptor sets for DrawFullscreen. Lets one
-    // pass issue multiple fullscreen draws with distinct textures (the 997af20
-    // last-bound-wins fix).
+    // pass issue multiple fullscreen draws with distinct textures without
+    // last-bound-wins aliasing.
     std::vector<std::array<VkDescriptorSet, kCompositeRingSize>> composite_sets_;
 };
 

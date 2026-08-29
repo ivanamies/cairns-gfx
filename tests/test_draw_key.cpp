@@ -50,10 +50,9 @@ SCENARIO("fields are masked and cannot bleed into neighbors",
     REQUIRE(a == b);
 }
 
-// Phase B.13: pin EXACT bit positions and widths. The previous tests only
-// asserted *relative* ordering, so a wrong-layout impl that swapped two
-// fields could pass the precedence tests. These assertions pin the layout
-// per the audit-named spec:
+// Pin EXACT bit positions and widths. Relative-ordering assertions alone
+// let a wrong-layout impl that swapped two fields pass the precedence
+// tests. The layout:
 //   material[0-29] depth[30-53] translucency[54-55]
 //   viewport_layer[56-58] viewport[59-61] fullscreen_layer[62-63]
 SCENARIO("draw_key layout: each field lives at its exact bit range",
@@ -110,10 +109,10 @@ SCENARIO("draw_key field widths: max value of each field stays in its range",
 
 SCENARIO("viewport_layer outranks translucency",
          "[spec][draw_key][regression]") {
-    // The audit named this exact gap: existing tests proved fullscreen >
-    // viewport and depth > material, but nothing pitted viewport_layer
-    // directly against translucency. A wrong-impl that swapped the two
-    // would still pass the others.
+    // The other precedence tests prove fullscreen > viewport and
+    // depth > material, but nothing pits viewport_layer directly against
+    // translucency. A wrong-impl that swapped the two would still pass
+    // the others.
     const auto trans_max = BuildDrawKey(0, 0, 0x3u, 0, 0, 0);
     const auto vpl_min = BuildDrawKey(0, 0, 0, 0, 1u, 0);
     REQUIRE(trans_max < vpl_min);  // viewport_layer always outranks

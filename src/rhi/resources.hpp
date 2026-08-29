@@ -33,10 +33,8 @@ class Allocator;
 class Frames;
 class Pipelines;
 
-// Compile-time backend capability flag. Today: metal renders the full scene
-// into final_target_ via the swap pass; vk's render-to-texture (#199) isn't
-// wired yet, so surfaceless mode bails before the render thread spins up.
-// Engine consults this instead of #if CAIRNS_METAL.
+// Compile-time backend capability flag: surfaceless full-scene render into
+// final_target_. Consult this instead of #if CAIRNS_METAL.
 inline constexpr bool kSupportsSurfacelessRender = true;
 
 class Resources {
@@ -55,22 +53,22 @@ public:
     Handle<Texture> CreateTexture(Allocator& alloc, const TextureDesc& desc);
     Handle<Sampler> CreateSampler(const SamplerDesc& desc);
     Handle<BindGroup> CreateBindGroup(const BindGroupDesc& desc);
-    // #221 Phase 9 (vk): per-skinned-mesh Group A bind group. desc.buffers
-    // must carry exactly two BufferBindings (slot 0 = positions slice w/
-    // mesh-local element-aligned byte offset + range, slot 1 = skin-attrs
-    // slice). Vulkan: allocates from the descriptor_pool + writes both
-    // SSBO descriptors. Metal: returns Null (Metal compute binds buffers
-    // directly per-batch via setBuffer:offset:atIndex:).
-    // #222 Phase F.4: takes Pipelines& for the layout, Frames& for the
-    // descriptor pool (one stays per-FIF; the other is global to PSOs).
+    // Per-skinned-mesh Group A bind group. desc.buffers must carry exactly
+    // two BufferBindings (slot 0 = positions slice w/ mesh-local
+    // element-aligned byte offset + range, slot 1 = skin-attrs slice).
+    // Vulkan: allocates from the descriptor_pool + writes both SSBO
+    // descriptors. Metal: returns Null (Metal compute binds buffers
+    // directly per-batch via setBuffer:offset:atIndex:). Takes Pipelines&
+    // for the layout (global to PSOs), Frames& for the per-FIF pool.
     Handle<BindGroup> CreateSkinGroupA(Allocator& alloc, Frames& frames,
                                         Pipelines& pipelines,
                                         const BindGroupDesc& desc);
     Handle<DynamicBuffers> CreateDynamicBuffers(const DynamicBuffersDesc& desc);
-    // #222 Phase D.2: full impl variant. Vulkan builds VkDescriptorSetLayout
-    // from bindings, allocates one VkDescriptorSet per FIF from
-    // frames.plat.descriptor_pool_, writes each against the kDynamic master
-    // at offset 0 + max_range. Metal stores Cold's layout; same as minimal.
+    // Full variant. Vulkan builds a VkDescriptorSetLayout from bindings,
+    // allocates one VkDescriptorSet per FIF from frames.plat.
+    // descriptor_pool_, writes each against the kDynamic master at
+    // offset 0 + max_range. Metal stores only Cold's layout (same as the
+    // overload above).
     Handle<DynamicBuffers> CreateDynamicBuffers(Allocator& alloc, Frames& frames,
                                                   const DynamicBuffersDesc& desc);
 
@@ -105,7 +103,7 @@ public:
     void Destroy(Handle<Shader> h);
     void Destroy(Handle<Kernel> h);
 
-    // #228 F1: fenced deferred deletion. Enqueue a handle to be Destroy()'d
+    // Fenced deferred deletion. Enqueue a handle to be Destroy()'d
     // kFramesInFlight frames from now -- safely past the in-flight window
     // that might still reference the underlying GPU object. The drain
     // happens in Frames::Begin at the existing vkWaitForFences /
@@ -129,12 +127,12 @@ public:
     // kFIF, so they retire exactly when cur_frame catches up.
     void DrainDeferredFrees(Allocator& alloc, uint32_t cur_frame);
 
-    // #229: bulk-free every per-material set-2 descriptor set. Destroy(BindGroup)
-    // only recycles the handle slot, never vkFreeDescriptorSets, so the fixed
-    // material descriptor pool leaks a set per material across scenario
-    // reloads -> after ~4096 the vk alloc fails -> null set2 -> WHITE actors
-    // (vk-only; Metal/WebGPU have no fixed pool). Call at a full-unload point
-    // (render thread drained, all materials released) so no live set2 remains.
+    // Bulk-free every per-material set-2 descriptor set. Destroy(BindGroup)
+    // only recycles the handle slot, never vkFreeDescriptorSets, so the
+    // fixed material descriptor pool leaks a set per material across full
+    // reloads until allocation fails (vk-only; Metal/WebGPU have no fixed
+    // pool). Call at a full-unload point (render thread drained, all
+    // materials released) so no live set2 remains.
     void ResetMaterialBindGroups();
 
     Buffer::Hot* GetHot(Handle<Buffer> h);
@@ -157,15 +155,14 @@ public:
     // to disk (so stb stays out of rhi/).
     //
     // ClearColorTexture: one-shot clear of |h| to |color| and transition into
-    // shader-read. Used by RenderHeadlessFrame's vk fallback until #199 wires
-    // the full scene through final_target_.
+    // shader-read. Used by RenderHeadlessFrame's vk fallback.
     //
     // MakeSurfacelessSwapResolveTarget: build a SwapResolveTarget that writes
     // into |h| instead of a swapchain drawable. Returns a null target on vk
     // (surfaceless render-to-texture not yet wired).
     bool ReadBackTextureRgba(Handle<Texture> h, std::vector<uint8_t>& out_rgba,
                               uint32_t& out_w, uint32_t& out_h);
-    // #207 pick: read one R32U texel from |h| at (x, y). Returns false if
+    // Pick readback: read one R32U texel from |h| at (x, y). Returns false if
     // the texture is invalid, the coord is out of range, or the backend
     // failed to map the readback buffer. Caller is expected to have
     // drained in-flight work targeting |h| before calling -- this helper
@@ -195,15 +192,14 @@ public:
 private:
     bool inited_ = false;
 
-    // #228 F1 (v2): per-RESOURCE retire-frame FIFO. Granite / Themaister
-    // pattern -- each enqueued handle carries the frame index at which
-    // it becomes safe to destroy (FrameIndex at-time-of-push + kFIF).
+    // Per-resource retire-frame FIFO (Granite / Themaister pattern) --
+    // each enqueued handle carries the frame index at which it becomes
+    // safe to destroy (FrameIndex at-time-of-push + kFIF).
     // DrainDeferredFrees pops from the front while the front's
     // retire_frame <= the cutoff frame the caller passes in (driven by
     // the existing fence / semaphore wait that proves frame N-kFIF is
-    // done). The v1 per-slot bucket design assumed any item pushed
-    // during slot S's frame was last-used by slot S's frame -- false
-    // for items pushed BETWEEN frames (which is when reload runs).
+    // done). Retire by frame index, not per-slot buckets: frees pushed
+    // BETWEEN frames (reload) belong to no slot's frame.
     enum DeferKind : uint8_t {
         kDeferBuffer,
         kDeferTexture,

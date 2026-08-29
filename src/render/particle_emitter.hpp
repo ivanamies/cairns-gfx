@@ -1,17 +1,13 @@
 // src/render/particle_emitter.hpp
 //
 // DETERMINISTIC, PLATFORM-INDEPENDENT particle seeding, built on the STL.
-//
-// WHY THIS EXISTS -- a real divergence trap with TWO layers:
-//   1. initParticles currently seeds via std::srand + std::rand. std::rand is
-//      not specified across implementations (Apple libc++ / NDK libc++ / glibc
-//      all differ), so a cross-platform particle-buffer diff would fail on the
-//      RNG, not the GPU -- the false-lead class the bisect cost us 48h on.
-//   2. The fix is STL, but the SUBTLE part: std::mt19937 IS portable -- the
-//      standard fully specifies its sequence. What is NOT portable is
-//      std::uniform_real_distribution / std::uniform_int_distribution -- those
-//      are implementation-defined and differ between libc++ and libstdc++. So
-//      we use the std::mt19937 ENGINE and map to [0,1) BY HAND.
+//  - std::rand is not specified across implementations (Apple libc++ / NDK
+//    libc++ / glibc all differ), so a cross-platform particle-buffer diff
+//    would fail on the RNG, not the GPU.
+//  - std::mt19937 IS portable -- the standard fully specifies its sequence.
+//    std::uniform_real_distribution / std::uniform_int_distribution are NOT
+//    (implementation-defined; libc++ and libstdc++ differ). So: the
+//    std::mt19937 ENGINE, mapped to [0,1) BY HAND.
 
 #ifndef CAIRNS_RENDER_PARTICLE_EMITTER_HPP
 #define CAIRNS_RENDER_PARTICLE_EMITTER_HPP

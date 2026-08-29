@@ -20,10 +20,10 @@ uint64_t TicksMs();
 // High-resolution monotonic nanoseconds, for the profiling Timer.
 uint64_t TimestampNs();
 
-// Background worker threads for the build-draws fan-out. 0 => run inline on the
-// calling thread. The browser returns 0 for now (W6a single-threaded): Web
-// Worker pthreads in a WebGPU app are fragile (main-thread affinity /
-// PROXY_TO_PTHREAD), so multithreading is a separate follow-up (W6b).
+// Background worker threads for the build-draws fan-out. 0 => run inline on
+// the calling thread. The browser returns 0 (single-threaded): Web Worker
+// pthreads in a WebGPU app are fragile (main-thread affinity /
+// PROXY_TO_PTHREAD).
 uint32_t WorkerThreadCount();
 
 // Default asset base directory (trailing '/'), or empty. The CAIRNS_BASE_PATH
@@ -37,8 +37,7 @@ bool AssetExists(const std::filesystem::path& path);
 bool ReadAsset(const std::filesystem::path& path, std::string& out);
 
 // Per-frame imgui platform-backend hook (sets DisplaySize/DeltaTime/input from
-// the windowing layer). SDL backend on native; no-op on web, where the engine's
-// surfaceless path sets DisplaySize directly and DOM events feed ImGuiIO.
+// the windowing layer). ImGui_ImplSDL3_NewFrame on native and web alike.
 void ImguiNewFrame();
 
 }  // namespace cairns::platform

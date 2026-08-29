@@ -129,7 +129,7 @@ MetalShaderInfo resolve_metal_shader(const char* logical) {
         std::strcmp(logical, "unlit_offscreen") == 0) {
         return {"unlit.metal", "cube::vertexShader", "cube::fragmentShader", nullptr};
     }
-    // #222 Phase A.1: id-less offscreen variant. Same metal file, different
+    // Id-less offscreen variant. Same metal file, different
     // fragment entry point (cube::fragmentShader_noid).
     if (std::strcmp(logical, "unlit_offscreen_noid") == 0) {
         return {"unlit.metal", "cube::vertexShader",
@@ -148,12 +148,12 @@ MetalShaderInfo resolve_metal_shader(const char* logical) {
                 "depthvizfx::depthviz_fragment", nullptr};
     }
     if (std::strcmp(logical, "outline") == 0) {
-        // #207 outline fullscreen post-process.
+        // Outline fullscreen post-process.
         return {"outline.metal", "cube::vertexShader", "cube::fragmentShader",
                 nullptr};
     }
     if (std::strcmp(logical, "skin") == 0) {
-        // #221 Phase 4: skin compute kernel (no vert/frag).
+        // Skin compute kernel (no vert/frag).
         return {"skin.metal", nullptr, nullptr, "skin_compute"};
     }
     if (std::strcmp(logical, "anim_eval") == 0) {
@@ -188,7 +188,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     rpd->setVertexFunction(vfn);
     rpd->setFragmentFunction(ffn);
 
-    // #206 multi-color attachment setup. color_count > 0 -> use
+    // Multi-color attachment setup. color_count > 0 -> use
     // color_formats[0..count); else fall back to single color_format.
     // Attachment 0 carries the shared BlendState; secondaries (e.g.
     // R32U ID buffer) get blend disabled (UINT can't blend).

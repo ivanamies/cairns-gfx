@@ -55,12 +55,9 @@ bool Pipelines::Init(Device& device) {
     }
     plat.device_ = device.plat.device_;
     VkDevice dev = plat.device_;
-    // #222 Phase F.4: descriptor set layouts moved from Frames to here
-    // (Pipelines is the canonical consumer for VkPipelineLayout creation).
+    // Descriptor set layouts live here: Pipelines is the canonical
+    // consumer for VkPipelineLayout creation.
 
-    // #222 Phase E.2: point_layout_ retired -- particle render PSO has
-    // zero descriptor sets in its pipeline layout (vert reads only
-    // vertex-input attributes); the recorder skips the empty-set bind.
     {  // skin Group B (frame-global skin kernel set 0): dynUBO Params
        // @0, dynSSBO palettes @1, dynSSBO InstanceMeta @2, SSBO output
        // pool whole @3.
@@ -91,8 +88,9 @@ bool Pipelines::Init(Device& device) {
             return false;
         }
     }
-    {  // #231 anim_eval set layout (7 bindings; DYNAMIC_UBO records @0,
-       // 6 packed SSBO i32/vec4/word16 + headers + scratch + palette @1..6).
+    {  // anim_eval set layout: DYNAMIC_UBO records @0, 6 SSBOs @1..6
+       // (i32/vec4/word16 tables + headers + scratch + palette; packed by
+       // element type to fit WebGPU's 10-SSBO per-stage limit).
         VkDescriptorSetLayoutBinding b[7]{};
         b[0].binding = 0;
         b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
@@ -114,10 +112,9 @@ bool Pipelines::Init(Device& device) {
             return false;
         }
     }
-    {  // #221 Skinning Phase 4 -- Group A (per-mesh). Set 1 of the
-       // skin kernel: SSBO positions slice @ 0, SSBO skin-attrs slice
-       // @ 1. Built at load via Resources::CreateBindGroup; one set
-       // per skinned mesh.
+    {  // Skin Group A (per-mesh): set 1 of the skin kernel. SSBO
+       // positions slice @ 0, SSBO skin-attrs slice @ 1. Built at load
+       // via Resources::CreateSkinGroupA; one set per skinned mesh.
         VkDescriptorSetLayoutBinding b[2]{};
         b[0].binding = 0;
         b[0].descriptorCount = 1;
@@ -219,8 +216,8 @@ void Pipelines::Deinit(Resources& resources) {
             hot.plat.vk_layout = VK_NULL_HANDLE;
         }
     });
-    // #222 Phase F.4: descriptor set layouts owned here -- teardown
-    // after the live pipelines so consumers are gone first.
+    // Descriptor set layouts owned here -- teardown after the live
+    // pipelines so consumers are gone first.
     auto destroy_layout = [dev](VkDescriptorSetLayout& l) {
         if (l) {
             vkDestroyDescriptorSetLayout(dev, l, nullptr);
@@ -329,7 +326,7 @@ VkShaderFiles resolve_vk_shader(const char* logical) {
         std::strcmp(logical, "unlit_offscreen") == 0) {
         return {"unlit.vert.spv", "unlit.frag.spv", nullptr};
     }
-    // #222 Phase A.1: id-less offscreen variant (no R32U MRT output).
+    // Id-less offscreen variant (no R32U MRT output).
     if (std::strcmp(logical, "unlit_offscreen_noid") == 0) {
         return {"unlit.vert.spv", "unlit_noid.frag.spv", nullptr};
     }
@@ -344,11 +341,11 @@ VkShaderFiles resolve_vk_shader(const char* logical) {
         return {"composite_pip.vert.spv", "depthviz.frag.spv", nullptr};
     }
     if (std::strcmp(logical, "outline") == 0) {
-        // #207 outline post-process fullscreen tri.
+        // Outline post-process fullscreen tri.
         return {"outline.vert.spv", "outline.frag.spv", nullptr};
     }
     if (std::strcmp(logical, "skin") == 0) {
-        // #221 Phase 4: skin compute kernel (no vert/frag).
+        // Skin compute kernel (no vert/frag).
         return {nullptr, nullptr, "skin.comp.spv"};
     }
     if (std::strcmp(logical, "anim_eval") == 0) {
@@ -359,7 +356,7 @@ VkShaderFiles resolve_vk_shader(const char* logical) {
 
 // Render-pass compatibility object built once per pipeline create, then
 // destroyed. Used when desc.swap_chain is null (offscreen target compat).
-// #206 multi-color: color_count attachments at indices [0..color_count),
+// Multi-color: color_count attachments at indices [0..color_count),
 // depth (if has_depth) follows at color_count. kMaxColorFormats hard cap.
 VkRenderPass build_offscreen_compat_rp(VkDevice dev,
                                        const VkFormat* colors, uint32_t color_count,
@@ -516,7 +513,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     blend_attachment.dstAlphaBlendFactor = to_vk_blend_factor(desc.blend.dst_alpha);
     blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
 
-    // #206 per-attachment blend state. The shared BlendState applies to
+    // Per-attachment blend state. The shared BlendState applies to
     // attachment 0 (color); secondary attachments (e.g. R32U ID buffer)
     // get a blend-disabled state with the same color write mask.
     const uint32_t n_color_atts =
@@ -524,7 +521,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
             ? static_cast<uint32_t>(desc.color_count)
             : (desc.color_format != Format::kUndefined ? 1u : 0u);
     VkPipelineColorBlendAttachmentState blend_atts[GraphicsPipelineDesc::kMaxColorFormats]{};
-    // #242: shader may write fewer outputs than n_color_atts. Attachments
+    // The shader may write fewer outputs than n_color_atts. Attachments
     // [frag_outs, n_color_atts) get colorWriteMask=0 so validation knows
     // we're intentionally not writing them (avoids
     // Undefined-Value-ShaderInputNotProduced).
@@ -588,8 +585,8 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
         vkCreateDescriptorSetLayout(device, &dl, nullptr, &imgui_set_layout);
         set_layouts = {imgui_set_layout};
     } else {
-        // #222 Phase E.2: particle vert shader reads no descriptors --
-        // pipeline layout has zero sets, recorder skips bind.
+        // Particle vert shader reads no descriptors -- pipeline layout
+        // has zero sets, recorder skips bind.
     }
     VkPipelineLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -624,7 +621,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     if (desc.swap_chain && desc.swap_chain->plat.renderPass != VK_NULL_HANDLE) {
         pi.renderPass = desc.swap_chain->plat.renderPass;
     } else {
-        // #206 resolve color formats: prefer color_formats[] when
+        // Resolve color formats: prefer color_formats[] when
         // color_count > 0; else fall back to single color_format.
         VkFormat color_fmts[GraphicsPipelineDesc::kMaxColorFormats]{};
         uint32_t cc = 0;
@@ -708,18 +705,17 @@ Handle<Kernel> Pipelines::CreateComputePipeline(
     stage.module = comp_mod;
     stage.pName = "main";
 
-    // #221 Phase 4: layout selection via ComputePipelineDesc::layout. Skin
-    // uses two sets (Group B frame-global + Group A per-mesh); particle
-    // stays single-set. The skin path's Group A set is per-mesh and lives
-    // in the bind-group pool, not in Frames.
+    // Layout selection via ComputePipelineDesc::layout. Skin uses two
+    // sets (Group B frame-global + Group A per-mesh); particle stays
+    // single-set. The skin path's Group A set is per-mesh and lives in
+    // the bind-group pool.
     VkDescriptorSetLayout compute_layouts[2];
     uint32_t set_count = 1;
-    // #222 Phase D.3/D.4 cleanup:
     // - kParticle: layout comes from dyn_set_0 (parity DynamicBuffers
     //   built before the kernel by initParticles).
-    // - kSkin / kAnimEval: layout comes from frames.plat (DynamicBuffers
-    //   for these kernels are built post-uploadAnimTablesGpu, AFTER the
-    //   kernel. Sets are layout-compatible).
+    // - kSkin / kAnimEval: layout comes from the Pipelines-owned layouts
+    //   (their DynamicBuffers are built AFTER the kernel, post
+    //   uploadAnimTablesGpu; sets are layout-compatible).
     VkDescriptorSetLayout dyn0 = VK_NULL_HANDLE;
     if (!desc.dyn_set_0.IsNull()) {
         DynamicBuffers::Hot* dh = resources.dynamic_buffers.GetHot(desc.dyn_set_0);

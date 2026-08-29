@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# #229 allocation-receipts harness (throwaway, like _alloc_capture.js / _diag*.js).
+# Allocation-receipts harness (throwaway, like _alloc_capture.js / _diag*.js).
 #
-# One canonical driver reused after every milestone. Given a cairns_serve
-# binary, runs two workloads against it and prints the receipt:
+# One canonical driver. Given a cairns_serve binary, runs two workloads
+# against it and prints the receipt:
 #
 #   alloc  -- load 3 GLBs + instantiate + render + reload 1 + clear + unloadAll.
 #             Needs a CAIRNS_GFX_ALLOC_TRACE=ON build; extracts the engine's
@@ -11,9 +11,8 @@
 #             slices). Render 120 frames, then cairns.perf.last -> Timer slots
 #             (the same numbers the imgui HUD shows).
 #
-# cairns_serve exits 139 at teardown on a heavy scene (PRE-EXISTING, unrelated
-# to receipts -- the non-trace binary does it too); all work + receipts flush
-# first, so we ignore the exit code.
+# cairns_serve exits 139 at teardown on a heavy scene (unrelated to receipts);
+# all work + receipts flush first, so the exit code is ignored.
 #
 # Usage: scripts/_receipts.sh <path-to-cairns_serve> [alloc|perf|both]
 set -u

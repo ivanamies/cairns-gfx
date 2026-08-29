@@ -1,11 +1,10 @@
 // tests/test_material_map.cpp
 //
 // SPEC: the material->texture index mapping (src/util/material_map.hpp). The
-// invariant under test is the #229 loader fix: outputs stay 1:1 with glTF
-// material indices even when a material has no resolvable baseColorTexture. The
-// old code SKIPPED such a material, compacting the list and shifting every
-// later slot -> off-by-N texture binds. No roster GLB triggers it today, hence
-// this synthetic coverage.
+// invariant: outputs stay 1:1 with glTF material indices even when a material
+// has no resolvable baseColorTexture. SKIPPING such a material compacts the
+// list and shifts every later slot -> off-by-N texture binds. No roster GLB
+// triggers it today, hence this synthetic coverage.
 // TAGS: [spec][loader]
 
 #include <catch2/catch_test_macros.hpp>

@@ -37,7 +37,7 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
     }
     MTL::ComputeCommandEncoder* cenc = plat.cmd_->computeCommandEncoder();
     cenc->setComputePipelineState(res.GetHot(d.kernel)->api_pso);
-    // #222 Phase D.4: walk DynamicBuffers Cold layout.
+    // Walk DynamicBuffers Cold layout.
     // has_dynamic_offset=true -> kDynamic master at d.dyn_offset_0
     // (only one dyn offset supported; particle uses binding 0 = dt).
     // has_dynamic_offset=false -> binding's backing buffer at base_off.
@@ -58,22 +58,17 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
     cenc->endEncoding();
 }
 
-// #221 Skinning Phase 7: Metal mirror of DispatchSkinBatches. ONE
-// MTLComputeCommandEncoder for the whole batch (F4: per-call encoder is
-// fatal at 500 dispatches). Per-batch setBuffer:offset:atIndex: + dispatch.
-// Encoder boundary = barrier; the next render encoder sees this batch's
-// writes via Metal's implicit hazard tracking.
-//
-// Stub today: until BuildSkinFrame populates SkinDispatchBatch's
-// kDynamic byte offsets (and the kernel sees real params/palettes), this
-// records the encoder if batches is non-empty. Empty path returns
-// immediately and is a no-op.
+// Metal mirror of DispatchSkinBatches. ONE MTLComputeCommandEncoder for
+// the whole batch (a per-call encoder is fatal at 500 dispatches);
+// per-batch setBuffer:offset:atIndex: + dispatch. Heap buffers are
+// untracked, so cross-encoder ordering is explicit MTLFence work (the
+// waits/updates below), not implicit hazard tracking.
 void CommandRecorder::DispatchSkinBatches(
     Resources& res, Allocator& alloc, Handle<Kernel> kernel,
     Handle<Buffer> output_pool_buffer, Handle<Buffer> palette_buf,
     Handle<DynamicBuffers> /*dyn_set_0*/,
     std::span<const SkinDispatchBatch> batches) {
-    // #222 Phase D.3: dyn_set_0 unused on metal (no descriptor object;
+    // dyn_set_0 unused on metal (no descriptor object;
     // setBuffer:offset:atIndex: drives bindings directly). Kept in signature
     // for parity with vk and a clean engine call site.
     if (batches.empty() || kernel.IsNull()) {
@@ -99,8 +94,7 @@ void CommandRecorder::DispatchSkinBatches(
     uint32_t pool_master_off = 0;
     MTL::Buffer* pool_buf =
         res.plat.GetMtlBuffer(alloc, output_pool_buffer, &pool_master_off);
-    // #222 Phase D.3: palette buffer is frame-wide. Resolve once outside
-    // the loop instead of per-batch (per MISTAKES.md counter:1 fix).
+    // Palette buffer is frame-wide: resolve once, outside the loop.
     MTL::Buffer* pal_buf = nullptr;
     uint32_t pal_master_off = 0;
     if (!palette_buf.IsNull()) {
@@ -164,12 +158,12 @@ void CommandRecorder::DispatchSkinBatches(
     cenc->endEncoding();
 }
 
-// #221 Phase 5b: Metal mirror of DispatchAnimEval. One workgroup per actor,
-// 64 threads. setBuffer all 7 buffers (records + 6 packed SSBOs, #231) +
-// setThreadgroupMemoryLength for the
-// shared GpuTRS[256]. Encoder boundary acts as the compute->compute barrier;
-// the subsequent DispatchSkinBatches sees this kernel's writes via Metal's
-// implicit hazard tracking.
+// Metal mirror of DispatchAnimEval. One workgroup per actor, 64 threads.
+// setBuffer all 7 buffers (records + the 6 element-type-packed SSBOs) +
+// setThreadgroupMemoryLength for the shared GpuTRS[256]. palette_out
+// lives on an untracked heap, so this encoder signals compute_fence_ and
+// DispatchSkinBatches waits on it -- the encoder boundary alone does not
+// synchronize the write.
 void CommandRecorder::DispatchAnimEval(
     Resources& res, Allocator& alloc, Handle<Kernel> kernel,
     const AnimEvalArgs& args) {
@@ -190,7 +184,7 @@ void CommandRecorder::DispatchAnimEval(
     }
     MTL::ComputeCommandEncoder* cenc = plat.cmd_->computeCommandEncoder();
     cenc->setComputePipelineState(khot->api_pso);
-    // #231 SSBO pack: bindings 1-6 = i32 / vec4 / word16 / headers /
+    // Bindings 1-6 = i32 / vec4 / word16 / headers /
     // world_scratch / palette_out (matching the metal kernel buffer indices).
     Handle<Buffer> hs[6] = {
         args.i32_buf, args.vec4_buf, args.word16_buf,
@@ -223,8 +217,7 @@ static MTL::LoadAction to_mtl_load(LoadOp op) {
     return MTL::LoadActionClear;
 }
 
-static MTL::StoreAction to_mtl_store(StoreOp op) {  // #222 Phase A.2
-    switch (op) {
+static MTL::StoreAction to_mtl_store(StoreOp op) {    switch (op) {
         case StoreOp::kStore: return MTL::StoreActionStore;
         case StoreOp::kDontCare: return MTL::StoreActionDontCare;
     }
@@ -234,7 +227,7 @@ static MTL::StoreAction to_mtl_store(StoreOp op) {  // #222 Phase A.2
 // Execute the graph's invalidate barriers on the just-created render encoder:
 // wait each hazarding texture's sync_fence_ (signaled by its last writer at
 // EndRenderPass). Metal has no layouts/access masks; the fence IS the barrier,
-// so we ignore the abstract src/dst fields and just wait. FLAKY_TESTS #2.
+// so we ignore the abstract src/dst fields and just wait.
 static void apply_invalidate_fences(CommandRecorderPlat& plat, Resources& res,
                                     std::span<const ResourceBarrier> invalidate) {
     for (const ResourceBarrier& b : invalidate) {
@@ -275,10 +268,9 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
     }
 
     MTL::RenderPassDescriptor* rpd = MTL::RenderPassDescriptor::alloc()->init();
-    // #206 MRT: bind every color attachment so the R32U id_target_ (slot 1
-    // in the forward pass) actually receives unlit.frag's location-1
-    // output. Previously only desc.color[0] was bound, which left the id
-    // buffer un-touched -- pick readback got uninitialized memory.
+    // Bind every color attachment so the R32U id_target_ (slot 1 in the
+    // forward pass) receives unlit.frag's location-1 output; an unbound
+    // id buffer leaves pick readback reading uninitialized memory.
     for (size_t i = 0; i < desc.color.size(); ++i) {
         const float* c = desc.color[i].clear;
         MTL::Texture* tex = res.GetHot(desc.color[i].target)->api_view;
@@ -286,16 +278,14 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
             rpd->colorAttachments()->object(static_cast<NS::UInteger>(i));
         ca->setTexture(tex);
         ca->setLoadAction(to_mtl_load(desc.color[i].load));
-        ca->setStoreAction(to_mtl_store(desc.color[i].store));  // #222 Phase A.2
-        ca->setClearColor(MTL::ClearColor(c[0], c[1], c[2], c[3]));
+        ca->setStoreAction(to_mtl_store(desc.color[i].store));        ca->setClearColor(MTL::ClearColor(c[0], c[1], c[2], c[3]));
     }
     if (!desc.depth.depth.IsNull()) {
         MTL::Texture* dtex = res.GetHot(desc.depth.depth)->api_view;
         MTL::RenderPassDepthAttachmentDescriptor* da = rpd->depthAttachment();
         da->setTexture(dtex);
         da->setLoadAction(to_mtl_load(desc.depth.load));
-        da->setStoreAction(to_mtl_store(desc.depth.store));  // #222 Phase A.2
-        da->setClearDepth(desc.depth.clear_depth);
+        da->setStoreAction(to_mtl_store(desc.depth.store));        da->setClearDepth(desc.depth.clear_depth);
     }
     plat.enc_ = plat.cmd_->renderCommandEncoder(rpd);
     if (plat.compute_fence_ != nullptr) {
@@ -327,7 +317,7 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     enc->setVertexBuffer(dyn_master, 0, cairns::kMaterialBindSlot);
     enc->setVertexBuffer(dyn_master, 0, cairns::kDrawTmpBindSlot);
 
-    // Pack-meshes (slide 26): bind streams only when the mesh buffer changes;
+    // Pack-meshes (Aaltonen slide 26): bind streams only when the mesh buffer changes;
     // drawIndexedPrimitives already selects the primitive via baseVertex.
     uint32_t last_mat_off = std::numeric_limits<uint32_t>::max();
     uint32_t last_bg[3] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
@@ -335,9 +325,8 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     uint32_t last_pos_off = std::numeric_limits<uint32_t>::max();
     MTL::Buffer* last_attr_buf = nullptr;
     uint32_t last_attr_off = std::numeric_limits<uint32_t>::max();
-    // #222 Phase E.1 (metal mirror): per-draw shader rebind on change.
-    // Init last bound to list.pipeline so an unchanged draw.shader (or
-    // the still-common Null sentinel) doesn't rebind.
+    // Per-draw shader rebind on change. Init last bound to list.pipeline
+    // so an unchanged draw.shader (or the Null sentinel) doesn't rebind.
     uint32_t last_shader_idx = list.pipeline.index;
     for (size_t i = 0; i < list.sorted_draws.size(); ++i) {
         const cairns::Draw& draw = list.draws[list.sorted_draws[i].second];
@@ -348,10 +337,8 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
                 last_shader_idx = draw.shader.index;
             }
         }
-        // #222 Phase E.0 (metal mirror): generic bind_groups[0..2] loop.
-        // Today only slot 1 (material) is non-null; E.1/E.2/E.4 fill the
-        // others. Bound as a vertex+fragment argument buffer; material
-        // sets a fragment buffer (see kMaterialBindSlot).
+        // Generic bind_groups[0..2] loop; null = skip. Slot 1 is the
+        // per-material set (a fragment buffer, see kMaterialBindSlot).
         for (uint32_t s = 0; s < 3; ++s) {
             if (draw.bind_groups[s].IsNull()) {
                 continue;
@@ -364,8 +351,7 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
             if (!mh) {
                 continue;
             }
-            // Material today (slot 1) is fragment-side only on metal.
-            // Other slots arrive with their own bind sites in E.1/E.2.
+            // Material (slot 1) is fragment-side only on metal.
             if (s == 1) {
                 enc->setFragmentBuffer(mh->api_descriptor_set,
                                         mh->arg_buf_offset,
@@ -376,8 +362,8 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
             uint32_t pos_off = 0;
             MTL::Buffer* pos_buf = res.plat.GetMtlBuffer(
                 alloc, draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
-            // #222 Phase E.6 (Metal mirror): stream-0 alias resolves to the
-            // final byte offset; no pos_buffer_byte_offset side channel.
+            // Stream-0 alias resolves to the final byte offset; no
+            // per-draw side channel.
             if (pos_buf != last_pos_buf || pos_off != last_pos_off) {
                 last_pos_buf = pos_buf;
                 last_pos_off = pos_off;
@@ -542,7 +528,7 @@ void CommandRecorder::EndRenderPass(Resources& res,
     // writes, so a later pass that hazards on it (this frame OR next) waits via
     // BeginRenderPass. Lazy-create the per-resource fence on first write; one
     // fence per texture, reused across frames -> cross-frame WAW. The metal leaf
-    // of the graph's flush. FLAKY_TESTS #2 / Granite gap #1.
+    // of the graph's flush.
     for (Handle<Texture> h : flush) {
         if (h.IsNull()) {
             continue;

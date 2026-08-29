@@ -1,16 +1,16 @@
 // control/agent_stdin_drain.hpp
 //
-// Live-app agent transport (decision #6 in the headless-editor plan): a
-// reader thread on stdin pushes NDJSON command lines into a queue; the main
-// thread drains the queue each frame and dispatches each line through the
-// shared CommandRegistry. Responses go to stdout.
+// Live-app agent transport: a reader thread on stdin pushes NDJSON command
+// lines into a queue; the main thread drains the queue each frame and
+// dispatches each line through the shared CommandRegistry. Responses go to
+// stdout.
 //
 // Gated by CAIRNS_AGENT_STDIN=1 -- without the env var, cairns_app's stdin
 // stays untouched (the normal interactive run doesn't get its stdin captured
 // and stdout doesn't get prefixed with JSON responses).
 //
-// The reader uses std::thread + std::mutex (per the threading-primitives
-// memory: no semaphores / latches / barriers / shared_mutex / atomic wait).
+// The reader uses std::thread + std::mutex only -- no semaphores / latches /
+// barriers / shared_mutex / atomic wait.
 
 #pragma once
 

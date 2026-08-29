@@ -1,6 +1,6 @@
-// #225 R5: studio_js smoke test. Exercises the new Unity-shaped surface
-// (Prefab / Scene / Prefabs / Editor) and the #226 reserved stubs. Each
-// assertion either returns a value or throws -- the wrapper sh script
+// studio_js smoke test. Exercises the Unity-shaped surface
+// (Prefab / Scene / Prefabs / Editor) and the reserved capability stubs.
+// Each assertion either returns a value or throws -- the wrapper sh script
 // counts both via the printed { ok, fail, errors } summary.
 
 function _assertEq(name, got, want) {
@@ -38,7 +38,7 @@ run("Vector3.zero", () => {
 run("Mathf.Lerp", () => _assertEq("lerp", Mathf.Lerp(0, 10, 0.5), 5));
 
 // ── New nouns: Prefab + Scene + Editor + Prefabs. ──
-// #224 L9: boot loads zero prefabs. The script must explicitly load
+// Boot loads zero prefabs. The script must explicitly load
 // at least one before testing Prefabs.list / Scene.instantiate. The
 // JS owns the catalog -- cairns.prefab.load takes a single path; the
 // loop belongs in the script.
@@ -82,7 +82,7 @@ run("global Instantiate refused", () => {
                    "Instantiate is not defined");
 });
 
-// ── R6 stubs: #226 features throw loud. ──
+// ── Reserved stubs: unwired capabilities throw loud. ──
 run("Editor.thumbnails throws #226 CAP-2", () => {
     _assertThrows("Editor.thumbnails", () => Editor.thumbnails(),
                    "#226 CAP-2");

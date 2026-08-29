@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include "engine/engine_config.hpp"  // cairns::EngineConfig (no longer the whole engine)
+#include "engine/engine_config.hpp"  // cairns::EngineConfig
 
 namespace cairns::shell {
 

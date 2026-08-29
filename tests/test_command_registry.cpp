@@ -1,21 +1,14 @@
 // tests/test_command_registry.cpp
 //
-// SPEC: G.5 control / agent layer round-trip.
+// SPEC: control / agent layer round-trip.
 // TAGS: [spec][control][registry]
 //
-// The audit named control/* as entirely uncovered. The CommandRegistry
-// register-then-dispatch round-trip is a pure-CPU contract (no engine, no
-// GPU): given (name, schema, handler), Dispatch on a JSON request invokes
-// the handler with the matching args. Alias resolution + ToolsSearch are
-// pure functions over the registry's flat array (#215). This is the
-// observable surface every JS Studio Sugar / NDJSON / ImGui transport
-// bottoms out at.
-//
-// Note: we don't link command_registry.cpp into the spec target (it's
-// the only TU that owns dispatch state); instead we test the public API
-// through a minimal CommandRegistry constructed in this TU. If a Registry
-// implementation lands as header-only, swap to that. The shape this spec
-// pins is what a re-implementer must produce.
+// The CommandRegistry register-then-dispatch round-trip is a pure-CPU
+// contract (no engine, no GPU): given (name, schema, handler), Dispatch on a
+// JSON request invokes the handler with the matching args. Alias resolution +
+// ToolsSearch are pure functions over the registry's flat array (a sorted
+// (name, op_id) table binary-searched at Dispatch). This is the observable
+// surface every JS Studio Sugar / NDJSON / ImGui transport bottoms out at.
 
 #include <catch2/catch_test_macros.hpp>
 

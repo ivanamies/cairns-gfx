@@ -1,6 +1,6 @@
 // rhi/metal/gpu_profiler.cpp
 //
-// #222 Phase F.1: GPU profiler -- metal no-ops. Metal drives per-pass
+// GPU profiler -- metal no-ops. Metal drives per-pass
 // timing via MTLCommandBuffer GPUStartTime/EndTime in the completion
 // handler installed by CommandRecorder::PassTimerEnd; no shared state
 // lives on the profiler.

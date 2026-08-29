@@ -3,7 +3,7 @@
 // The resource vocabulary: Handle<T>, the generational ResourceManager<T> pool
 // template (Aaltonen "arrays you walk"), the resource types (Buffer/Texture/...)
 // with their Hot/Cold SoA split, and the *Desc creation structs. The cooperating
-// subsystems (Device/Allocator/Resources/Bindless/Frames/Pipelines) live in their
+// subsystems (Device/Allocator/Resources/Frames/Pipelines) live in their
 // own headers; this one is what they all share.
 //
 // Three rules that drive every decision:
@@ -58,10 +58,9 @@ struct Kernel;
 struct SwapChain;
 struct FrameContext;
 
-// Lifted to cairns::core (src/core/handle.hpp). Re-exported here so all
-// existing cairns::rhi callers see Handle<T> / ResourceManager<T>
-// unchanged. Worlds, assets, and any non-GPU persistent pool now share
-// the exact same template instantiation pattern.
+// Handle<T> / ResourceManager<T> live in cairns::core (core/handle.hpp);
+// re-exported so rhi code and non-GPU persistent pools (scenes, assets)
+// share one pool substrate.
 template <typename T> using Handle = ::cairns::Handle<T>;
 template <typename T> using ResourceManager = ::cairns::ResourceManager<T>;
 
@@ -122,9 +121,9 @@ enum class Format : uint16_t {
     kBc7Rgba,
     kAstc4x4,
     kRg32F,
-    // P4: the picking ID buffer's color attachment. R32U packed
-    // {type<<24 | id}. Distinguished from kR32F since uint sampling +
-    // integer-output fragments need integer formats end-to-end.
+    // Picking ID buffer attachment: R32U packed {type<<24 | id}. Distinct
+    // from kR32F because uint sampling + integer-output fragments need
+    // integer formats end-to-end.
     kR32Uint,
 };
 
@@ -221,14 +220,14 @@ struct DynamicBinding {
     BufferKind kind = BufferKind::kUniform;
     uint32_t max_range = 0;  // bytes; needed for validation
     ShaderStage stages = kStageAll;
-    // #222 Phase D.3: backing buffer. Null = kDynamic bump master (Aaltonen
-    // slot 4 with per-draw dynamic offsets). Non-null = persistent SSBO
-    // (e.g. skin palettes / scene tables / particle parity buffer).
+    // Backing buffer. Null = kDynamic bump master (Aaltonen slot 4 with
+    // per-draw dynamic offsets). Non-null = persistent SSBO (e.g. skin
+    // palettes / scene tables / particle parity buffer).
     Handle<Buffer> backing;
-    // #222 Phase D.3: when false, binding is a regular UBO/SSBO descriptor
-    // (no dynamic offset) and writes the whole backing buffer (range =
-    // max_range or VK_WHOLE_SIZE). True = UBO_DYNAMIC/SSBO_DYNAMIC; caller
-    // supplies the per-dispatch byte offset at bind time.
+    // False: regular UBO/SSBO descriptor (no dynamic offset), written over
+    // the whole backing buffer (range = max_range or VK_WHOLE_SIZE).
+    // True: UBO_DYNAMIC/SSBO_DYNAMIC; caller supplies the per-dispatch
+    // byte offset at bind time.
     bool has_dynamic_offset = true;
 };
 
@@ -302,9 +301,9 @@ struct BindGroup {
 // ring's master buffer; only the per-draw offsets change.
 struct DynamicBuffers {
     struct Hot {
-        void* api_descriptor_set = nullptr;  // legacy slot; D.2 reads plat
+        void* api_descriptor_set = nullptr;  // unused; state lives in plat
         uint8_t binding_count = 0;
-        // #222 Phase D.2: per-backend Hot state (vk: layout + per-FIF sets).
+        // Per-backend state (vk: layout + per-FIF sets).
         DynamicBuffersHotPlat plat;
     };
     struct Cold {
@@ -373,11 +372,10 @@ struct BlendState {
 struct GraphicsPipelineDesc {
     const char* logical_shader = nullptr;  // "unlit" / "particle"
     const char* shader_dir = nullptr;      // base dir for shader files
-    // #222 Phase D.2: optional DynamicBuffers handles for set 0 (pass
-    // globals) + set 2 (per-draw drawtmp). When non-null, pipelines.cpp
-    // resolves the VkDescriptorSetLayout from these instead of from
-    // frames.plat.globals_set_layout_ / drawtmp_set_layout_. Null = use
-    // the legacy path (still required for kernels + non-unlit pipelines).
+    // Optional DynamicBuffers handles for set 0 (pass globals) + set 2
+    // (per-draw drawtmp). When non-null, pipelines resolves the descriptor
+    // set layout from these; null = the Pipelines-owned globals_/drawtmp_
+    // layouts (still required for non-unlit pipelines).
     Handle<DynamicBuffers> dyn_set_0;
     Handle<DynamicBuffers> dyn_set_2;
     std::span<const VertexInputAttribute> vertex_attributes;
@@ -389,23 +387,22 @@ struct GraphicsPipelineDesc {
     bool depth_write = true;
     CompareOp depth_compare = CompareOp::kLess;
     BlendState blend;
-    // #206 multi-color attachment support. color_count == 0 means "single
-    // attachment, use color_format below" (back-compat shorthand). When
-    // color_count > 0, color_formats[0..count) drives the renderpass /
-    // pipeline; color_format is ignored. kMaxColorFormats matches the RHI
-    // ceiling on simultaneous color attachments.
+    // Multi-color attachments. color_count == 0 means "single attachment,
+    // use color_format below" (shorthand). When color_count > 0,
+    // color_formats[0..count) drives the renderpass / pipeline and
+    // color_format is ignored. kMaxColorFormats matches the RHI ceiling on
+    // simultaneous color attachments.
     static constexpr uint8_t kMaxColorFormats = 4;
     Format color_formats[kMaxColorFormats] = {Format::kUndefined,
                                                 Format::kUndefined,
                                                 Format::kUndefined,
                                                 Format::kUndefined};
     uint8_t color_count = 0;
-    // #242: when the fragment shader writes fewer outputs than
-    // color_count (e.g. particle frag writes 1, but the offscreen PSO
-    // has 2 attachments to match the id-MRT renderpass), tell the
-    // pipeline to set colorWriteMask=0 on attachments
-    // [frag_color_output_count, color_count). 0 means "auto: match
-    // color_count" -- the common case where shader writes match exactly.
+    // When the fragment shader writes fewer outputs than color_count
+    // (e.g. particle frag writes 1, but the offscreen PSO has 2
+    // attachments to match the id-MRT renderpass), the pipeline sets
+    // colorWriteMask=0 on attachments [frag_color_output_count,
+    // color_count). 0 means "auto: match color_count".
     uint8_t frag_color_output_count = 0;
     Format color_format = Format::kBgra8Unorm;
     Format depth_format = Format::kD32F;
@@ -417,11 +414,10 @@ struct GraphicsPipelineDesc {
     SwapChain* swap_chain = nullptr;
 };
 
-// #221 Skinning Phase 4: descriptor-layout discriminator. Particle (single
-// set: dynUBO + 2 SSBO) was the only computer kernel until skin landed;
-// skinning needs two sets (Group B frame-global + Group A per-mesh slices).
-// The discriminator lets CreateComputePipeline pick the right layouts from
-// Frames without conditional code in shader resolution.
+// Descriptor-layout discriminator. Particle is a single set (dynUBO +
+// 2 SSBO); skinning needs two (Group B frame-global + Group A per-mesh
+// slices). Lets CreateComputePipeline pick the right layouts without
+// conditional code in shader resolution.
 enum class ComputePipelineLayout : uint8_t {
     kParticle = 0,
     kSkin = 1,
@@ -433,11 +429,9 @@ struct ComputePipelineDesc {
     const char* shader_dir = nullptr;
     const char* debug_name = nullptr;
     ComputePipelineLayout layout = ComputePipelineLayout::kParticle;
-    // #222 Phase D.3/D.4: optional DynamicBuffers handle for set 0.
-    // When non-null, pipelines.cpp resolves the VkDescriptorSetLayout from
-    // GetHot(dyn_set_0)->plat.vk_layout instead of frames.plat.*_layout_.
-    // Required for kSkin (Group B), kAnimEval, and kParticle once D.4
-    // converts particle to prebuilt parity DynamicBuffers.
+    // Optional DynamicBuffers handle for set 0. When non-null, pipelines
+    // resolves the descriptor set layout from GetHot(dyn_set_0)->plat.
+    // Required for kSkin (Group B), kAnimEval, and kParticle.
     Handle<DynamicBuffers> dyn_set_0;
 };
 
@@ -459,14 +453,12 @@ struct BindlessRegistryDesc {
 
 // BackendInitParams lives in the per-backend resource_manager_plat header.
 
-// rhi-wide config constants (formerly ResourceManager statics).
-// #222 Phase T.2: triple-buffer for 30 FPS camera-app pacing. Memory
-// scaling: each kDynamic/kUpload/kReadback ring slot is allocated per
-// frame-in-flight (bump_.slot_size[m] * kFramesInFlight in vulkan/metal
-// memory_allocator). At slot sizes 32/64/8 MB, FIF=3 adds +52 MB host-
-// visible vs FIF=2. PerSlot + descriptor sets + sync vectors scale
-// linearly; cpu_arena.hpp's FrameArena ring kMaxFrames=4 still covers
-// us. See PERFORMANCE.md triple-buffer ledger for the bill.
+// rhi-wide config constants.
+// kFramesInFlight is the one home for FIF: bump rings, CPU arenas,
+// descriptor pools, and sync vectors all scale off it. Each
+// kDynamic/kUpload/kReadback ring slot is allocated per frame in flight,
+// so raising FIF is a host-visible memory bill (see PERFORMANCE.md
+// triple-buffer ledger).
 inline constexpr uint32_t kFramesInFlight = 2;
 inline constexpr uint32_t kHeapBlockBytes = 128u * 1024u * 1024u;
 inline constexpr uint32_t kLargeThreshold = 64u * 1024u * 1024u;

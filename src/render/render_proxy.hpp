@@ -1,8 +1,8 @@
 #pragma once
 
-#include "core/handle.hpp"  // #220 Step 1: cairns::Handle template
+#include "core/handle.hpp"
 #include "rhi/resource_manager.hpp"
-#include "util/cpu_pool.hpp"  // #221 Phase 3: PoolSlice for SkinnedAttachment
+#include "util/cpu_pool.hpp"  // PoolSlice for SkinnedAttachment::Cold.
 
 #include <glm/glm.hpp>
 
@@ -11,12 +11,10 @@
 
 namespace cairns {
 
-// #220 Step 1: forward-decl so PrimitiveProxy::material_id can be a
-// Handle<Material> without dragging in gltf_loader.hpp.
+// Forward-decls so proxies can hold handles without dragging in
+// gltf_loader.hpp / asset_registry.hpp (which define the real types).
 struct Material;
-// #221 Phase 3: forward-decl for SkinnedAttachment::Hot::mesh handle.
 struct Mesh;
-// #221 Phase 3: PrefabId forward-pass (real def in asset_registry.hpp).
 struct Prefab;
 using PrefabId = Handle<Prefab>;
 
@@ -38,10 +36,10 @@ struct MeshProxy {
     uint32_t skin = kInvalidSkin;
     uint32_t layer_mask = 0xFFFFFFFFu;
     uint32_t flags = kProxyVisible;
-    // #207 entity id baked into the R32U id_off by unlit.frag. Stored as
-    // entt::to_integral(entity) + 1 so the value 0 means "background" (the
-    // forward pass clears id_off to 0 and the outline shader treats id==0
-    // as the empty highlight). 0xFFFFFFFF reserved for "unknown".
+    // Entity id baked into the R32U id_off by unlit.frag. Stored as
+    // entt::to_integral(entity) + 1 so 0 means "background" (the forward
+    // pass clears id_off to 0; the outline shader treats id==0 as the
+    // empty highlight). 0xFFFFFFFF reserved for "unknown".
     uint32_t entity_id = 0;
 };
 
@@ -49,7 +47,7 @@ struct PrimitiveProxy {
     uint32_t first_index = 0;
     uint32_t index_count = 0;
     int32_t vertex_offset = 0;
-    cairns::Handle<Material> material_id;  // #220 Step 1 (was uint32_t)
+    cairns::Handle<Material> material_id;
 };
 
 struct LineProxy {
@@ -70,50 +68,46 @@ struct PointProxy {
     uint32_t is_2d_overlay = 0;
 };
 
-// #221 Skinning Phase 3: Aaltonen Hot/Cold split for SkinnedAttachment.
-// Pooled via cairns::ResourceManager<SkinnedAttachment> on Engine; SkinId
-// = Handle<SkinnedAttachment>. Hot is what the per-frame skin path reads
-// every dispatch (slice + joint_count + clip ref + time); Cold carries
-// the scene/skin-index resolution path used at palette eval to recover
-// the joint set + inverse binds, plus a debug name.
+// Aaltonen Hot/Cold split. Pooled via ResourceManager<SkinnedAttachment>
+// on Engine; SkinId = Handle<SkinnedAttachment>. Hot is what the
+// per-frame skin path reads every dispatch (slice + joint_count + clip
+// ref + time); Cold carries the scene/skin-index resolution path used at
+// palette eval to recover the joint set + inverse binds, plus a debug
+// name.
 //
 // The slice is the per-actor slab in skin_output_pool_, measured in vec4
 // (16 B) vertex units. Skinned draws point stream 0 at
 // (pool_buffer, slice.offset * 16).
 struct SkinnedAttachment {
     struct Hot {
-        // #222 Phase H.5 finish: PoolSlice (16 B + Allocation metadata) →
-        // 4 B slice_offset on Hot. BuildSkinFrame only reads .offset to
-        // fill InstanceMeta. Allocation metadata + count move to Cold (no
-        // destroy path today; matters once Free fires).
+        // Only the slice offset is per-frame hot (BuildSkinFrame reads it
+        // to fill InstanceMeta); the full PoolSlice lives in Cold.
         uint32_t slice_offset = 0;
         uint32_t joint_count = 0;
-        // Sim-time phase + speed for clip eval (TODO determinism).
+        // Sim-time phase + speed for clip eval.
         float time_offset = 0.0f;
         float time_scale = 1.0f;
         // Mesh the slice was sized for; kernel uses mesh.vert_count.
         cairns::Handle<Mesh> mesh;
-        // #222 Phase H.5: cached at skin-create so BuildSkinFrame avoids
-        // skins_.GetCold + prefabs_.GetHot + prefabs_.GetCold per actor
-        // per frame. UINT32_MAX means scene not registered with anim_eval.
+        // Cached at skin-create so BuildSkinFrame avoids skins_.GetCold +
+        // prefabs_.GetHot + prefabs_.GetCold per actor per frame.
+        // UINT32_MAX means scene not registered with anim_eval.
         uint32_t gpu_prefab_header_idx = UINT32_MAX;
         float gpu_clip_duration = 1.0f;
-        // #222 Phase E.6: per-actor stream-0 alias of skin_output_pool_
-        // pre-offset by (pool_base + slice.offset * 16). Skinned draws
-        // set vertex_buffers[0] = pos_stream; retired the F5
-        // Draw::pos_buffer_byte_offset side channel. Non-owning VIEW.
+        // Per-actor stream-0 alias of skin_output_pool_, pre-offset by
+        // (pool_base + slice.offset * 16). Skinned draws set
+        // vertex_buffers[0] = pos_stream. Non-owning view.
         rhi::Handle<rhi::Buffer> pos_stream = rhi::Handle<rhi::Buffer>::Null;
     };
     struct Cold {
         cairns::PrefabId scene;
         uint32_t skin_index = 0;
-        // #222 Phase H.5: clip_index demoted; not read on the per-frame
-        // GPU eval path (the scene header carries the channel/sampler
-        // bounds). Kept for debug + future late-toggle.
+        // Not read on the per-frame GPU eval path (the scene header
+        // carries the channel/sampler bounds). Kept for debug + a future
+        // late clip toggle.
         int32_t clip_index = -1;
-        // #222 Phase H.5 finish: full PoolSlice (incl OffsetAllocator::
-        // Allocation) lives here. Only read at destroy/Free; today there
-        // is no destroy path so it's effectively a deathbed reference.
+        // Full PoolSlice (incl. OffsetAllocator::Allocation). Only read
+        // at destroy/Free.
         cairns::PoolSlice slice;
         std::string name;
     };

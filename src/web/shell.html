@@ -24,10 +24,10 @@
         .catch((e) => console.warn('[sw] registration failed:', e));
   }
 
-  // Boot-time log buffer: the WASM app crashes ~2 s in (heap abort), faster than
-  // a CDP drain can attach, so every print/err/abort/uncaught is captured into a
-  // JS ring from the very first line. The buffer lives in the JS heap and SURVIVES
-  // the WASM abort, so `window.cairnsDumpLogs()` returns the full history at any
+  // Boot-time log buffer: a WASM abort can land faster than a CDP drain can
+  // attach, so every print/err/abort/uncaught is captured into a JS ring from
+  // the very first line. The buffer lives in the JS heap and SURVIVES a WASM
+  // abort, so `window.cairnsDumpLogs()` returns the full history at any
   // time -- no attach-timing race. CDP: Runtime.evaluate("window.cairnsDumpLogs()").
   window.__cairns_logs = [];
   window.__cairns_t0 = (performance && performance.now) ? performance.now() : 0;

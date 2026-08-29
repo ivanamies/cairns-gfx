@@ -1,5 +1,5 @@
 // shell/scenario_launcher.hpp -- the imgui scenario picker shared by the native
-// SDL app (main.cpp) and the web app (web_main.cpp), so both windowed targets
+// and web builds of the SDL shell (one main.cpp), so both windowed targets
 // draw the SAME UI. Enumerates scripts/*.js next to the app, draws an imgui
 // button list, and records the clicked index (pending) for the app to dispatch
 // at its safe point (reset + script.eval). App-owned value, no singleton; the
@@ -72,7 +72,7 @@ struct ScenarioLauncher {
 
     // Drawn inside the engine's HUD imgui frame (panel hook).
     void Draw() {
-        // #229: top-right, clear of the HUD (top-left). Pivot (1,0) anchors the
+        // Top-right, clear of the HUD (top-left). Pivot (1,0) anchors the
         // window's top-right corner so it never clips regardless of window size.
         const ImVec2 disp = ImGui::GetIO().DisplaySize;
         ImGui::SetNextWindowPos(ImVec2(disp.x - 16.0f, 16.0f),

@@ -24,12 +24,10 @@ void AgentStdinDrain::Stop() {
         return;
     }
     quit_.store(true);
-    // std::getline blocks on stdin; the typical exit path is the user
-    // (or the controlling agent) closing stdin -> getline returns false ->
-    // loop exits. Without that we'd need a portable interruptible read.
-    // For now, detach if the reader is still blocked at shutdown so the
-    // app can exit cleanly. Acceptable because the reader thread holds no
-    // resources that outlive process exit.
+    // ReadLine blocks on stdin; the normal exit path is the controlling
+    // agent closing stdin -> ReadLine returns false -> loop exits. There is
+    // no portable interruptible read, so if the reader is still blocked at
+    // shutdown, detach -- it holds no resources that outlive process exit.
     if (reader_.joinable()) {
         reader_.detach();
     }

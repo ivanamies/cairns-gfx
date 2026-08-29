@@ -1,7 +1,6 @@
 // rhi/vulkan/command_recorder.cpp
 //
-// Vulkan backend bodies for CommandRecorder. Moved out of resource_manager.cpp
-// EndFrame in resource_manager.cpp can construct/destroy it.
+// Vulkan backend bodies for CommandRecorder.
 
 #include "util/define.hpp"
 
@@ -72,8 +71,7 @@ static VkAttachmentLoadOp to_vk_load(LoadOp op) {
     return VK_ATTACHMENT_LOAD_OP_CLEAR;
 }
 
-static VkAttachmentStoreOp to_vk_store(StoreOp op) {  // #222 Phase A.2
-    switch (op) {
+static VkAttachmentStoreOp to_vk_store(StoreOp op) {    switch (op) {
         case StoreOp::kStore: return VK_ATTACHMENT_STORE_OP_STORE;
         case StoreOp::kDontCare: return VK_ATTACHMENT_STORE_OP_DONT_CARE;
     }
@@ -86,14 +84,12 @@ static bool key_eq(const OffscreenTargetCache::RpKey& a,
         a.depth != b.depth ||
         a.color_load != b.color_load ||
         a.depth_load != b.depth_load ||
-        a.depth_store != b.depth_store ||  // #222 Phase A.2
-        a.has_depth != b.has_depth) {
+        a.depth_store != b.depth_store ||        a.has_depth != b.has_depth) {
         return false;
     }
     for (uint32_t i = 0; i < a.color_count; ++i) {
         if (a.colors[i] != b.colors[i]) return false;
-        if (a.color_store[i] != b.color_store[i]) return false;  // #222 Phase A.2
-    }
+        if (a.color_store[i] != b.color_store[i]) return false;    }
     return true;
 }
 
@@ -113,10 +109,9 @@ static VkRenderPass get_offscreen_rp(OffscreenTargetCache* cache,
         atts[att_count].format = key.colors[i];
         atts[att_count].samples = VK_SAMPLE_COUNT_1_BIT;
         atts[att_count].loadOp = key.color_load;
-        atts[att_count].storeOp = key.color_store[i];  // #222 Phase A.2
-        atts[att_count].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        atts[att_count].storeOp = key.color_store[i];        atts[att_count].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         atts[att_count].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        // #207: when load_op=CLEAR the previous contents are discarded, so
+        // When load_op=CLEAR the previous contents are discarded, so
         // initialLayout=UNDEFINED is the correct (and safer) value. Lets the
         // pool reuse a transient target that the validation tracker still
         // sees in SHADER_READ_ONLY from a prior pass without us needing to
@@ -136,8 +131,7 @@ static VkRenderPass get_offscreen_rp(OffscreenTargetCache* cache,
         atts[att_count].format = key.depth;
         atts[att_count].samples = VK_SAMPLE_COUNT_1_BIT;
         atts[att_count].loadOp = key.depth_load;
-        atts[att_count].storeOp = key.depth_store;  // #222 Phase A.2
-        atts[att_count].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        atts[att_count].storeOp = key.depth_store;        atts[att_count].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         atts[att_count].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         atts[att_count].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         atts[att_count].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
@@ -293,9 +287,9 @@ void CommandRecorder::DispatchSkinBatches(
     Handle<Buffer> output_pool_buffer, Handle<Buffer> /*palette_buf*/,
     Handle<DynamicBuffers> dyn_set_0,
     std::span<const SkinDispatchBatch> batches) {
-    // #222 Phase D.3: set 0 comes from dyn_set_0's DynamicBuffers Hot
-    // (per-FIF set). palette_buf is bound at DynamicBuffers create time
-    // as binding 1's backing.
+    // Set 0 comes from dyn_set_0's DynamicBuffers Hot (per-FIF set).
+    // palette_buf is bound at DynamicBuffers create time as binding 1's
+    // backing.
     if (batches.empty() || kernel.IsNull() ||
         output_pool_buffer.IsNull() || dyn_set_0.IsNull()) {
         return;
@@ -320,11 +314,11 @@ void CommandRecorder::DispatchSkinBatches(
     if (!k) {
         return;
     }
-    // Group B descriptors are written ONCE at engine init
-    // (Frames::WriteSkinGroupBDescriptors). Per-dispatch we just provide
-    // 3 dynamic byte offsets at vkCmdBindDescriptorSets time -- avoids
+    // Group B descriptors are written ONCE when the DynamicBuffers set is
+    // created. Per-dispatch we just provide 3 dynamic byte offsets at
+    // vkCmdBindDescriptorSets time -- avoids
     // VUID-vkUpdateDescriptorSets-None-03047 (set in use by pending cmd
-    // buffer) that fires when re-writing a sets-in-flight set every frame.
+    // buffer) that fires when re-writing an in-flight set every frame.
     (void)alloc;
     (void)output_pool_buffer;
 
@@ -360,10 +354,10 @@ void CommandRecorder::DispatchAnimEval(
     const AnimEvalArgs& args) {
     const uint32_t actor_count = args.actor_count;
     const uint32_t records_byte_offset = args.records_byte_offset;
-    // #222 Phase D.3: anim_eval set 0 comes from args.dyn_set_0's
-    // DynamicBuffers Hot. Scene-table SSBOs (bindings 1..12) are
-    // backed via per-binding `backing` at create time; only binding 0
-    // (records UBO) takes a dynamic offset per dispatch.
+    // anim_eval set 0 comes from args.dyn_set_0's DynamicBuffers Hot.
+    // Scene-table SSBOs (bindings 1..6) are backed via per-binding
+    // `backing` at create time; only binding 0 (records UBO) takes a
+    // dynamic offset per dispatch.
     if (kernel.IsNull() || actor_count == 0 || args.dyn_set_0.IsNull()) {
         return;
     }
@@ -421,10 +415,8 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb,
                              0, nullptr, 0, nullptr);
     }
-    // #222 Phase D.4: set 0 comes from dyn_set_0's DynamicBuffers Hot
-    // (prebuilt parity sets; one per FIF). Bind with dyn_offset_0
-    // (binding 0 = UBO_DYN dt). Legacy per-step vkUpdateDescriptorSets
-    // + BoundBuffer write loop retired.
+    // Set 0 comes from dyn_set_0's DynamicBuffers Hot (prebuilt parity
+    // sets; one per FIF). Bind with dyn_offset_0 (binding 0 = UBO_DYN dt).
     if (d.dyn_set_0.IsNull()) {
         return;
     }
@@ -456,9 +448,9 @@ void CommandRecorder::BeginRenderPass(
     }
 
     // Execute the graph's computed invalidate barriers (transitions inputs ->
-    // SHADER_READ, color -> COLOR_ATTACHMENT, depth -> DEPTH, plus the RAW/WAW
-    // access sync the old transition() missed). Same graph-computed barriers
-    // metal drives off -- no backend mismatch.
+    // SHADER_READ, color -> COLOR_ATTACHMENT, depth -> DEPTH, plus RAW/WAW
+    // access sync). Same graph-computed barriers metal drives off -- no
+    // backend mismatch.
     apply_invalidate_barriers(plat.gfx_, res, invalidate);
 
     const bool is_swapchain = desc.color.empty() ||
@@ -484,7 +476,7 @@ void CommandRecorder::BeginRenderPass(
         rpi.pClearValues = clears;
         vkCmdBeginRenderPass(plat.gfx_, &rpi, VK_SUBPASS_CONTENTS_INLINE);
     } else {
-        // #206 multi-color: iterate desc.color for every attachment. Each
+        // Multi-color: iterate desc.color for every attachment. Each
         // gets transitioned to COLOR_ATTACHMENT_OPTIMAL, its view collected,
         // and its format hashed into the cache key.
         const uint32_t color_count = static_cast<uint32_t>(desc.color.size());
@@ -499,8 +491,7 @@ void CommandRecorder::BeginRenderPass(
             color_views[i] = reinterpret_cast<VkImageView>(
                 res.GetHot(desc.color[i].target)->api_view);
             key.colors[i] = to_vk_format(c->format);
-            key.color_store[i] = to_vk_store(desc.color[i].store);  // #222 Phase A.2
-            if (i == 0) {
+            key.color_store[i] = to_vk_store(desc.color[i].store);            if (i == 0) {
                 key.color_load = to_vk_load(desc.color[i].load);
             }
         }
@@ -510,8 +501,7 @@ void CommandRecorder::BeginRenderPass(
                 res.GetHot(desc.depth.depth)->api_view);
             key.depth = to_vk_format(c->format);
             key.depth_load = to_vk_load(desc.depth.load);
-            key.depth_store = to_vk_store(desc.depth.store);  // #222 Phase A.2
-        }
+            key.depth_store = to_vk_store(desc.depth.store);        }
         VkRenderPass rp = get_offscreen_rp(plat.offscreen_, key);
         // Attachment order matches the renderpass: colors[0..N) then depth.
         VkImageView views[OffscreenTargetCache::kMaxColors + 1]{};
@@ -563,11 +553,11 @@ void CommandRecorder::BeginRenderPass(
 
 void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list) {
     VkCommandBuffer cb = plat.gfx_;
-    (void)alloc;  // descriptors now written once at init (Frames::WriteUnlitDescriptors).
+    (void)alloc;  // descriptors written once at init (Frames::WriteUnlitDescriptors)
 
-    // #237 fix: globals + drawtmp descriptors are written ONCE at engine
-    // init pointing at the master kDynamic buffer. Per-pass we only
-    // supply the dynamic offset at vkCmdBindDescriptorSets time. Avoids
+    // globals + drawtmp descriptors are written ONCE at engine init
+    // pointing at the master kDynamic buffer. Per-pass we only supply
+    // the dynamic offset at vkCmdBindDescriptorSets time. Avoids
     // VUID-vkUpdateDescriptorSets-None-03047 (set in use by pending cmd).
 
     Shader::Hot* unlit = res.GetHot(list.pipeline);
@@ -576,10 +566,8 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     }
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->plat.vk_pipeline);
 
-    // set 0 globals: bind once for the whole pass. #222 Phase D.2 routes
-    // through list.dyn_globals's per-FIF set when set; falls back to the
-    // legacy plat.globals_set_ otherwise (recorder + Frames still own that
-    // until callers opt all the way in).
+    // set 0 globals: bind once for the whole pass. list.dyn_globals's
+    // per-FIF set when non-null; plat.globals_set_ otherwise.
     {
         VkDescriptorSet s0 = plat.globals_set_;
         if (!list.dyn_globals.IsNull()) {
@@ -596,10 +584,9 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     // Pack-meshes (Aaltonen slide 26): bind each stream at its mesh-region base
     // and select the primitive via baseVertex/baseIndex in the draw call, so the
     // VB/IB binds are emitted only when the mesh buffer actually changes.
-    // #222 Phase E.1: per-draw shader cache. list.pipeline is the
-    // initial bind; if a draw sets draw.shader to something different,
-    // rebind. Null shader = stick with last bind. Today all draws keep
-    // shader Null so no rebind fires (byte-identical).
+    // Per-draw shader cache: list.pipeline is the initial bind; a draw
+    // whose draw.shader differs rebinds. Null shader = stick with last
+    // bind.
     uint32_t last_shader_idx = list.pipeline.index;
     VkBuffer last_pos_buf = VK_NULL_HANDLE;
     uint32_t last_pos_off = 0xFFFFFFFFu;
@@ -607,17 +594,13 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     uint32_t last_attr_off = 0xFFFFFFFFu;
     VkBuffer last_idx_buf = VK_NULL_HANDLE;
     uint32_t last_idx_off = 0xFFFFFFFFu;
-    // #222 Phase E.0: generic loops over bind_groups[0..2] and
-    // vertex_buffers[0..2]. Null = skip. bind_groups[1] is material today
-    // (only non-null seat); E.1/E.2/E.4 will fill [0] and [2]. stream 0
-    // still adds Draw::pos_buffer_byte_offset until E.6 retires that
-    // field; static draws set it to 0 so the net offset is unchanged.
+    // Generic loops over bind_groups[0..2] and vertex_buffers[0..2];
+    // null = skip. bind_groups[1] is the per-material set.
     uint32_t last_bg[3] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
     for (size_t i = 0; i < list.sorted_draws.size(); ++i) {
         const cairns::Draw& draw = list.draws[list.sorted_draws[i].second];
-        // #222 Phase E.1: per-draw shader rebind on change. Skip if null
-        // (the engine has not opted into per-draw PSOs yet) or if matches
-        // last bind.
+        // Per-draw shader rebind on change. Skip if null or if it matches
+        // the last bind.
         if (!draw.shader.IsNull() && draw.shader.index != last_shader_idx) {
             Shader::Hot* sh = res.GetHot(draw.shader);
             if (sh) {
@@ -643,8 +626,8 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
         uint32_t pos_off = 0;
         VkBuffer pos_buf =
             res.plat.GetVkBuffer(alloc,draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
-        // #222 Phase E.6: stream-0 alias resolves to the final byte offset
-        // directly; no Draw::pos_buffer_byte_offset side channel.
+        // Stream-0 alias resolves to the final byte offset directly; no
+        // per-draw side channel.
         if (pos_buf != last_pos_buf || pos_off != last_pos_off) {
             last_pos_buf = pos_buf;
             last_pos_off = pos_off;
@@ -660,7 +643,7 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
             VkDeviceSize off = attr_off;
             vkCmdBindVertexBuffers(cb, cairns::kMeshAttrVertexBindSlot, 1, &attr_buf, &off);
         }
-        // Slot 2 (E.4 velocity stream consumer; null today): generic bind.
+        // Stream 2: generic bind when non-null.
         if (!draw.vertex_buffers[2].IsNull()) {
             uint32_t v2_off = 0;
             VkBuffer v2_buf =
@@ -676,9 +659,9 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
             vkCmdBindIndexBuffer(cb, idx_buf, idx_base, VK_INDEX_TYPE_UINT32);
         }
         const uint32_t first_index = (draw.index_offset - idx_base) / sizeof(uint32_t);
-        // set 2 drawtmp: the only per-draw dynamic offset. #222 Phase D.2
-        // routes through draw.dynamic_buffers's per-FIF set when non-null;
-        // legacy plat.drawtmp_set_ otherwise.
+        // set 2 drawtmp: the only per-draw dynamic offset.
+        // draw.dynamic_buffers's per-FIF set when non-null;
+        // plat.drawtmp_set_ otherwise.
         {
             VkDescriptorSet s2 = plat.drawtmp_set_;
             if (!draw.dynamic_buffers.IsNull()) {
@@ -704,8 +687,8 @@ void CommandRecorder::DrawPoints(Resources& res, Allocator& alloc, const PointDr
     VkBuffer ssbo = res.plat.GetVkBuffer(alloc,pd.vertex_buffer, &ssbo_off);
     VkDeviceSize off = ssbo_off;
     vkCmdBindVertexBuffers(cb, 0, 1, &ssbo, &off);
-    // #222 Phase E.2: pipeline layout has zero descriptor sets; nothing
-    // to bind via vkCmdBindDescriptorSets.
+    // Pipeline layout has zero descriptor sets; nothing to bind via
+    // vkCmdBindDescriptorSets.
     vkCmdDraw(cb, pd.vertex_count, 1, 0, 0);
 }
 
@@ -720,9 +703,9 @@ void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader>
         return;
     }
 
-    // #236 fix: imgui font + sampler are stable post-Engine init; the
-    // per-frame write was racing the prior frame's pending gfx cmd
-    // buffer (VUID-vkUpdateDescriptorSets-None-03047). Only call
+    // imgui font + sampler are stable post-Engine init; a per-frame
+    // write races the prior frame's pending gfx cmd buffer
+    // (VUID-vkUpdateDescriptorSets-None-03047). Only call
     // vkUpdateDescriptorSets when the (font, sampler) handles actually
     // change. The cached packed values live on ShaderHotPlat.
     const uint32_t font_packed =
@@ -871,7 +854,7 @@ void CommandRecorder::EndRenderPass(
     Resources& /*res*/, std::span<const Handle<Texture>> /*flush*/) {
     // The graph's `flush` is a no-op on vk: the next pass's invalidate barrier
     // already carries the producer's access from PipelineEvent, so there's no
-    // separate signal (unlike metal's per-resource fence). Both backends now
+    // separate signal (unlike metal's per-resource fence). Both backends
     // drive off the same graph-computed barriers.
     vkCmdEndRenderPass(plat.gfx_);
 }

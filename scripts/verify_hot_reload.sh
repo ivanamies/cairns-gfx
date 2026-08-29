@@ -1,14 +1,14 @@
 #!/bin/zsh
-# #228 F1 + F2 + R1 acceptance test (the ONE verification for hot-reload work).
+# Hot-reload acceptance test (the ONE verification for hot-reload work).
 #
 #   engine starts -> load 3 -> count=3 -> load 3 more -> count=6 ->
 #   instantiate all 6 + render + dump tmp/_hr_${bk}_loaded.png ->
-#   R1: reload one of the resident prefabs in place (count stays 6),
+#   reload one of the resident prefabs in place (count stays 6),
 #       render + dump tmp/_hr_${bk}_reloaded.png ->
 #   scene.clear -> unloadAll (returns 6) -> count=0 -> stop engine
 #
 # Both PNG dumps must exist + be non-trivially sized; the reload dump
-# proves R1 keeps rendering past the in-place pool-slot swap. Inspect
+# proves rendering continues past the in-place pool-slot swap. Inspect
 # tmp/_hr_metal_loaded.png to confirm heroes are visible.
 #
 # Usage: scripts/verify_hot_reload.sh [metal|vk]   (default: both)
@@ -57,16 +57,16 @@ run_backend() {
         done
         for _ in $(seq 1 10); do echo '{"op":"cairns.render.frame"}'; done
         printf '%s\n' "{\"op\":\"cairns.io.dumpTexture\",\"args\":{\"target\":\"final\",\"path\":\"tmp/_hr_${bk}_loaded.png\"}}"
-        # R1: reload one of the resident prefabs in place. count stays 6.
+        # Reload one of the resident prefabs in place. count stays 6.
         printf '%s\n' '{"op":"cairns.prefab.reload","args":{"path":"aatrox.glb"}}'
         printf '%s\n' '{"op":"cairns.prefab.count"}'
-        # R2: hot-reload each of the three compute pipelines.
+        # Hot-reload each of the three compute pipelines.
         # KEEP-LAST-GOOD: no visual change since shaders unchanged;
         # render continues with the new (functionally identical) PSO.
         for k in anim_eval skin particle; do
             printf '%s\n' "{\"op\":\"cairns.pipeline.reload\",\"args\":{\"name\":\"${k}\"}}"
         done
-        # R3: reload the JS context (fresh JSContext, same JSRuntime).
+        # Reload the JS context (fresh JSContext, same JSRuntime).
         printf '%s\n' '{"op":"cairns.script.reload"}'
         for _ in $(seq 1 10); do echo '{"op":"cairns.render.frame"}'; done
         printf '%s\n' "{\"op\":\"cairns.io.dumpTexture\",\"args\":{\"target\":\"final\",\"path\":\"tmp/_hr_${bk}_reloaded.png\"}}"

@@ -1,11 +1,11 @@
-// #224 verify_load_flow: the user's stated sequence, verified at EVERY step.
+// verify_load_flow driver: the full load sequence, verified at EVERY step.
 //
 //   step 1: engine starts empty           assert count == 0
 //   step 2: particles are running         dump tmp/_lf_empty.png (particles
 //                                          + background; the wrapper asserts
 //                                          file exists AND is not blank)
 //   step 3: load 3 GLBs                   assert count == 3
-//   step 4: snapshot Mesh::Hot handles    (L6 baseline)
+//   step 4: snapshot Mesh::Hot handles    (append-only baseline)
 //   step 5: load 3 MORE                   assert count == 6
 //   step 6: append-only contract          assert 0 mismatches in the snapshot
 //   step 7: instantiate ALL 6 prefabs     assert listEntities.count == 6
@@ -141,14 +141,12 @@ run("step 6: first 3 prefabs' handles unchanged (APPEND-only)", () => {
 // ── step 7 ────────────────────────────────────────────────────────────
 run("step 7: instantiate all 6 prefabs; listEntities.count == 6", () => {
     const n_total = BATCH_A.length + BATCH_B.length;
-    // Layout: 6 heroes in a horizontal row at the same depth+scale
-    // the verify_headless byte-gate uses (z=-3, scale 0.00433 = the
-    // pre-#269 grid_n=3 normalizer). That combo is the ONE rendering
-    // path the vk backend is provably-good on; load_flow piggybacking
-    // it dodges a pre-existing vk depth/scale-sensitive render bug
-    // that surfaces at z=-5,scale=0.002 (the bug is real but separate
-    // from this harness's #228 work; tracked via the runtime-load
-    // golden in H5).
+    // Layout: 6 heroes in a horizontal row at the same depth+scale the
+    // verify_headless byte-gate uses (z=-3, scale 0.00433). That combo
+    // is the ONE rendering path the vk backend is provably-good on;
+    // piggybacking it dodges a vk depth/scale-sensitive render bug that
+    // surfaces at z=-5,scale=0.002 (real, but separate from this
+    // harness; the runtime-load golden tracks it).
     const SCALE = 0.00433;
     const SPACING = 1.333;
     const START = -SPACING * (n_total - 1) * 0.5;

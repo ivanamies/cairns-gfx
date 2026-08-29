@@ -3,8 +3,8 @@
 // Platform device lifetime — the leaf of the rhi DAG. Owns the instance /
 // surface / physical+logical device / queues / command pool (Vulkan) or the
 // MTL::Device + command queue (Metal). Backend handles are PUBLIC members
-// (SwapChain-style, no pimpl); the GIANT-CAPS banner below is the access
-// contract that replaces the old friend list.
+// (SwapChain-style, no pimpl); the CALLER: lines below are the access
+// contract.
 
 #pragma once
 
@@ -49,8 +49,8 @@ public:
 
     // Filled by Init() right after the backing device is up. Pure POD;
     // engine consumes via cairns::SkinPoolFitsDevice / FitsResidentBudget.
-    // The 2026-06-17 S22 garble (Adreno 730 maxStorageBufferRange = 256 MB)
-    // is caught at boot by reading max_storage_buffer_range from this.
+    // Catches device limits at boot (e.g. Adreno 730 caps
+    // maxStorageBufferRange at 256 MB) via max_storage_buffer_range.
     cairns::DeviceCaps caps{};
 
 private:

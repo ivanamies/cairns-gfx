@@ -4,10 +4,11 @@
 // JSON, Dispatch, write the response line to stdout, repeat until EOF.
 //
 // stdout is protocol-only -- anything that writes a non-JSON line corrupts
-// the stream (see plan risk #1). All logging routes to stderr.
+// the stream. All logging routes to stderr.
 //
 // C-stdio (FILE*) rather than iostream: <iostream>'s static std::ios_base::Init
-// allocates cout/cin/cerr + locale before main (#229 M0b kills that alloc).
+// allocates cout/cin/cerr + locale before main -- a static-init alloc outside
+// the budgeted CPU block.
 
 #pragma once
 
@@ -24,7 +25,7 @@ public:
     // Synchronous Run loop. Returns when `in` reaches EOF or quit_flag flips.
     // The handler for `app.quit` should flip a quit flag the caller passes in.
     //
-    // W1 watchdog hook: |heartbeat_ns| is updated to the current
+    // Watchdog hook: |heartbeat_ns| is updated to the current
     // steady_clock ns BEFORE each Dispatch and AFTER each response is
     // flushed. A separate watchdog thread monitors this counter and
     // calls std::abort() if it stops advancing. Pass nullptr to opt out.

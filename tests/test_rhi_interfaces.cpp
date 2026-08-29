@@ -1,13 +1,13 @@
 // tests/test_rhi_interfaces.cpp
 //
 // SPEC: src/rhi/resource_manager.hpp -- cross-backend descriptors +
-//        kFramesInFlight invariant (G.3 of the test tech tree).
+//        kFramesInFlight invariant.
 // TAGS: [spec][rhi]
 //
-// The audit named "kFramesInFlight hardcoded to 3 instead of 2" as a real
-// risk: arithmetic test passes with wrong FIF input, OOMs on-device. This
-// spec pins kFramesInFlight == 2 and the BufferUsage bit positions so a
-// drift on either side gets caught at the spec level.
+// A wrong kFramesInFlight is a real risk: the arithmetic tests pass with
+// the wrong FIF input and the OOM only shows on-device. This spec pins
+// kFramesInFlight == 2 and the BufferUsage bit positions so a drift on
+// either side gets caught at the spec level.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -17,8 +17,8 @@ using namespace cairns::rhi;
 
 SCENARIO("kFramesInFlight is exactly 2",
          "[spec][rhi][fif][regression]") {
-    // Phase G.9 #84: pin to 2 at the spec level. The audit named the risk
-    // of a back-slide to 3 (the value that crossed the S22 lmkd budget).
+    // Pin to 2 at the spec level: 3 is the value that crossed the S22
+    // lmkd budget.
     REQUIRE(kFramesInFlight == 2u);
 }
 

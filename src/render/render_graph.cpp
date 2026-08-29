@@ -143,7 +143,7 @@ void PassBuilder::AddColorOutput(const char* name, GraphTexture t, LoadOp load,
     RenderGraph::ColorOutput& out = p.color_outputs[p.color_outputs_count++];
     out.tex = t.id;
     out.load = load;
-    out.store = store;  // #222 Phase A.2
+    out.store = store;
     out.clear[0] = clear[0];
     out.clear[1] = clear[1];
     out.clear[2] = clear[2];
@@ -159,7 +159,7 @@ void PassBuilder::AddDepthOutput(const char* name, GraphTexture t, LoadOp load,
     p.has_depth = true;
     p.depth_output.tex = t.id;
     p.depth_output.load = load;
-    p.depth_output.store = store;  // #222 Phase A.2
+    p.depth_output.store = store;
     p.depth_output.clear_depth = clear_depth;
     PUSH_OR_DIE(p, writes, writes_count, RenderGraph::kMaxPassWrites,
                 "writes", t.id);
@@ -234,10 +234,9 @@ Handle<Texture> RenderGraph::AcquireTransientTex(const GraphTextureDesc& desc,
     return h;
 }
 
-// #210 flat-array variant. tex_pool_ grow via push_back is rare (only on
-// new-shape transients); when it fires, claimed_n grows alongside the
-// arena-backed flat array -- but the arena allocation is fixed size, so
-// new entries past claimed_n stay implicitly unclaimed for THIS Bake.
+// Flat-array variant: `claimed` is a fixed-size arena allocation, so pool
+// entries pushed past claimed_n stay implicitly unclaimed for THIS Bake.
+// tex_pool_ grow via push_back is rare (only on new-shape transients).
 Handle<Texture> RenderGraph::AcquireTransientTexFlat(const GraphTextureDesc& desc,
                                                      uint8_t* claimed,
                                                      size_t claimed_n) {
@@ -276,7 +275,7 @@ bool RenderGraph::Bake(uint32_t slot) {
     }
     const bool log = std::getenv("CAIRNS_RG_LOG") != nullptr;
 
-    // #210 all Bake() scratch on this slot's arena. Slot is the lock.
+    // All Bake() scratch on this slot's arena. Slot is the lock.
     assert(slot < kMaxBoundSlots && slot_arenas_[slot] != nullptr &&
            "RenderGraph::Bake: slot arena not bound -- call BindSlotArena");
     cairns::BumpArena& arena = *slot_arenas_[slot];
@@ -489,10 +488,10 @@ bool RenderGraph::Bake(uint32_t slot) {
     for (uint32_t oi = 0; oi < order_n; ++oi) {
         const uint16_t t = order[oi];
         Handle<Texture> chosen = Handle<Texture>::Null;
-        // #229 GPU-determinism: golden mode skips intra-frame slot aliasing so a
-        // transient never reuses physical memory whose prior occupant's lifetime
-        // ended this frame (the read-before-write hazard). Every transient gets
-        // its own physical texture (AcquireTransientTexFlat; pool auto-grows).
+        // Golden mode skips intra-frame slot aliasing so a transient never
+        // reuses physical memory whose prior occupant's lifetime ended this
+        // frame (the read-before-write hazard). Every transient gets its own
+        // physical texture (AcquireTransientTexFlat; pool auto-grows).
         if (!disable_aliasing_) {
             for (uint32_t si = 0; si < slots_n; ++si) {
                 Slot& s = slots[si];
@@ -533,14 +532,14 @@ bool RenderGraph::Bake(uint32_t slot) {
             ca.clear[2] = co.clear[2];
             ca.clear[3] = co.clear[3];
             ca.load = co.load;
-            ca.store = co.store;  // #222 Phase A.2
+            ca.store = co.store;
         }
         if (pass.has_depth) {
             pass.baked_depth = DepthAttachment{};
             pass.baked_depth.depth = resolved_tex_[pass.depth_output.tex];
             pass.baked_depth.clear_depth = pass.depth_output.clear_depth;
             pass.baked_depth.load = pass.depth_output.load;
-            pass.baked_depth.store = pass.depth_output.store;  // #222 Phase A.2
+            pass.baked_depth.store = pass.depth_output.store;
         }
         for (uint8_t i = 0; i < pass.attachment_inputs_count; ++i) {
             // attachment_inputs cap == baked_inputs cap, so no need for a

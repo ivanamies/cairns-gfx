@@ -1,11 +1,10 @@
 // rhi/frame_capture.hpp
 //
-// #222 Phase F.2: one-shot swap-image dump path. Extracted from Frames
-// so the per-frame loop doesn't drag tools-grade stb_image_write into
-// the hot path. Holds the pending dump request; the actual dump
-// (vkCmdCopyImage / MTL blit + stbi_write_png) still lives in
-// Frames::EndSubmit because it needs the backend's swap image handle.
-// Frames reads the path via Rhi::frame_capture (Init-time pointer).
+// One-shot swap-image dump request. Holds only the pending path; the
+// actual dump (vkCmdCopyImage / MTL blit + stbi_write_png) lives in
+// Frames::EndSubmit / Present because it needs the backend's swap image
+// handle. Passed to those calls per-frame; kept out of Frames so the
+// per-frame loop doesn't drag stb_image_write into the hot path.
 
 #pragma once
 

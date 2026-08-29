@@ -32,13 +32,13 @@ using ApiKernelHandle = MTL::ComputePipelineState*;
 // this fence at EndRenderPass, a later pass that hazards on this texture waits
 // it at BeginRenderPass. Lazy-created, reused across frames (the fence persists
 // with Texture::Cold) -> cross-frame WAW sync. Driven by the graph's computed
-// barriers, NOT ad-hoc. (Granite physical_events leaf; FLAKY_TESTS #2.)
+// barriers, NOT ad-hoc (Granite physical_events leaf).
 struct TextureColdPlat {
     MTL::Fence* sync_fence_ = nullptr;
 };
 struct ShaderHotPlat {};
 struct KernelHotPlat {};
-// #222 Phase D.2: Metal has no descriptor objects; DynamicBuffers plat is
+// Metal has no descriptor objects; DynamicBuffers plat is
 // empty. Recorder reads bindings from Cold's layout vector per draw.
 struct DynamicBuffersHotPlat {};
 

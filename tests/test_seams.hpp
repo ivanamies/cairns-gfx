@@ -5,7 +5,7 @@
 // site into a test) (a) gives the tests one stable surface area to read
 // against, and (b) lets us return false from unwired seams so the scenario
 // SECTIONs `SKIP` instead of erroring out -- the golden ladder grows green-bar
-// as Phase 3 lands more of these.
+// as seams get wired.
 
 #pragma once
 
@@ -40,9 +40,8 @@ bool BootHeadless(cairns::Engine& engine, uint32_t width, uint32_t height);
 // Returns true iff every tick returned true.
 bool AdvanceToGoldenFrame(cairns::Engine& engine);
 
-// C.18: parameterized advance + per-frame capture support. Tick `N`
-// frames forward. Tests call this twice to land on frame 9 then frame
-// 55 -- two refs per rung per platform.
+// Tick `N` frames forward. Golden subjects call this twice to land on
+// frame 9 then frame 55 -- two refs per subject per platform.
 bool AdvanceFrames(cairns::Engine& engine, uint32_t n);
 
 struct FrameStats {
@@ -51,11 +50,12 @@ struct FrameStats {
     uint32_t culled = 0;
     uint32_t submitted = 0;
 };
-// G5 readback. Pulls the BSF / extract counters from the last advanced frame.
+// Frustum-cull golden readback. Pulls the BSF / extract counters from the
+// last advanced frame.
 bool LastFrameStats(cairns::Engine& engine, FrameStats& out);
 
-// G1: deterministic particle SSBO readback. Until production particle init
-// switches to cairns::ParticleRng, this returns false and the scenario SKIPs.
+// Deterministic particle SSBO readback for the particles state-hash golden.
+// Returns false (the scenario SKIPs) on backends without buffer readback.
 bool ReadParticleBuffer(cairns::Engine& engine, std::vector<uint8_t>& out);
 
 // Ladder & scenario screen readback. Same surface as
@@ -66,12 +66,12 @@ bool ReadFinalTargetRgba(cairns::Engine& engine, std::vector<uint8_t>& rgba,
 
 void DumpFinalTargetPng(cairns::Engine& engine, const std::string& name);
 
-// L6/L7 skin-output buffer readback. Returns false until the stash@{0}
-// ReadBackBuffer salvage is applied; that day the rungs' buffer SECTION
-// turns from SKIP to a real cross-platform check.
+// Skin-output buffer readback for the append-only load acceptance pair.
+// Returns false until Resources::ReadBackBuffer lands; then the buffer
+// SECTION turns from SKIP to a real cross-platform check.
 bool ReadSkinOutputUsedBytes(cairns::Engine& engine, std::vector<uint8_t>& out);
 
-// G4 resolved-depth readback. Same SKIP discipline.
+// Nested-graph resolved-depth readback. Same SKIP discipline.
 bool ReadResolvedDepth(cairns::Engine& engine, std::vector<uint8_t>& out);
 
 // Asset presence check used by every ladder/scenario test. Returns true iff

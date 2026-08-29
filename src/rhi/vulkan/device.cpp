@@ -1,9 +1,9 @@
 // rhi/vulkan/device.cpp
 //
-// Vulkan platform device lifetime. The instance/surface/physical+logical
-// device/queues/command-pool creation + the device-suitability helpers moved
-// here out of resource_manager.cpp (Phase 0e). ResourceManager mirrors these
-// handle values during InitDevice; Device owns their teardown.
+// Vulkan platform device lifetime: instance/surface/physical+logical
+// device/queues/command-pool creation + the device-suitability helpers.
+// Subsystems mirror these handle values during their Init; Device owns
+// the teardown.
 
 #include "util/define.hpp"
 
@@ -230,7 +230,7 @@ bool Device::Init(const InitConfig& cfg) {
             cfg.plat.vk_instance_extensions + cfg.plat.vk_instance_extension_count);
         if (plat.validation_enabled_) {
             extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-            // #229 GPU-determinism: VK_EXT_validation_features carries the
+            // VK_EXT_validation_features carries the
             // synchronization-validation toggle below.
             extensions.push_back(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
         }
@@ -248,12 +248,12 @@ bool Device::Init(const InitConfig& cfg) {
         ci.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         ci.ppEnabledExtensionNames = extensions.data();
         VkDebugUtilsMessengerCreateInfoEXT dbg{};
-        // #229 GPU-determinism: enable Khronos SYNCHRONIZATION validation in
-        // debug builds. It flags read-before-write / missing-barrier hazards on
-        // reused GPU memory (transient slots, ping-pong SSBOs) -- the suspected
-        // three_champ flake class -- and names the exact pass + resource via the
-        // debug messenger. No-op in Release (validation_enabled_ = false). The
-        // enable array + features struct must outlive vkCreateInstance.
+        // Enable Khronos SYNCHRONIZATION validation in debug builds. It
+        // flags read-before-write / missing-barrier hazards on reused GPU
+        // memory (transient slots, ping-pong SSBOs) and names the exact
+        // pass + resource via the debug messenger. No-op in Release
+        // (validation_enabled_ = false). The enable array + features
+        // struct must outlive vkCreateInstance.
         const VkValidationFeatureEnableEXT sync_val_enable[] = {
             VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
         };
@@ -361,8 +361,8 @@ bool Device::Init(const InitConfig& cfg) {
         VkPhysicalDeviceFeatures2 features2{};
         features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         features2.features.samplerAnisotropy = VK_TRUE;
-        // #206 MRT: per-attachment blend state (color attachment 0 alpha-
-        // blends, R32U id attachment has blendEnable=false). Without
+        // Per-attachment blend state (color attachment 0 alpha-blends,
+        // R32U id attachment has blendEnable=false). Without
         // independentBlend, all attachments must share the same blend state.
         features2.features.independentBlend = VK_TRUE;
         features2.pNext = &vk12;

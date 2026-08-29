@@ -1,7 +1,7 @@
 // tests/test_render_proxies.cpp
 //
 // SPEC: src/render/render_proxy.hpp + render_proxy_arrays.hpp +
-//        frame_packet.hpp (G.2 of the test tech tree).
+//        frame_packet.hpp.
 // TAGS: [spec][render][proxy]
 //
 // PODs for the per-frame scene-to-draw extract. LightProxy is skipped per

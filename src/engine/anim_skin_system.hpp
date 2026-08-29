@@ -1,10 +1,10 @@
 // engine/anim_skin_system.hpp
 //
-// GPU skinning + animation state, grouped out of the Engine god class (C2 S2):
-// the SkinnedAttachment pool + persistent skin-output RangePool, the skin
-// deform + palette-eval kernels, the folded anim-table SSBOs, the delta-upload
-// cursor/dirty latches, and the dynamic-offset descriptor sets. Engine's load +
-// BuildSkinFrame + uploadAnimTablesGpu systems operate on it.
+// GPU skinning + animation state: the SkinnedAttachment pool + persistent
+// skin-output RangePool, the skin deform + palette-eval kernels, the folded
+// anim-table SSBOs, the delta-upload cursor/dirty latches, and the
+// dynamic-offset descriptor sets. Pure state; Engine's load + BuildSkinFrame
+// + uploadAnimTablesGpu systems operate on it.
 
 #pragma once
 

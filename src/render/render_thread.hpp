@@ -33,13 +33,13 @@ struct FramePacket;
 
 class RenderThread {
 public:
-    // #222 Phase T.1: re-export of cairns::rhi::kFramesInFlight.
+    // Re-export; cairns::rhi::kFramesInFlight is the one FIF home.
     static constexpr uint32_t kFramesInFlight = cairns::rhi::kFramesInFlight;
 
     // record_fn records each published packet. background=true runs it on a
     // dedicated worker thread (native, double-buffered); background=false runs
     // it inline at Submit on the calling thread (single-threaded, e.g. the
-    // browser where Web Worker pthreads + WebGPU are deferred to W6b).
+    // browser, where Web Worker pthreads + WebGPU don't yet coexist).
     RenderThread(std::function<void(FramePacket&)> record_fn, bool background);
     ~RenderThread();
 

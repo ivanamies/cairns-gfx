@@ -1,12 +1,12 @@
 // engine/particle_system.hpp
 //
-// Particle subsystem state, split out of the Engine god class (C2 S3). Groups
-// the compute kernel + render shaders + the double-buffered SSBOs + the
-// cross-thread parity handshake (mutex/cv/counters) into one cohesive unit --
-// the render thread writes parity_out under parity_m so the game thread chains
-// frame N+1's parity_in from frame N's parity_out. Engine owns one of these and
-// its init/draw systems operate on it; keeping the lock WITH the data it guards
-// is the point (they must never drift apart).
+// Particle subsystem state: the compute kernel + render shaders + the
+// double-buffered SSBOs + the cross-thread parity handshake
+// (mutex/cv/counters) -- the render thread writes parity_out under parity_m
+// so the game thread chains frame N+1's parity_in from frame N's parity_out.
+// Engine owns one of these and its init/draw systems operate on it; keeping
+// the lock WITH the data it guards is the point (they must never drift
+// apart).
 
 #pragma once
 
@@ -23,7 +23,7 @@ struct ParticleSystem {
     rhi::Handle<rhi::Kernel> kernel;
     rhi::Handle<rhi::Shader> render_shader;
     rhi::Handle<rhi::Shader> render_offscreen;
-    // #222 Phase A.1 fix: id-less variant for the no-id forward pass.
+    // Id-less variant for the no-id forward pass (picking inactive).
     rhi::Handle<rhi::Shader> render_offscreen_noid;
     rhi::Handle<rhi::Buffer> ssbo[2];
 
@@ -38,8 +38,9 @@ struct ParticleSystem {
 
     // Particle RNG seed; takes effect on the next initParticles.
     uint32_t random_seed = 42;
-    // #229 C3: the sim/draw gate moved to a per-scene ParticleEmitterComponent
-    // (Engine::AnyBoundSceneHasEmitter). No global enable flag here.
+    // The sim/draw gate is a per-scene ParticleEmitterComponent
+    // (Engine::AnyBoundSceneHasEmitter) -- deliberately no global enable
+    // flag here.
 };
 
 }  // namespace cairns

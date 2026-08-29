@@ -71,11 +71,11 @@ SCENARIO("WorldAabb pads about the center and follows the world transform",
     }
 }
 
-// Phase B.15: pin the Gribb-Hartmann plane math directly. The previous
-// tests only asserted in/out decisions on hand-picked points, which a
-// distance-from-eye sphere cull (entirely wrong math) also satisfies.
-// With the identity view_proj the frustum should be the unit cube
-// (planes at +/-1 on each axis with outward-pointing normals).
+// Pin the Gribb-Hartmann plane math directly. In/out decisions on
+// hand-picked points alone are also satisfied by a distance-from-eye
+// sphere cull (entirely wrong math). With the identity view_proj the
+// frustum should be the unit cube (planes at +/-1 on each axis with
+// outward-pointing normals).
 SCENARIO("ExtractFrustumPlanes on identity view_proj = unit cube",
          "[spec][frustum][layout][regression]") {
     const auto pl = cairns::ExtractFrustumPlanes(glm::mat4(1.0f));
@@ -104,8 +104,8 @@ SCENARIO("ExtractFrustumPlanes on identity view_proj = unit cube",
 
 SCENARIO("positive-vertex selection picks the correct AABB corner",
          "[spec][frustum][regression]") {
-    // Audit-named gap: a center-only or sphere cull would pass the
-    // existing in/out scenarios. This test exercises the positive-
+    // A center-only or sphere cull would pass the plain in/out
+    // scenarios. This test exercises the positive-
     // vertex rule directly: a box straddling a frustum plane with the
     // "positive vertex" outside the plane SHOULD be culled; the same
     // box with positive vertex inside should NOT.

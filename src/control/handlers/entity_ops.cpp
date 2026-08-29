@@ -30,10 +30,10 @@ std::array<float, N> ReadVec(const json& args, const char* key,
 
 int SceneArg(const json& args) { return args.value("scene", -1); }
 
-// #229 C4.2 component-type table. Each row binds a type name to typed
-// headless:: accessors; add/get parse json props here (control side), remove
-// uses the generic ComponentType switch. Sorted-by-name array, binary-searched
-// (no maps). Adding a CV-tool/effect/diffusion component = one row + typed
+// Component-type table. Each row binds a type name to typed headless::
+// accessors; add/get parse json props here (control side), remove uses the
+// generic ComponentType switch. Sorted-by-name array, binary-searched (no
+// maps). Adding a CV-tool/effect/diffusion component = one row + typed
 // accessors; tools.list advertises it automatically.
 json AddName(cairns::Engine* e, int s, uint32_t ent, const json& props) {
     const std::string n = props.value("name", std::string{});

@@ -1,8 +1,7 @@
 // rhi/pipelines.hpp
 //
 // Graphics + compute pipeline (PSO) creation. Depends on Device + Resources
-// (stores the compiled Shader/Kernel in their pools) + Bindless + Frames
-// (Vulkan pipeline layouts reference their descriptor-set layouts). Owns the
+// (stores the compiled Shader/Kernel in their pools) + Frames. Owns the
 // pipeline teardown for live Shader/Kernel pool entries at shutdown.
 
 #pragma once

@@ -1,7 +1,8 @@
 // scripts/web_move_champion.mjs
 //
-// W7 (R2): drive the cairns_web WASM page in Chrome over the DevTools Protocol
-// and *move a champion* -- the interactive loop the headless gate can't prove.
+// R2 (windowed click->eval->move) driver: drive the cairns_web WASM page in
+// Chrome over the DevTools Protocol and *move a champion* -- the interactive
+// loop the headless gate can't prove.
 // Sequence: boot -> scn('three_champ') (3 static champions) -> screenshot BEFORE
 // -> listEntities -> selection.set(first) -> scene.setTransform(first, shifted)
 // -> screenshot AFTER. The two PNGs show the selected champion translated.

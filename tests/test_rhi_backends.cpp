@@ -1,6 +1,6 @@
 // tests/test_rhi_backends.cpp
 //
-// SPEC: backend boot-cap fill contract + offset×16 binding (G.4).
+// SPEC: backend boot-cap fill contract + offset×16 binding.
 // TAGS: [spec][rhi][backend]
 //
 // These are spec-tier even though they're about backend behavior: the
@@ -18,7 +18,7 @@ using namespace cairns;
 
 SCENARIO("offset*16 byte-offset arithmetic is bit-stable",
          "[spec][rhi][backend][regression]") {
-    // Phase G.4 #56: every backend's BindStorageBuffer for the skin pool
+    // Every backend's BindStorageBuffer for the skin pool
     // must bind at slice.offset * kSkinVertexStride. This pins the
     // arithmetic side; cairns_golden_tests runs the contract against the
     // live Device + bake.
@@ -31,7 +31,7 @@ SCENARIO("offset*16 byte-offset arithmetic is bit-stable",
 
 SCENARIO("DeviceCaps fields default to zero",
          "[spec][rhi][backend][regression]") {
-    // Phase G.4 #55: boot-cap fill contract. Each backend's Device::Init
+    // Boot-cap fill contract. Each backend's Device::Init
     // is required to populate max_storage_buffer_range and
     // resident_budget_bytes. Default-zero is the "uninitialized" state
     // the engine's boot invariant catches.

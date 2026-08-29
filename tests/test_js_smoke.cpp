@@ -1,4 +1,4 @@
-// TEMP smoke: prove cairns_control links into the golden tests + JS eval works.
+// Smoke: cairns_control links into the golden tests + JS eval works.
 #include <catch2/catch_test_macros.hpp>
 
 #include "control/command_registry.hpp"

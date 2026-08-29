@@ -2,14 +2,14 @@
 //
 // NDJSON command registry + transport-agnostic dispatch.
 //
-// One CommandRegistry; three frontends (decision #1 in the plan):
+// One CommandRegistry; three frontends:
 //   - stdio NDJSON (cairns_serve / cairns_app agent transport)
-//   - ImGui buttons (P5: every editor action goes through Dispatch)
-//   - QuickJS (P5: every registered op bound as a JS function)
+//   - ImGui buttons (every editor action goes through Dispatch)
+//   - QuickJS (every op reachable via cairns.dispatch)
 //
 // Each Register() carries (schema, doc, handler). The schema rides registration
 // so `tools.list` can emit a JSON-Schema manifest that an external agent or
-// MCP server consumes -- decision #4 (self-describing surface).
+// MCP server consumes (self-describing surface).
 
 #pragma once
 
@@ -33,9 +33,8 @@ struct Command {
     std::string aliased_for;
 };
 
-// #215 (name, op_id) sorted lookup table. Binary-searched at Dispatch
-// time -- one std::string construction per request (from the json op
-// field) and one comparison cascade, no hash.
+// (name, op_id) lookup table. MUST stay sorted -- Dispatch binary-searches
+// it to resolve name -> op_id (no hash, no per-request string copy).
 struct CommandIndex {
     std::string name;
     uint32_t op_id = 0;
@@ -44,7 +43,7 @@ struct CommandIndex {
 
 class CommandRegistry {
 public:
-    // #229 M4: reserve to the ~60-op surface (+headroom) so Register doesn't
+    // Reserve to the ~60-op surface (+headroom) so Register doesn't
     // doubling-grow the flat command vectors during boot registration.
     CommandRegistry() {
         commands_.reserve(128);
@@ -87,21 +86,18 @@ public:
     // Event channel: any handler may publish a structured event. The
     // transport drains the queue after each dispatch and writes one NDJSON
     // line per event ({"event": <topic>, "data": {...}}). Today events are
-    // unconditional broadcasts -- subscribe semantics (per-topic filter,
-    // subscription ids) are a follow-up; clients can already drop frames by
+    // unconditional broadcasts -- no subscribe semantics (per-topic filter,
+    // subscription ids) exist yet; clients can already drop events by
     // topic. Thread-safe so a render-thread handler can publish too.
     void PublishEvent(std::string&& topic, json&& data);
     std::vector<json> DrainEvents();
 
 private:
-    // #215 flat array indexed by OpId + sorted name lookup table. Replaces
-    // std::unordered_map<std::string, Command>. Dispatch: binary search
-    // the sorted_names_ vector to resolve name -> op_id, then commands_
-    // [op_id] is the handler. RegisterAlias adds another entry in
-    // sorted_names_ pointing at the canonical op_id. Names live on
-    // Command::name so sorted_names_ stores std::string copies (small
-    // hashable map -> sorted vector trade); reserve once and re-sort
-    // after each Register.
+    // Flat array indexed by OpId + sorted name lookup table. Dispatch:
+    // binary search sorted_names_ to resolve name -> op_id, then
+    // commands_[op_id] is the handler. RegisterAlias adds another
+    // sorted_names_ entry pointing at the canonical op_id. Register
+    // inserts in order so the table stays sorted.
     std::vector<Command> commands_;
     std::vector<CommandIndex> sorted_names_;
     std::mutex events_m_;

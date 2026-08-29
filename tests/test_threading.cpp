@@ -1,11 +1,10 @@
 // tests/test_threading.cpp
 //
-// SPEC: G.6 threading + SPSC handoff invariants.
+// SPEC: threading + SPSC handoff invariants.
 // TAGS: [spec][threading]
 //
-// The audit named threading as the biggest invisible gap. We can't link
-// the live RenderThread into the pure-CPU spec target (it has rhi
-// surface), but we CAN spec the SPSC handoff invariants on a minimal
+// The live RenderThread can't link into the pure-CPU spec target (it has
+// rhi surface), but we CAN spec the SPSC handoff invariants on a minimal
 // depth-2 ring of POD packets -- the same shape the engine uses to hand
 // FramePacket from game to render.
 //

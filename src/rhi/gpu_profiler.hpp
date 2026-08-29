@@ -1,7 +1,6 @@
 // rhi/gpu_profiler.hpp
 //
-// #222 Phase F.1: GPU-side per-pass timing. Extracted out of Frames
-// so FramesPlat is no longer a god struct.
+// GPU-side per-pass timing.
 //
 // vk path: VkQueryPool + per-FIF arrays of pass names/counts. The
 // recorder reaches into plat.profiler_ to write start/end timestamps;

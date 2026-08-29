@@ -1,5 +1,5 @@
 #!/bin/zsh
-# #225 R5: studio_js smoke harness. Loads scripts/_studio_js_smoke.js
+# studio_js smoke harness. Loads scripts/_studio_js_smoke.js
 # via cairns.script.eval and asserts the printed result is {ok:N, fail:0}.
 #
 # Usage: scripts/verify_studio_js.sh [metal|vk]   (default: both)

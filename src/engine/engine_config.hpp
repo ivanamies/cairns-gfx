@@ -45,17 +45,17 @@ struct EngineConfig {
     // clock without the dump+exit path.
     bool use_fixed_clock = false;
 
-    // A.2: gate particle_sim + particle_draw at the source. Default OFF for
-    // every ladder rung + every scenario except G1 (and G3-right viewport).
-    // Particle compute writes via std::rand-shaped paths consumed downstream;
-    // with this off, L1 "pipeline + clear + one draw" is actually that.
-    // Set via Engine::EnableParticles(bool) at runtime; CLI app and serve
-    // shell default ON via main / serve_main lowering.
+    // Gate particle sim + draw at the source. Default OFF for every golden
+    // scenario except the particle ones -- particle compute writes feed
+    // downstream state, so the minimal "pipeline + clear + one draw" rungs
+    // are only that with this off. Set via Engine::EnableParticles(bool) at
+    // runtime; CLI app and serve shell default ON via main / serve_main
+    // lowering.
     bool particles_enabled = false;
 
     // CAIRNS_ANIM_VERT_REPORT: per-frame [ANIM-VERTS] receipt of the vertices
-    // the skin kernel actually dispatches (post-cull, post-cap). Diagnostic for
-    // the scale rungs + frustum cull; off by default.
+    // the skin kernel actually dispatches (post-cull, post-cap). Diagnostic
+    // for scale testing + frustum cull; off by default.
     bool anim_vert_report = false;
 };
 

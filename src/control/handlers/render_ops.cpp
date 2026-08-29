@@ -14,8 +14,7 @@ void RegisterRenderOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.render.frame",
         /*schema=*/json::object(),
-        /*doc=*/"Render one frame to final_target_ (clear-only in P1C; scene "
-                "render once P2 wires it).",
+        /*doc=*/"Render one headless frame to final_target_ (fixed clock).",
         [engine = &engine](const json&) -> json {
             if (!cairns::headless::RenderFrame(engine)) {
                 throw std::runtime_error("RenderHeadlessFrame failed");
@@ -26,8 +25,8 @@ void RegisterRenderOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.io.dumpTexture",
         /*schema=*/json::object(),
-        /*doc=*/"Read back the named target to PNG. target='final' for now; "
-                "viewport:N / shadow:N / depth:N to follow.",
+        /*doc=*/"Read back the named target to PNG. target='final' "
+                "(headless final_target_) or 'window' (queued swapchain dump).",
         [engine = &engine](const json& args) -> json {
             const std::string target = args.value("target", std::string{"final"});
             const std::string path = args.value("path", std::string{});

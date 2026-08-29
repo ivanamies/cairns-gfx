@@ -1,4 +1,4 @@
-// rhi/webgpu/frames.cpp -- WebGPU backend (W2 stubs; real frame loop in W3/W4).
+// rhi/webgpu/frames.cpp -- WebGPU frame loop: begin/submit + present-by-copy.
 #include "util/define.hpp"
 #if CAIRNS_WEBGPU
 
@@ -122,9 +122,8 @@ void Frames::Present(const SwapResolveTarget& target, FrameCapture& frame_captur
 #ifndef __EMSCRIPTEN__
     wgpuSurfacePresent(plat.surface_);  // native; browser auto-presents on rAF return
 #endif
-    // emdawnwebgpu mints a fresh refcounted texture per GetCurrentTexture; without
-    // this release it leaks one per frame until the WASM heap scribbles the stack
-    // cookie (~frame 450) -> "corrupted heap (address zero)" abort.
+    // emdawnwebgpu mints a fresh refcounted texture per GetCurrentTexture;
+    // release it or the heap grows every frame.
     wgpuTextureRelease(st.texture);
 }
 void Frames::WriteUnlitDescriptors(Resources& resources, Allocator& alloc) {

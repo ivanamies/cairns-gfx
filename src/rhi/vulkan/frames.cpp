@@ -168,8 +168,8 @@ bool Frames::Init(Device& device, Pipelines& pipelines) {
     plat.graphics_queue_ = device.plat.graphics_queue_;
     plat.compute_queue_ = device.plat.compute_queue_;
     plat.present_queue_ = device.plat.present_queue_;
-    // #222 Phase F.1: query pool + per-FIF tracker init moved to
-    // GpuProfiler::Init (called from engine before Frames::Init).
+    // Query pool + per-FIF tracker init live in GpuProfiler::Init
+    // (engine calls it before Frames::Init).
 
     {  // per-frame command buffers + sync
         const uint32_t n = kFramesInFlight;
@@ -214,17 +214,15 @@ bool Frames::Init(Device& device, Pipelines& pipelines) {
         }
     }
 
-    // #222 Phase F.4: descriptor set layouts moved to Pipelines::Init;
-    // Frames only owns per-FIF sets + the pool below.
     {  // pool + per-frame sets (layouts read from PipelinesPlat).
         VkDevice dev = plat.device_;
         const uint32_t n = kFramesInFlight;
 
 
-        // Pool sizing post-E.2 (point_sets_ retired):
+        // Pool sizing:
         //   SSBO: skin Group A (2 per skinned mesh, kMaxSkinnedMeshes
         //     budget) + dyn_skin_group_b_ binding 3 (n) + dyn_anim_eval_
-        //     bindings 1..12 (12n) + dyn_particle_parity_[2] (4n).
+        //     SSBOs (12n budget) + dyn_particle_parity_[2] (4n).
         //   UBO_DYN: globals (n) + drawtmp (n) + dyn_globals_/drawtmp_
         //     (2n) + dyn_skin_group_b_ params (n) + dyn_anim_eval_ records
         //     (n) + dyn_particle_parity_[2] dt (2n).
@@ -270,9 +268,8 @@ bool Frames::Init(Device& device, Pipelines& pipelines) {
             !alloc_sets(pp.drawtmp_set_layout_, plat.drawtmp_sets_)) {
             return false;
         }
-        // #222 Phase D.3/D.4 cleanup: per-step compute_sets_ + per-FIF
-        // skin_group_b_sets_ + anim_eval_sets_ retired. Particle / skin
-        // Group B / anim_eval all use DynamicBuffers created in engine.
+        // Particle / skin Group B / anim_eval sets all flow through
+        // DynamicBuffers created in engine.
         plat.composite_sets_.resize(n);
         {
             const uint32_t total = n * kCompositeRingSize;
@@ -317,11 +314,6 @@ void Frames::Deinit() {
     if (plat.descriptor_pool_) {
         vkDestroyDescriptorPool(dev, plat.descriptor_pool_, nullptr);
     }
-    // #222 Phase F.1: profiler teardown moved to GpuProfiler::Deinit.
-    // #222 Phase F.3: offscreen-target cache teardown moved to
-    // OffscreenTargets::Deinit.
-    // #222 Phase F.4: descriptor set layout teardown moved to
-    // Pipelines::Deinit.
     inited_ = false;
 }
 
@@ -379,11 +371,10 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
         vkWaitForFences(dev, 1, &plat.compute_in_flight_[cf], VK_TRUE, UINT64_MAX);
         vkWaitForFences(dev, 1, &plat.in_flight_[cf], VK_TRUE, UINT64_MAX);
     }
-    // #228 F1 (v2): drain any pending free whose retire_frame <=
-    // current frame_index_. Both fences for slot |cf| signaled above
-    // prove the kFIF-frames-ago frame is GPU-done; per-resource
-    // retire_frame stamping covers the between-frames push case the
-    // v1 per-slot bucket got wrong.
+    // Drain any pending free whose retire_frame <= current frame_index_.
+    // Both fences for slot |cf| signaled above prove the kFIF-frames-ago
+    // frame is GPU-done; per-resource retire_frame stamping also covers
+    // frees pushed between frames (reload).
     resources.DrainDeferredFrees(alloc, resources.FrameIndex());
 
     // Both queues' slot-`cf` timestamps are now resolved -- read them BEFORE

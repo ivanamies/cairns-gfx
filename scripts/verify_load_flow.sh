@@ -1,5 +1,6 @@
 #!/bin/zsh
-# #224 L9+: the user's stated sequence, verified at EVERY step.
+# Load-flow acceptance: boot-empty -> load -> append -> instantiate ->
+# animate, verified at EVERY step.
 #
 # Drives scripts/_load_flow_test.js (9 steps; see comment block in that
 # file). The JS reports {ok, fail, errors[]} -- we assert fail=0. THEN
@@ -91,20 +92,13 @@ run_backend() {
     assert_diff tmp/_lf_${bk}_empty.png   tmp/_lf_${bk}_loaded.png   "$bk: instantiate produced no pixel delta" || return 1
     assert_diff tmp/_lf_${bk}_loaded.png  tmp/_lf_${bk}_animated.png "$bk: animation produced no pixel delta"  || return 1
 
-    # ── #228 H5: runtime-load golden. WARN-mode pending determinism fix.
-    #    The pixel-delta checks above only prove "something changed";
-    #    the golden proves "changed to the RIGHT thing." But load_flow's
-    #    runtime path is currently non-deterministic across cairns_serve
-    #    invocations (two consecutive `regenerate_load_flow_golden.sh
-    #    && verify_load_flow.sh` runs differ by ~all-bytes; the static
-    #    verify_headless byte-gate IS deterministic at the same seed, so
-    #    something on the runtime cairns.prefab.load path leaks state).
-    #    Suspect H4's per-load uploadAnimTablesGpu re-flatten -- the GPU
-    #    allocator hands out non-deterministic offsets when buffers churn
-    #    every call. Tracking: task #297.
-    #    Until then: WARN on mismatch (visible signal of pixel drift), do
-    #    not fail the gate. When H4 lands, flip back to hard-cmp.
-    #    vk is excluded until #296 fixes the load_flow vk render bug.
+    # ── Runtime-load golden, WARN-mode. The pixel-delta checks above only
+    #    prove "something changed"; the golden proves "changed to the RIGHT
+    #    thing." The runtime cairns.prefab.load path is not yet deterministic
+    #    across cairns_serve invocations (the static verify_headless byte-gate
+    #    IS, at the same seed), so mismatch WARNs instead of failing the gate;
+    #    flip back to hard-cmp once the load path is deterministic.
+    #    vk is excluded until its render of this workload is fixed.
     if [ "$bk" = "metal" ] && [ -f goldens/load_flow_loaded_metal.png ]; then
         local g_drift=0
         /usr/bin/cmp -s tmp/_lf_metal_loaded.png   goldens/load_flow_loaded_metal.png   || g_drift=$((g_drift + 1))

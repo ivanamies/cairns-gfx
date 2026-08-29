@@ -1,6 +1,6 @@
 // tests/test_asset_gpu_pods.cpp
 //
-// SPEC: G.7 partial -- the pure-CPU asset/upload PODs (gpu_anim_types,
+// SPEC: the pure-CPU asset/upload PODs (gpu_anim_types,
 // material_gpu, sampler enums). gltf_loader + scene_gpu + animation_runtime
 // require the engine + glm gltf paths; those go in cairns_golden_tests.
 // TAGS: [spec][asset][gpu]

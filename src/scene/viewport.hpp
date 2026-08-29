@@ -1,16 +1,16 @@
 // scene/viewport.hpp
 //
 // A Viewport is the rendered pane: a Camera + offscreen color target
-// bound to a Scene (#225: pre-#225 this was called World).
-// Editor-engine vocabulary (Document-View): Scene = Document (data +
-// edit state); Viewport = the pane onto it; Camera = the math.
-// Editors keep N of these (one per dock pane). The camera is per-
-// viewport, NOT per-scene -- multiple panes can show the same scene
-// from different angles.
+// bound to a Scene. Editor-engine vocabulary (Document-View): Scene =
+// Document (data + edit state); Viewport = the pane onto it; Camera =
+// the math. Editors keep N of these (one per dock pane / [N-node] graph
+// node). The camera is per-viewport, NOT per-scene -- multiple panes
+// can show the same scene from different angles.
 //
 // Target lifetime: PERSISTENT imported texture, NOT a per-frame
 // transient. Allocated on viewport open, sized to the pane; re-allocated
-// on resize. The render graph imports it each frame.
+// on resize. The render graph imports it each frame. The per-viewport
+// target is the multi-scene seam: a composition pane samples it.
 
 #pragma once
 
@@ -36,19 +36,15 @@ struct Camera {
 // Per-viewport navigation state. yaw rotates around world up (Y); pitch around
 // the camera's local right (X). The resolved view matrix on Viewport::camera
 // is the durable thing -- this struct is just the input to that resolve.
-// #220 Step 4: lives in Viewport::Cold (folded in from the old parallel
-// Engine::fly_ array; generational pool removed the reason that was
-// parallel).
 struct FlyController {
     glm::vec3 position{0.0f, 0.0f, 0.0f};
     float yaw = 0.0f;    // radians
     float pitch = 0.0f;  // radians
 };
 
-// #220 Step 4: Viewport is now Handle-pilled (ViewportId = Handle<Viewport>),
-// owned by Engine::viewports_ ResourceManager. Hot/Cold split per the plan:
-// Hot = per-draw read in RecordFrame; Cold = camera-entity binding + fly
-// controller, both read once per frame.
+// Handle-pilled (ViewportId = Handle<Viewport>), owned by Engine's viewport
+// pool. Hot = per-draw read in RecordFrame; Cold = camera-entity binding +
+// fly controller, both read once per frame.
 struct Viewport {
     struct Hot {
         SceneId scene;
@@ -57,7 +53,7 @@ struct Viewport {
         rhi::Handle<rhi::Texture> depth_target;
         uint32_t target_w = 0;
         uint32_t target_h = 0;
-        // #194: where this viewport tiles on the swap pane, in NDC (0..1).
+        // Where this viewport tiles on the swap pane, in NDC (0..1).
         // (x, y) = bottom-left corner; (z, w) = size. {0,0,1,1} = full pane.
         // Default for viewport 0 = full pane; other viewports = zero-size so
         // they're inert until the agent calls cairns.viewport.setLayout.
@@ -71,17 +67,15 @@ struct Viewport {
         // happens once per frame in BuildMeshOpaqueDraws.
         entt::entity camera_entity = entt::null;
         FlyController fly;
-        // A.5: per-viewport particle draw toggle. The engine's global
-        // particles_enabled_ gates the compute pass + ssbo writes; this
-        // per-viewport flag gates the DrawPoints call in each viewport's
-        // forward pass. Default true (back-compat with the global gate);
-        // G3 right viewport sets true while left sets false, with the
-        // global flag on.
+        // Per-viewport particle DRAW toggle: gates only the DrawPoints
+        // call in this viewport's forward pass (the sim/compute gate is
+        // separate). Default true so the sim gate alone decides; two
+        // viewports on one scene can differ (e.g. left off, right on).
         bool particles_enabled = true;
-        // #229 C3: per-viewport editor-chrome gate (was Engine::
-        // editor_chrome_enabled_). The selection-outline pass draws for this
-        // viewport only when set. Default on. [N-node] node K can drop its
-        // outline for a capture while node J keeps it.
+        // Per-viewport editor-chrome gate. The selection-outline pass
+        // draws for this viewport only when set. Default on. [N-node]
+        // node K can drop its outline for a capture while node J keeps
+        // it.
         bool chrome_enabled = true;
     };
 };

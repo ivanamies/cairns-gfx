@@ -1,6 +1,6 @@
 // tests/test_scene_ecs.cpp
 //
-// SPEC: src/scene/* PODs (G.1 of the test tech tree).
+// SPEC: src/scene/* PODs.
 // TAGS: [spec][scene]
 //
 // Pure-CPU contract on the data-oriented core: Scene::Hot/Cold POD shapes,

@@ -73,9 +73,9 @@ SCENARIO("unit draws stay in the half-open zero-to-one range",
     }
 }
 
-// Phase B.14: pin the NextUnit() FLOAT mapping formula, not just the
-// underlying NextU32 sequence. The audit named the gap: alternate
-// mappings (e.g. (NextU32() & 0xFFFFFF) * (1/16777216), or
+// Pin the NextUnit() FLOAT mapping formula, not just the underlying
+// NextU32 sequence. Alternate mappings (e.g.
+// (NextU32() & 0xFFFFFF) * (1/16777216), or
 // (float)NextU32() / 4294967296.0f) all satisfy the [0,1) range test
 // and the same-seed determinism test -- but produce different particle
 // bytes than the spec-mandated `(NextU32() >> 8) * (1.0f/16777216.0f)`.
@@ -95,7 +95,7 @@ SCENARIO("NextUnit() emits the exact mt19937(42) mapping",
     REQUIRE(u0_bits == 0x3EBFC3B8u);
 }
 
-// Phase B.14: pin that SeedParticles draws exactly 2 NextUnit() per
+// Pin that SeedParticles draws exactly 2 NextUnit() per
 // particle (radius + theta). A wrong impl that drew 3 or used a different
 // stride would produce different bytes despite matching `count`.
 SCENARIO("SeedParticles consumes exactly two NextUnit per particle",

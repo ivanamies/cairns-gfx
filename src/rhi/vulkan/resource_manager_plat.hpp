@@ -31,7 +31,7 @@ struct ShaderHotPlat {
     VkDescriptorSetLayout vk_imgui_set_layout = VK_NULL_HANDLE;
     VkDescriptorPool vk_imgui_pool = VK_NULL_HANDLE;
     VkDescriptorSet vk_imgui_set = VK_NULL_HANDLE;
-    // #236 fix: cache the last-written (font, sampler) pair so DrawImGui
+    // Cache the last-written (font, sampler) pair so DrawImGui
     // only re-runs vkUpdateDescriptorSets when they actually change.
     // Stable across frames since the font atlas + sampler are immutable
     // post-Engine init -- avoids VUID-vkUpdateDescriptorSets-None-03047.
@@ -44,9 +44,8 @@ struct KernelHotPlat {
     VkPipelineLayout vk_layout = VK_NULL_HANDLE;
 };
 
-// #222 Phase D.2: vk-side per-FIF descriptor sets for DynamicBuffers.
-// One layout, one set per frame-in-flight (matches the FramesPlat per-FIF
-// rotation it replaces). All sets bound against the same backing buffer
+// vk-side per-FIF descriptor sets for DynamicBuffers: one layout, one
+// set per frame-in-flight. All sets bound against the same backing buffer
 // at offset 0 with the binding's max_range; per-draw dynamic offsets shift
 // the access window. kMaxFrames=4 (covers FIF=2 and FIF=3 with headroom);
 // slots past frames_in_flight stay Null.

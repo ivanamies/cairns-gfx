@@ -1,8 +1,7 @@
 // rhi/vulkan/gpu_profiler.cpp
 //
-// #222 Phase F.1: GPU profiler -- vk Init/Deinit. Per-FIF readback
-// + reset still lives in Frames::Begin for now (calls into ts_pool_
-// directly); a follow-up will fold it in here.
+// GPU profiler -- vk Init/Deinit. Per-FIF readback + reset lives in
+// Frames::Begin (calls into ts_pool_ directly).
 
 #include "util/define.hpp"
 

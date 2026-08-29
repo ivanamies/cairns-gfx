@@ -1,10 +1,10 @@
 // control/stdio_lines.hpp
 //
-// C-stdio NDJSON line I/O. Replaces std::getline(std::cin) / ostream<< so the
-// transport TUs don't pull in <iostream>, whose static std::ios_base::Init
-// object allocates cout/cin/cerr + locale before main (#229 M0b kills that
-// static-init allocation). FILE* is buffered; reads are unbounded (NDJSON
-// command lines can be long). Not a hot path -- one line per command.
+// C-stdio NDJSON line I/O. The transport TUs must not pull in <iostream>:
+// its static std::ios_base::Init object allocates cout/cin/cerr + locale
+// before main -- a static-init alloc outside the budgeted CPU block. FILE*
+// is buffered; reads are unbounded (NDJSON command lines can be long). Not
+// a hot path -- one line per command.
 
 #pragma once
 

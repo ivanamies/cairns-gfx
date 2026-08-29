@@ -1,10 +1,10 @@
 // rhi/offscreen_targets.hpp
 //
-// #222 Phase F.3: render-pass + framebuffer cache extracted out of
-// Frames. vk path owns the OffscreenTargetCache (keyed on attachment
-// formats / load-store ops); metal path is empty (no equivalent).
-// Frames::Begin stamps the cache pointer onto the recorder so the
-// per-pass BeginRenderPass can look up / create framebuffers.
+// Render-pass + framebuffer cache. vk path owns the
+// OffscreenTargetCache (keyed on attachment formats / load-store ops);
+// metal path is empty (no equivalent). Frames::Begin stamps the cache
+// pointer onto the recorder so the per-pass BeginRenderPass can look
+// up / create framebuffers.
 
 #pragma once
 

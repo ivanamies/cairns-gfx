@@ -8,21 +8,16 @@
 namespace cairns {
 
 // Per-frame scene proxy bag. `meshes` and `primitives` ride the per-slot
-// BumpArena (#219 Chunk B) -- the only proxy kinds the current scene path
-// pushes into.
-//
-// #229 M0b: the six vestigial ProxyArray<T> slots from the #194 plan
-// (lines/points/skins/lights/cameras/layers) were never produced and were
-// default-heap std::vectors that escaped the block hash -- deleted, along with
-// the ProxyArray<T> wrapper. Re-add as ArenaList<T> when a producer wakes up.
+// BumpArena -- the only proxy kinds the current scene path pushes into.
+// New proxy kinds must be ArenaList<T> too, or they escape the block hash.
 
 struct RenderProxyArrays {
     cairns::ArenaList<MeshProxy> meshes;
     cairns::ArenaList<PrimitiveProxy> primitives;
 
-    // #219 Chunk B: per-frame bind. Call once at slot Acquire after
-    // arena.Reset(). cap_meshes / cap_prims are upper bounds; push_back
-    // beyond cap asserts. Sizes are headroom for the 3300-hero benchmark
+    // Per-frame bind. Call once at slot Acquire after arena.Reset().
+    // cap_meshes / cap_prims are upper bounds; push_back beyond cap
+    // asserts. Sizes are headroom for the 3300-hero benchmark
     // (~3300 meshes / ~11220 primitives) without growing.
     void Reset(cairns::BumpArena& arena,
                uint32_t cap_meshes = 8192,

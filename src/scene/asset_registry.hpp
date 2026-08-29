@@ -1,8 +1,8 @@
 // scene/asset_registry.hpp
 //
 // AssetRegistry is the ONE class wrapper in the scene layer that earns
-// its own type (per the planning-Claude "no XRegistry classes" rule).
-// It owns four jobs the generic ResourceManager<Asset> can't:
+// its own type. It owns four jobs the generic ResourceManager<Asset>
+// can't:
 //   1. interning / dedup: by_key maps path/content-hash -> AssetId so a
 //      re-loaded GLB returns the same Asset with the same MatIds.
 //   2. loading / parsing: Load(path) drives glTF parse + GPU upload.
@@ -31,8 +31,6 @@ namespace cairns {
 // Forward-declared to avoid pulling util/gltf_loader.hpp (which pulls
 // stb_image's impl) into every TU that just needs AssetId.
 struct Prefab;
-// #220 Step 3: PrefabId is Handle<Prefab>; cpu_graph holds it instead of
-// a raw const Scene*.
 using PrefabId = Handle<Prefab>;
 
 struct Asset {
@@ -46,13 +44,8 @@ struct Asset {
     };
 
     struct Cold {
-        // Non-owning pointer into Engine::prefabs_ during the P4 parity
-        // window; later commits move ownership into AssetRegistry as
-        // unique_ptr<Scene> once AssetRegistry::Load is the real load
-        // path. Forward-declared so this header doesn't pull stb_image.
-        // #220 Step 3: was const Scene*. Now PrefabId into Engine::prefabs_;
-        // ExtractFromScene resolves via the threaded prefabs_pool. Null
-        // sentinel is Handle::Null (rather than nullptr).
+        // PrefabId into Engine::prefabs_; ExtractFromScene resolves it
+        // via the threaded prefabs_pool. Null sentinel is Handle::Null.
         PrefabId cpu_graph;
         // Suballoc slices into the shared packed buffers (deferred; the
         // existing scene_gpu.hpp packs all GLBs into one shared
@@ -71,19 +64,17 @@ public:
     // Dedup-before-allocate: by_key lookup first; on hit, refcount++ and
     // return the existing AssetId. On miss: pool.Acquire(), re-init
     // Cold (per the reused-slot trap), parse glTF, suballoc, register
-    // MatIds globally, refcount = 1, by_key[key] = id. P4 wires the
-    // real body; P3-P4 uses RegisterExistingScene below as the seam.
+    // MatIds globally, refcount = 1, by_key[key] = id. Unwired stub;
+    // RegisterExistingScene below is the live seam.
     inline AssetId Load(const std::string& path) { (void)path; return AssetId::Null; }
 
     // refcount--; at 0, free suballocs + by_key erase + pool.Release().
-    // Actual GPU buffer recycle deferred to a later commit (per plan's
-    // out-of-scope).
+    // Unwired stub; GPU buffer recycle does not exist yet.
     inline void Release(AssetId id) { (void)id; }
 
-    // P4-only seam: register an already-loaded Scene (still owned by
-    // Engine::prefabs_) plus its shared GPU buffer handles. Dedup-keyed
-    // by scene_index. Later commits replace this with a real Load(path)
-    // that owns parsing + suballoc + dedup-by-content-hash.
+    // Register an already-loaded Prefab (still owned by Engine::prefabs_)
+    // plus its shared GPU buffer handles. Dedup-keyed by scene_index.
+    // The live substitute for the unwired Load(path).
     inline AssetId RegisterExistingScene(uint32_t scene_idx,
                                          PrefabId scene_id,
                                          rhi::Handle<rhi::Buffer> pos,
@@ -92,13 +83,12 @@ public:
         const uint64_t key = static_cast<uint64_t>(scene_idx);
         if (AssetId* existing = FindByKey(key)) {
             // unloadAll restarts the prefab pool at index 0, so this scene_idx
-            // key collides with a DIFFERENT, now-released prefab. Rebind the
-            // dedup'd asset to the freshly-loaded prefab + its GPU buffers --
-            // else cpu_graph points at a released PrefabId (generation bumped)
-            // and ExtractFromScene skips every entity in the scene (draws 0,
-            // the "renders first time, not after a scenario switch" bug). A
-            // genuine same-prefab dedup passes identical args, so this is a
-            // no-op there.
+            // key can collide with a DIFFERENT, now-released prefab. Rebind
+            // the dedup'd asset to the freshly-loaded prefab + its GPU
+            // buffers -- else cpu_graph points at a released PrefabId
+            // (generation bumped) and ExtractFromScene skips every entity in
+            // the scene. A genuine same-prefab dedup passes identical args,
+            // so this is a no-op there.
             if (auto* c = pool_.GetCold(*existing)) {
                 ++c->ref_count;
                 c->cpu_graph = scene_id;
@@ -111,8 +101,8 @@ public:
             return *existing;
         }
         AssetId id = pool_.Acquire();
-        // Reused-slot trap (spec §3): freshly re-initialize Cold every
-        // Acquire so a previously-released slot doesn't carry over.
+        // Reused-slot trap: freshly re-initialize Cold every Acquire so
+        // a previously-released slot doesn't carry over.
         if (auto* cold = pool_.GetCold(id)) {
             *cold = Asset::Cold{};
             cold->cpu_graph = scene_id;

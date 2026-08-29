@@ -1,4 +1,4 @@
-// rhi/vulkan/resources.cpp  (Phase 0g-a: pools + destroy/get + frame counter)
+// rhi/vulkan/resources.cpp -- pools + create/destroy/get + frame counter.
 
 #include "util/define.hpp"
 
@@ -284,7 +284,7 @@ bool Resources::Init(Device& device, cairns::ChunkAllocator& chunk) {
     plat.queue_ = device.plat.graphics_queue_;
     plat.physical_ = device.plat.physical_;
     plat.resources_ = this;
-    deferred_.reserve(64);  // #229 M4: cap the fenced-delete ring up front.
+    deferred_.reserve(64);  // size the fenced-delete ring up front
     inited_ = true;
     return true;
 }
@@ -381,12 +381,11 @@ void Resources::Destroy(Handle<Shader> h) { shaders.Release(h); }
 
 void Resources::Destroy(Handle<Kernel> h) { kernels.Release(h); }
 
-// #228 F1 (v2): fenced deferred deletion -- per-resource retire-frame.
-// Each push stamps retire_frame = current frame_index_ + kFIF; drain
-// pops everything whose retire_frame <= the cutoff passed in. This is
-// the Granite / Themaister pattern and replaces the v1 per-slot bucket
-// (which mis-assumed every push during slot S was used by slot S's
-// frame -- false for between-frames pushes like asset reload).
+// Fenced deferred deletion -- per-resource retire-frame (Granite /
+// Themaister pattern). Each push stamps retire_frame = current
+// frame_index_ + kFIF; drain pops everything whose retire_frame <= the
+// cutoff passed in. Retire by frame index, not per-slot buckets:
+// between-frames pushes (asset reload) belong to no slot's frame.
 void Resources::DeferPushRaw(uint16_t index, uint16_t generation,
                               uint8_t kind) {
     DeferEntry e;
@@ -811,8 +810,8 @@ Handle<BindGroup> Resources::CreateSkinGroupA(Allocator& alloc,
 
 Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
     const DynamicBuffersDesc& desc) {
-    // #222 Phase D.1 (vk minimal): metadata-only. Hot.plat.vk_layout +
-    // vk_sets stay Null; D.2 path (with Frames&) does the real work.
+    // Minimal variant: metadata-only. Hot.plat.vk_layout + vk_sets stay
+    // Null; the overload taking Frames& does the real work.
     Handle<DynamicBuffers> h = dynamic_buffers.Acquire();
     DynamicBuffers::Hot* hot = dynamic_buffers.GetHot(h);
     DynamicBuffers::Cold* cold = dynamic_buffers.GetCold(h);
@@ -823,7 +822,7 @@ Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
     return h;
 }
 
-// #222 Phase D.2 full impl. Build layout + per-FIF sets + write descriptors
+// Full variant. Build layout + per-FIF sets + write descriptors
 // against the kDynamic master with each binding's max_range. The bindings'
 // `kind` selects VkDescriptorType (kUniform → UBO_DYNAMIC,
 // kStorage → SSBO_DYNAMIC). Caller passes the same FIF count Frames was
@@ -837,9 +836,9 @@ Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
     cold->layout.assign(desc.bindings.begin(), desc.bindings.end());
     cold->debug_name = desc.debug_name;
 
-    // Build the VkDescriptorSetLayout. #222 Phase D.3: descriptor type is
-    // 4-way over (kind, has_dynamic_offset). False = regular UBO/SSBO
-    // (no dynamic offset; whole-buffer or max_range bind once at create).
+    // Build the VkDescriptorSetLayout. Descriptor type is 4-way over
+    // (kind, has_dynamic_offset). False = regular UBO/SSBO (no dynamic
+    // offset; whole-buffer or max_range bind once at create).
     auto pick_type = [](const DynamicBinding& b) {
         if (b.kind == BufferKind::kUniform) {
             return b.has_dynamic_offset
@@ -850,7 +849,7 @@ Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
             ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC
             : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     };
-    // #222 Phase D.3 fix: vk descriptor-set / pipeline-layout compatibility
+    // vk descriptor-set / pipeline-layout compatibility
     // requires stage flags to match exactly (VUID-00358). Translate the
     // ShaderStage bitset so callers' explicit stages (kStageCompute for
     // skin/anim_eval/particle; Vertex|Fragment for unlit globals/drawtmp)
@@ -908,7 +907,7 @@ Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
         std::vector<VkWriteDescriptorSet> w(desc.bindings.size());
         for (size_t i = 0; i < desc.bindings.size(); ++i) {
             const DynamicBinding& b = desc.bindings[i];
-            // #222 Phase D.3: per-binding backing. Null = kDynamic master;
+            // Per-binding backing. Null = kDynamic master;
             // non-null resolves through plat.GetVkBuffer (heap master +
             // sub-buffer offset). For dynamic-offset bindings we always
             // bind at offset 0 + max_range so the per-draw dynamic offset
@@ -1115,10 +1114,6 @@ bool Resources::ReadBackTextureRgba(Handle<Texture> h,
     return true;
 }
 
-// #207 single-texel R32U readback for pick. vkCmdCopyImageToBuffer of a
-// 1x1 region into a host-visible staging buffer, waits, reads the uint32.
-// Caller is expected to have drained in-flight rendering before calling
-// (we don't add cross-frame sync beyond an immediate queueWaitIdle).
 bool Resources::ReadBackBuffer(Allocator& /*alloc*/, Handle<Buffer> /*h*/,
                                uint32_t /*byte_size*/,
                                std::vector<uint8_t>& /*out*/) {
@@ -1127,6 +1122,10 @@ bool Resources::ReadBackBuffer(Allocator& /*alloc*/, Handle<Buffer> /*h*/,
     return false;
 }
 
+// Single-texel R32U readback for pick. vkCmdCopyImageToBuffer of a
+// 1x1 region into a host-visible staging buffer, waits, reads the uint32.
+// Caller is expected to have drained in-flight rendering before calling
+// (we don't add cross-frame sync beyond an immediate queueWaitIdle).
 bool Resources::ReadBackTextureR32UTexel(Handle<Texture> h, uint32_t x,
                                          uint32_t y, uint32_t& out_value) {
     Texture::Cold* cold = textures.GetCold(h);

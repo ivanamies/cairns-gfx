@@ -58,7 +58,7 @@ inline WGPUBindGroupLayout MakeMaterialLayout(WGPUDevice device) {
 // single Storage binding type covers src+dst -- they never alias within a set.
 // Compute-visible; wgpu-native dedups identical descriptors so the bind group
 // (CreateDynamicBuffers) and the pipeline layout share one layout object.
-inline constexpr size_t kMaxComputeBindings = 16;  // anim_eval = 7 bindings (#231)
+inline constexpr size_t kMaxComputeBindings = 16;  // anim_eval = 7 bindings
 
 inline WGPUBindGroupLayout MakeComputeSetLayout(
     WGPUDevice device, const DynamicBinding* bindings, size_t count) {
@@ -79,7 +79,7 @@ inline WGPUBindGroupLayout MakeComputeSetLayout(
     return wgpuDeviceCreateBindGroupLayout(device, &d);
 }
 
-// #231 anim_eval set 0: 7 bindings matching MakeComputeSetLayout's output for
+// anim_eval set 0: 7 bindings matching MakeComputeSetLayout's output for
 // the ae_b[] DynamicBindings (binding 0 = dynamic UBO, 1-6 = packed storage).
 // Built here from desc.layout==kAnimEval (like vk's anim_eval_layout_) so the
 // kernel's pipeline layout exists independent of when dyn_anim_eval_'s backings

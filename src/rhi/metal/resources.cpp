@@ -1,4 +1,4 @@
-// rhi/metal/resources.cpp  (Phase 0g-a: pools + destroy/get + frame counter)
+// rhi/metal/resources.cpp -- pools + create/destroy/get + frame counter.
 
 #include "util/define.hpp"
 
@@ -95,7 +95,7 @@ bool Resources::Init(Device& device, cairns::ChunkAllocator& chunk) {
     plat.device_ = device.plat.device_;
     plat.queue_ = device.plat.queue_;
     plat.resources_ = this;
-    deferred_.reserve(64);  // #229 M4: cap the fenced-delete ring up front.
+    deferred_.reserve(64);  // size the fenced-delete ring up front
     inited_ = true;
     return true;
 }
@@ -185,7 +185,7 @@ void Resources::Destroy(Handle<Kernel> h) {
     kernels.Release(h);
 }
 
-// #228 F1 (v2): per-resource retire-frame FIFO. See vulkan/resources.cpp
+// Per-resource retire-frame FIFO. See vulkan/resources.cpp
 // for the design rationale (same body, per-backend Destroy() switch).
 void Resources::DeferPushRaw(uint16_t index, uint16_t generation,
                               uint8_t kind) {
@@ -530,7 +530,7 @@ Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
     return h;
 }
 
-// #222 Phase D.2 (metal): same as the minimal path; no descriptor objects
+// Same as the minimal overload; metal has no descriptor objects
 // to build. The Allocator& + Frames& params are unused but kept so the
 // caller can be backend-agnostic.
 Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
@@ -634,7 +634,7 @@ bool Resources::ReadBackTextureRgba(Handle<Texture> h,
     return true;
 }
 
-// #207 single-texel R32U readback for pick. Apple GPUs (especially the
+// Single-texel R32U readback for pick. Apple GPUs (especially the
 // M-series) reject small-region blits with under-aligned destination row
 // pitches; copy the whole row that contains (y) and index in. R32U row
 // = width * 4 bytes, naturally aligned. Caller drains in-flight work

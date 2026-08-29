@@ -1,7 +1,7 @@
-// scene/world.hpp  (#225: file kept for include-stability; struct is Scene)
+// scene/world.hpp  (file name kept for include-stability; the struct is Scene)
 //
-// A Scene (Unity vocabulary; pre-#225 this was called World) is a
-// container of GameObjects: an entt::registry plus a root transform.
+// A Scene (Unity vocabulary) is a container of GameObjects: an
+// entt::registry plus a root transform.
 // Pooled in ResourceManager<Scene> on Engine so the editor can open
 // >= 4 of them simultaneously, each referenced by a generational
 // SceneId. Multi-active by design -- the active_scene_ concept is
@@ -29,10 +29,10 @@
 namespace cairns {
 
 struct Scene {
-    // #229 M0b: the entt registry is parameterized with the block allocator (its
-    // own quarantined kRegionEcs region per the pointer-quarantine plan). The
-    // null-arena default ctor falls back to malloc until re-seated onto
-    // cpu_block_ at scene Acquire (Engine::ReseatSceneOnBlock).
+    // The entt registry is parameterized with the block allocator (its own
+    // quarantined kRegionEcs region). The null-arena default ctor falls back
+    // to malloc until re-seated onto cpu_block_ at scene Acquire
+    // (Engine::ReseatSceneOnBlock).
     using Registry = entt::basic_registry<entt::entity,
                                           cairns::ChunkStdAllocator<entt::entity>>;
 

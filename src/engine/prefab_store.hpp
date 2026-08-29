@@ -1,9 +1,8 @@
 // engine/prefab_store.hpp
 //
-// Loaded-prefab store, grouped out of the Engine god class (C2 S1): the
-// prefab/material/mesh generational pools + the order-stable parallel vectors
-// (ids/paths/assets), the resident-texture + per-batch shared-skin lists, and
-// the loader instruments.
+// Loaded-prefab store: the prefab/material/mesh generational pools + the
+// order-stable parallel vectors (ids/paths/assets), the resident-texture +
+// per-batch shared-skin lists, and the loader instruments.
 //
 // DESTRUCTION ORDER: cpu_block_ + prefab_arena_ deliberately stay on Engine,
 // declared BEFORE prefab_store_, so they outlive it -- the pools' ChunkStd

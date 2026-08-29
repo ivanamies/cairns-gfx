@@ -10,12 +10,10 @@ namespace cairns::control {
 
 namespace {
 
-// #215 binary-search the sorted lookup table for `name`. Returns op_id or
-// UINT32_MAX if not found.
+// Binary-search the sorted lookup table for `name`; kNoOp if absent.
 constexpr uint32_t kNoOp = 0xFFFFFFFFu;
-// #229 M6: takes a string_view + a heterogeneous comparator so dispatch
-// doesn't copy the op name into a std::string (nor build a scratch
-// CommandIndex) per command.
+// string_view + heterogeneous comparator: dispatch never copies the op
+// name into a std::string (nor builds a scratch CommandIndex).
 uint32_t FindOp(const std::vector<CommandIndex>& sorted, std::string_view name) {
     auto it = std::lower_bound(
         sorted.begin(), sorted.end(), name,
@@ -48,10 +46,7 @@ void CommandRegistry::Register(std::string&& name, json&& schema, std::string&& 
 }
 
 void CommandRegistry::RegisterAlias(std::string&& alias, std::string&& canonical) {
-    // Register a new command for the alias that dispatches to the canonical
-    // op via the registry singleton. Pre-#215 used a separate per-alias
-    // Command storing aliased_for + a forwarding lambda; same shape here,
-    // just landed in the flat commands_ vector.
+    // The alias is a full Command whose fn re-dispatches to the canonical op.
     const uint32_t op_id = static_cast<uint32_t>(commands_.size());
     std::string canonical_copy = canonical;
     Command cmd;
@@ -94,7 +89,7 @@ json CommandRegistry::Dispatch(const json& request) {
                          {"message", "request must have a string 'op' field"}};
         return resp;
     }
-    // #229 M6: op as a view into the request (no per-command string copy).
+    // View into the request -- no per-command string copy.
     const std::string_view op = op_it->get_ref<const std::string&>();
     const uint32_t op_id = FindOp(sorted_names_, op);
     if (op_id == kNoOp || op_id >= commands_.size()) {
@@ -102,9 +97,9 @@ json CommandRegistry::Dispatch(const json& request) {
         resp["error"] = {{"code", "unknown_op"}, {"message", op}};
         return resp;
     }
-    // #229 M6: pass args by const-ref straight from the request -- no subtree
-    // copy. The no-args case materializes one empty object (null default costs
-    // nothing); a pointer avoids the ternary's copy-to-common-type.
+    // Pass args by pointer straight from the request -- no subtree copy
+    // (a ternary would copy to a common type). Only the no-args case
+    // materializes an empty object.
     const auto args_it = request.find("args");
     const json* args_ptr = nullptr;
     json empty_args;  // null -> no allocation unless the no-args branch runs
@@ -130,9 +125,8 @@ json CommandRegistry::Dispatch(const json& request) {
 }
 
 json CommandRegistry::ToolsList() const {
-    // sorted_names_ is already sorted alphabetically -- iterate it directly
-    // for stable manifest output (was a std::map<string, const Command*>
-    // scratch in the unordered_map era).
+    // sorted_names_ is already alphabetical -- iterate it directly for
+    // stable manifest output.
     json out = json::array();
     for (const CommandIndex& idx : sorted_names_) {
         const Command& cmd = commands_[idx.op_id];

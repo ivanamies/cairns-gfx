@@ -10,7 +10,7 @@ backend="${1:-metal}"
 mkdir -p tmp
 
 drive=tmp/_headless_drive.ndjson
-# #269: spawn shape matches verify_headless.sh. Keep these in sync.
+# Spawn shape matches verify_headless.sh. Keep these in sync.
 spawn_op=$(python3 -c 'import json,sys;print(json.dumps({"op":"cairns.script.eval","args":{"code":open(sys.argv[1]).read()}}))' scripts/_headless_spawn.js)
 {
   printf '%s\n' "$spawn_op"

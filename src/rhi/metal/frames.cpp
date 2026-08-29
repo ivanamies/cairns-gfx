@@ -125,10 +125,6 @@ void Frames::Deinit() {
     inited_ = false;
 }
 
-// #222 Phase F.3: OnSurfaceResize retired -- engine calls
-// rhi.offscreen_targets.FlushFramebuffers() directly. Metal stub
-// would have been a no-op anyway.
-
 void Frames::WriteUnlitDescriptors(Resources& /*resources*/,
                                      Allocator& /*alloc*/) {
     // Metal: no per-frame descriptor sets in the unlit path; render
@@ -143,10 +139,10 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(plat.frame_semaphore_),
                             DISPATCH_TIME_FOREVER);
     resources.AdvanceFrame(alloc);  // bump ring reset
-    // #228 F1 (v2): semaphore wait above caps in-flight frames at kFIF;
-    // drain any pending free whose retire_frame <= current frame_index_.
-    // Per-resource stamping fixes the between-frames push case the v1
-    // per-slot bucket got wrong.
+    // The semaphore wait above caps in-flight frames at kFIF; drain any
+    // pending free whose retire_frame <= current frame_index_.
+    // Per-resource retire-frame stamping also covers frees pushed
+    // between frames (reload).
     resources.DrainDeferredFrees(alloc, resources.FrameIndex());
 
     MTL::Texture* swap_tex = target.plat.texture;

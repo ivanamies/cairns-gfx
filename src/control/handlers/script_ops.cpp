@@ -9,7 +9,7 @@
 #include "control/command_registry.hpp"
 #include "control/handlers/studio_js.hpp"
 #include "platform/platform.hpp"        // ReadAsset for scenario.load
-#include "util/chunk_allocator.hpp"  // #229 M7: QuickJS heap backing
+#include "util/chunk_allocator.hpp"  // QuickJS heap backing
 #include "util/json.hpp"
 #include "util/memory_budget.hpp"
 #include "util/misc.hpp"                 // GetBasePathSafe / GetStaticResourceFilepath
@@ -25,7 +25,7 @@ namespace cairns::control {
 
 namespace {
 
-// #229 M7: route QuickJS's allocator to a fixed ChunkAllocator reservation
+// Route QuickJS's allocator to a fixed ChunkAllocator reservation
 // (MemoryBudget::js_heap_bytes, 256 MB). A size-class free-list is the right
 // tool for QuickJS's millions of tiny allocations -- NOT the offset allocator,
 // which is for the GPU range domain. Bounds the JS heap by construction; cells
@@ -67,7 +67,6 @@ void EnsureRuntime(ScriptHost& s) {
     if (s.rt) {
         return;
     }
-    // #229 M7: bound the QuickJS heap to a fixed ChunkAllocator reservation.
     const uint64_t js_bytes = cairns::MemoryBudget::Default().js_heap_bytes;
     s.js_heap.InitReserved(js_bytes);
     s.rt = JS_NewRuntime2(&kJsMallocFuncs, &s.js_heap);
@@ -80,10 +79,10 @@ void EnsureRuntime(ScriptHost& s) {
 
 // Drain pending jobs, drop the current JSContext, and create a fresh one in
 // the same JSRuntime. Both RegisterScriptOps (re-registration, e.g. the tests
-// rebinding ops against a fresh engine per scenario) and the R3 reload op use
-// this so studio_js always evals into a CLEAN global scope -- re-evaling it on
-// a context that already declared its globals throws "redeclaration of <X>"
-// (const/class bindings are not idempotent).
+// rebinding ops against a fresh engine per scenario) and cairns.script.reload
+// use this so studio_js always evals into a CLEAN global scope -- re-evaling
+// it on a context that already declared its globals throws "redeclaration of
+// <X>" (const/class bindings are not idempotent).
 void ResetJsContext(ScriptHost& s) {
     if (!s.rt) {
         return;
@@ -111,20 +110,20 @@ JSValue JsDispatch(JSContext* ctx, JSValueConst this_val, int argc,
                    JSValueConst* argv);
 
 // Bind `cairns.dispatch` on |ctx|'s global + eval studio_js. Used by
-// initial RegisterScriptOps AND by R3's reload after a fresh JSContext
-// is created.
+// initial RegisterScriptOps AND by cairns.script.reload after a fresh
+// JSContext is created.
 void BindAndAutoloadStudio(JSContext* ctx) {
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue cairns_obj = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, cairns_obj, "dispatch",
                       JS_NewCFunction(ctx, &JsDispatch, "dispatch", 2));
-    // #229: instantiate-pass count for the boot workload, platform-aware so
-    // run.js renders 100 actors on mobile (Adreno/Apple tile budget) vs 300 on
-    // desktop. Desktop was 500 (5 passes) but 500 actors' skinned output is
-    // ~288 MB, over the 256 MB skin pool we cap at for WebGPU portability (the
-    // S22/Adreno + WebGPU storage-bind floor), so desktop drops to 3 passes = 300
-    // actors. Derived from the persistent budget (mobile is floored to 256 MB) to
-    // avoid duplicating the __ANDROID__/iOS guard from memory_budget.hpp.
+    // Instantiate-pass count for the boot workload, platform-aware: run.js
+    // renders 100 actors on mobile (Adreno/Apple tile budget) vs 300 on
+    // desktop -- 500 actors' skinned output (~288 MB) would overflow the
+    // 256 MB skin pool capped for WebGPU portability (the S22/Adreno +
+    // WebGPU storage-bind floor). Derived from the persistent budget
+    // (mobile is floored to 256 MB) to avoid duplicating the
+    // __ANDROID__/iOS guard from memory_budget.hpp.
     const bool mobile =
         cairns::MemoryBudget::Default().cpu_persistent_bytes <=
         512ull * 1024 * 1024;
@@ -148,7 +147,7 @@ void BindAndAutoloadStudio(JSContext* ctx) {
     JS_FreeValue(ctx, v);
 }
 
-// #228 R3: drop the current JSContext and start fresh -- new context in
+// Drop the current JSContext and start fresh -- new context in
 // the same JSRuntime, re-bind cairns.dispatch, re-eval studio_js. The
 // runtime is preserved so QuickJS's internal heap survives; only the
 // per-context scope is reset. All state in the active script is
@@ -187,10 +186,8 @@ JSValue JsDispatch(JSContext* ctx, JSValueConst /*this_val*/, int argc,
     JS_FreeCString(ctx, op);
     if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
         // Stringify argv[1] via JS itself, then parse back into json.
-        // Each intermediate value gets explicitly freed; previously the
-        // global + JSON object refs leaked once per call, which built up
-        // into a shutdown-time refcount assert when scripts called
-        // cairns.dispatch even once (reproduced 2026-06-05).
+        // Every intermediate ref must be freed -- one leaked global/JSON
+        // ref per call trips QuickJS's shutdown refcount assert.
         JSValue global = JS_GetGlobalObject(ctx);
         JSValue json_obj = JS_GetPropertyStr(ctx, global, "JSON");
         JSValue stringify = JS_GetPropertyStr(ctx, json_obj, "stringify");
@@ -253,7 +250,7 @@ void RegisterScriptOps(CommandRegistry& registry, ScriptHost& host) {
     registry.Register(
         "cairns.script.reload",
         json::object(),
-        "#228 R3: tear down the current JSContext and spin up a fresh "
+        "Tear down the current JSContext and spin up a fresh "
         "one inside the same JSRuntime. Re-binds cairns.dispatch + "
         "re-evaluates studio_js. State survives because everything "
         "addressable is host-side (resident prefabs, entities, "

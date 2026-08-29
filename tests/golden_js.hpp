@@ -83,15 +83,13 @@ inline void EndGpuCapture() {
 #endif
 
 // Clear the shared registry, register every op group against THIS scenario's
-// engine, install a fresh JS context, then eval the composition `js`. (The
-// registry singleton is a known wart -- TODO "delete all singletons" -- so we
-// Clear()+re-register per scenario to rebind the captured Engine&.)
+// engine, install a fresh JS context, then eval the composition `js`.
 inline cairns::control::CommandRegistry& SetupJs(cairns::Engine& engine) {
     // Test-harness scaffolding: a stable-address registry reused across
-    // scenarios (Clear()+re-register rebinds the captured Engine&). Not the
-    // production singleton -- that's gone; the QuickJS runtime (still process-
-    // static in script_ops) holds a pointer to this, so the address must be
-    // stable, hence a function-local static rather than a per-scenario local.
+    // scenarios (Clear()+re-register rebinds the captured Engine&). The
+    // QuickJS runtime (process-static in script_ops) holds a pointer to this,
+    // so the address must be stable -- a function-local static, not a
+    // per-scenario local.
     static cairns::control::ScriptHost script_host;
     static cairns::control::CommandRegistry reg;
     reg.Clear();

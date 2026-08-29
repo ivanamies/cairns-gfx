@@ -1,14 +1,12 @@
 // src/render/worker_context.hpp
 //
-// Per-worker no-lock memory context. Each worker (render thread, future
-// physics / anim) gets a WorkerContext by reference and pulls scratch
-// memory from its arena slice -- never from malloc, never from a shared
-// container that would need a mutex.
+// Per-worker no-lock memory context. Each worker gets a WorkerContext by
+// reference and pulls scratch memory from its arena slice -- never from
+// malloc, never from a shared container that would need a mutex.
 //
-// Today's only consumer is the render thread; expand when physics /
-// scripting workers land. Arena lifetime = the worker's call frame:
-// resets at slot acquire (FrameArena::BeginFrame), lives until the next
-// frame's BeginFrame on the same slot.
+// Arena lifetime = the worker's call frame: resets at slot acquire
+// (FrameArena::BeginFrame), lives until the next frame's BeginFrame on
+// the same slot.
 
 #pragma once
 

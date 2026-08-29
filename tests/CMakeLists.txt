@@ -7,15 +7,12 @@
 #                          offset_allocator TU that cpu_pool.hpp depends on.
 #                          Builds and runs identically on macOS Metal / macOS vk
 #                          / Android NDK / iOS simulator because it never
-#                          touches a backend. This is the target the TDD relay
-#                          implements against, and the one that must build
-#                          before a single line of renderer exists.
+#                          touches a backend.
 #
 #   cairns_golden_tests -- Tier G. Links cairns_core (backend compile-selected
 #                          via -DCAIRNS_GFX_BACKEND). Drives RenderHeadlessFrame
 #                          + ReadFinalTargetRgba. Off by default; turn on with
-#                          -DCAIRNS_GFX_BUILD_GOLDEN_TESTS=ON once engine
-#                          enablers (Phase 3) are wired.
+#                          -DCAIRNS_GFX_BUILD_GOLDEN_TESTS=ON.
 
 include(FetchContent)
 
@@ -41,42 +38,42 @@ include(Catch)
 
 # ---- Tier S: pure spec tests (no engine, no GPU) --------------------------
 add_executable(cairns_spec_tests
-    # allocators (impl order 1)
+    # allocators
     test_handle.cpp
     test_range_pool.cpp
     test_frame_budget.cpp
-    # profiling (2)
+    # profiling
     test_hud_stats.cpp
-    # cameras (4)
+    # cameras
     test_frustum_cull.cpp
-    # particles (5)
+    # particles
     test_particle_emitter.cpp
-    # render graph (6)
+    # render graph
     test_draw_key.cpp
     test_render_graph_schedule.cpp
-    # scene data layer (8)
+    # scene data layer
     test_transform.cpp
-    # loader material->texture mapping (#229 desync invariant)
+    # loader material->texture mapping (1:1 desync invariant)
     test_material_map.cpp
-    # G.1 scene ECS PODs
+    # scene ECS PODs
     test_scene_ecs.cpp
-    # G.2 render proxies
+    # render proxies
     test_render_proxies.cpp
-    # #195 multi-scene per-viewport draw fan-out (CarveSceneDrawRanges)
+    # multi-scene per-viewport draw fan-out (CarveSceneDrawRanges)
     test_scene_draw_ranges.cpp
-    # G.3 rhi cross-platform interfaces
+    # rhi cross-platform interfaces
     test_rhi_interfaces.cpp
-    # G.4 rhi backend boot-cap / offset×16
+    # rhi backend boot-cap / offset×16
     test_rhi_backends.cpp
-    # G.9 top-risk consolidation
+    # top-risk consolidation
     test_top_risks.cpp
-    # G.6 threading SPSC invariants
+    # threading SPSC invariants
     test_threading.cpp
-    # G.7 asset/GPU PODs (pure CPU)
+    # asset/GPU PODs (pure CPU)
     test_asset_gpu_pods.cpp
-    # #229 M0b MemoryBudget + ChunkAllocator fixed reservation
+    # MemoryBudget + ChunkAllocator fixed reservation
     test_memory_budget.cpp
-    # G.5 control / agent CommandRegistry round-trip
+    # control / agent CommandRegistry round-trip
     test_command_registry.cpp
     "${CMAKE_SOURCE_DIR}/src/control/command_registry.cpp"
     # cpu_pool.hpp pulls in offset_allocator.hpp + needs its TU for the
@@ -94,9 +91,9 @@ target_include_directories(cairns_spec_tests PRIVATE
 
 target_compile_features(cairns_spec_tests PRIVATE cxx_std_20)
 
-# Asserts STAY ON. They are the cheapest tripwire for the #228 reuse-not-reset
-# / #222 dangling-Hot* class of bug, and a test suite that disables them is
-# blind to exactly what hurt us. No spec test deliberately trips an assert.
+# Asserts STAY ON. They are the cheapest tripwire for the reuse-not-reset /
+# dangling-Hot* class of bug, and a test suite that disables them is blind to
+# exactly what hurt us. No spec test deliberately trips an assert.
 target_compile_options(cairns_spec_tests PRIVATE -UNDEBUG)
 
 target_link_libraries(cairns_spec_tests PRIVATE Catch2::Catch2WithMain)
@@ -115,8 +112,7 @@ else()
 endif()
 
 # ---- Tier G: golden ladder (links the engine; backend-selected) -----------
-# Off by default. Phase 3 lands the engine enablers + test_seams; this option
-# turns the target on once those are real.
+# Off by default -- golden runs need a built backend + assets.
 option(CAIRNS_GFX_BUILD_GOLDEN_TESTS
     "Build cairns_golden_tests (links cairns_core; backend-selected)" OFF)
 if(CAIRNS_GFX_BUILD_GOLDEN_TESTS)

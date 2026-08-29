@@ -1,6 +1,6 @@
 // tests/test_scene_draw_ranges.cpp
 //
-// TIER S spec: #195 multi-scene per-viewport draw fan-out. CarveSceneDrawRanges
+// TIER S spec: multi-scene per-viewport draw fan-out. CarveSceneDrawRanges
 // turns each scene's [mesh) range in the proxy union into its [draw) slice of
 // the shared sorted draw list; each viewport then renders only its own scene's
 // slice. Guards the regression where two viewports on two scenes render the

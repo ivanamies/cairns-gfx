@@ -1,8 +1,8 @@
 // rhi/command_recorder.hpp
 //
-// Fork C: pass-scaffolded, data-driven command recording. BeginFrame returns a
-// FrameContext whose CommandRecorder exposes per-pass calls; the backend owns the
-// bind/draw loop (last-bound caching). See the merge plan for rationale.
+// Pass-scaffolded, data-driven command recording. Frames::Begin returns a
+// FrameContext whose CommandRecorder exposes per-pass calls; the backend owns
+// the bind/draw loop (last-bound caching).
 
 #pragma once
 
@@ -85,10 +85,9 @@ struct ComputeDispatch {
     uint32_t local_y = 1;
     uint32_t local_z = 1;
     uint32_t step_index = 0;
-    // #222 Phase D.4: recorder binds set 0 from
-    // GetHot(dyn_set_0)->plat.vk_sets[frame_] with dyn_offset_0. Caller
-    // pre-built the set via DynamicBuffers (binding 0 UBO_DYN dt,
-    // bindings 1..N SSBO over persistent backing).
+    // Recorder binds set 0 from GetHot(dyn_set_0)->plat.vk_sets[frame_]
+    // with dyn_offset_0. Caller pre-built the set via DynamicBuffers
+    // (binding 0 UBO_DYN dt, bindings 1..N SSBO over persistent backing).
     Handle<DynamicBuffers> dyn_set_0;
     uint32_t dyn_offset_0 = 0;
 };
@@ -100,10 +99,9 @@ struct MeshDrawList {
     uint32_t globals_offset = 0;
     std::span<const Handle<Texture>> resident_textures;
     std::span<const Handle<Buffer>> resident_buffers;
-    // #222 Phase D.2: DynamicBuffers handle for set 0 (pass globals).
-    // Carries the per-FIF descriptor set + layout that replaces
-    // FramesPlat::globals_set_layout_ / globals_sets_. Null = fall back to
-    // the legacy frames.plat.globals_set_ binding.
+    // DynamicBuffers handle for set 0 (pass globals): carries the per-FIF
+    // descriptor set + layout. Null = fall back to the frames.plat
+    // globals sets.
     Handle<DynamicBuffers> dyn_globals;
 };
 
@@ -114,11 +112,11 @@ struct PointDraw {
     uint32_t vertex_count = 0;
 };
 
-// #221 Skinning Phase 5: render-side batch (resolves arena-relative
-// element offsets to kDynamic byte offsets at EncodeDraws time). One per
-// (mesh, instance-list) pair. The recorder iterates these, binds the
-// mesh's Group A set, sets 3 dynamic offsets on the persistent Group B
-// set, and issues one vkCmdDispatch.
+// Render-side skin batch (resolves arena-relative element offsets to
+// kDynamic byte offsets at EncodeDraws time). One per (mesh,
+// instance-list) pair. The recorder iterates these, binds the mesh's
+// Group A set, sets 3 dynamic offsets on the persistent Group B set, and
+// issues one vkCmdDispatch.
 struct SkinDispatchBatch {
     Handle<BindGroup> mesh_set;            // Group A (Vulkan path)
     // Metal path: resolved mesh buffer handles + base-vertex byte offsets.
@@ -129,9 +127,6 @@ struct SkinDispatchBatch {
     uint32_t params_byte_offset = 0;       // dynamic offset for Group B binding 0
     uint32_t palettes_byte_offset = 0;     // dynamic offset for Group B binding 1
     uint32_t instance_meta_byte_offset = 0; // dynamic offset for Group B binding 2
-    // #222 Phase D.3: palette_buffer field retired (MISTAKES.md counter:1).
-    // It was frame-wide constant masquerading as per-batch state. Recorder
-    // now takes palette_buf as a parameter to DispatchSkinBatches.
     uint32_t workgroups = 0;                // workgroups along X axis (per instance)
     uint32_t instance_count = 1;            // dispatched along Y axis
 };
@@ -139,43 +134,42 @@ struct SkinDispatchBatch {
 class CommandRecorder {
 public:
     void Dispatch(Resources& res, Allocator& alloc, const ComputeDispatch& d);
-    // #221 Skinning Phase 5: dedicated skin path. Binds pipeline + Group B
-    // descriptors ONCE (whole-buffer writes to palettes/InstanceMeta/Params
-    // via the kDynamic master buffer + output pool whole), then loops
-    // per-batch: vkCmdBindDescriptorSets(set 0 + set 1, 3 dyn offsets) +
+    // Dedicated skin path. Binds pipeline + Group B descriptors ONCE
+    // (whole-buffer writes to palettes/InstanceMeta/Params via the
+    // kDynamic master buffer + output pool whole), then loops per-batch:
+    // vkCmdBindDescriptorSets(set 0 + set 1, 3 dyn offsets) +
     // vkCmdDispatch. Routes into plat.comp_ on Vulkan (free vertex-fetch
     // sync via the existing compute->graphics semaphore @ VERTEX_INPUT).
     // batches.size() == 0 is a no-op; the engine guards on this AND on
     // skin_kernel_.IsNull() to keep the static path bit-for-bit.
-    // #222 Phase D.3: palette_buf is the frame-wide palette destination
-    // (palette_out_buf_). Was per-batch on SkinDispatchBatch; promoted to
-    // a parameter since it doesn't vary across batches.
+    // palette_buf is the frame-wide palette destination (palette_out_buf_);
+    // it is a parameter, not per-batch state, because it never varies
+    // across batches.
     void DispatchSkinBatches(Resources& res, Allocator& alloc,
                               Handle<Kernel> kernel,
                               Handle<Buffer> output_pool_buffer,
                               Handle<Buffer> palette_buf,
                               Handle<DynamicBuffers> dyn_set_0,
                               std::span<const SkinDispatchBatch> batches);
-    // #221 Phase 5b: dispatch anim_eval (one workgroup per actor; 64 threads
-    // per workgroup). Persistent scene-table SSBOs + actor_records dynUBO are
+    // Dispatch anim_eval (one workgroup per actor; 64 threads per
+    // workgroup). Persistent scene-table SSBOs + actor_records dynUBO are
     // bound through the anim_eval descriptor set on vk and directly as
     // buffers on Metal. records_byte_offset selects this frame's slice in
     // the kDynamic ring (vk); records_buffer / records_byte_offset together
     // are read by Metal directly.
-    // #222 Phase R.1: 13-buffer + 2-uint param sprawl collapsed to a
-    // parameter object. Add fields here, not to the signature.
+    // Parameter object: add fields here, not to the signature.
     struct AnimEvalArgs {
-        // #231 SSBO pack: 9 read-only table handles folded to 3 by element
-        // type. Binding order = i32(1)/vec4(2)/word16(3)/headers(4)/
-        // world_scratch(5)/palette_out(6).
+        // Read-only anim tables packed by element type (3 SSBOs, not 9) to
+        // fit WebGPU's 10-SSBO per-stage limit. Binding order =
+        // i32(1)/vec4(2)/word16(3)/headers(4)/world_scratch(5)/palette_out(6).
         Handle<Buffer> i32_buf;
         Handle<Buffer> vec4_buf;
         Handle<Buffer> word16_buf;
         Handle<Buffer> scene_headers;
         Handle<Buffer> world_scratch;
         Handle<Buffer> palette_out;
-        // #222 Phase D.3: dyn_set_0 carries the per-FIF anim_eval set
-        // (DynamicBuffers Hot owns the layout + 1 set per frame-in-flight).
+        // dyn_set_0 carries the per-FIF anim_eval set (DynamicBuffers Hot
+        // owns the layout + 1 set per frame-in-flight).
         Handle<DynamicBuffers> dyn_set_0;
         uint32_t records_byte_offset = 0;
         uint32_t actor_count = 0;

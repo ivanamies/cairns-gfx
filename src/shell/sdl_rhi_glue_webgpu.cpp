@@ -30,7 +30,7 @@ SDL_WindowFlags BackendWindowFlag() {
     // under SDL_WINDOW_OPENGL, so the canvas stays free for WebGPU.
     return 0;
 #else
-    return SDL_WINDOW_METAL;  // M5: native windowed surface via the metal layer
+    return SDL_WINDOW_METAL;  // native windowed surface via the metal layer
 #endif
 }
 

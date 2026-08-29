@@ -72,7 +72,7 @@ bool ReadAsset(const std::filesystem::path& path, std::string& out) {
 
 void ImguiNewFrame() { ImGui_ImplSDL3_NewFrame(); }  // SDL drives DisplaySize + input
 
-uint32_t WorkerThreadCount() { return 0; }  // W6a: single-threaded (inline fan-out)
+uint32_t WorkerThreadCount() { return 0; }  // single-threaded (inline fan-out)
 
 }  // namespace cairns::platform
 

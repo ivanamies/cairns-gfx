@@ -5,7 +5,7 @@
 
 namespace cairns {
 
-// #195 per-viewport scene draw fan-out (pure -> spec-tested).
+// Per-viewport scene draw fan-out (pure -> spec-tested).
 //
 // When two viewports bind two different scenes, every scene's meshes are
 // extracted into ONE proxy union, contiguously: scene k owns proxy meshes
