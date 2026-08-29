@@ -526,6 +526,10 @@ endif()
 set_target_properties(${EXECUTABLE_NAME} PROPERTIES
     MACOSX_BUNDLE TRUE
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/assets/Info.plist.in"
+    # Generator-agnostic plist substitution (template uses these instead of
+    # Xcode's $(...) macros, which Ninja leaves unexpanded -> broken `open`).
+    MACOSX_BUNDLE_BUNDLE_NAME "${EXECUTABLE_NAME}"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "com.cairns.gfx"
     XCODE_GENERATE_SCHEME TRUE
     XCODE_ATTRIBUTE_BUNDLE_IDENTIFIER "com.ravbug.sdl3-sample"
     XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.ravbug.sdl3-sample"
