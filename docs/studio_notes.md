@@ -1,131 +1,120 @@
-# studio surface notes — divergence ledger + refusals + cairns wins
+# studio surface notes — clone, new noun, refuse
 
 **Internal doc.** Cites Unity by name because internal clarity > marketing
-discretion. The user-facing surface (`studio.*` registry namespace,
-`studio.js` adapter classes) is deliberately neutral — see `~/dev/plans/
-2026-06-05_gfx_unity-shaped-op-surface.md` for the rationale ("clone the
-shape for corpus density; be discreet about it").
+discretion.
 
-This doc has three jobs, in priority order:
+**The naming rule (#225):** every symbol on the studio surface sorts into
+exactly one of three bins. There is no "divergence" axis — and the
+**Clone** and **New noun** columns are the entire decision procedure.
 
-1. **The refuse list** — Unity ops we explicitly DO NOT ship under any name.
-2. **The cairns wins** — architectural decisions kept un-renamed because we
-   do them better than Unity (no customers yet ⇒ no compat tax).
-3. **The divergence ledger** — Unity ops we DO ship under the same name but
-   with different semantics, each with the LOUD form that makes the
-   divergence visible (rename / runtime throw / await), never doc-only.
+1. **Clone** — Unity has the concept → cairns uses Unity's exact name and
+   shape, no asterisk. Transfer of Unity muscle memory is free.
+2. **New noun** — Unity has no concept of it → cairns picks a clean new
+   name *because there is no Unity word to be faithful to*.
+3. **Refuse** — Unity has it, but it's a wart we don't clone. (Section
+   below; canon list.)
 
-If you're trying to add a new `studio.*` op, read all three sections
-first. The default for a new Unity op is "refuse" or "reserve" (namespace
-+ `engine_status:unimplemented`), not "clone."
+If you're adding a new studio symbol, decide which bin first. If the
+answer is "I want it to be Unity-but-with-an-asterisk," you're in the
+wrong frame: split into Clone (the part Unity has) and New noun (the
+part Unity doesn't), or move it to Refuse.
 
 ---
 
-## 1. Refuse list (canon)
+## 1. Clone — Unity name = cairns name, no notes
 
-These Unity APIs do not exist under any name in `studio.*`. If a Unity
-script reaches for them, it gets `unknown_op`. If a contributor proposes
-adding one, this doc is the reason to push back.
+| Unity 2022.3 | cairns | lowers to |
+|---|---|---|
+| `Scene` (container of GameObjects) | `Scene` | `cairns.scene.*` |
+| `Prefab` | `Prefab` | `cairns.prefab.*` |
+| `GameObject` | `GameObject` | wraps `cairns.scene.instantiate` result |
+| `Transform` | `Transform` | wraps `WorldTransform` component |
+| `Component` | `Component` | wraps entt components |
+| `Material` | `Material` | wraps `cairns::Material` |
+| `Mesh` | `Mesh` | wraps `cairns::Mesh` |
+| `Camera` | `Camera` | `cairns.viewport.*` for the binding |
+| `Vector3` / `Vector2` / `Quaternion` | same | math, pure JS |
+| `Mathf.{PI,Deg2Rad,Lerp,Clamp,…}` | same | math, pure JS |
+| `Application.Quit` | same | `cairns.app.quit` |
+| `Time.deltaTime` (getter) | same | `pkt.dt` from the FrameClock |
+| `Random.Range` | same | active-scene RNG (`cairns.rng.*`) |
+| `Resources.Load`-shape sync loader | `Prefabs.load(source, count, cursor)` | `cairns.prefab.loadBatch` |
 
-| Unity API | Reason |
+That's the whole clone column. Anything Unity-named that isn't here
+either lives under Refuse or doesn't have an analogue yet — open an
+issue, don't invent a private name.
+
+---
+
+## 2. New noun — cairns concept Unity lacks
+
+Unity has multi-scene editing (since 5.3) and additive runtime scenes,
+so cairns holding several `Scene`s live is plain Unity. **It is not a
+new noun.** Plural-active scenes are clone behavior used fully.
+
+There is exactly ONE new noun on the surface — the multi-scene
+compositor — and it lives under `Editor.*`:
+
+| cairns | what | why no Unity name |
+|---|---|---|
+| `Editor.scenes` | the array of all live scenes (no implicit active scene) | Unity's `SceneManager` encodes single-active. cairns wants plural-active; using `SceneManager` would inherit the wrong shape. |
+| `Editor.newScene()` | create a fresh `Scene` | NOT `SceneManager.LoadScene` — same reason. |
+| `Editor.show(scene, viewport)` | bind a scene to a viewport pane | Unity's per-camera scene targeting is editor-internal, not a runtime API. |
+| `Editor.thumbnails(scene, opts)` (#226 CAP-2 stub) | virtualized render-to-texture pool of generated previews | No Unity analogue. Throws `"not wired yet (#226 CAP-2)"` until #226. |
+| `Editor.compose(scene, viewport, opts)` (#226 CAP-3 stub) | a viewport whose pixels are a shader function of OTHER viewports' rendered targets | **This is the core differentiator.** Unity additive scenes share one camera stack and render into one image; they are never independent render sources a third pass samples. Throws until #226 lands the pass. |
+| `Scene.addCamera(...)` (#226 CAP-1 stub) | cameras as entities IN a scene (multi-camera per viewport with split) | Unity's camera stack is per-viewport-display, not per-scene-entity. Different shape. Throws until #226. |
+
+The R6 not-yet-wired stubs follow the `Cairns.onFrame` precedent: the
+names are reserved, the Unity prior is held off (because there isn't
+one), and nothing silently half-works.
+
+---
+
+## 3. Refuse list (canon)
+
+Unity APIs cairns does NOT ship under any name. If a Unity script
+reaches for them, it gets `unknown_op`.
+
+| Unity API | Reason refused |
 |---|---|
-| `MonoBehaviour` lifecycle: `Awake` / `Start` / `OnEnable` / `Update` / `FixedUpdate` / `LateUpdate` / `OnDisable` / `OnDestroy` / `OnGUI` | Cairns win #7: engine exposes primitives, scripts compose policy. Per-frame work subscribes to `cairns.events.frame` (when wired); there is deliberately no `Update()` to override. |
-| `SendMessage` / `BroadcastMessage` | String-based dynamic dispatch. Replace with explicit `cairns.dispatch` (already typed via JSON Schema). |
-| Tag strings + `GameObject.Find("name")` | Stringly-typed entity lookup. Use `EntityRef` / handle directly; the registry is the lookup surface, not a global name pool. |
+| `MonoBehaviour` lifecycle: `Awake` / `Start` / `OnEnable` / `Update` / `FixedUpdate` / `LateUpdate` / `OnDisable` / `OnDestroy` / `OnGUI` | Engine exposes primitives, scripts compose policy. Per-frame work subscribes to `cairns.events.frame` (when wired); there is no `Update()` to override. |
+| `SendMessage` / `BroadcastMessage` | String-based dynamic dispatch. Use explicit `cairns.dispatch` (typed via JSON Schema). |
+| Tag strings + `GameObject.Find("name")` | Stringly-typed entity lookup. Use `EntityRef` / handle directly. |
 | `AssetDatabase` (entire namespace) | Editor-only ceremony coupled to Unity's serialization model. Not a runtime API. |
-| `SerializedProperty` + Editor extensions | Same. Editor authoring is a separate product surface (not Day-1). |
-| Coroutines: `IEnumerator` + `yield return new WaitForSeconds(...)` | Wall-clock coupled; conflicts with cairns win #1 (deterministic clock). Replace with deterministic-clock-aware scheduled tasks. |
-| Prefab system (`PrefabUtility`, prefab variants, nested prefabs) | Too coupled to Unity's serialization model. "Scenes as data + EnTT spawning" is the cairns shape. |
-| `InvokeRepeating` | Same issue as coroutines. |
+| `SerializedProperty` + Editor extensions | Same. Editor authoring is a separate product surface. |
+| Coroutines: `IEnumerator` + `yield return new WaitForSeconds(...)` | Wall-clock coupled; conflicts with the deterministic clock. |
+| `PrefabUtility`, prefab variants, nested prefabs | Coupled to Unity's serialization model. Plain `Prefab` + `Scene.instantiate` is the cairns shape. |
+| `InvokeRepeating` | Same as coroutines. |
 | `PlayerPrefs` | Separate config-storage surface; expose via `cairns.config.*` if needed. |
-| `OnGUI` / Unity IMGUI | Half-deprecated in Unity itself. Cairns has Dear ImGui through `cairns.imgui.*`; runtime UI is a separate planned arc. |
+| `OnGUI` / Unity IMGUI | Cairns has Dear ImGui through `cairns.imgui.*`. |
 | Tag/Layer string-based filtering | Replace with explicit bitmasks or named-set membership. |
-| Synchronous `Instantiate(prefab)` | Refinement 1 (the loud-divergence invariant): the sync name reserves Unity-sync semantics, which we don't honor. Only `InstantiateAsync` ships. Caller writes `await`; today the function returns directly so `await` resolves immediately, but the syntactic divergence is locked in. |
-| Setters on Unity read-only properties (e.g. anything that would force surprising mutation semantics) | Forces the divergence into a differently-named cairns op. See `Time.deltaTime` row in the divergence ledger. |
+| **Global `Instantiate(prefab)` (silent active-scene target)** | The multi-scene wart: in multi-scene code it bites the moment you have >1 scene open, which is the cairns common case. `Scene.instantiate(prefab, pos)` carries the explicit scene target. Even Unity's own multi-scene docs route through `SceneManager.MoveGameObjectToScene` to undo the global — refusing the global is *more* faithful to Unity's own multi-scene guidance. |
+| `SceneManager.LoadScene(name, Single | Additive)` | Encodes single-active-scene. Use `Editor.newScene()` + plural-active `Editor.scenes`. |
+| `Camera.main`'s silent return-first-or-tagged | Unity returns the first tagged main camera silently. cairns `Camera.main` throws on 0 or >1 (loud). |
+| `Time.deltaTime` setter | Unity allows mutating wall-clock state via Time; cairns puts that on `cairns.time.set(t)`. The getter is a clone; the setter is refused on Time itself. |
 
 ---
 
-## 2. Cairns wins (un-renamed, deliberately different)
+## QuickJS async limitation (engineering note)
 
-These are decisions cairns makes that Unity makes worse. They keep
-`cairns.*`-prefixed names; the studio surface does NOT paper over them.
-When in doubt about hiding a cairns mechanism behind a Unity name: don't.
-
-1. **Deterministic clock as a first-class mode.** `FrameClock` interface,
-   `FixedClock` implementation, `CAIRNS_DUMP` ⇒ byte-identical PNG output
-   across runs. Unity's `Time.fixedDeltaTime` is a hint; there is no
-   project-level "produce the same pixels twice" mode. Surface as
-   `cairns.time.set(dt)` / `cairns.time.fixedClock(true|false)`. The
-   studio `Time.deltaTime` getter still works; setting time is a
-   different name.
-2. **Multi-world / EntityRef.** Explicit `WorldId` + `EntityRef`,
-   `World::Hot`/`World::Cold` split. Unity has one global scene tree
-   (`SceneManager`-as-hack). Studio `GameObject.Find` scopes to the active
-   world; `cairns.world.*` is the explicit multi-world API.
-3. **RHI abstraction with byte-identical metal+vk goldens.** Dev-time
-   invariant: every commit byte-gates `sdl-min` on both backends. Unity's
-   SRP doesn't promise pixel parity. Internal only — not surfaced.
-4. **Bump-allocator + memory archetypes.** `Arena` / `ChunkAllocator` /
-   `RangePool` / `ResourceManager<T>` are named in the engine; per-frame
-   uploads go through a known bump ring. Unity hides this entirely
-   behind GC. Expose introspection as `cairns.mem.*`; don't bury under
-   Unity-style `Resources.totalAllocatedMemory`.
-5. **`Handle<T>` + ResourceManager.** Typed generational handles;
-   `handle.IsNull()` reflects destruction. Unity's `UnityEngine.Object` is
-   a managed reference with overridden `==null`. Studio `GameObject ==
-   null` returns false today (handle-staleness detection deferred); when
-   it lands, it lowers to a generation check on the underlying handle.
-6. **Headless-first / NDJSON control plane.** `cairns_serve` is a real
-   binary; the registry + `script.eval` + agent stdin transport are the
-   primary surface. Unity's `-batchmode` is an afterthought. Cairns wins
-   here by design — the studio surface works identically in both shells.
-7. **Engine exposes primitives, scripts compose policy.** The refuse list
-   above is the practical expression of this win. Studio scripts call
-   `cairns.dispatch` directly or use the studio wrapper classes; there
-   is no MonoBehaviour to inherit from. `Cairns.onFrame(cb)` is the
-   reserved channel for per-frame work (lands with the
-   `event`/`subscribe` channel from the headless plan).
-8. **EnTT-shaped events (when wired).** If we ever add per-entity hooks,
-   they follow the EnTT signal/sink shape (`world.on<T>().connect`), not
-   MonoBehaviour. Reserved namespace; no shape committed yet.
-
----
-
-## 3. Divergence ledger (loud form, not doc-only)
-
-Per Refinement 1 of the design: a divergence may live in the name or in a
-runtime failure — **never only in the docs.** The ledger here is the
-*explanation*; the loud form is the *enforcement*.
-
-| Unity op | Studio shipping | Loud form | Reason |
-|---|---|---|---|
-| `Instantiate(prefab)` | `GameObject.InstantiateAsync(asset_id, world_id?)` | **Rename.** Sync `Instantiate` refused. Caller writes `await`; today the function returns directly so `await` resolves immediately, but the syntax pins the eventual asynchrony of spawn+upload. | Win #5 (Handle generations + future async upload completion). |
-| `Camera.main` | `Camera.main` (single-instance-strict) | **Throw.** Returns the unique Camera component; throws if zero or >1 instead of Unity's silent return-first. | Eliminates the "I have multiple cameras and silently get the wrong one" footgun. |
-| `Time.deltaTime` setter | getter only; setting is `cairns.time.set(t)` | **Rename.** Studio `Time.deltaTime` getter returns `pkt.dt`; no setter exists on `Time`. Setting clock state is a different name. | Win #1 (deterministic clock). |
-| `Random.Range` | reads active-world RNG | **Scope-explicit.** Studio `Random.Range` always reads the active world's RNG; cross-world is `cairns.world.rng(world_id, ...)`. | Win #2 (multi-world); silent cross-world reads would be a Heisenbug. |
-| `Application.Quit()` | `cairns.app.quit` | **None.** Semantics match. No divergence, no action. | — |
-| `Cairns.onFrame(cb)` | reserved (not Unity-named) | **Throw.** Stub that throws "not yet wired" until the `event`/`subscribe` channel lands. | Surface reservation; prevents the eventual API from getting back-named to a refused MonoBehaviour-style `Update()`. |
-
-### QuickJS async limitation (engineering note)
-
-`InstantiateAsync` is deliberately a normal function that returns the
-`GameObject` directly, NOT an `async` function and NOT one that returns
-`Promise.resolve(...)`. Two reasons:
+`GameObject.InstantiateAsync` is deliberately a normal function that
+returns the `GameObject` directly, NOT an `async` function and NOT one
+that returns `Promise.resolve(...)`. Two reasons:
 
 1. `await` on a non-Promise resolves to the value immediately, so call
    sites use `await GameObject.InstantiateAsync(...)` exactly as they
-   would in Unity-shape JavaScript. The syntactic divergence (the `await`
-   keyword sitting visible in the source) stays.
+   would in Unity-shape JS. The `await` keyword sits visible in the
+   source — when real async upload completion lands, the body becomes
+   a true Promise return without changing call sites.
 2. QuickJS's promise machinery leaves shutdown state that trips a
    refcount assert at `JS_FreeRuntime` time when scripts go through
-   `cairns.dispatch` (reproduced 2026-06-05, root-caused to the global
-   object ref leak in `JsDispatch` — fixed — and the leftover Promise
-   tracking; further fixes deferred). Returning the value directly
-   avoids the machinery entirely.
+   `cairns.dispatch` (reproduced 2026-06-05; the global-object-ref leak
+   in `JsDispatch` is fixed, further fixes deferred). Returning the
+   value directly avoids the machinery entirely.
 
-When the engine grows real async upload completion (asset upload + spawn
-visible-next-frame), this becomes a real Promise return without changing
-call sites. The `await` was the contract.
+In #225 R4 the global `InstantiateAsync` is a deprecated alias (one
+release). New code calls `scene.instantiate(prefab, pos)` — also sync,
+also returns directly, same QuickJS reasoning.
 
 ---
 
@@ -136,18 +125,14 @@ call sites. The `await` was the contract.
 Component, Camera, Material, math) is essentially version-invariant — it
 has been stable for >15 years — so the pin barely matters for the ~120
 core ops; it mainly fixes the reserved-tail vocabulary. Document any
-deliberate drift here in the ledger.
-
-(Confirm the exact current LTS string at pin time. The choice of *which*
-recent LTS is low-stakes precisely because the cloned surface is the
-stable part.)
+deliberate drift here.
 
 ---
 
 ## Two-namespace rule
 
-- `cairns.*` is the source-of-truth registry surface for cairns features.
-  Every studio class lowers to one or more `cairns.*` ops via
+- `cairns.*` is the source-of-truth registry surface for cairns
+  features. Every studio class lowers to one or more `cairns.*` ops via
   `cairns.dispatch`.
 - `studio.*` (when ops live here directly) is reserved for adapter ops
   that have no clean cairns underlying op yet. **Default to lowering
@@ -156,5 +141,5 @@ stable part.)
 - `tools.*` is the meta layer (`tools.list`, `tools.search`). No ops
   migrate here; no studio names sit here.
 
-If you're tempted to put real engine logic in `studio.*`, that's a smell:
-the logic belongs in a `cairns.*` op.
+If you're tempted to put real engine logic in `studio.*`, that's a
+smell: the logic belongs in a `cairns.*` op.
