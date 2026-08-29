@@ -60,6 +60,10 @@ struct AppContext {
 
     cairns::Engine* engine = nullptr;
 
+    // Op registry owned by the app (no process singleton). Register*Ops bind
+    // against it; the agent drain + scenario launcher dispatch through it.
+    cairns::control::CommandRegistry registry;
+
     // Live agent transport: a stdin reader thread + drain on each
     // SDL_AppIterate. Disabled unless CAIRNS_AGENT_STDIN=1.
     cairns::control::AgentStdinDrain agent_drain;
@@ -153,7 +157,7 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
 
     // Live agent transport setup (no-op unless CAIRNS_AGENT_STDIN is set).
     AppContext* app_ctx = static_cast<AppContext*>(*appstate);
-    auto& registry = cairns::control::CommandRegistry::Instance();
+    auto& registry = app_ctx->registry;
     cairns::control::RegisterLifecycleOps(registry, app_ctx->agent_quit);
     cairns::control::RegisterPerfOps(registry, *engine);
     // Live agent surface (target="window" path on io.dumpTexture). render.frame
@@ -295,8 +299,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     // Drain any pending agent commands BEFORE the frame so the agent's
     // mutations land on this frame's render. Responses go to stdout; logs
     // / [Timer] / [FLAKE] stay on stderr per the protocol contract.
-    app->agent_drain.Drain(cairns::control::CommandRegistry::Instance(),
-                           stdout);
+    app->agent_drain.Drain(app->registry, stdout);
     if (app->agent_quit) {
         app->app_quit = SDL_APP_SUCCESS;
     }
@@ -308,7 +311,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         const int idx = app->launcher.pending;
         app->launcher.pending = -1;
         app->launcher.current = idx;
-        auto& reg = cairns::control::CommandRegistry::Instance();
+        auto& reg = app->registry;
         reg.Dispatch(cairns::json{{"op", "cairns.scene.clear"}});
         reg.Dispatch(cairns::json{{"op", "cairns.prefab.unloadAll"}});
         reg.Dispatch(cairns::json{{"op", "cairns.render.nestedGraph"},

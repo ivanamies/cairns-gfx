@@ -54,13 +54,17 @@ struct WebApp {
     uint32_t height = 720;
     cairns::Engine* engine = nullptr;
     cairns::ScenarioLauncher launcher;
+    // Op registry owned by the app (no process singleton). The window.cairns
+    // dispatch bridge + the scenario launcher route through it.
+    cairns::control::CommandRegistry registry;
     bool quit = false;
     bool ready = false;
 };
 
-// Heap-owned (callbacks outlive main); reached only via main-loop arg + the
-// dispatch bridge. Not a global state container -- the registry it talks to is
-// the existing CommandRegistry singleton.
+// Heap-owned (callbacks outlive main); reached via main-loop arg + the dispatch
+// bridge (which reaches app->registry through this pointer). Emscripten's
+// C-ABI entry points force a single heap-owned app context -- framework-forced,
+// not a general singleton.
 WebApp* g_web = nullptr;
 
 WGPUStringView Sv(const char* s) { return WGPUStringView{s, WGPU_STRLEN}; }
@@ -113,7 +117,7 @@ EM_BOOL OnMouseButton(int type, const EmscriptenMouseEvent* e, void* u) {
                                                 static_cast<double>(app->height) /
                                                 css_h)
                         : 0u;
-        cairns::control::CommandRegistry::Instance().Dispatch(
+        app->registry.Dispatch(
             cairns::json{{"op", "cairns.pick"},
                          {"args", {{"viewport", 0}, {"x", px}, {"y", py}}}});
     }
@@ -131,7 +135,7 @@ void Frame(void* arg) {
         const int idx = app->launcher.pending;
         app->launcher.pending = -1;
         app->launcher.current = idx;
-        auto& reg = cairns::control::CommandRegistry::Instance();
+        auto& reg = app->registry;
         reg.Dispatch(cairns::json{{"op", "cairns.scene.clear"}});
         reg.Dispatch(cairns::json{{"op", "cairns.prefab.unloadAll"}});
         reg.Dispatch(cairns::json{{"op", "cairns.render.nestedGraph"},
@@ -208,7 +212,7 @@ void StartEngine(WebApp* app) {
         return;
     }
 
-    auto& reg = cairns::control::CommandRegistry::Instance();
+    auto& reg = app->registry;
     cairns::control::RegisterLifecycleOps(reg, app->quit);
     cairns::control::RegisterRenderOps(reg, *app->engine);
     cairns::control::RegisterSceneOps(reg, *app->engine);
@@ -273,8 +277,7 @@ char* cairns_dispatch(const char* op, const char* args_json) {
     if (args_json && args_json[0]) {
         req["args"] = cairns::json::parse(args_json, nullptr, false);
     }
-    cairns::json resp =
-        cairns::control::CommandRegistry::Instance().Dispatch(req);
+    cairns::json resp = g_web->registry.Dispatch(req);
     const std::string s = resp.dump();
     char* out = static_cast<char*>(std::malloc(s.size() + 1));
     std::memcpy(out, s.c_str(), s.size() + 1);

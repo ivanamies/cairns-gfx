@@ -6,8 +6,7 @@
 #include "control/handlers/script_ops.hpp"
 
 SCENARIO("control links + JS dispatch + eval", "[jsmoke]") {
-    auto& reg = cairns::control::CommandRegistry::Instance();
-    reg.Clear();
+    cairns::control::CommandRegistry reg;
     bool quit = false;
     cairns::control::RegisterLifecycleOps(reg, quit);
     cairns::control::RegisterScriptOps(reg);

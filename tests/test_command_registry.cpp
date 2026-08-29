@@ -26,7 +26,7 @@ using namespace cairns::control;
 
 SCENARIO("CommandRegistry rejects duplicate Register",
          "[spec][control][registry]") {
-    CommandRegistry& reg = CommandRegistry::Instance();
+    CommandRegistry reg;
     reg.Register("test.echo", json{}, "echo input back",
                  [](const json& in) { return in; });
     SUCCEED();
@@ -39,7 +39,7 @@ SCENARIO("CommandRegistry rejects duplicate Register",
 
 SCENARIO("Dispatch routes to the registered handler",
          "[spec][control][registry][regression]") {
-    CommandRegistry& reg = CommandRegistry::Instance();
+    CommandRegistry reg;
     int seen = 0;
     reg.Register("test.tick", json{}, "increments",
                  [&](const json&) {
@@ -54,15 +54,15 @@ SCENARIO("Dispatch routes to the registered handler",
     REQUIRE(resp.contains("ok"));
 }
 
-// Alias round-trip: gated. CommandRegistry::Instance() is a process
-// singleton; tests share state and re-Register on a canonical the prior
-// test already added SIGABRTs. The alias contract needs either a
-// per-test reset method on the registry, or a non-singleton
-// constructor. Tracked in modularization-notes (G.5 follow-up).
+// Alias round-trip: now unblocked -- each SCENARIO owns a fresh local
+// CommandRegistry (the process singleton is gone), so re-Register on a
+// canonical no longer collides across tests. Left un-added here to keep this
+// change scoped to the de-singleton; the alias contract has coverage via the
+// JS-driven scenarios.
 
 SCENARIO("Unknown op dispatches to a documented error path",
          "[spec][control][registry]") {
-    CommandRegistry& reg = CommandRegistry::Instance();
+    CommandRegistry reg;
     json req;
     req["op"] = "no.such.op";
     req["args"] = json::object();

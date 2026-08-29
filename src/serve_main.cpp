@@ -44,7 +44,7 @@
 #include "shell/env_config.hpp"
 
 int main() {
-    auto& registry = cairns::control::CommandRegistry::Instance();
+    cairns::control::CommandRegistry registry;
     bool quit = false;
     cairns::control::RegisterLifecycleOps(registry, quit);
 

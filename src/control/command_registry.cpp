@@ -8,11 +8,6 @@
 
 namespace cairns::control {
 
-CommandRegistry& CommandRegistry::Instance() {
-    static CommandRegistry registry;
-    return registry;
-}
-
 namespace {
 
 // #215 binary-search the sorted lookup table for `name`. Returns op_id or
@@ -64,11 +59,11 @@ void CommandRegistry::RegisterAlias(std::string&& alias, std::string&& canonical
     cmd.schema = json::object();
     cmd.doc = "DEPRECATED alias for `" + canonical + "`.";
     cmd.aliased_for = canonical;
-    cmd.fn = [canonical_copy](const json& args) -> json {
+    cmd.fn = [this, canonical_copy](const json& args) -> json {
         json req;
         req["op"] = canonical_copy;
         req["args"] = args;
-        const json resp = CommandRegistry::Instance().Dispatch(req);
+        const json resp = this->Dispatch(req);
         if (!resp.value("ok", false)) {
             std::string msg = "alias dispatch failed";
             if (resp.contains("error") && resp["error"].is_object() &&
