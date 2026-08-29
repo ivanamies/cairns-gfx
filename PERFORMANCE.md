@@ -66,19 +66,44 @@ in the [~57, ~120] ms band, not a fixed steady-state. The pattern of
 the EnTT path being within thermal noise of the post-render-graph
 baseline holds.
 
-### iOS — Debug build refreshed (not run)
+### iOS Metal Release — iPhone 15, native res
+| Pass            | avg     |
+|-----------------|---------|
+| `frame`         |  7.12 ms (CPU, game thread post-Acquire) |
+| `build_draws`   |  6.49 ms |
+| `record`        |  4.53 ms |
+| `gpu_frame`     | 34.87 ms (overall GPU; sum of PassTimer slots) |
+| `swap`          |  0.93 ms (GPU) |
+| `forward`       | ~33.94 ms (implicit = gpu_frame − swap; see note) |
+| total           | 34.76 ms CPU / 29 FPS |
+
+`forward` and `particle_sim` don't surface as their own overlay rows on
+iOS: per `feedback-no-metal-timestamps`, the device lies about
+`MTLCounterSampleBuffer` support and the codebase falls back to
+`cmdbuf->GPUStartTime/EndTime` in the completion handler — which gives
+accurate per-command-buffer timings but not per-pass within a single
+cmd-buf. `gpu_frame` sums the populated `SlotForPass` slots, so it
+captures the whole frame; `swap` is its own cmd-buf (composite + PIP +
+ImGui), and the residual is `forward` + `particle_sim`. Particle sim
+is sub-millisecond on every other platform so the implicit `forward`
+≈ 33.94 ms is accurate to within noise.
+
+iOS at this workload is GPU-bound (`gpu_frame` 34.87 vs CPU `frame`
+7.12 ms): 29 FPS = ~34.5 ms/frame wall-clock, set by GPU not CPU.
+That matches the iPhone 15 result documented at `9c8356e`
+(prior-baseline ~32 ms forward at 1280×720 in earlier benches; this
+run is at the iPhone's native screen res which is ~2.8× pixels).
+
+### iOS Debug build env
 
 `cmake -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCAIRNS_GFX_BACKEND=metal -B
 build/ios` configures clean. `xcodebuild -sdk iphoneos -destination
 'generic/platform=iOS' build CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO`
-links cleanly (** BUILD SUCCEEDED **). Deploying to a physical device
-needs a signing identity I don't have access to in this session, so
-no on-device readout yet. Simulator build hits an architecture-define
-mismatch: `define.hpp` keys `CAIRNS_APPLE` off `__APPLE__ &&
-__aarch64__`, which is false for x86_64-iphonesimulator → `CAIRNS_METAL=0`
-→ `SwapChain` has no body → render_graph.cpp can't see members. Two
-ways to fix when next needed: (a) drop the `__aarch64__` requirement
-in `define.hpp`, or (b) force `ARCHS=arm64` for simulator builds.
+links cleanly. Simulator build hits an architecture-define mismatch:
+`define.hpp` keys `CAIRNS_APPLE` off `__APPLE__ && __aarch64__`, which
+is false for x86_64-iphonesimulator → `CAIRNS_METAL=0` → `SwapChain`
+has no body. Fix when next needed: drop the `__aarch64__` requirement
+in `define.hpp`, or force `ARCHS=arm64` for simulator builds.
 
 ### Observations vs. `042ebec`
 - `build_draws` is ~25% faster (M2 Max metal) on the EnTT path. The
