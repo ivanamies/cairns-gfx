@@ -896,9 +896,9 @@ public:
                     bb[1].slot = 1;
                     bb[1].buffer = shared_skin_attrs_buf_;
                     bb[1].offset = mhot.skin_attr_base_vertex *
-                        static_cast<uint32_t>(sizeof(cairns::SkinVertex));
+                        static_cast<uint32_t>(sizeof(cairns::PackedSkinVertex));
                     bb[1].range = mhot.vert_count *
-                        static_cast<uint32_t>(sizeof(cairns::SkinVertex));
+                        static_cast<uint32_t>(sizeof(cairns::PackedSkinVertex));
                     bb[1].kind = cairns::rhi::BufferKind::kStorage;
                     cairns::rhi::BindGroupDesc bgd{};
                     bgd.debug_name = "skin_group_a";
@@ -2222,7 +2222,7 @@ public:
                         db.skin_attr_byte_offset =
                             mhot->skin_attr_base_vertex *
                             static_cast<uint32_t>(
-                                sizeof(cairns::SkinVertex));
+                                sizeof(cairns::PackedSkinVertex));
                         db.params_byte_offset = params_off;
                         db.palettes_byte_offset = pal_off;
                         db.instance_meta_byte_offset = meta_off;

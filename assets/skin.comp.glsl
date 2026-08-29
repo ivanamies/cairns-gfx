@@ -53,18 +53,23 @@ layout(set = 1, binding = 0) readonly buffer Positions {
     vec4 mesh_pos[];
 };
 
+// #222 Phase S.2: packed skin attrs -- 8 B/vert (u8 j0|j1|j2|j3 + u8 w0..w3
+// unorm). Two uint32 per vertex. unpackUnorm4x8 handles the weights; joints
+// fall out of bit-shifts. Replaces the 32 B/vert uvec4+uvec4 layout (4x
+// SSBO bandwidth cut at no precision loss for joints, +unorm renorm at
+// pack time so weights still sum to 255/255).
 layout(set = 1, binding = 1) readonly buffer SkinAttrs {
-    uvec4 skin_joints_then_weights[];
+    uvec2 skin_packed[];
 };
 
 vec4 skin_weights_at(uint vid) {
-    uvec4 raw = skin_joints_then_weights[2u * vid + 1u];
-    return vec4(uintBitsToFloat(raw.x), uintBitsToFloat(raw.y),
-                uintBitsToFloat(raw.z), uintBitsToFloat(raw.w));
+    return unpackUnorm4x8(skin_packed[vid].y);
 }
 
 uvec4 skin_joints_at(uint vid) {
-    return skin_joints_then_weights[2u * vid];
+    uint p = skin_packed[vid].x;
+    return uvec4(p & 0xFFu, (p >> 8) & 0xFFu,
+                 (p >> 16) & 0xFFu, (p >> 24) & 0xFFu);
 }
 
 // #222 Phase S.1: cooperative LDS palette. 64 threads x mat4 = 64 B/thread =

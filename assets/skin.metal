@@ -31,6 +31,7 @@ constant uint kSkinModePassthrough = 3u;
 // invariant: cooperative load + barrier before the vid early-out. Metal's
 // function-scope threadgroup-class float4x4 doesn't default-construct;
 // store 4 rows per joint and rebuild on read.
+// #222 Phase S.2 (metal mirror): packed 8 B/vert.
 kernel void skin_compute(uint3 gid [[thread_position_in_grid]],
                           uint3 wid [[threadgroup_position_in_grid]],
                           uint3 lid [[thread_position_in_threadgroup]],
@@ -39,7 +40,7 @@ kernel void skin_compute(uint3 gid [[thread_position_in_grid]],
                           const device uint2* inst_meta [[buffer(2)]],
                           device float4* out_pos [[buffer(3)]],
                           const device float4* mesh_pos [[buffer(4)]],
-                          const device uint4* skin_joints_then_weights [[buffer(5)]]) {
+                          const device uint2* skin_packed [[buffer(5)]]) {
     threadgroup float4 s_pal[256 * 4];  // 4 rows per mat4
     uint inst = wid.y;
     uint vid = gid.x;
@@ -73,10 +74,13 @@ kernel void skin_compute(uint3 gid [[thread_position_in_grid]],
             j = uint4(0u, 0u, 0u, 0u);
             w = float4(1.0, 0.0, 0.0, 0.0);
         } else {
-            j = skin_joints_then_weights[2u * vid];
-            uint4 wraw = skin_joints_then_weights[2u * vid + 1u];
-            w = float4(as_type<float>(wraw.x), as_type<float>(wraw.y),
-                       as_type<float>(wraw.z), as_type<float>(wraw.w));
+            uint jp = skin_packed[vid].x;
+            uint wp = skin_packed[vid].y;
+            j = uint4(jp & 0xFFu, (jp >> 8) & 0xFFu,
+                      (jp >> 16) & 0xFFu, (jp >> 24) & 0xFFu);
+            w = float4(float(wp & 0xFFu), float((wp >> 8) & 0xFFu),
+                       float((wp >> 16) & 0xFFu),
+                       float((wp >> 24) & 0xFFu)) * (1.0f / 255.0f);
         }
         float4x4 mx = float4x4(s_pal[j.x*4+0], s_pal[j.x*4+1],
                                s_pal[j.x*4+2], s_pal[j.x*4+3]);

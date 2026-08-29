@@ -47,7 +47,8 @@ inline bool LoadScenesGpu(std::span<const cairns::SceneId> scene_ids,
     const size_t pos_bytes = total_verts * sizeof(glm::vec4);
     const size_t attr_bytes = total_verts * sizeof(VertexAttribute);
     const size_t idx_bytes = total_indices * sizeof(uint32_t);
-    const size_t skin_bytes = total_skin_verts * sizeof(SkinVertex);
+    // #222 Phase S.2: GPU side packs to PackedSkinVertex (8 B) at upload.
+    const size_t skin_bytes = total_skin_verts * sizeof(PackedSkinVertex);
 
     BufferDesc vd{};
     vd.byte_size = static_cast<uint32_t>(pos_bytes + attr_bytes);
@@ -129,7 +130,8 @@ inline bool LoadScenesGpu(std::span<const cairns::SceneId> scene_ids,
         std::vector<glm::vec4> pos_batch;
         std::vector<VertexAttribute> attr_batch;
         std::vector<uint32_t> idx_batch;
-        std::vector<SkinVertex> skin_batch;
+        std::vector<PackedSkinVertex> skin_batch;
+        std::vector<SkinVertex> skin_raw;
         for (size_t s = batch_start; s < batch_end; ++s) {
             Scene::Hot* shot = scenes_pool.GetHot(scene_ids[s]);
             for (cairns::Handle<Mesh> mid : shot->meshes) {
@@ -140,9 +142,11 @@ inline bool LoadScenesGpu(std::span<const cairns::SceneId> scene_ids,
                                   mcold->cpuAttrs.end());
                 idx_batch.insert(idx_batch.end(), mcold->cpuIndices.begin(),
                                  mcold->cpuIndices.end());
-                skin_batch.insert(skin_batch.end(),
-                                  mcold->cpuSkinAttrs.begin(),
-                                  mcold->cpuSkinAttrs.end());
+                // #222 Phase S.2: pack u8 joints + u8 unorm weights with
+                // largest-remainder renorm at upload.
+                for (const SkinVertex& sv : mcold->cpuSkinAttrs) {
+                    skin_batch.push_back(PackSkinVertex(sv));
+                }
             }
         }
 
@@ -150,7 +154,7 @@ inline bool LoadScenesGpu(std::span<const cairns::SceneId> scene_ids,
         const size_t attr_batch_bytes =
             attr_batch.size() * sizeof(VertexAttribute);
         const size_t idx_batch_bytes = idx_batch.size() * sizeof(uint32_t);
-        const size_t skin_batch_bytes = skin_batch.size() * sizeof(SkinVertex);
+        const size_t skin_batch_bytes = skin_batch.size() * sizeof(PackedSkinVertex);
 
         rm.UploadBuffer(alloc, shared_vtx,
                         static_cast<uint32_t>(cur_vert_off_bytes),

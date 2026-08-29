@@ -61,6 +61,67 @@ struct SkinVertex {
     glm::vec4  weights = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
 };
 
+// #222 Phase S.2: GPU-side packed skin vertex. 8 B (4x u8 joints + 4x u8
+// unorm weights). Largest-remainder renorm during pack guarantees the
+// weights sum to exactly 255 (post-quantization) so seams don't crack.
+struct PackedSkinVertex {
+    uint32_t joints_packed = 0;   // u8 j0 | u8 j1 | u8 j2 | u8 j3 (LSB first)
+    uint32_t weights_packed = 0;  // u8 w0 | u8 w1 | u8 w2 | u8 w3
+};
+
+inline PackedSkinVertex PackSkinVertex(const SkinVertex& v) {
+    PackedSkinVertex p;
+    p.joints_packed =
+        (v.joints.x & 0xFFu) |
+        ((v.joints.y & 0xFFu) << 8) |
+        ((v.joints.z & 0xFFu) << 16) |
+        ((v.joints.w & 0xFFu) << 24);
+    // u8 quantization with largest-remainder renorm. Compute floor(w*255)
+    // per channel, distribute the deficit to the channels with the largest
+    // fractional remainders.
+    const float wsum =
+        v.weights.x + v.weights.y + v.weights.z + v.weights.w;
+    const float inv = (wsum > 1e-6f) ? (1.0f / wsum) : 0.0f;
+    const float ns[4] = {
+        v.weights.x * inv, v.weights.y * inv,
+        v.weights.z * inv, v.weights.w * inv,
+    };
+    const float scaled[4] = {
+        ns[0] * 255.0f, ns[1] * 255.0f, ns[2] * 255.0f, ns[3] * 255.0f,
+    };
+    uint32_t base[4] = {
+        static_cast<uint32_t>(scaled[0]),
+        static_cast<uint32_t>(scaled[1]),
+        static_cast<uint32_t>(scaled[2]),
+        static_cast<uint32_t>(scaled[3]),
+    };
+    uint32_t total = base[0] + base[1] + base[2] + base[3];
+    int32_t deficit = 255 - static_cast<int32_t>(total);
+    // give 1 LSB to the channels with the largest remainders, in order.
+    for (int32_t k = 0; k < deficit && k < 4; ++k) {
+        float best_rem = -1.0f;
+        int best_idx = 0;
+        for (int i = 0; i < 4; ++i) {
+            const float rem = scaled[i] - static_cast<float>(base[i]);
+            // skip channels we already bumped this round
+            if (((base[i] + 1u) > 255u) || rem <= best_rem) {
+                continue;
+            }
+            best_rem = rem;
+            best_idx = i;
+        }
+        if (base[best_idx] < 255u) {
+            base[best_idx]++;
+        }
+    }
+    p.weights_packed =
+        (base[0] & 0xFFu) |
+        ((base[1] & 0xFFu) << 8) |
+        ((base[2] & 0xFFu) << 16) |
+        ((base[3] & 0xFFu) << 24);
+    return p;
+}
+
 struct Primitive {
     uint32_t firstIndex = 0;
     uint32_t indexCount = 0;
