@@ -46,22 +46,16 @@ MTL::PixelFormat to_mtl_pixel_format(Format f) {
 
 }  // namespace
 
-Pipelines::~Pipelines() { Deinit(); }
-
-bool Pipelines::Init(Device& device, Resources& resources, Bindless& bindless,
-                     Frames& frames) {
-    (void)bindless;  // Metal pipelines don't reference bindless/frame layouts.
-    (void)frames;
+bool Pipelines::Init(Device& device) {
     if (inited_) {
         return true;
     }
     device_ = device.device_;
-    res_ = &resources;
     inited_ = true;
     return true;
 }
 
-void Pipelines::Deinit() {
+void Pipelines::Deinit(Resources&) {
     if (!inited_) {
         return;
     }
@@ -137,7 +131,7 @@ MetalShaderInfo resolve_metal_shader(const char* logical) {
 }  // namespace
 
 Handle<Shader> Pipelines::CreateGraphicsPipeline(
-    const GraphicsPipelineDesc& desc) {
+    Resources& resources, Bindless&, Frames&, const GraphicsPipelineDesc& desc) {
     MTL::Device* device = device_;
     const MetalShaderInfo info = resolve_metal_shader(desc.logical_shader);
     const std::filesystem::path dir = desc.shader_dir ? desc.shader_dir : "";
@@ -207,14 +201,14 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
         return Handle<Shader>::Null;
     }
 
-    Handle<Shader> h = res_->shaders.Acquire();
-    res_->shaders.GetHot(h)->api_pso = pso;
-    res_->shaders.GetCold(h)->debug_name = desc.debug_name;
+    Handle<Shader> h = resources.shaders.Acquire();
+    resources.shaders.GetHot(h)->api_pso = pso;
+    resources.shaders.GetCold(h)->debug_name = desc.debug_name;
     return h;
 }
 
 Handle<Kernel> Pipelines::CreateComputePipeline(
-    const ComputePipelineDesc& desc) {
+    Resources& resources, Frames&, const ComputePipelineDesc& desc) {
     MTL::Device* device = device_;
     const MetalShaderInfo info = resolve_metal_shader(desc.logical_shader);
     const std::filesystem::path dir = desc.shader_dir ? desc.shader_dir : "";
@@ -236,9 +230,9 @@ Handle<Kernel> Pipelines::CreateComputePipeline(
         std::cerr << "rhi/metal: newComputePipelineState failed" << std::endl;
         return Handle<Kernel>::Null;
     }
-    Handle<Kernel> h = res_->kernels.Acquire();
-    res_->kernels.GetHot(h)->api_pso = cps;
-    res_->kernels.GetCold(h)->debug_name = desc.debug_name;
+    Handle<Kernel> h = resources.kernels.Acquire();
+    resources.kernels.GetHot(h)->api_pso = cps;
+    resources.kernels.GetCold(h)->debug_name = desc.debug_name;
     return h;
 }
 }  // namespace cairns::rhi

@@ -14,12 +14,11 @@ namespace cairns::rhi {
 
 Bindless::~Bindless() { Deinit(); }
 
-bool Bindless::Init(Device& device, Resources& resources) {
+bool Bindless::Init(Device& device) {
     if (inited_) {
         return true;
     }
     device_ = device.device_;
-    res_ = &resources;
     inited_ = true;
     return true;
 }
@@ -35,7 +34,8 @@ void Bindless::Deinit() {
     inited_ = false;
 }
 
-Handle<BindGroup> Bindless::CreateRegistry(const BindlessRegistryDesc& desc) {
+Handle<BindGroup> Bindless::CreateRegistry(Resources& resources, Allocator& alloc,
+                                           const BindlessRegistryDesc& desc) {
     MTL::Device* device = device_;
 
     auto* texArg = MTL::ArgumentDescriptor::alloc()->init();
@@ -63,9 +63,9 @@ Handle<BindGroup> Bindless::CreateRegistry(const BindlessRegistryDesc& desc) {
     bd.byte_size = static_cast<uint32_t>(arg_encoder->encodedLength());
     bd.usage = kUsageUniform | kUsageStorage;
     bd.memory = Memory::kUpload;
-    Handle<Buffer> arg_buf_h = res_->CreateBuffer(bd);
+    Handle<Buffer> arg_buf_h = resources.CreateBuffer(alloc, bd);
     uint32_t arg_off = 0;
-    MTL::Buffer* arg_buf = res_->GetMtlBuffer(arg_buf_h, &arg_off);
+    MTL::Buffer* arg_buf = resources.GetMtlBuffer(alloc, arg_buf_h, &arg_off);
     arg_encoder->setArgumentBuffer(arg_buf, arg_off);
 
     bindless_encoder_ = arg_encoder;
@@ -76,33 +76,34 @@ Handle<BindGroup> Bindless::CreateRegistry(const BindlessRegistryDesc& desc) {
     bindless_num_attr_ = 0;
     bindless_num_samp_ = 0;
 
-    Handle<BindGroup> h = res_->bind_groups.Acquire();
-    BindGroup::Hot* hot = res_->bind_groups.GetHot(h);
+    Handle<BindGroup> h = resources.bind_groups.Acquire();
+    BindGroup::Hot* hot = resources.bind_groups.GetHot(h);
     hot->api_descriptor_set = arg_buf;
     hot->arg_buf_offset = arg_off;
-    res_->bind_groups.GetCold(h)->debug_name = desc.debug_name;
+    resources.bind_groups.GetCold(h)->debug_name = desc.debug_name;
     return h;
 }
 
-uint32_t Bindless::AddTexture(Handle<BindGroup>, Handle<Texture> tex) {
-    MTL::Texture* t = res_->textures.GetHot(tex)->api_view;
+uint32_t Bindless::AddTexture(Resources& resources, Handle<BindGroup>, Handle<Texture> tex) {
+    MTL::Texture* t = resources.textures.GetHot(tex)->api_view;
     const uint32_t slot = bindless_num_tex_;
     bindless_encoder_->setTexture(t, bindless_tex_base_ + slot);
     bindless_num_tex_ = slot + 1;
     return slot;
 }
 
-uint32_t Bindless::AddAttrBuffer(Handle<BindGroup>, Handle<Buffer> buf) {
+uint32_t Bindless::AddAttrBuffer(Resources& resources, Allocator& alloc, Handle<BindGroup>,
+                                 Handle<Buffer> buf) {
     uint32_t off = 0;
-    MTL::Buffer* b = res_->GetMtlBuffer(buf, &off);
+    MTL::Buffer* b = resources.GetMtlBuffer(alloc, buf, &off);
     const uint32_t slot = bindless_num_attr_;
     bindless_encoder_->setBuffer(b, off, bindless_attr_base_ + slot);
     bindless_num_attr_ = slot + 1;
     return slot;
 }
 
-uint32_t Bindless::AddSampler(Handle<BindGroup>, Handle<Sampler> samp) {
-    MTL::SamplerState* s = res_->samplers.GetHot(samp)->api_sampler;
+uint32_t Bindless::AddSampler(Resources& resources, Handle<BindGroup>, Handle<Sampler> samp) {
+    MTL::SamplerState* s = resources.samplers.GetHot(samp)->api_sampler;
     const uint32_t slot = bindless_num_samp_;
     bindless_encoder_->setSamplerState(s, bindless_samp_base_ + slot);
     bindless_num_samp_ = slot + 1;

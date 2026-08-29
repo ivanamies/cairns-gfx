@@ -21,27 +21,25 @@ class Frames;
 class Pipelines {
 public:
     Pipelines() = default;
-    ~Pipelines();
+    ~Pipelines() = default;
     Pipelines(const Pipelines&) = delete;
     Pipelines& operator=(const Pipelines&) = delete;
 
-    [[nodiscard]] bool Init(Device& device, Resources& resources,
-                            Bindless& bindless, Frames& frames);
-    void Deinit();
+    [[nodiscard]] bool Init(Device& device);
+    void Deinit(Resources& resources);
 
-    Handle<Shader> CreateGraphicsPipeline(const GraphicsPipelineDesc& desc);
-    Handle<Kernel> CreateComputePipeline(const ComputePipelineDesc& desc);
+    Handle<Shader> CreateGraphicsPipeline(Resources& resources, Bindless& bindless,
+                                          Frames& frames, const GraphicsPipelineDesc& desc);
+    Handle<Kernel> CreateComputePipeline(Resources& resources, Frames& frames,
+                                         const ComputePipelineDesc& desc);
 
 private:
     // Internal state — self-only (nothing reaches into Pipelines).
 #if CAIRNS_VULKAN
     VkDevice device_ = VK_NULL_HANDLE;  // mirrored from Device
-    Bindless* bindless_ = nullptr;      // borrowed; graphics layout reads its set layout
-    Frames* frames_ = nullptr;          // borrowed; pipeline reads its set layouts
 #elif CAIRNS_METAL
     MTL::Device* device_ = nullptr;     // mirrored from Device
 #endif
-    Resources* res_ = nullptr;          // borrowed; stores compiled Shader/Kernel
     bool inited_ = false;
 };
 

@@ -24,6 +24,7 @@ namespace cairns::rhi {
 
 class Device;
 class Resources;
+class Allocator;
 struct SwapChain;
 
 class Frames {
@@ -34,18 +35,18 @@ public:
     Frames& operator=(const Frames&) = delete;
 
     // CALLER: ENGINE.
-    [[nodiscard]] bool Init(Device& device, Resources& resources);
+    [[nodiscard]] bool Init(Device& device);
     // CALLER: ENGINE.
     void Deinit();
 
     // Metal: create MSAA/depth render targets + render-pass descriptor (called
     // after scene textures load). Vulkan: no-op (targets created in SwapChain).
     // CALLER: ENGINE.
-    [[nodiscard]] bool InitTargets(SwapChain& sc);
+    [[nodiscard]] bool InitTargets(Resources& resources, Allocator& alloc, SwapChain& sc);
 
     // CALLER: ENGINE (per-frame draw loop).
-    FrameContext Begin(SwapChain& sc);
-    void End(FrameContext& fc);
+    FrameContext Begin(Resources& resources, Allocator& alloc, SwapChain& sc);
+    void End(SwapChain& sc, FrameContext& fc);
 
     // Request a one-shot swapchain dump on the next End(). CALLER: ENGINE.
     void SetDumpPath(const std::filesystem::path& path);
@@ -84,7 +85,6 @@ public:
     Handle<Texture> depth_handle_ = Handle<Texture>::Null;
 #endif
     std::filesystem::path dump_path_;
-    Resources* res_ = nullptr;                  // borrowed
 
 private:
     bool inited_ = false;

@@ -149,7 +149,7 @@ void dump_swapchain_image(VkDevice device, VkPhysicalDevice phys,
 
 Frames::~Frames() { Deinit(); }
 
-bool Frames::Init(Device& device, Resources& resources) {
+bool Frames::Init(Device& device) {
     if (inited_) {
         return true;
     }
@@ -159,7 +159,6 @@ bool Frames::Init(Device& device, Resources& resources) {
     graphics_queue_ = device.graphics_queue_;
     compute_queue_ = device.compute_queue_;
     present_queue_ = device.present_queue_;
-    res_ = &resources;
 
     {  // per-frame command buffers + sync
         const uint32_t n = kFramesInFlight;
@@ -296,8 +295,8 @@ bool Frames::Init(Device& device, Resources& resources) {
     return true;
 }
 
-bool Frames::InitTargets(SwapChain& sc) {
-    (void)sc;  // depth/MSAA/render-pass already created in sc.Init on Vulkan.
+bool Frames::InitTargets(Resources&, Allocator&, SwapChain&) {
+    // depth/MSAA/render-pass already created in sc.Init on Vulkan.
     return true;
 }
 
@@ -332,7 +331,7 @@ void Frames::SetDumpPath(const std::filesystem::path& path) {
     dump_path_ = path;
 }
 
-FrameContext Frames::Begin(SwapChain& sc) {
+FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc) {
     const uint32_t cf = recorder_frame_;
     VkDevice dev = device_;
 
@@ -341,7 +340,7 @@ FrameContext Frames::Begin(SwapChain& sc) {
     vkResetCommandBuffer(compute_cmds_[cf], 0);
 
     vkWaitForFences(dev, 1, &in_flight_[cf], VK_TRUE, UINT64_MAX);
-    res_->AdvanceFrame();  // bump ring reset
+    resources.AdvanceFrame(alloc);  // bump ring reset
 
     uint32_t image_index = 0;
     vkAcquireNextImageKHR(dev, sc.swapChain, UINT64_MAX, image_available_[cf],
@@ -357,8 +356,6 @@ FrameContext Frames::Begin(SwapChain& sc) {
     FrameContext fc;
     fc.frame_index = cf;
     fc.swapchain_image_index = image_index;
-    fc.cmd.res_ = res_;
-    fc.cmd.sc_ = &sc;
     fc.cmd.frame_ = cf;
     fc.cmd.image_index_ = image_index;
     fc.cmd.gfx_ = graphics_cmds_[cf];
@@ -370,7 +367,7 @@ FrameContext Frames::Begin(SwapChain& sc) {
     return fc;
 }
 
-void Frames::End(FrameContext& fc) {
+void Frames::End(SwapChain& sc, FrameContext& fc) {
     CommandRecorder& ri = fc.cmd;
     const uint32_t cf = fc.frame_index;
 
@@ -403,7 +400,7 @@ void Frames::End(FrameContext& fc) {
     pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     pi.waitSemaphoreCount = 1;
     pi.pWaitSemaphores = &render_finished_[cf];
-    VkSwapchainKHR swapchains[1] = {ri.sc_->swapChain};
+    VkSwapchainKHR swapchains[1] = {sc.swapChain};
     pi.swapchainCount = 1;
     pi.pSwapchains = swapchains;
     pi.pImageIndices = &fc.swapchain_image_index;
@@ -413,10 +410,10 @@ void Frames::End(FrameContext& fc) {
         vkQueueWaitIdle(present_queue_);
         dump_swapchain_image(device_, physical_,
                              command_pool_, graphics_queue_,
-                             ri.sc_->swapChainImages[fc.swapchain_image_index],
-                             ri.sc_->swapChainImageFormat,
-                             ri.sc_->swapChainExtent.width,
-                             ri.sc_->swapChainExtent.height,
+                             sc.swapChainImages[fc.swapchain_image_index],
+                             sc.swapChainImageFormat,
+                             sc.swapChainExtent.width,
+                             sc.swapChainExtent.height,
                              dump_path_.string().c_str());
         dump_path_.clear();
     }

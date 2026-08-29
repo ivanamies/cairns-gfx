@@ -355,7 +355,7 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene) {
     return true;
 }
 
-inline void PrepareSceneResources(Scene& scene, rhi::Resources& rm, std::vector<LoadedMaterial>& materials) {
+inline void PrepareSceneResources(Scene& scene, rhi::Resources& rm, rhi::Allocator& alloc, std::vector<LoadedMaterial>& materials) {
     // Textures
     for (const auto& texDescIn : scene.loaded_textures) {
         rhi::TextureDesc d;
@@ -370,7 +370,7 @@ inline void PrepareSceneResources(Scene& scene, rhi::Resources& rm, std::vector<
             static_cast<const uint8_t*>(texDescIn.src_image),
             static_cast<size_t>(texDescIn.src_bytes_per_row) *
                 static_cast<size_t>(texDescIn.height));
-        scene.textureHandles.push_back(rm.CreateTexture(d));
+        scene.textureHandles.push_back(rm.CreateTexture(alloc, d));
     }
     
     // Samplers

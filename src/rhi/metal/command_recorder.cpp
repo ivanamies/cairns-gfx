@@ -20,13 +20,13 @@
 
 namespace cairns::rhi {
 
-void CommandRecorder::Dispatch(const ComputeDispatch& d) {
+void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDispatch& d) {
     MTL::ComputeCommandEncoder* cenc = cmd_->computeCommandEncoder();
-    cenc->setComputePipelineState(res_->GetHot(d.kernel)->api_pso);
+    cenc->setComputePipelineState(res.GetHot(d.kernel)->api_pso);
     for (size_t i = 0; i < d.buffers.size(); ++i) {
         const BoundBuffer& b = d.buffers[i];
         uint32_t off = 0;
-        MTL::Buffer* buf = res_->GetMtlBuffer(b.buffer, &off);
+        MTL::Buffer* buf = res.GetMtlBuffer(alloc,b.buffer, &off);
         cenc->setBuffer(buf, off + b.offset, b.slot);
     }
     cenc->dispatchThreadgroups(MTL::Size{d.groups_x, d.groups_y, d.groups_z},
@@ -34,7 +34,7 @@ void CommandRecorder::Dispatch(const ComputeDispatch& d) {
     cenc->endEncoding();
 }
 
-void CommandRecorder::BeginRenderPass(const RenderPassDesc& desc) {
+void CommandRecorder::BeginRenderPass(SwapChain&, const RenderPassDesc& desc) {
     if (!desc.color.empty()) {
         const float* c = desc.color[0].clear;
         render_pass_desc_->colorAttachments()->object(0)->setClearColor(
@@ -43,31 +43,31 @@ void CommandRecorder::BeginRenderPass(const RenderPassDesc& desc) {
     enc_ = cmd_->renderCommandEncoder(render_pass_desc_);
 }
 
-void CommandRecorder::DrawMeshes(const MeshDrawList& list) {
+void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list) {
     MTL::RenderCommandEncoder* enc = enc_;
-    enc->setRenderPipelineState(res_->GetHot(list.pipeline)->api_pso);
+    enc->setRenderPipelineState(res.GetHot(list.pipeline)->api_pso);
     enc->setDepthStencilState(depth_stencil_);
     enc->setFrontFacingWinding(MTL::WindingCounterClockwise);
     enc->setCullMode(MTL::CullModeBack);
     {
-        BindGroup::Hot* bg = res_->GetHot(list.bindless);
+        BindGroup::Hot* bg = res.GetHot(list.bindless);
         MTL::Buffer* bg_buf = bg->api_descriptor_set;
         const uint32_t bg_off = bg->arg_buf_offset;
         enc->setVertexBuffer(bg_buf, bg_off, GpuSceneRegistry::kBindSlot);
         enc->setFragmentBuffer(bg_buf, bg_off, GpuSceneRegistry::kBindSlot);
     }
     for (size_t i = 0; i < list.resident_textures.size(); ++i) {
-        MTL::Texture* tex = res_->GetHot(list.resident_textures[i])->api_view;
+        MTL::Texture* tex = res.GetHot(list.resident_textures[i])->api_view;
         if (tex) {
             enc->useResource(tex, MTL::ResourceUsageRead, MTL::RenderStageFragment);
         }
     }
     uint32_t mesh_master_off = 0;
     MTL::Buffer* mesh_master =
-        res_->GetMtlBuffer(list.resident_buffers[0], &mesh_master_off);
+        res.GetMtlBuffer(alloc,list.resident_buffers[0], &mesh_master_off);
     enc->useResource(mesh_master, MTL::ResourceUsageRead, MTL::RenderStageVertex);
     enc->setVertexBuffer(mesh_master, 0, 0);
-    MTL::Buffer* dyn_master = res_->GetBumpMasterBuffer(Memory::kDynamic);
+    MTL::Buffer* dyn_master = res.GetBumpMasterBuffer(alloc, Memory::kDynamic);
     enc->setVertexBuffer(dyn_master, list.globals_offset, cairns::kRenderPassGlobalBindSlot);
     enc->setVertexBuffer(dyn_master, 0, cairns::kMaterialBindSlot);
     enc->setVertexBuffer(dyn_master, 0, cairns::kDrawTmpBindSlot);
@@ -77,7 +77,7 @@ void CommandRecorder::DrawMeshes(const MeshDrawList& list) {
         const cairns::Draw& draw = list.draws[list.sorted_indices[i]];
         {
             uint32_t pos_off = 0;
-            res_->GetMtlBuffer(draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot],
+            res.GetMtlBuffer(alloc,draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot],
                                     &pos_off);
             enc->setVertexBufferOffset(pos_off, 0);
         }
@@ -91,7 +91,7 @@ void CommandRecorder::DrawMeshes(const MeshDrawList& list) {
         enc->setVertexBufferOffset(draw.dynamic_buffer_offsets[1], cairns::kDrawTmpBindSlot);
         {
             uint32_t index_master_off = 0;
-            MTL::Buffer* index_buffer = res_->GetMtlBuffer(draw.index_buffer, &index_master_off);
+            MTL::Buffer* index_buffer = res.GetMtlBuffer(alloc,draw.index_buffer, &index_master_off);
             enc->drawIndexedPrimitives(MTL::PrimitiveTypeTriangle, draw.triangle_count * 3,
                                        MTL::IndexTypeUInt32, index_buffer, draw.index_offset, 1,
                                        draw.vertex_offset, 0);
@@ -99,10 +99,10 @@ void CommandRecorder::DrawMeshes(const MeshDrawList& list) {
     }
 }
 
-void CommandRecorder::DrawPoints(const PointDraw& pd) {
-    enc_->setRenderPipelineState(res_->GetHot(pd.pipeline)->api_pso);
+void CommandRecorder::DrawPoints(Resources& res, Allocator& alloc, const PointDraw& pd) {
+    enc_->setRenderPipelineState(res.GetHot(pd.pipeline)->api_pso);
     uint32_t off = 0;
-    MTL::Buffer* buf = res_->GetMtlBuffer(pd.vertex_buffer, &off);
+    MTL::Buffer* buf = res.GetMtlBuffer(alloc,pd.vertex_buffer, &off);
     enc_->setVertexBuffer(buf, off, 0);
     enc_->drawPrimitives(MTL::PrimitiveTypePoint, NS::UInteger(pd.vertex_offset),
                                NS::UInteger(pd.vertex_count));

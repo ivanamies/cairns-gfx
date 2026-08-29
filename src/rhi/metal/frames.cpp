@@ -21,13 +21,12 @@ namespace cairns::rhi {
 
 Frames::~Frames() { Deinit(); }
 
-bool Frames::Init(Device& device, Resources& resources) {
+bool Frames::Init(Device& device) {
     if (inited_) {
         return true;
     }
     device_ = device.device_;
     queue_ = device.queue_;
-    res_ = &resources;
 
     frame_semaphore_ = dispatch_semaphore_create(kFramesInFlight);
     {
@@ -43,7 +42,7 @@ bool Frames::Init(Device& device, Resources& resources) {
 
 // Metal MSAA/depth targets share the texture Pool index space with scene
 // textures; created after scene textures load (call post scene load).
-bool Frames::InitTargets(SwapChain& sc) {
+bool Frames::InitTargets(Resources& resources, Allocator& alloc, SwapChain& sc) {
     constexpr uint32_t kSampleCount = 4;
     const int32_t w = static_cast<int32_t>(sc.Width());
     const int32_t h = static_cast<int32_t>(sc.Height());
@@ -54,7 +53,7 @@ bool Frames::InitTargets(SwapChain& sc) {
         d.sample_count = kSampleCount;
         d.usage = kTexUsageColorTarget;
         d.memory = Memory::kDefault;
-        msaa_handle_ = res_->CreateTexture(d);
+        msaa_handle_ = resources.CreateTexture(alloc, d);
         if (msaa_handle_.IsNull()) {
             return false;
         }
@@ -66,13 +65,13 @@ bool Frames::InitTargets(SwapChain& sc) {
         d.sample_count = kSampleCount;
         d.usage = kTexUsageDepthTarget;
         d.memory = Memory::kDefault;
-        depth_handle_ = res_->CreateTexture(d);
+        depth_handle_ = resources.CreateTexture(alloc, d);
         if (depth_handle_.IsNull()) {
             return false;
         }
     }
-    MTL::Texture* msaa = res_->GetHot(msaa_handle_)->api_view;
-    MTL::Texture* depth = res_->GetHot(depth_handle_)->api_view;
+    MTL::Texture* msaa = resources.GetHot(msaa_handle_)->api_view;
+    MTL::Texture* depth = resources.GetHot(depth_handle_)->api_view;
     return InitRenderPassDescriptor(render_pass_desc_, msaa, depth, sc);
 }
 
@@ -93,14 +92,14 @@ void Frames::SetDumpPath(const std::filesystem::path& path) {
     dump_path_ = path;
 }
 
-FrameContext Frames::Begin(SwapChain& sc) {
+FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc) {
     dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(frame_semaphore_),
                             DISPATCH_TIME_FOREVER);
-    res_->AdvanceFrame();  // bump ring reset
+    resources.AdvanceFrame(alloc);  // bump ring reset
 
     sc.NextDrawable();
-    MTL::Texture* msaa = res_->GetHot(msaa_handle_)->api_view;
-    MTL::Texture* depth = res_->GetHot(depth_handle_)->api_view;
+    MTL::Texture* msaa = resources.GetHot(msaa_handle_)->api_view;
+    MTL::Texture* depth = resources.GetHot(depth_handle_)->api_view;
     UpdateRenderPassDescriptor(render_pass_desc_, msaa, depth, sc);
 
     MTL::CommandBuffer* cmd = queue_->commandBuffer();
@@ -110,8 +109,6 @@ FrameContext Frames::Begin(SwapChain& sc) {
     FrameContext fc;
     fc.frame_index = 0;
     fc.swapchain_image_index = 0;
-    fc.cmd.res_ = res_;
-    fc.cmd.sc_ = &sc;
     fc.cmd.cmd_ = cmd;
     fc.cmd.enc_ = nullptr;
     fc.cmd.render_pass_desc_ = render_pass_desc_;
@@ -119,12 +116,12 @@ FrameContext Frames::Begin(SwapChain& sc) {
     return fc;
 }
 
-void Frames::End(FrameContext& fc) {
+void Frames::End(SwapChain& sc, FrameContext& fc) {
     CommandRecorder& ri = fc.cmd;
     MTL::CommandBuffer* cmd = ri.cmd_;
 
     if (!dump_path_.empty()) {
-        MTL::Texture* drawableTex = ri.sc_->GetDrawable()->texture();
+        MTL::Texture* drawableTex = sc.GetDrawable()->texture();
         const NS::UInteger w = drawableTex->width();
         const NS::UInteger h = drawableTex->height();
         const NS::UInteger bytesPerRow = w * 4;
@@ -134,7 +131,7 @@ void Frames::End(FrameContext& fc) {
         blitEnc->copyFromTexture(drawableTex, 0, 0, MTL::Origin{0, 0, 0}, MTL::Size{w, h, 1},
                                  readback, 0, bytesPerRow, 0);
         blitEnc->endEncoding();
-        cmd->presentDrawable(ri.sc_->GetDrawable());
+        cmd->presentDrawable(sc.GetDrawable());
         cmd->commit();
         cmd->waitUntilCompleted();
         std::vector<uint8_t> rgba(bufSize);
@@ -150,7 +147,7 @@ void Frames::End(FrameContext& fc) {
         readback->release();
         dump_path_.clear();
     } else {
-        cmd->presentDrawable(ri.sc_->GetDrawable());
+        cmd->presentDrawable(sc.GetDrawable());
         cmd->commit();
     }
 }

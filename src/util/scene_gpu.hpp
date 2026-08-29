@@ -6,7 +6,7 @@
 
 namespace cairns::rhi {
 
-inline bool LoadMeshGpu(Mesh& mesh, Resources& rm) {
+inline bool LoadMeshGpu(Mesh& mesh, Resources& rm, Allocator& alloc) {
     auto process = [&](Handle<Buffer>& h, const void* srcData,
                        size_t srcSize) -> bool {
         if (srcSize == 0) {
@@ -18,7 +18,7 @@ inline bool LoadMeshGpu(Mesh& mesh, Resources& rm) {
         d.memory = Memory::kDefault;
         d.initial_data = std::span<const uint8_t>(
             static_cast<const uint8_t*>(srcData), srcSize);
-        h = rm.CreateBuffer(d);
+        h = rm.CreateBuffer(alloc, d);
         return !h.IsNull();
     };
 
@@ -37,9 +37,9 @@ inline bool LoadMeshGpu(Mesh& mesh, Resources& rm) {
     return true;
 }
 
-inline bool LoadSceneGpu(Scene& scene, Resources& rm) {
+inline bool LoadSceneGpu(Scene& scene, Resources& rm, Allocator& alloc) {
     for (size_t i = 0; i < scene.meshes.size(); ++i) {
-        if (!LoadMeshGpu(scene.meshes[i], rm)) {
+        if (!LoadMeshGpu(scene.meshes[i], rm, alloc)) {
             return false;
         }
     }

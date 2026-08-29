@@ -49,27 +49,21 @@ VkFormat to_vk_format(Format f) {
 
 }  // namespace
 
-Pipelines::~Pipelines() { Deinit(); }
-
-bool Pipelines::Init(Device& device, Resources& resources, Bindless& bindless,
-                     Frames& frames) {
+bool Pipelines::Init(Device& device) {
     if (inited_) {
         return true;
     }
     device_ = device.device_;
-    res_ = &resources;
-    bindless_ = &bindless;
-    frames_ = &frames;
     inited_ = true;
     return true;
 }
 
-void Pipelines::Deinit() {
+void Pipelines::Deinit(Resources& resources) {
     if (!inited_) {
         return;
     }
     VkDevice dev = device_;
-    res_->shaders.ForEachLive([dev](Shader::Hot& hot, Shader::Cold&) {
+    resources.shaders.ForEachLive([dev](Shader::Hot& hot, Shader::Cold&) {
         if (hot.vk_pipeline) {
             vkDestroyPipeline(dev, hot.vk_pipeline, nullptr);
             hot.vk_pipeline = VK_NULL_HANDLE;
@@ -79,7 +73,7 @@ void Pipelines::Deinit() {
             hot.vk_layout = VK_NULL_HANDLE;
         }
     });
-    res_->kernels.ForEachLive([dev](Kernel::Hot& hot, Kernel::Cold&) {
+    resources.kernels.ForEachLive([dev](Kernel::Hot& hot, Kernel::Cold&) {
         if (hot.vk_pipeline) {
             vkDestroyPipeline(dev, hot.vk_pipeline, nullptr);
             hot.vk_pipeline = VK_NULL_HANDLE;
@@ -191,6 +185,7 @@ VkShaderFiles resolve_vk_shader(const char* logical) {
 }  // namespace
 
 Handle<Shader> Pipelines::CreateGraphicsPipeline(
+    Resources& resources, Bindless& bindless, Frames& frames,
     const GraphicsPipelineDesc& desc) {
     VkDevice device = device_;
     const VkShaderFiles files = resolve_vk_shader(desc.logical_shader);
@@ -310,10 +305,10 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     pc_range.size = desc.push_constant_bytes;
     std::vector<VkDescriptorSetLayout> set_layouts;
     if (desc.logical_shader && std::string(desc.logical_shader) == "unlit") {
-        set_layouts = {bindless_->bindless_layout_,
-                       frames_->dyn_ubo_layout_};
+        set_layouts = {bindless.bindless_layout_,
+                       frames.dyn_ubo_layout_};
     } else {
-        set_layouts = {frames_->point_layout_};
+        set_layouts = {frames.point_layout_};
     }
     VkPipelineLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -357,16 +352,16 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
         return Handle<Shader>::Null;
     }
 
-    Handle<Shader> h = res_->shaders.Acquire();
-    Shader::Hot* hot = res_->shaders.GetHot(h);
+    Handle<Shader> h = resources.shaders.Acquire();
+    Shader::Hot* hot = resources.shaders.GetHot(h);
     hot->vk_pipeline = pipeline;
     hot->vk_layout = layout;
-    res_->shaders.GetCold(h)->debug_name = desc.debug_name;
+    resources.shaders.GetCold(h)->debug_name = desc.debug_name;
     return h;
 }
 
 Handle<Kernel> Pipelines::CreateComputePipeline(
-    const ComputePipelineDesc& desc) {
+    Resources& resources, Frames& frames, const ComputePipelineDesc& desc) {
     VkDevice device = device_;
     const VkShaderFiles files = resolve_vk_shader(desc.logical_shader);
     const std::filesystem::path dir = desc.shader_dir ? desc.shader_dir : "";
@@ -386,7 +381,7 @@ Handle<Kernel> Pipelines::CreateComputePipeline(
     stage.module = comp_mod;
     stage.pName = "main";
 
-    const VkDescriptorSetLayout compute_layouts[1] = {frames_->compute_layout_};
+    const VkDescriptorSetLayout compute_layouts[1] = {frames.compute_layout_};
     VkPipelineLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layout_info.setLayoutCount = 1;
@@ -412,11 +407,11 @@ Handle<Kernel> Pipelines::CreateComputePipeline(
         return Handle<Kernel>::Null;
     }
 
-    Handle<Kernel> h = res_->kernels.Acquire();
-    Kernel::Hot* hot = res_->kernels.GetHot(h);
+    Handle<Kernel> h = resources.kernels.Acquire();
+    Kernel::Hot* hot = resources.kernels.GetHot(h);
     hot->vk_pipeline = pipeline;
     hot->vk_layout = layout;
-    res_->kernels.GetCold(h)->debug_name = desc.debug_name;
+    resources.kernels.GetCold(h)->debug_name = desc.debug_name;
     return h;
 }
 

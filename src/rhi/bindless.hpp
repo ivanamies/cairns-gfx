@@ -23,6 +23,7 @@ namespace cairns::rhi {
 
 class Device;
 class Resources;
+class Allocator;
 
 class Bindless {
 public:
@@ -32,15 +33,17 @@ public:
     Bindless& operator=(const Bindless&) = delete;
 
     // CALLER: ENGINE.
-    [[nodiscard]] bool Init(Device& device, Resources& resources);
+    [[nodiscard]] bool Init(Device& device);
     // CALLER: ENGINE.
     void Deinit();
 
     // CALLER: ENGINE (registry build: CreateRegistry -> Add* -> Finalize).
-    Handle<BindGroup> CreateRegistry(const BindlessRegistryDesc& desc);
-    uint32_t AddTexture(Handle<BindGroup> reg, Handle<Texture> tex);
-    uint32_t AddAttrBuffer(Handle<BindGroup> reg, Handle<Buffer> buf);
-    uint32_t AddSampler(Handle<BindGroup> reg, Handle<Sampler> samp);
+    Handle<BindGroup> CreateRegistry(Resources& resources, Allocator& alloc,
+                                     const BindlessRegistryDesc& desc);
+    uint32_t AddTexture(Resources& resources, Handle<BindGroup> reg, Handle<Texture> tex);
+    uint32_t AddAttrBuffer(Resources& resources, Allocator& alloc, Handle<BindGroup> reg,
+                           Handle<Buffer> buf);
+    uint32_t AddSampler(Resources& resources, Handle<BindGroup> reg, Handle<Sampler> samp);
     void Finalize(Handle<BindGroup> reg);
 
     // Registry state; Pipelines reads bindless_layout_ (vk pipeline layout).
@@ -66,7 +69,6 @@ public:
     uint32_t bindless_num_attr_ = 0;
     uint32_t bindless_num_samp_ = 0;
 #endif
-    Resources* res_ = nullptr;                  // borrowed
 
 private:
     bool inited_ = false;

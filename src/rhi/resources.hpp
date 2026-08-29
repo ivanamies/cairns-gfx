@@ -26,11 +26,11 @@ public:
     Resources(const Resources&) = delete;
     Resources& operator=(const Resources&) = delete;
 
-    [[nodiscard]] bool Init(Device& device, Allocator& alloc);
+    [[nodiscard]] bool Init(Device& device);
     void Deinit();
 
-    Handle<Buffer> CreateBuffer(const BufferDesc& desc);
-    Handle<Texture> CreateTexture(const TextureDesc& desc);
+    Handle<Buffer> CreateBuffer(Allocator& alloc, const BufferDesc& desc);
+    Handle<Texture> CreateTexture(Allocator& alloc, const TextureDesc& desc);
     Handle<Sampler> CreateSampler(const SamplerDesc& desc);
     Handle<BindGroup> CreateBindGroup(const BindGroupDesc& desc);
     Handle<DynamicBuffers> CreateDynamicBuffers(const DynamicBuffersDesc& desc);
@@ -44,8 +44,8 @@ public:
     ResourceManager<Shader> shaders;
     ResourceManager<Kernel> kernels;
 
-    void Destroy(Handle<Buffer> h);
-    void Destroy(Handle<Texture> h);
+    void Destroy(Allocator& alloc, Handle<Buffer> h);
+    void Destroy(Allocator& alloc, Handle<Texture> h);
     void Destroy(Handle<Sampler> h);
     void Destroy(Handle<BindGroup> h);
     void Destroy(Handle<DynamicBuffers> h);
@@ -63,24 +63,24 @@ public:
     uint32_t GetBufferByteSize(Handle<Buffer> h);
 
     // Byte offset of a buffer within its backing master allocation.
-    uint32_t BufferBaseOffset(Handle<Buffer> h);
+    uint32_t BufferBaseOffset(Allocator& alloc, Handle<Buffer> h);
 
 #if CAIRNS_VULKAN
     // Native-handle resolution used by the Vulkan CommandRecorder + Bindless.
-    VkBuffer GetVkBuffer(Handle<Buffer> h, uint32_t* out_offset);
-    VkBuffer GetVkBumpMasterBuffer(Memory mem);
-    uint8_t* MappedPtr(Handle<Buffer> h);
+    VkBuffer GetVkBuffer(Allocator& alloc, Handle<Buffer> h, uint32_t* out_offset);
+    VkBuffer GetVkBumpMasterBuffer(Allocator& alloc, Memory mem);
+    uint8_t* MappedPtr(Allocator& alloc, Handle<Buffer> h);
 #endif  // CAIRNS_VULKAN
 
 #if CAIRNS_METAL
     // Native-handle resolution used by the Metal CommandRecorder + Bindless.
-    MTL::Buffer* GetMtlBuffer(Handle<Buffer> h, uint32_t* out_offset);
-    uint8_t* MappedPtr(Handle<Buffer> h);
-    MTL::Buffer* GetBumpMasterBuffer(Memory mem) const;
+    MTL::Buffer* GetMtlBuffer(Allocator& alloc, Handle<Buffer> h, uint32_t* out_offset);
+    uint8_t* MappedPtr(Allocator& alloc, Handle<Buffer> h);
+    MTL::Buffer* GetBumpMasterBuffer(Allocator& alloc, Memory mem) const;
 #endif  // CAIRNS_METAL
 
     // Advance the resource frame counter (drives deferred-free + the bump ring).
-    void AdvanceFrame();
+    void AdvanceFrame(Allocator& alloc);
     uint32_t FrameIndex() const;
 
 private:
@@ -97,7 +97,6 @@ private:
     MTL::CommandQueue* queue_ = nullptr;        // mirrored from Device
     uint32_t frame_index_ = 1;                  // drives deferred-free + bump retire
 #endif
-    Allocator* alloc_ = nullptr;                // borrowed
     bool inited_ = false;
 };
 

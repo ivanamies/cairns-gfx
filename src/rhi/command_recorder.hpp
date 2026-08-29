@@ -19,6 +19,7 @@
 namespace cairns::rhi {
 
 class Resources;
+class Allocator;
 struct SwapChain;
 
 enum class LoadOp : uint8_t { kClear, kLoad, kDontCare };
@@ -84,15 +85,13 @@ struct PointDraw {
 
 class CommandRecorder {
 public:
-    void Dispatch(const ComputeDispatch& d);
-    void BeginRenderPass(const RenderPassDesc& desc);
-    void DrawMeshes(const MeshDrawList& list);
-    void DrawPoints(const PointDraw& draw);
+    void Dispatch(Resources& res, Allocator& alloc, const ComputeDispatch& d);
+    void BeginRenderPass(SwapChain& sc, const RenderPassDesc& desc);
+    void DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list);
+    void DrawPoints(Resources& res, Allocator& alloc, const PointDraw& draw);
     void EndRenderPass();
 
     // Per-frame recording state, populated by Frames::Begin.
-    Resources* res_ = nullptr;
-    SwapChain* sc_ = nullptr;
 #if CAIRNS_VULKAN
     uint32_t frame_ = 0;
     uint32_t image_index_ = 0;

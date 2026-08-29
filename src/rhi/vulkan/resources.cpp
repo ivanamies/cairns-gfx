@@ -270,7 +270,7 @@ bool generate_mipmaps(VkDevice device, VkCommandPool pool, VkQueue queue,
 
 Resources::~Resources() { Deinit(); }
 
-bool Resources::Init(Device& device, Allocator& alloc) {
+bool Resources::Init(Device& device) {
     if (inited_) {
         return true;
     }
@@ -278,7 +278,6 @@ bool Resources::Init(Device& device, Allocator& alloc) {
     command_pool_ = device.command_pool_;
     queue_ = device.graphics_queue_;
     physical_ = device.physical_;
-    alloc_ = &alloc;
     inited_ = true;
     return true;
 }
@@ -307,32 +306,32 @@ void Resources::Deinit() {
     inited_ = false;
 }
 
-void Resources::AdvanceFrame() {
+void Resources::AdvanceFrame(Allocator& alloc) {
     frame_index_++;
-    alloc_->AdvanceFrame(frame_index_);
+    alloc.AdvanceFrame(frame_index_);
 }
 
 uint32_t Resources::FrameIndex() const { return frame_index_; }
 
-void Resources::Destroy(Handle<Buffer> h) {
+void Resources::Destroy(Allocator& alloc, Handle<Buffer> h) {
     Buffer::Hot* hot = buffers.GetHot(h);
     Buffer::Cold* cold = buffers.GetCold(h);
     if (!hot || !cold) {
         return;
     }
-    alloc_->memory_.FreeBuffer(
+    alloc.memory_.FreeBuffer(
         hot->heap_buffer_index, cold->alloc,
         frame_index_ + kFramesInFlight);
     buffers.Release(h);
 }
 
-void Resources::Destroy(Handle<Texture> h) {
+void Resources::Destroy(Allocator& alloc, Handle<Texture> h) {
     Texture::Hot* hot = textures.GetHot(h);
     Texture::Cold* cold = textures.GetCold(h);
     if (!hot || !cold) {
         return;
     }
-    alloc_->memory_.FreeImage(
+    alloc.memory_.FreeImage(
         cold->heap_buffer_index, cold->alloc,
         static_cast<VkImage>(cold->api_image),
         static_cast<VkImageView>(hot->api_view),
@@ -378,17 +377,17 @@ uint32_t Resources::GetBufferByteSize(Handle<Buffer> h) {
     return cold->size_bytes;
 }
 
-Handle<Buffer> Resources::CreateBuffer(const BufferDesc& d) {
+Handle<Buffer> Resources::CreateBuffer(Allocator& alloc, const BufferDesc& d) {
     uint32_t align = 16;
     if (d.usage & kUsageUniform) {
-        align = std::max(align, alloc_->uniform_align_);
+        align = std::max(align, alloc.uniform_align_);
     }
     if (d.usage & kUsageStorage) {
-        align = std::max(align, alloc_->storage_align_);
+        align = std::max(align, alloc.storage_align_);
     }
 
     vulkan::AllocResult r =
-        alloc_->memory_.AllocBuffer(d.byte_size, d.usage, d.memory, align);
+        alloc.memory_.AllocBuffer(d.byte_size, d.usage, d.memory, align);
     if (!r.ok) {
         return Handle<Buffer>::Null;
     }
@@ -408,36 +407,36 @@ Handle<Buffer> Resources::CreateBuffer(const BufferDesc& d) {
 
     if (!d.initial_data.empty()) {
         if (is_host_visible(d.memory)) {
-            uint8_t* dst = MappedPtr(h);
+            uint8_t* dst = MappedPtr(alloc, h);
             if (dst) {
                 std::memcpy(dst, d.initial_data.data(), d.initial_data.size());
             }
         } else {
             uint32_t saved_cursor =
-                alloc_->memory_.BumpSaveCursor(Memory::kUpload);
-            void* staging = alloc_->memory_.BumpAllocate(
+                alloc.memory_.BumpSaveCursor(Memory::kUpload);
+            void* staging = alloc.memory_.BumpAllocate(
                 static_cast<uint32_t>(d.initial_data.size()), 16,
                 Memory::kUpload);
             if (staging) {
                 std::memcpy(staging, d.initial_data.data(),
                             d.initial_data.size());
-                uint32_t src_off = alloc_->memory_.BumpOffset(staging);
+                uint32_t src_off = alloc.memory_.BumpOffset(staging);
                 uint32_t src_hi =
-                    alloc_->memory_.BumpMasterHeapIndex(Memory::kUpload);
-                VkBuffer src = alloc_->memory_.HeapMasterBuffer(src_hi);
-                VkBuffer dst = alloc_->memory_.HeapMasterBuffer(r.heap_index);
+                    alloc.memory_.BumpMasterHeapIndex(Memory::kUpload);
+                VkBuffer src = alloc.memory_.HeapMasterBuffer(src_hi);
+                VkBuffer dst = alloc.memory_.HeapMasterBuffer(r.heap_index);
                 copy_via_staging(
                     device_, command_pool_,
                     queue_, src, src_off, dst, r.offset,
                     static_cast<uint32_t>(d.initial_data.size()));
             }
-            alloc_->memory_.BumpRestoreCursor(Memory::kUpload, saved_cursor);
+            alloc.memory_.BumpRestoreCursor(Memory::kUpload, saved_cursor);
         }
     }
     return h;
 }
 
-Handle<Texture> Resources::CreateTexture(const TextureDesc& d) {
+Handle<Texture> Resources::CreateTexture(Allocator& alloc, const TextureDesc& d) {
     VkFormat vk_format = to_vk_format(d.format);
     VkImageUsageFlags usage = to_vk_image_usage(d.usage);
     if (!d.initial_data.empty() || d.mip_levels > 1) {
@@ -467,7 +466,7 @@ Handle<Texture> Resources::CreateTexture(const TextureDesc& d) {
 
     VkMemoryRequirements req;
     vkGetImageMemoryRequirements(device_, image, &req);
-    vulkan::AllocResult r = alloc_->memory_.AllocImage(
+    vulkan::AllocResult r = alloc.memory_.AllocImage(
         static_cast<uint32_t>(req.size), static_cast<uint32_t>(req.alignment),
         req.memoryTypeBits, Memory::kDefault);
     if (!r.ok) {
@@ -475,17 +474,17 @@ Handle<Texture> Resources::CreateTexture(const TextureDesc& d) {
         return Handle<Texture>::Null;
     }
     vkBindImageMemory(device_, image,
-                      alloc_->memory_.HeapDeviceMemory(r.heap_index), r.offset);
+                      alloc.memory_.HeapDeviceMemory(r.heap_index), r.offset);
 
     if (!d.initial_data.empty()) {
-        uint32_t saved_cursor = alloc_->memory_.BumpSaveCursor(Memory::kUpload);
-        void* staging = alloc_->memory_.BumpAllocate(
+        uint32_t saved_cursor = alloc.memory_.BumpSaveCursor(Memory::kUpload);
+        void* staging = alloc.memory_.BumpAllocate(
             static_cast<uint32_t>(d.initial_data.size()), 16, Memory::kUpload);
         if (staging) {
             std::memcpy(staging, d.initial_data.data(), d.initial_data.size());
-            uint32_t src_off = alloc_->memory_.BumpOffset(staging);
-            uint32_t src_hi = alloc_->memory_.BumpMasterHeapIndex(Memory::kUpload);
-            VkBuffer src = alloc_->memory_.HeapMasterBuffer(src_hi);
+            uint32_t src_off = alloc.memory_.BumpOffset(staging);
+            uint32_t src_hi = alloc.memory_.BumpMasterHeapIndex(Memory::kUpload);
+            VkBuffer src = alloc.memory_.HeapMasterBuffer(src_hi);
             transition_to_transfer_dst(device_,
                                        command_pool_,
                                        queue_, image, d.mip_levels);
@@ -499,7 +498,7 @@ Handle<Texture> Resources::CreateTexture(const TextureDesc& d) {
                              vk_format, d.dimensions.x, d.dimensions.y,
                              d.mip_levels);
         }
-        alloc_->memory_.BumpRestoreCursor(Memory::kUpload, saved_cursor);
+        alloc.memory_.BumpRestoreCursor(Memory::kUpload, saved_cursor);
     }
 
     VkImageViewCreateInfo vci{};
@@ -584,25 +583,25 @@ Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
     return Handle<DynamicBuffers>::Null;
 }
 
-VkBuffer Resources::GetVkBumpMasterBuffer(Memory mem) {
-    void* p = alloc_->BumpAllocate(1, 1, mem);
+VkBuffer Resources::GetVkBumpMasterBuffer(Allocator& alloc, Memory mem) {
+    void* p = alloc.BumpAllocate(1, 1, mem);
     (void)p;
-    uint32_t hi = alloc_->memory_.BumpMasterHeapIndex(mem);
-    return alloc_->memory_.HeapMasterBuffer(hi);
+    uint32_t hi = alloc.memory_.BumpMasterHeapIndex(mem);
+    return alloc.memory_.HeapMasterBuffer(hi);
 }
 
-uint32_t Resources::BufferBaseOffset(Handle<Buffer> h) {
+uint32_t Resources::BufferBaseOffset(Allocator& alloc, Handle<Buffer> h) {
     uint32_t off = 0;
-    GetVkBuffer(h, &off);
+    GetVkBuffer(alloc, h, &off);
     return off;
 }
 
-VkBuffer Resources::GetVkBuffer(Handle<Buffer> h, uint32_t* out_offset) {
+VkBuffer Resources::GetVkBuffer(Allocator& alloc, Handle<Buffer> h, uint32_t* out_offset) {
     if (h.generation == 0) {
         if (out_offset) {
             *out_offset = 0;
         }
-        return alloc_->memory_.HeapMasterBuffer(h.index);
+        return alloc.memory_.HeapMasterBuffer(h.index);
     }
     Buffer::Hot* hot = buffers.GetHot(h);
     if (!hot) {
@@ -614,16 +613,16 @@ VkBuffer Resources::GetVkBuffer(Handle<Buffer> h, uint32_t* out_offset) {
     if (out_offset) {
         *out_offset = hot->offset_in_heap;
     }
-    return alloc_->memory_.HeapMasterBuffer(hot->heap_buffer_index);
+    return alloc.memory_.HeapMasterBuffer(hot->heap_buffer_index);
 }
 
-uint8_t* Resources::MappedPtr(Handle<Buffer> h) {
+uint8_t* Resources::MappedPtr(Allocator& alloc, Handle<Buffer> h) {
     Buffer::Hot* hot = buffers.GetHot(h);
     if (!hot) {
         return nullptr;
     }
     uint8_t* base =
-        static_cast<uint8_t*>(alloc_->memory_.HeapMappedPtr(hot->heap_buffer_index));
+        static_cast<uint8_t*>(alloc.memory_.HeapMappedPtr(hot->heap_buffer_index));
     if (!base) {
         return nullptr;
     }

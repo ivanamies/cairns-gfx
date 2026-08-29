@@ -112,16 +112,16 @@ public:
         if (!rhi_.alloc.Init(rhi_.device)) {
             return false;
         }
-        if (!rhi_.resources.Init(rhi_.device, rhi_.alloc)) {
+        if (!rhi_.resources.Init(rhi_.device)) {
             return false;
         }
-        if (!rhi_.bindless.Init(rhi_.device, rhi_.resources)) {
+        if (!rhi_.bindless.Init(rhi_.device)) {
             return false;
         }
-        if (!rhi_.frames.Init(rhi_.device, rhi_.resources)) {
+        if (!rhi_.frames.Init(rhi_.device)) {
             return false;
         }
-        if (!rhi_.pipelines.Init(rhi_.device, rhi_.resources, rhi_.bindless, rhi_.frames)) {
+        if (!rhi_.pipelines.Init(rhi_.device)) {
             return false;
         }
         if ( !initSwapChain(window)) {
@@ -184,9 +184,9 @@ public:
                 if (!cairns::LoadSceneFromGltf(filepath, scene)) {
                     return false;
                 }
-                cairns::PrepareSceneResources(scene, rhi_.resources, materials_);
+                cairns::PrepareSceneResources(scene, rhi_.resources, rhi_.alloc, materials_);
 
-                if (!cairns::rhi::LoadSceneGpu(scene, rhi_.resources)) {
+                if (!cairns::rhi::LoadSceneGpu(scene, rhi_.resources, rhi_.alloc)) {
                     return false;
                 }
 
@@ -199,7 +199,7 @@ public:
         if ( !initRenderPipeline() ) {
             return false;
         }
-        if ( !rhi_.frames.InitTargets(swapchain_) ) {
+        if ( !rhi_.frames.InitTargets(rhi_.resources, rhi_.alloc, swapchain_) ) {
             return false;
         }
         if ( !initParticles() ) {
@@ -322,7 +322,7 @@ public:
 
                     cairns::Draw draw{};
                     draw.index_buffer = index;
-                    const uint32_t index_base_off = rhi_.resources.BufferBaseOffset(index);
+                    const uint32_t index_base_off = rhi_.resources.BufferBaseOffset(rhi_.alloc, index);
                     draw.index_offset = index_base_off + (prim.firstIndex * sizeof(uint32_t));
                     draw.vertex_offset = prim.vertexOffset;
                     draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot] = pos;
@@ -351,7 +351,7 @@ public:
             rhi_.frames.SetDumpPath("/tmp/cairns_dump.png");
         }
 
-        rhi::FrameContext fc = rhi_.frames.Begin(swapchain_);
+        rhi::FrameContext fc = rhi_.frames.Begin(rhi_.resources, rhi_.alloc, swapchain_);
 
         const uint64_t now_ticks = SDL_GetTicks();
         float delta_time = 0.016f;
@@ -392,7 +392,7 @@ public:
         cd.buffers = std::span<const rhi::BoundBuffer>(cbufs, 3);
         cd.groups_x = kParticleCount / 256;
         cd.local_x = 256;
-        fc.cmd.Dispatch(cd);
+        fc.cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
 
         rhi::ColorAttachment col[1]{};
         col[0].clear[0] = 41.0f / 255.0f;
@@ -404,7 +404,7 @@ public:
         rp.depth.clear_depth = 1.0f;
         rp.width = swapchain_.Width();
         rp.height = swapchain_.Height();
-        fc.cmd.BeginRenderPass(rp);
+        fc.cmd.BeginRenderPass(swapchain_, rp);
 
         rhi::MeshDrawList ml{};
         ml.draws = std::span<const cairns::Draw>(drawList_.data(), drawList_.size());
@@ -417,17 +417,17 @@ public:
             resident_textures_.data(), resident_textures_.size());
         ml.resident_buffers =
             std::span<const rhi::Handle<rhi::Buffer>>(&mesh_master_handle_, 1);
-        fc.cmd.DrawMeshes(ml);
+        fc.cmd.DrawMeshes(rhi_.resources, rhi_.alloc, ml);
 
         rhi::PointDraw pd{};
         pd.pipeline = particle_render_shader_;
         pd.vertex_buffer = particle_ssbo_[1 - particle_parity_];
         pd.vertex_offset = 0;
         pd.vertex_count = kParticleCount;
-        fc.cmd.DrawPoints(pd);
+        fc.cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
 
         fc.cmd.EndRenderPass();
-        rhi_.frames.End(fc);
+        rhi_.frames.End(swapchain_, fc);
         particle_parity_ ^= 1;
         return true;
     }
@@ -446,7 +446,7 @@ public:
             rdesc.attr_buffer_slot = R::kAttrBufferRegistrySlot;
             rdesc.sampler_slot = R::kSamplerRegistrySlot;
             rdesc.debug_name = "bindless";
-            bindless_bg_ = rhi_.bindless.CreateRegistry(rdesc);
+            bindless_bg_ = rhi_.bindless.CreateRegistry(rhi_.resources, rhi_.alloc, rdesc);
 
             texture_id_map_.clear();
             mesh_attr_id_map_.clear();
@@ -459,20 +459,20 @@ public:
                     rhi::Texture::Hot* hot = rhi_.resources.GetHot(h);
                     if (hot && hot->api_view) {
                         texture_id_map_[h.index] =
-                            rhi_.bindless.AddTexture(bindless_bg_, h);
+                            rhi_.bindless.AddTexture(rhi_.resources, bindless_bg_, h);
                     }
                 }
                 for (size_t j = 0; j < scene.meshes.size(); ++j) {
                     auto h = scene.meshes[j].attrHandle;
                     if (!h.IsNull()) {
                         mesh_attr_id_map_[h.index] =
-                            rhi_.bindless.AddAttrBuffer(bindless_bg_, h);
+                            rhi_.bindless.AddAttrBuffer(rhi_.resources, rhi_.alloc, bindless_bg_, h);
                     }
                 }
                 for (size_t j = 0; j < scene.samplerHandles.size(); ++j) {
                     auto h = scene.samplerHandles[j];
                     sampler_id_map_[h.index] =
-                        rhi_.bindless.AddSampler(bindless_bg_, h);
+                        rhi_.bindless.AddSampler(rhi_.resources, bindless_bg_, h);
                 }
             }
 
@@ -505,7 +505,7 @@ public:
             desc.push_constant_bytes = sizeof(uint32_t);
             desc.debug_name = "unlit";
             desc.swap_chain = &swapchain_;
-            unlit_ = rhi_.pipelines.CreateGraphicsPipeline(desc);
+            unlit_ = rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources, rhi_.bindless, rhi_.frames, desc);
             if (unlit_.IsNull()) {
                 std::exit(0);
             }
@@ -528,7 +528,7 @@ public:
             desc.logical_shader = "particle";
             desc.shader_dir = shader_dir.c_str();
             desc.debug_name = "particle_compute";
-            particle_kernel_ = rhi_.pipelines.CreateComputePipeline(desc);
+            particle_kernel_ = rhi_.pipelines.CreateComputePipeline(rhi_.resources, rhi_.frames, desc);
             if (particle_kernel_.IsNull()) {
                 return false;
             }
@@ -566,7 +566,7 @@ public:
             desc.push_constant_bytes = 0;
             desc.debug_name = "particle_render";
             desc.swap_chain = &swapchain_;
-            particle_render_shader_ = rhi_.pipelines.CreateGraphicsPipeline(desc);
+            particle_render_shader_ = rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources, rhi_.bindless, rhi_.frames, desc);
             if (particle_render_shader_.IsNull()) {
                 return false;
             }
@@ -598,16 +598,16 @@ public:
         bd.usage = rhi::kUsageStorage | rhi::kUsageVertex;
         bd.memory = rhi::Memory::kDefault;
         bd.initial_data = init_data;
-        particle_ssbo_[0] = rhi_.resources.CreateBuffer(bd);
+        particle_ssbo_[0] = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
         bd.initial_data = init_data;
-        particle_ssbo_[1] = rhi_.resources.CreateBuffer(bd);
+        particle_ssbo_[1] = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
 
         return !particle_ssbo_[0].IsNull() && !particle_ssbo_[1].IsNull();
     }
 
     bool deinit() {
         swapchain_.Deinit();
-        rhi_.pipelines.Deinit();
+        rhi_.pipelines.Deinit(rhi_.resources);
         rhi_.frames.Deinit();
         rhi_.bindless.Deinit();
         rhi_.resources.Deinit();

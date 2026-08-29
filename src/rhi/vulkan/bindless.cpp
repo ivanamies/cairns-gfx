@@ -16,12 +16,11 @@ namespace cairns::rhi {
 
 Bindless::~Bindless() { Deinit(); }
 
-bool Bindless::Init(Device& device, Resources& resources) {
+bool Bindless::Init(Device& device) {
     if (inited_) {
         return true;
     }
     device_ = device.device_;
-    res_ = &resources;
     inited_ = true;
     return true;
 }
@@ -39,7 +38,8 @@ void Bindless::Deinit() {
     inited_ = false;
 }
 
-Handle<BindGroup> Bindless::CreateRegistry(const BindlessRegistryDesc& desc) {
+Handle<BindGroup> Bindless::CreateRegistry(Resources& resources, Allocator&,
+                                           const BindlessRegistryDesc& desc) {
     VkDevice device = device_;
 
     VkDescriptorBindingFlags binding_flags[3] = {
@@ -113,15 +113,15 @@ Handle<BindGroup> Bindless::CreateRegistry(const BindlessRegistryDesc& desc) {
     bindless_attr_infos_.clear();
     bindless_sampler_infos_.clear();
 
-    Handle<BindGroup> h = res_->bind_groups.Acquire();
-    res_->bind_groups.GetHot(h)->api_descriptor_set = bindless_set_;
-    res_->bind_groups.GetCold(h)->debug_name = desc.debug_name;
+    Handle<BindGroup> h = resources.bind_groups.Acquire();
+    resources.bind_groups.GetHot(h)->api_descriptor_set = bindless_set_;
+    resources.bind_groups.GetCold(h)->debug_name = desc.debug_name;
     bindless_handle_ = h;
     return h;
 }
 
-uint32_t Bindless::AddTexture(Handle<BindGroup>, Handle<Texture> tex) {
-    Texture::Hot* hot = res_->textures.GetHot(tex);
+uint32_t Bindless::AddTexture(Resources& resources, Handle<BindGroup>, Handle<Texture> tex) {
+    Texture::Hot* hot = resources.textures.GetHot(tex);
     VkDescriptorImageInfo img{};
     img.imageView = static_cast<VkImageView>(hot->api_view);
     img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -129,19 +129,20 @@ uint32_t Bindless::AddTexture(Handle<BindGroup>, Handle<Texture> tex) {
     return static_cast<uint32_t>(bindless_tex_infos_.size()) - 1;
 }
 
-uint32_t Bindless::AddAttrBuffer(Handle<BindGroup>, Handle<Buffer> buf) {
+uint32_t Bindless::AddAttrBuffer(Resources& resources, Allocator& alloc, Handle<BindGroup>,
+                                 Handle<Buffer> buf) {
     uint32_t off = 0;
-    VkBuffer vk = res_->GetVkBuffer(buf, &off);
+    VkBuffer vk = resources.GetVkBuffer(alloc, buf, &off);
     VkDescriptorBufferInfo info{};
     info.buffer = vk;
     info.offset = off;
-    info.range = res_->GetBufferByteSize(buf);
+    info.range = resources.GetBufferByteSize(buf);
     bindless_attr_infos_.push_back(info);
     return static_cast<uint32_t>(bindless_attr_infos_.size()) - 1;
 }
 
-uint32_t Bindless::AddSampler(Handle<BindGroup>, Handle<Sampler> samp) {
-    Sampler::Hot* hot = res_->samplers.GetHot(samp);
+uint32_t Bindless::AddSampler(Resources& resources, Handle<BindGroup>, Handle<Sampler> samp) {
+    Sampler::Hot* hot = resources.samplers.GetHot(samp);
     VkDescriptorImageInfo info{};
     info.sampler = static_cast<VkSampler>(hot->api_sampler);
     bindless_sampler_infos_.push_back(info);
