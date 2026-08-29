@@ -273,23 +273,47 @@ bool Frames::Init(Device& device) {
             return false;
         }
 
+        // Composite descriptor set layout: 1 COMBINED_IMAGE_SAMPLER frag (used
+        // by both composite_pip and depthviz fullscreen passes).
+        {
+            VkDescriptorSetLayoutBinding b{};
+            b.binding = 0;
+            b.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            b.descriptorCount = 1;
+            b.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            VkDescriptorSetLayoutCreateInfo li{};
+            li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            li.bindingCount = 1;
+            li.pBindings = &b;
+            if (vkCreateDescriptorSetLayout(dev, &li, nullptr,
+                                            &composite_set_layout_) !=
+                VK_SUCCESS) {
+                return false;
+            }
+        }
+
         // Compute uses kMaxStepsPerFrame sets per slot (Fiedler N-step sim).
+        // Composite uses kCompositeRingSize sets per slot (PIP multi-draw fix).
         // UBO count: point(n) + compute(n * kMaxStepsPerFrame).
         // SSBO count: compute (2 * n * kMaxStepsPerFrame).
         // DYNAMIC UBO: globals(n) + drawtmp(n).
-        VkDescriptorPoolSize sizes[3]{};
+        // COMBINED_IMAGE_SAMPLER: composite (n * kCompositeRingSize).
+        VkDescriptorPoolSize sizes[4]{};
         sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = n + n * kMaxStepsPerFrame;
         sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         sizes[1].descriptorCount = 2 * n * kMaxStepsPerFrame;
         sizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         sizes[2].descriptorCount = 2 * n;
+        sizes[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        sizes[3].descriptorCount = n * kCompositeRingSize;
         VkDescriptorPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pci.poolSizeCount = 3;
+        pci.poolSizeCount = 4;
         pci.pPoolSizes = sizes;
-        // 3 single-set layouts + compute (kMaxStepsPerFrame sets) per slot.
-        pci.maxSets = 3 * n + n * kMaxStepsPerFrame;
+        // 3 single-set layouts + compute (kMaxStepsPerFrame) + composite
+        // (kCompositeRingSize) per slot.
+        pci.maxSets = 3 * n + n * kMaxStepsPerFrame + n * kCompositeRingSize;
         if (vkCreateDescriptorPool(dev, &pci, nullptr, &descriptor_pool_) !=
             VK_SUCCESS) {
             return false;
@@ -330,6 +354,26 @@ bool Frames::Init(Device& device) {
                 }
             }
         }
+        composite_sets_.resize(n);
+        {
+            const uint32_t total = n * kCompositeRingSize;
+            std::vector<VkDescriptorSetLayout> layouts(total, composite_set_layout_);
+            std::vector<VkDescriptorSet> flat(total);
+            VkDescriptorSetAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            ai.descriptorPool = descriptor_pool_;
+            ai.descriptorSetCount = total;
+            ai.pSetLayouts = layouts.data();
+            if (vkAllocateDescriptorSets(dev, &ai, flat.data()) != VK_SUCCESS) {
+                return false;
+            }
+            for (uint32_t f = 0; f < n; ++f) {
+                for (uint32_t k = 0; k < kCompositeRingSize; ++k) {
+                    composite_sets_[f][k] = flat[f * kCompositeRingSize + k];
+                }
+            }
+        }
+        offscreen_target_cache_.device = dev;
     }
     inited_ = true;
     return true;
@@ -367,6 +411,10 @@ void Frames::Deinit() {
     if (point_layout_) {
         vkDestroyDescriptorSetLayout(dev, point_layout_, nullptr);
     }
+    if (composite_set_layout_) {
+        vkDestroyDescriptorSetLayout(dev, composite_set_layout_, nullptr);
+    }
+    offscreen_target_cache_.Deinit();
     if (ts_pool_) {
         vkDestroyQueryPool(dev, ts_pool_, nullptr);
         ts_pool_ = VK_NULL_HANDLE;
@@ -455,6 +503,9 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
     fc.cmd.drawtmp_set_ = drawtmp_sets_[cf];
     fc.cmd.compute_sets_ = compute_sets_[cf];
     fc.cmd.point_set_ = point_sets_[cf];
+    fc.cmd.composite_sets_ = composite_sets_[cf];
+    fc.cmd.composite_next_idx_ = 0;
+    fc.cmd.offscreen_ = &offscreen_target_cache_;
     fc.cmd.ts_pool_ = ts_pool_;
     fc.cmd.pass_names_ = &pass_names_[cf];
     fc.cmd.pass_count_ = &pass_count_[cf];

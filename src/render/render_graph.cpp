@@ -435,7 +435,7 @@ bool RenderGraph::Execute(FrameContext& fc, SwapChain& sc) {
         rp.height = sc.Height();
         rp.input_textures = std::span<const Handle<Texture>>(
             pass.baked_inputs.data(), pass.baked_inputs.size());
-        fc.cmd.BeginRenderPass(sc, rp);
+        fc.cmd.BeginRenderPass(resources_, sc, rp);
         if (pass.execute) {
             pass.execute(fc.cmd, res);
         }

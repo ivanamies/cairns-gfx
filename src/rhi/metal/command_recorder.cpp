@@ -41,16 +41,54 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
     cenc->endEncoding();
 }
 
-void CommandRecorder::BeginRenderPass(SwapChain&, const RenderPassDesc& desc) {
+static MTL::LoadAction to_mtl_load(LoadOp op) {
+    switch (op) {
+        case LoadOp::kClear: return MTL::LoadActionClear;
+        case LoadOp::kLoad: return MTL::LoadActionLoad;
+        case LoadOp::kDontCare: return MTL::LoadActionDontCare;
+    }
+    return MTL::LoadActionClear;
+}
+
+void CommandRecorder::BeginRenderPass(Resources& res, SwapChain&,
+                                      const RenderPassDesc& desc) {
     if (cmd_ == nullptr) {
         cmd_ = queue_->commandBuffer();
     }
+    const bool is_swapchain = desc.color.empty() ||
+                              desc.color[0].target.IsNull();
+    if (is_swapchain) {
+        if (!desc.color.empty()) {
+            const float* c = desc.color[0].clear;
+            render_pass_desc_->colorAttachments()->object(0)->setClearColor(
+                MTL::ClearColor(c[0], c[1], c[2], c[3]));
+            render_pass_desc_->colorAttachments()->object(0)->setLoadAction(
+                to_mtl_load(desc.color[0].load));
+        }
+        enc_ = cmd_->renderCommandEncoder(render_pass_desc_);
+        return;
+    }
+
+    MTL::RenderPassDescriptor* rpd = MTL::RenderPassDescriptor::alloc()->init();
     if (!desc.color.empty()) {
         const float* c = desc.color[0].clear;
-        render_pass_desc_->colorAttachments()->object(0)->setClearColor(
-            MTL::ClearColor(c[0], c[1], c[2], c[3]));
+        MTL::Texture* tex = res.GetHot(desc.color[0].target)->api_view;
+        MTL::RenderPassColorAttachmentDescriptor* ca = rpd->colorAttachments()->object(0);
+        ca->setTexture(tex);
+        ca->setLoadAction(to_mtl_load(desc.color[0].load));
+        ca->setStoreAction(MTL::StoreActionStore);
+        ca->setClearColor(MTL::ClearColor(c[0], c[1], c[2], c[3]));
     }
-    enc_ = cmd_->renderCommandEncoder(render_pass_desc_);
+    if (!desc.depth.depth.IsNull()) {
+        MTL::Texture* dtex = res.GetHot(desc.depth.depth)->api_view;
+        MTL::RenderPassDepthAttachmentDescriptor* da = rpd->depthAttachment();
+        da->setTexture(dtex);
+        da->setLoadAction(to_mtl_load(desc.depth.load));
+        da->setStoreAction(MTL::StoreActionStore);
+        da->setClearDepth(desc.depth.clear_depth);
+    }
+    enc_ = cmd_->renderCommandEncoder(rpd);
+    rpd->release();
 }
 
 void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list) {
@@ -210,6 +248,44 @@ void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader>
                                        NS::UInteger(0));
         }
     }
+}
+
+void CommandRecorder::DrawFullscreen(Resources& res, Handle<Shader> pipeline,
+                                     std::span<const Handle<Texture>> textures,
+                                     Handle<Sampler> sampler) {
+    MTL::RenderCommandEncoder* enc = enc_;
+    enc->setRenderPipelineState(res.GetHot(pipeline)->api_pso);
+    enc->setCullMode(MTL::CullModeNone);
+    MTL::SamplerState* samp = res.GetHot(sampler)->api_sampler;
+    for (uint32_t i = 0; i < textures.size(); ++i) {
+        MTL::Texture* tex = res.GetHot(textures[i])->api_view;
+        if (tex) {
+            enc->useResource(tex, MTL::ResourceUsageRead, MTL::RenderStageFragment);
+            enc->setFragmentTexture(tex, i);
+        }
+        enc->setFragmentSamplerState(samp, i);
+    }
+    enc->drawPrimitives(MTL::PrimitiveTypeTriangle, NS::UInteger(0), NS::UInteger(3));
+}
+
+void CommandRecorder::SetViewport(float x, float y, float w, float h) {
+    MTL::Viewport vp{};
+    vp.originX = x;
+    vp.originY = y;
+    vp.width = w;
+    vp.height = h;
+    vp.znear = 0.0;
+    vp.zfar = 1.0;
+    enc_->setViewport(vp);
+}
+
+void CommandRecorder::SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) {
+    MTL::ScissorRect s{};
+    s.x = NS::UInteger(x < 0 ? 0 : x);
+    s.y = NS::UInteger(y < 0 ? 0 : y);
+    s.width = NS::UInteger(w);
+    s.height = NS::UInteger(h);
+    enc_->setScissorRect(s);
 }
 
 void CommandRecorder::EndRenderPass() {

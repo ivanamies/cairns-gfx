@@ -74,6 +74,7 @@ public:
     VkDescriptorSetLayout drawtmp_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout compute_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout point_layout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout composite_set_layout_ = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> globals_sets_;
     std::vector<VkDescriptorSet> drawtmp_sets_;
     // One DescriptorSet per in-flight slot per sim step. Indexed
@@ -81,6 +82,11 @@ public:
     // because vkUpdateDescriptorSets on an in-use set is UB.
     std::vector<std::array<VkDescriptorSet, kMaxStepsPerFrame>> compute_sets_;
     std::vector<VkDescriptorSet> point_sets_;
+    // Per-frame ring of composite descriptor sets for DrawFullscreen. Lets one
+    // pass issue multiple fullscreen draws with distinct textures (the 997af20
+    // last-bound-wins fix).
+    std::vector<std::array<VkDescriptorSet, kCompositeRingSize>> composite_sets_;
+    OffscreenTargetCache offscreen_target_cache_;
     VkQueryPool ts_pool_ = VK_NULL_HANDLE;
     float ts_period_ns_ = 0.0f;
     bool host_query_reset_ = false;

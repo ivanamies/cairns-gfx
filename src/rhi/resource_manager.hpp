@@ -363,6 +363,11 @@ struct Texture {
         Memory mem_type = Memory::kDefault;
         uint32_t heap_buffer_index = 0xFFFFFFFFu;  // 0xFFFFFFFF if dedicated
         const char* debug_name = nullptr;
+#if CAIRNS_VULKAN
+        // Current image layout, updated by CommandRecorder::BeginRenderPass when
+        // attachments + input_textures transition between passes.
+        VkImageLayout vk_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+#endif
     };
 };
 

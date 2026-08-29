@@ -125,6 +125,12 @@ target_include_directories(cairns_render_thread PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/glm")
 target_compile_features(cairns_render_thread PUBLIC cxx_std_20)
 target_compile_options(cairns_render_thread PRIVATE -Wall -Wextra)
+target_compile_definitions(cairns_render_thread PRIVATE
+    $<$<BOOL:${CAIRNS_GFX_BACKEND_METAL}>:CAIRNS_METAL=1>
+    $<$<BOOL:${CAIRNS_GFX_BACKEND_VULKAN}>:CAIRNS_VULKAN=1>)
+if (CAIRNS_GFX_BACKEND_VULKAN AND APPLE)
+    target_link_libraries(cairns_render_thread PRIVATE Vulkan::Vulkan)
+endif()
 target_link_libraries(${EXECUTABLE_NAME} PRIVATE cairns_render_thread)
 
 # Set C++ version

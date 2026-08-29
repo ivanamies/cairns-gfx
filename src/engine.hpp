@@ -736,7 +736,7 @@ public:
         rp.width = swapchain_.Width();
         rp.height = swapchain_.Height();
         fc.cmd.PassTimerBegin("forward");
-        fc.cmd.BeginRenderPass(swapchain_, rp);
+        fc.cmd.BeginRenderPass(rhi_.resources, swapchain_, rp);
         fc.cmd.DrawMeshes(rhi_.resources, rhi_.alloc, ml);
         fc.cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
         if (pkt.imgui_snapshot) {
