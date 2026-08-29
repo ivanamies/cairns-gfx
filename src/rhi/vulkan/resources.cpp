@@ -275,10 +275,10 @@ bool Resources::Init(Device& device) {
     if (inited_) {
         return true;
     }
-    device_ = device.plat.device_;
-    command_pool_ = device.plat.command_pool_;
-    queue_ = device.plat.graphics_queue_;
-    physical_ = device.plat.physical_;
+    plat.device_ = device.plat.device_;
+    plat.command_pool_ = device.plat.command_pool_;
+    plat.queue_ = device.plat.graphics_queue_;
+    plat.physical_ = device.plat.physical_;
     inited_ = true;
     return true;
 }
@@ -287,14 +287,14 @@ void Resources::Deinit() {
     if (!inited_) {
         return;
     }
-    VkDevice dev = device_;
-    if (material_pool_) {
-        vkDestroyDescriptorPool(dev, material_pool_, nullptr);
-        material_pool_ = VK_NULL_HANDLE;
+    VkDevice dev = plat.device_;
+    if (plat.material_pool_) {
+        vkDestroyDescriptorPool(dev, plat.material_pool_, nullptr);
+        plat.material_pool_ = VK_NULL_HANDLE;
     }
-    if (material_set_layout_) {
-        vkDestroyDescriptorSetLayout(dev, material_set_layout_, nullptr);
-        material_set_layout_ = VK_NULL_HANDLE;
+    if (plat.material_set_layout_) {
+        vkDestroyDescriptorSetLayout(dev, plat.material_set_layout_, nullptr);
+        plat.material_set_layout_ = VK_NULL_HANDLE;
     }
     textures.ForEachLive([dev](Texture::Hot& hot, Texture::Cold& cold) {
         if (hot.api_view) {
@@ -316,11 +316,11 @@ void Resources::Deinit() {
 }
 
 void Resources::AdvanceFrame(Allocator& alloc) {
-    frame_index_++;
-    alloc.AdvanceFrame(frame_index_);
+    plat.frame_index_++;
+    alloc.AdvanceFrame(plat.frame_index_);
 }
 
-uint32_t Resources::FrameIndex() const { return frame_index_; }
+uint32_t Resources::FrameIndex() const { return plat.frame_index_; }
 
 void Resources::Destroy(Allocator& alloc, Handle<Buffer> h) {
     Buffer::Hot* hot = buffers.GetHot(h);
@@ -330,7 +330,7 @@ void Resources::Destroy(Allocator& alloc, Handle<Buffer> h) {
     }
     alloc.memory_.FreeBuffer(
         hot->heap_buffer_index, cold->alloc,
-        frame_index_ + kFramesInFlight);
+        plat.frame_index_ + kFramesInFlight);
     buffers.Release(h);
 }
 
@@ -344,7 +344,7 @@ void Resources::Destroy(Allocator& alloc, Handle<Texture> h) {
         cold->heap_buffer_index, cold->alloc,
         static_cast<VkImage>(cold->api_image),
         static_cast<VkImageView>(hot->api_view),
-        frame_index_ + kFramesInFlight);
+        plat.frame_index_ + kFramesInFlight);
     textures.Release(h);
 }
 
@@ -354,7 +354,7 @@ void Resources::Destroy(Handle<Sampler> h) {
         return;
     }
     if (hot->api_sampler) {
-        vkDestroySampler(device_, static_cast<VkSampler>(hot->api_sampler),
+        vkDestroySampler(plat.device_, static_cast<VkSampler>(hot->api_sampler),
                          nullptr);
     }
     samplers.Release(h);
@@ -456,7 +456,7 @@ void Resources::UploadBuffer(Allocator& alloc, Handle<Buffer> h,
         std::memcpy(staging, data.data() + done, chunk);
         uint32_t src_hi = alloc.memory_.BumpMasterHeapIndex(Memory::kUpload);
         VkBuffer src = alloc.memory_.HeapMasterBuffer(src_hi);
-        copy_via_staging(device_, command_pool_, queue_, src, src_off, dst_buf,
+        copy_via_staging(plat.device_, plat.command_pool_, plat.queue_, src, src_off, dst_buf,
                          static_cast<uint32_t>(hot->offset_in_heap +
                                                dst_offset + done),
                          chunk);
@@ -488,21 +488,21 @@ Handle<Texture> Resources::CreateTexture(Allocator& alloc, const TextureDesc& d)
     ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     VkImage image = VK_NULL_HANDLE;
-    if (vkCreateImage(device_, &ici, nullptr, &image) !=
+    if (vkCreateImage(plat.device_, &ici, nullptr, &image) !=
         VK_SUCCESS) {
         return Handle<Texture>::Null;
     }
 
     VkMemoryRequirements req;
-    vkGetImageMemoryRequirements(device_, image, &req);
+    vkGetImageMemoryRequirements(plat.device_, image, &req);
     vulkan::AllocResult r = alloc.memory_.AllocImage(
         static_cast<uint32_t>(req.size), static_cast<uint32_t>(req.alignment),
         req.memoryTypeBits, Memory::kDefault);
     if (!r.ok) {
-        vkDestroyImage(device_, image, nullptr);
+        vkDestroyImage(plat.device_, image, nullptr);
         return Handle<Texture>::Null;
     }
-    vkBindImageMemory(device_, image,
+    vkBindImageMemory(plat.device_, image,
                       alloc.memory_.HeapDeviceMemory(r.heap_index), r.offset);
 
     if (!d.initial_data.empty()) {
@@ -514,16 +514,16 @@ Handle<Texture> Resources::CreateTexture(Allocator& alloc, const TextureDesc& d)
             std::memcpy(staging, d.initial_data.data(), d.initial_data.size());
             uint32_t src_hi = alloc.memory_.BumpMasterHeapIndex(Memory::kUpload);
             VkBuffer src = alloc.memory_.HeapMasterBuffer(src_hi);
-            transition_to_transfer_dst(device_,
-                                       command_pool_,
-                                       queue_, image, d.mip_levels);
-            copy_buffer_to_image(device_,
-                                 command_pool_, queue_,
+            transition_to_transfer_dst(plat.device_,
+                                       plat.command_pool_,
+                                       plat.queue_, image, d.mip_levels);
+            copy_buffer_to_image(plat.device_,
+                                 plat.command_pool_, plat.queue_,
                                  src, src_off, image,
                                  static_cast<uint32_t>(d.dimensions.x),
                                  static_cast<uint32_t>(d.dimensions.y));
-            generate_mipmaps(device_, command_pool_,
-                             queue_, physical_, image,
+            generate_mipmaps(plat.device_, plat.command_pool_,
+                             plat.queue_, plat.physical_, image,
                              vk_format, d.dimensions.x, d.dimensions.y,
                              d.mip_levels);
         }
@@ -543,9 +543,9 @@ Handle<Texture> Resources::CreateTexture(Allocator& alloc, const TextureDesc& d)
     vci.subresourceRange.baseArrayLayer = 0;
     vci.subresourceRange.layerCount = d.array_layers;
     VkImageView view = VK_NULL_HANDLE;
-    if (vkCreateImageView(device_, &vci, nullptr, &view) !=
+    if (vkCreateImageView(plat.device_, &vci, nullptr, &view) !=
         VK_SUCCESS) {
-        vkDestroyImage(device_, image, nullptr);
+        vkDestroyImage(plat.device_, image, nullptr);
         return Handle<Texture>::Null;
     }
 
@@ -592,7 +592,7 @@ Handle<Sampler> Resources::CreateSampler(const SamplerDesc& d) {
     sci.maxLod = d.max_lod;
 
     VkSampler sampler = VK_NULL_HANDLE;
-    if (vkCreateSampler(device_, &sci, nullptr, &sampler) !=
+    if (vkCreateSampler(plat.device_, &sci, nullptr, &sampler) !=
         VK_SUCCESS) {
         return Handle<Sampler>::Null;
     }
@@ -604,8 +604,8 @@ Handle<Sampler> Resources::CreateSampler(const SamplerDesc& d) {
 }
 
 VkDescriptorSetLayout Resources::MaterialSetLayout() {
-    if (material_set_layout_ != VK_NULL_HANDLE) {
-        return material_set_layout_;
+    if (plat.material_set_layout_ != VK_NULL_HANDLE) {
+        return plat.material_set_layout_;
     }
     VkDescriptorSetLayoutBinding b{};
     b.binding = 0;
@@ -616,7 +616,7 @@ VkDescriptorSetLayout Resources::MaterialSetLayout() {
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     li.bindingCount = 1;
     li.pBindings = &b;
-    vkCreateDescriptorSetLayout(device_, &li, nullptr, &material_set_layout_);
+    vkCreateDescriptorSetLayout(plat.device_, &li, nullptr, &plat.material_set_layout_);
 
     VkDescriptorPoolSize ps{};
     ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -626,19 +626,19 @@ VkDescriptorSetLayout Resources::MaterialSetLayout() {
     pi.maxSets = 4096;
     pi.poolSizeCount = 1;
     pi.pPoolSizes = &ps;
-    vkCreateDescriptorPool(device_, &pi, nullptr, &material_pool_);
-    return material_set_layout_;
+    vkCreateDescriptorPool(plat.device_, &pi, nullptr, &plat.material_pool_);
+    return plat.material_set_layout_;
 }
 
 Handle<BindGroup> Resources::CreateBindGroup(const BindGroupDesc& desc) {
     MaterialSetLayout();  // ensure shared layout + pool exist
     VkDescriptorSetAllocateInfo ai{};
     ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    ai.descriptorPool = material_pool_;
+    ai.descriptorPool = plat.material_pool_;
     ai.descriptorSetCount = 1;
-    ai.pSetLayouts = &material_set_layout_;
+    ai.pSetLayouts = &plat.material_set_layout_;
     VkDescriptorSet set = VK_NULL_HANDLE;
-    if (vkAllocateDescriptorSets(device_, &ai, &set) != VK_SUCCESS) {
+    if (vkAllocateDescriptorSets(plat.device_, &ai, &set) != VK_SUCCESS) {
         return Handle<BindGroup>::Null;
     }
     // set 2 = one combined image+sampler: pair textures[0] with samplers[0].
@@ -659,7 +659,7 @@ Handle<BindGroup> Resources::CreateBindGroup(const BindGroupDesc& desc) {
     w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     w.descriptorCount = 1;
     w.pImageInfo = &img;
-    vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
+    vkUpdateDescriptorSets(plat.device_, 1, &w, 0, nullptr);
 
     Handle<BindGroup> h = bind_groups.Acquire();
     bind_groups.GetHot(h)->api_descriptor_set = set;

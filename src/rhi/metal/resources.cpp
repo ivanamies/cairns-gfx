@@ -91,8 +91,8 @@ bool Resources::Init(Device& device) {
     if (inited_) {
         return true;
     }
-    device_ = device.plat.device_;
-    queue_ = device.plat.queue_;
+    plat.device_ = device.plat.device_;
+    plat.queue_ = device.plat.queue_;
     inited_ = true;
     return true;
 }
@@ -105,11 +105,11 @@ void Resources::Deinit() {
 }
 
 void Resources::AdvanceFrame(Allocator& alloc) {
-    frame_index_++;
-    alloc.AdvanceFrame(frame_index_);
+    plat.frame_index_++;
+    alloc.AdvanceFrame(plat.frame_index_);
 }
 
-uint32_t Resources::FrameIndex() const { return frame_index_; }
+uint32_t Resources::FrameIndex() const { return plat.frame_index_; }
 
 void Resources::Destroy(Allocator& alloc, Handle<Buffer> h) {
     Buffer::Hot* hot = buffers.GetHot(h);
@@ -119,7 +119,7 @@ void Resources::Destroy(Allocator& alloc, Handle<Buffer> h) {
     }
     alloc.memory_.FreeBuffer(
         hot->heap_buffer_index, cold->alloc,
-        frame_index_ + kFramesInFlight);
+        plat.frame_index_ + kFramesInFlight);
     buffers.Release(h);
 }
 
@@ -131,7 +131,7 @@ void Resources::Destroy(Allocator& alloc, Handle<Texture> h) {
     }
     alloc.memory_.FreeImage(
         cold->heap_buffer_index, cold->alloc, hot->api_view,
-        frame_index_ + kFramesInFlight);
+        plat.frame_index_ + kFramesInFlight);
     textures.Release(h);
 }
 
@@ -257,7 +257,7 @@ void Resources::UploadBuffer(Allocator& alloc, Handle<Buffer> h,
         std::memcpy(staging, data.data() + done, chunk);
         uint32_t src_hi = alloc.memory_.BumpMasterHeapIndex(Memory::kUpload);
         MTL::Buffer* src = alloc.memory_.HeapMasterBuffer(src_hi);
-        MTL::CommandBuffer* cmd = queue_->commandBuffer();
+        MTL::CommandBuffer* cmd = plat.queue_->commandBuffer();
         MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
         blit->copyFromBuffer(src, src_off, dst_buf,
                              hot->offset_in_heap + dst_offset + done, chunk);
@@ -286,7 +286,7 @@ Handle<Texture> Resources::CreateTexture(Allocator& alloc, const TextureDesc& d)
     td->setStorageMode(storage_mode_for(d.memory));
     td->setHazardTrackingMode(MTL::HazardTrackingModeUntracked);
 
-    MTL::SizeAndAlign sa = device_->heapTextureSizeAndAlign(td);
+    MTL::SizeAndAlign sa = plat.device_->heapTextureSizeAndAlign(td);
 
     metal::AllocResult r = alloc.memory_.AllocImage(
         static_cast<uint32_t>(sa.size),
@@ -305,7 +305,7 @@ Handle<Texture> Resources::CreateTexture(Allocator& alloc, const TextureDesc& d)
     assert(tex && "heap newTexture failed");
     if (!tex) {
         alloc.memory_.FreeImage(r.heap_index, r.alloc, nullptr,
-                                frame_index_ + kFramesInFlight);
+                                plat.frame_index_ + kFramesInFlight);
         return Handle<Texture>::Null;
     }
 
@@ -331,12 +331,12 @@ Handle<Texture> Resources::CreateTexture(Allocator& alloc, const TextureDesc& d)
     if (!d.initial_data.empty()) {
         uint32_t bytes_per_row = static_cast<uint32_t>(d.initial_data.size()) /
                                  static_cast<uint32_t>(d.dimensions.y);
-        MTL::Buffer* staging = device_->newBuffer(
+        MTL::Buffer* staging = plat.device_->newBuffer(
             d.initial_data.size(), MTL::ResourceStorageModeShared);
         if (staging) {
             std::memcpy(staging->contents(), d.initial_data.data(),
                         d.initial_data.size());
-            MTL::CommandBuffer* cmd = queue_->commandBuffer();
+            MTL::CommandBuffer* cmd = plat.queue_->commandBuffer();
             MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
             blit->copyFromBuffer(
                 staging, 0, bytes_per_row, 0,
@@ -372,7 +372,7 @@ Handle<Sampler> Resources::CreateSampler(const SamplerDesc& d) {
         desc->setLodMaxClamp(d.max_lod);
     }
 
-    MTL::SamplerState* sampler = device_->newSamplerState(desc);
+    MTL::SamplerState* sampler = plat.device_->newSamplerState(desc);
     desc->release();
     if (!sampler) {
         return Handle<Sampler>::Null;
@@ -399,9 +399,9 @@ Handle<BindGroup> Resources::CreateBindGroup(const BindGroupDesc& desc) {
     sampArg->setIndex(1);
     sampArg->setAccess(MTL::ArgumentAccessReadOnly);
     NS::Array* args = NS::Array::array((NS::Object*[]){texArg, sampArg}, 2);
-    MTL::ArgumentEncoder* enc = device_->newArgumentEncoder(args);
+    MTL::ArgumentEncoder* enc = plat.device_->newArgumentEncoder(args);
 
-    MTL::Buffer* buf = device_->newBuffer(enc->encodedLength(),
+    MTL::Buffer* buf = plat.device_->newBuffer(enc->encodedLength(),
                                           MTL::ResourceStorageModeShared);
     enc->setArgumentBuffer(buf, 0);
     if (!desc.textures.empty()) {
