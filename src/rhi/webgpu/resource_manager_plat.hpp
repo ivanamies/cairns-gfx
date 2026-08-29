@@ -27,6 +27,7 @@ using ApiKernelHandle = void*;
 
 // WebGPU synchronizes implicitly -> no layout cache, no per-resource fence.
 struct TextureColdPlat {};
+struct BufferColdPlat {};
 struct ShaderHotPlat {
     WGPUPipelineLayout layout = nullptr;       // owned alongside the pipeline
     WGPUBindGroupLayout bind_group_layouts[4] = {nullptr, nullptr, nullptr,

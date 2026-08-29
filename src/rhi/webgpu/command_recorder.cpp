@@ -421,6 +421,13 @@ void CommandRecorder::EndRenderPass(Resources& res, std::span<const Handle<Textu
     (void)res; (void)flush;
     if (plat.enc_) { wgpuRenderPassEncoderEnd(plat.enc_); plat.enc_ = nullptr; }
 }
+// WebGPU synchronizes implicitly -- the graph's barriers are no-ops here.
+void CommandRecorder::BeginComputePass(Resources& res,
+                                       std::span<const ResourceBarrier> invalidate,
+                                       std::span<const Handle<Buffer>> flush_buffers) {
+    (void)res; (void)invalidate; (void)flush_buffers;
+}
+void CommandRecorder::EndComputePass(Resources& res) { (void)res; }
 
 }  // namespace cairns::rhi
 #endif  // CAIRNS_WEBGPU

@@ -248,7 +248,21 @@ static void apply_invalidate_barriers(
     uint32_t n = 0;
     VkPipelineStageFlags src_stage = 0;
     VkPipelineStageFlags dst_stage = 0;
+    // Buffer entries fold into ONE global VkMemoryBarrier: the cost of a
+    // barrier is the stage sync, not the range, and it needs no sub-allocation
+    // resolve.
+    VkMemoryBarrier mb{};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    bool have_mb = false;
     for (const ResourceBarrier& b : invalidate) {
+        if (!b.buffer.IsNull()) {
+            mb.srcAccessMask |= to_vk_access(b.src_access);
+            mb.dstAccessMask |= to_vk_access(b.dst_access);
+            src_stage |= to_vk_stage(b.src_stage);
+            dst_stage |= to_vk_stage(b.dst_stage);
+            have_mb = true;
+            continue;
+        }
         if (b.texture.IsNull() || n >= 24) {
             continue;
         }
@@ -276,11 +290,25 @@ static void apply_invalidate_barriers(
         dst_stage |= to_vk_stage(b.dst_stage);
         cold->plat.vk_layout = m.newLayout;
     }
-    if (n > 0) {
-        vkCmdPipelineBarrier(cb, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr,
-                             n, vb);
+    if (n > 0 || have_mb) {
+        vkCmdPipelineBarrier(cb, src_stage, dst_stage, 0, have_mb ? 1u : 0u,
+                             &mb, 0, nullptr, n, vb);
     }
 }
+
+void CommandRecorder::BeginComputePass(
+    Resources& res, std::span<const ResourceBarrier> invalidate,
+    std::span<const Handle<Buffer>> flush_buffers) {
+    // Producer state lives on the PipelineEvent; the next consumer's
+    // invalidate emits the barrier, so the flush list needs no vk work.
+    (void)flush_buffers;
+    if (invalidate.empty() || plat.comp_ == VK_NULL_HANDLE) {
+        return;
+    }
+    apply_invalidate_barriers(plat.comp_, res, invalidate);
+}
+
+void CommandRecorder::EndComputePass(Resources& res) { (void)res; }
 
 void CommandRecorder::DispatchSkinBatches(
     Resources& res, Allocator& alloc, Handle<Kernel> kernel,

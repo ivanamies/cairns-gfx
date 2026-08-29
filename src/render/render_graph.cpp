@@ -572,11 +572,66 @@ bool RenderGraph::Execute(FrameContext& fc, const SwapResolveTarget& target) {
     PassResources res(&resolved_tex_, &resolved_buf_);
     for (uint32_t p : topo_order_) {
         PassRecord& pass = passes_[p];
+        // Buffers ride the same invalidate/flush events as textures, minus
+        // layouts (kUndefined pins the layout clause off). Emits into the
+        // caller's invalidate list; returns whether a barrier was appended.
+        auto access_buf = [&](ResourceBarrier* inv, uint8_t* inv_n,
+                              uint8_t inv_cap, uint16_t buf_id,
+                              uint32_t dst_access, uint32_t dst_stage,
+                              bool is_write) {
+            const Handle<Buffer> h = resolved_buf_[buf_id];
+            if (h.IsNull()) {
+                return;
+            }
+            Buffer::Cold* cold = resources_.buffers.GetCold(h);
+            if (cold == nullptr) {
+                return;
+            }
+            BarrierEmit e{};
+            const bool need =
+                AccessResource(cold->sync, dst_access, dst_stage,
+                               BarrierLayout::kUndefined, is_write, &e);
+            if (!need) {
+                return;
+            }
+            if (*inv_n >= inv_cap) {
+                fprintf(stderr, "[RG] invalidate overflow (pass %.*s)\n",
+                        static_cast<int>(pass.name.size()), pass.name.data());
+                abort();
+            }
+            ResourceBarrier b{};
+            b.buffer = h;
+            b.src_access = e.src_access;
+            b.src_stage = e.src_stage;
+            b.dst_access = e.dst_access;
+            b.dst_stage = e.dst_stage;
+            inv[(*inv_n)++] = b;
+        };
         if (pass.type == PassType::kCompute) {
+            ResourceBarrier cinv[16];
+            uint8_t cinv_n = 0;
+            Handle<Buffer> cflush[8];
+            uint8_t cflush_n = 0;
+            for (uint8_t i = 0; i < pass.buf_reads_count; ++i) {
+                access_buf(cinv, &cinv_n, 16, pass.buf_reads[i],
+                           kAccessShaderRead, kPipeCompute, false);
+            }
+            for (uint8_t i = 0; i < pass.buf_writes_count; ++i) {
+                access_buf(cinv, &cinv_n, 16, pass.buf_writes[i],
+                           kAccessShaderWrite, kPipeCompute, true);
+                const Handle<Buffer> h = resolved_buf_[pass.buf_writes[i]];
+                if (!h.IsNull() && cflush_n < 8) {
+                    cflush[cflush_n++] = h;
+                }
+            }
             fc.cmd.PassTimerBegin(pass.name.data(), pass.type == PassType::kCompute);
+            fc.cmd.BeginComputePass(
+                resources_, std::span<const ResourceBarrier>(cinv, cinv_n),
+                std::span<const Handle<Buffer>>(cflush, cflush_n));
             if (pass.execute) {
                 pass.execute(fc.cmd, res);
             }
+            fc.cmd.EndComputePass(resources_);
             fc.cmd.PassTimerEnd();
             continue;
         }
@@ -639,6 +694,13 @@ bool RenderGraph::Execute(FrameContext& fc, const SwapResolveTarget& target) {
         if (pass.has_depth) {
             access_tex(pass.baked_depth.depth, kAccessDepthWrite, kPipeDepth,
                        BarrierLayout::kDepthAttachment, true);
+        }
+        // Graphics passes read buffers (vertex-fetched skin/particle SSBOs);
+        // none writes one -- the flush side stays compute-only.
+        for (uint8_t i = 0; i < pass.buf_reads_count; ++i) {
+            access_buf(invalidate, &inv_n, 24, pass.buf_reads[i],
+                       kAccessShaderRead,
+                       kPipeVertex | kPipeFragment, false);
         }
 
         fc.cmd.PassTimerBegin(pass.name.data());

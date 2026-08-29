@@ -36,6 +36,12 @@ using ApiKernelHandle = MTL::ComputePipelineState*;
 struct TextureColdPlat {
     MTL::Fence* sync_fence_ = nullptr;
 };
+// Same leaf for graph-declared buffers: compute writers signal at encoder end
+// (BeginComputePass stash), hazarding passes wait (render: vertex fetch;
+// compute: first encoder of the pass).
+struct BufferColdPlat {
+    MTL::Fence* sync_fence_ = nullptr;
+};
 struct ShaderHotPlat {};
 struct KernelHotPlat {};
 // Metal has no descriptor objects; DynamicBuffers plat is

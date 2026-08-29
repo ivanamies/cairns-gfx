@@ -252,6 +252,7 @@ struct Buffer {
         Memory mem_type = Memory::kDefault;
         const char* debug_name = nullptr;
         PipelineEvent sync;  // Granite per-resource barrier state (persists)
+        BufferColdPlat plat;
     };
 };
 

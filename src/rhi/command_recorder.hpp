@@ -197,6 +197,15 @@ public:
     // flush = textures this pass WROTE; backend records the producer side of the
     // barrier (metal: MTLFence signal; vk: no-op, state tracked in PipelineEvent).
     void EndRenderPass(Resources& res, std::span<const Handle<Texture>> flush);
+    // Compute-pass sibling of BeginRenderPass/EndRenderPass. Compute has no
+    // encoder at pass-begin (each Dispatch* creates its own), so metal stashes
+    // both lists: the first encoder of the pass waits the invalidate fences,
+    // every encoder signals the flush buffers' fences at its end. vk emits one
+    // vkCmdPipelineBarrier immediately; webgpu no-ops (implicit sync).
+    void BeginComputePass(Resources& res,
+                          std::span<const ResourceBarrier> invalidate,
+                          std::span<const Handle<Buffer>> flush_buffers);
+    void EndComputePass(Resources& res);
 
     // Per-frame recording state, populated by Frames::Begin. Backend state in
     // plat; pending_name_/pending_slot_ are common timer state.

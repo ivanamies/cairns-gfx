@@ -24,6 +24,9 @@ struct TextureColdPlat {
     // attachments + input_textures transition between passes.
     VkImageLayout vk_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 };
+// Buffer barriers are stateless on vk (one global VkMemoryBarrier per pass
+// boundary); nothing to cache per buffer.
+struct BufferColdPlat {};
 
 struct ShaderHotPlat {
     VkPipeline vk_pipeline = VK_NULL_HANDLE;

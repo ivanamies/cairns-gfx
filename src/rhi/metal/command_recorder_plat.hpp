@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace MTL {
 class CommandBuffer;
 class RenderCommandEncoder;
@@ -29,6 +31,16 @@ struct CommandRecorderPlat {
     // target carries its own MTL::Fence in TextureColdPlat::sync_fence_, signaled
     // by the writing pass (EndRenderPass) and waited by the next hazarding pass
     // (BeginRenderPass) from the graph's computed ResourceBarrier list.
+
+    // BeginComputePass stash: compute encoders don't exist at pass-begin
+    // (each Dispatch* creates its own), so the graph's lists park here. The
+    // pass's FIRST encoder drains the waits; EVERY encoder signals the update
+    // fences at its end (the last signal is the one later waiters see).
+    static constexpr uint32_t kMaxComputeSync = 16;
+    MTL::Fence* compute_waits_[kMaxComputeSync] = {};
+    uint32_t compute_waits_n_ = 0;
+    MTL::Fence* compute_updates_[kMaxComputeSync] = {};
+    uint32_t compute_updates_n_ = 0;
 };
 
 }  // namespace cairns::rhi

@@ -24,6 +24,14 @@
 
 namespace cairns::rhi {
 
+// Compute-pass barrier leaf (defined with apply_invalidate_fences below):
+// waits drained by the pass's first encoder, updates signaled at every
+// encoder's end.
+static void drain_compute_waits(CommandRecorderPlat& plat,
+                                MTL::ComputeCommandEncoder* cenc);
+static void signal_compute_updates(CommandRecorderPlat& plat,
+                                   MTL::ComputeCommandEncoder* cenc);
+
 void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDispatch& d) {
     if (d.dyn_set_0.IsNull()) {
         return;
@@ -37,6 +45,7 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
     }
     MTL::ComputeCommandEncoder* cenc = plat.cmd_->computeCommandEncoder();
     cenc->setComputePipelineState(res.GetHot(d.kernel)->api_pso);
+    drain_compute_waits(plat, cenc);
     // Walk DynamicBuffers Cold layout.
     // has_dynamic_offset=true -> kDynamic master at d.dyn_offset_0
     // (only one dyn offset supported; particle uses binding 0 = dt).
@@ -55,6 +64,7 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
     }
     cenc->dispatchThreadgroups(MTL::Size{d.groups_x, d.groups_y, d.groups_z},
                                MTL::Size{d.local_x, d.local_y, d.local_z});
+    signal_compute_updates(plat, cenc);
     cenc->endEncoding();
 }
 
@@ -83,6 +93,7 @@ void CommandRecorder::DispatchSkinBatches(
     }
     MTL::ComputeCommandEncoder* cenc = plat.cmd_->computeCommandEncoder();
     cenc->setComputePipelineState(khot->api_pso);
+    drain_compute_waits(plat, cenc);
     // anim_eval writes palette_out_buf_ in a prior encoder; that buffer
     // is HazardTrackingModeUntracked so the encoder boundary alone does
     // NOT synchronize the write. Wait on the fence anim_eval signaled.
@@ -155,6 +166,7 @@ void CommandRecorder::DispatchSkinBatches(
         plat.compute_fence_ = plat.cmd_->device()->newFence();
     }
     cenc->updateFence(plat.compute_fence_);
+    signal_compute_updates(plat, cenc);
     cenc->endEncoding();
 }
 
@@ -184,6 +196,7 @@ void CommandRecorder::DispatchAnimEval(
     }
     MTL::ComputeCommandEncoder* cenc = plat.cmd_->computeCommandEncoder();
     cenc->setComputePipelineState(khot->api_pso);
+    drain_compute_waits(plat, cenc);
     // Bindings 1-6 = i32 / vec4 / word16 / headers /
     // world_scratch / palette_out (matching the metal kernel buffer indices).
     Handle<Buffer> hs[6] = {
@@ -205,6 +218,7 @@ void CommandRecorder::DispatchAnimEval(
     cenc->dispatchThreadgroups(MTL::Size{actor_count, 1u, 1u},
                                 MTL::Size{64u, 1u, 1u});
     cenc->updateFence(plat.compute_fence_);
+    signal_compute_updates(plat, cenc);
     cenc->endEncoding();
 }
 
@@ -231,15 +245,80 @@ static MTL::StoreAction to_mtl_store(StoreOp op) {    switch (op) {
 static void apply_invalidate_fences(CommandRecorderPlat& plat, Resources& res,
                                     std::span<const ResourceBarrier> invalidate) {
     for (const ResourceBarrier& b : invalidate) {
-        if (b.texture.IsNull()) {
-            continue;
+        MTL::Fence* fence = nullptr;
+        if (!b.texture.IsNull()) {
+            Texture::Cold* cold = res.textures.GetCold(b.texture);
+            fence = cold != nullptr ? cold->plat.sync_fence_ : nullptr;
+        } else if (!b.buffer.IsNull()) {
+            // Vertex-fetched SSBO (skin/particle output): wait before vertex.
+            Buffer::Cold* cold = res.buffers.GetCold(b.buffer);
+            fence = cold != nullptr ? cold->plat.sync_fence_ : nullptr;
         }
-        Texture::Cold* cold = res.textures.GetCold(b.texture);
-        if (cold != nullptr && cold->plat.sync_fence_ != nullptr) {
-            plat.enc_->waitForFence(cold->plat.sync_fence_,
-                                    MTL::RenderStageVertex);
+        if (fence != nullptr) {
+            plat.enc_->waitForFence(fence, MTL::RenderStageVertex);
         }
     }
+}
+
+// Compute-pass barrier leaf. Encoders are created inside the Dispatch*
+// bodies, so BeginComputePass resolves the fences up front and parks them on
+// the recorder; drain runs on the pass's first encoder, signal on every
+// encoder's end (see CommandRecorderPlat).
+static void drain_compute_waits(CommandRecorderPlat& plat,
+                                MTL::ComputeCommandEncoder* cenc) {
+    for (uint32_t i = 0; i < plat.compute_waits_n_; ++i) {
+        cenc->waitForFence(plat.compute_waits_[i]);
+    }
+    plat.compute_waits_n_ = 0;
+}
+
+static void signal_compute_updates(CommandRecorderPlat& plat,
+                                   MTL::ComputeCommandEncoder* cenc) {
+    for (uint32_t i = 0; i < plat.compute_updates_n_; ++i) {
+        cenc->updateFence(plat.compute_updates_[i]);
+    }
+}
+
+void CommandRecorder::BeginComputePass(
+    Resources& res, std::span<const ResourceBarrier> invalidate,
+    std::span<const Handle<Buffer>> flush_buffers) {
+    plat.compute_waits_n_ = 0;
+    plat.compute_updates_n_ = 0;
+    if (plat.cmd_ == nullptr) {
+        plat.cmd_ = plat.queue_->commandBuffer();
+    }
+    for (const ResourceBarrier& b : invalidate) {
+        MTL::Fence* fence = nullptr;
+        if (!b.texture.IsNull()) {
+            Texture::Cold* cold = res.textures.GetCold(b.texture);
+            fence = cold != nullptr ? cold->plat.sync_fence_ : nullptr;
+        } else if (!b.buffer.IsNull()) {
+            Buffer::Cold* cold = res.buffers.GetCold(b.buffer);
+            fence = cold != nullptr ? cold->plat.sync_fence_ : nullptr;
+        }
+        if (fence != nullptr &&
+            plat.compute_waits_n_ < CommandRecorderPlat::kMaxComputeSync) {
+            plat.compute_waits_[plat.compute_waits_n_++] = fence;
+        }
+    }
+    for (Handle<Buffer> h : flush_buffers) {
+        Buffer::Cold* cold = res.buffers.GetCold(h);
+        if (cold == nullptr) {
+            continue;
+        }
+        if (cold->plat.sync_fence_ == nullptr) {
+            cold->plat.sync_fence_ = plat.cmd_->device()->newFence();
+        }
+        if (plat.compute_updates_n_ < CommandRecorderPlat::kMaxComputeSync) {
+            plat.compute_updates_[plat.compute_updates_n_++] =
+                cold->plat.sync_fence_;
+        }
+    }
+}
+
+void CommandRecorder::EndComputePass(Resources&) {
+    plat.compute_waits_n_ = 0;
+    plat.compute_updates_n_ = 0;
 }
 
 void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
