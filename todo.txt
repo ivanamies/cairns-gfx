@@ -105,3 +105,21 @@ HUMAN TODO — DECISION REQUIRED before/within Phase 0 (god-class split):
   deterministically before trusting the gate.
 
 (the very next slide is the CPU database and GPU virtual machine analogy)
+
+HUMAN TODO — kill the pimpl `Impl* impl_` heap indirection (make it compile-time):
+  Every rhi subsystem (Device/Allocator/Resources/Bindless/Frames/CommandRecorder +
+  the transitional ResourceManager) uses `struct Impl; Impl* impl_ = nullptr;` with a
+  per-Init `new Impl()` + per-access pointer indirection. The ONLY thing pimpl buys is
+  ABI/compile-firewall across a stable library boundary — which we do NOT have: the
+  backend is fixed at COMPILE time (CAIRNS_METAL / CAIRNS_VULKAN) and these are
+  engine-internal classes recompiled wholesale. The backend-typed fields already live in
+  guarded internal headers (rhi/{metal,vulkan}/internal/*_impl.hpp). So the indirection
+  is pure cost (a heap alloc per subsystem + a pointer hop per field access on the hot
+  path) for zero benefit.
+  Fix: make Impl a by-value member — `Impl impl_;` (the public header includes the
+  internal Impl header under the backend #if), or fold the fields directly into the class
+  under #if guards. Removes the heap alloc, the null-checks, and the indirection; all
+  resolvable at compile time. Do it after the Phase-0 split lands (every subsystem then
+  has a clean single Impl to inline). Watch: the public headers would then pull the
+  guarded backend headers (Vk*/MTL::*) — keep that contained, or use a fixed-size
+  aligned storage buffer if header hygiene matters more than simplicity.

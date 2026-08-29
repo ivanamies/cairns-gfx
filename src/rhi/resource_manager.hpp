@@ -66,6 +66,7 @@ using ApiKernelHandle = void*;
 class ResourceManager;
 class Device;
 class Allocator;
+class Resources;
 struct Buffer;
 struct Texture;
 struct Sampler;
@@ -534,7 +535,7 @@ public:
     // Mirrors the device handles + borrows the allocator, then initializes the
     // per-frame command/sync/descriptor state. Device + Allocator must be Init'd
     // first (the engine owns construction order).
-    bool InitDevice(Device& device, Allocator& alloc);
+    bool InitDevice(Device& device, Allocator& alloc, Resources& res);
     // Neutral swapchain bring-up: fills `sc` using the device objects InitDevice
     // owns (Vulkan: device/surface/queues/pool/samples; Metal: device).
     bool InitSwapChain(SwapChain& sc, SDL_Window* window);

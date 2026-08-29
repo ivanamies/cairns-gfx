@@ -30,6 +30,7 @@
 #include "rhi/vulkan/internal/device_impl.hpp"
 #include "rhi/allocator.hpp"
 #include "rhi/vulkan/internal/allocator_impl.hpp"
+#include "rhi/resources.hpp"
 #include "rhi/swap_chain.hpp"
 #include "util/render_pass_globals.hpp"
 #include "util/material_gpu.hpp"
@@ -71,15 +72,7 @@ struct ResourceManager::Impl {
     std::vector<VkDescriptorSet> compute_sets;
     std::vector<VkDescriptorSet> point_sets;
 
-    Pool<Buffer> buffers;
-    Pool<Texture> textures;
-    Pool<Sampler> samplers;
-    Pool<BindGroup> bind_groups;
-    Pool<DynamicBuffers> dynamic_buffers;
-    Pool<Kernel> kernels;
-    Pool<Shader> shaders;
-
-    uint32_t frame_index = 0;
+    Resources* res = nullptr;  // borrowed; owns the 7 pools + frame counter
 
     // Bindless registry builder (one in-flight at a time).
     VkDescriptorSetLayout bindless_layout = VK_NULL_HANDLE;
@@ -452,7 +445,7 @@ void ResourceManager::Deinit() {
         return;
     }
     VkDevice dev = impl_->params.device;
-    impl_->textures.ForEachLive([dev](Texture::Hot& hot, Texture::Cold& cold) {
+    impl_->res->textures.ForEachLive([dev](Texture::Hot& hot, Texture::Cold& cold) {
         if (hot.api_view) {
             vkDestroyImageView(dev, static_cast<VkImageView>(hot.api_view), nullptr);
             hot.api_view = nullptr;
@@ -462,7 +455,7 @@ void ResourceManager::Deinit() {
             cold.api_image = nullptr;
         }
     });
-    impl_->samplers.ForEachLive([dev](Sampler::Hot& hot, Sampler::Cold&) {
+    impl_->res->samplers.ForEachLive([dev](Sampler::Hot& hot, Sampler::Cold&) {
         if (hot.api_sampler) {
             vkDestroySampler(dev, static_cast<VkSampler>(hot.api_sampler), nullptr);
             hot.api_sampler = nullptr;
@@ -493,7 +486,7 @@ void ResourceManager::Deinit() {
     if (impl_->point_layout) {
         vkDestroyDescriptorSetLayout(dev, impl_->point_layout, nullptr);
     }
-    impl_->shaders.ForEachLive([dev](Shader::Hot& hot, Shader::Cold&) {
+    impl_->res->shaders.ForEachLive([dev](Shader::Hot& hot, Shader::Cold&) {
         if (hot.vk_pipeline) {
             vkDestroyPipeline(dev, hot.vk_pipeline, nullptr);
             hot.vk_pipeline = VK_NULL_HANDLE;
@@ -503,7 +496,7 @@ void ResourceManager::Deinit() {
             hot.vk_layout = VK_NULL_HANDLE;
         }
     });
-    impl_->kernels.ForEachLive([dev](Kernel::Hot& hot, Kernel::Cold&) {
+    impl_->res->kernels.ForEachLive([dev](Kernel::Hot& hot, Kernel::Cold&) {
         if (hot.vk_pipeline) {
             vkDestroyPipeline(dev, hot.vk_pipeline, nullptr);
             hot.vk_pipeline = VK_NULL_HANDLE;
@@ -520,8 +513,9 @@ void ResourceManager::Deinit() {
     impl_ = nullptr;
 }
 
-bool ResourceManager::InitDevice(Device& dev, Allocator& alloc) {
+bool ResourceManager::InitDevice(Device& dev, Allocator& alloc, Resources& res) {
     impl_ = new Impl();
+    impl_->res = &res;  // borrowed; owns the 7 pools + frame counter
 
     // Mirror the device handles owned by Device into this manager's Impl, so the
     // memory/frame/descriptor setup below is unchanged. Device owns creation +
@@ -702,13 +696,13 @@ Handle<Buffer> ResourceManager::CreateBuffer(const BufferDesc& d) {
         return Handle<Buffer>::Null;
     }
 
-    Handle<Buffer> h = impl_->buffers.Acquire();
-    Buffer::Hot* hot = impl_->buffers.GetHot(h);
+    Handle<Buffer> h = impl_->res->buffers.Acquire();
+    Buffer::Hot* hot = impl_->res->buffers.GetHot(h);
     hot->heap_buffer_index = static_cast<uint16_t>(r.heap_index);
     hot->pad = 0;
     hot->offset_in_heap = r.offset;
 
-    Buffer::Cold* cold = impl_->buffers.GetCold(h);
+    Buffer::Cold* cold = impl_->res->buffers.GetCold(h);
     cold->alloc = r.alloc;
     cold->size_bytes = d.byte_size;
     cold->usage = d.usage;
@@ -830,12 +824,12 @@ Handle<Texture> ResourceManager::CreateTexture(const TextureDesc& d) {
         return Handle<Texture>::Null;
     }
 
-    Handle<Texture> h = impl_->textures.Acquire();
-    Texture::Hot* hot = impl_->textures.GetHot(h);
+    Handle<Texture> h = impl_->res->textures.Acquire();
+    Texture::Hot* hot = impl_->res->textures.GetHot(h);
     hot->api_view = view;
     hot->descriptor_index = 0;
 
-    Texture::Cold* cold = impl_->textures.GetCold(h);
+    Texture::Cold* cold = impl_->res->textures.GetCold(h);
     cold->alloc = r.alloc;
     cold->api_image = image;
     cold->width = static_cast<uint32_t>(d.dimensions.x);
@@ -878,9 +872,9 @@ Handle<Sampler> ResourceManager::CreateSampler(const SamplerDesc& d) {
         return Handle<Sampler>::Null;
     }
 
-    Handle<Sampler> h = impl_->samplers.Acquire();
-    impl_->samplers.GetHot(h)->api_sampler = sampler;
-    impl_->samplers.GetCold(h)->debug_name = d.debug_name;
+    Handle<Sampler> h = impl_->res->samplers.Acquire();
+    impl_->res->samplers.GetHot(h)->api_sampler = sampler;
+    impl_->res->samplers.GetCold(h)->debug_name = d.debug_name;
     return h;
 }
 
@@ -889,11 +883,11 @@ Handle<BindGroup> ResourceManager::CreateBindGroup(const BindGroupDesc&) {
 }
 
 void ResourceManager::Destroy(Handle<Shader> h) {
-    impl_->shaders.Release(h);
+    impl_->res->shaders.Release(h);
 }
 
 Shader::Hot* ResourceManager::GetHot(Handle<Shader> h) {
-    return impl_->shaders.GetHot(h);
+    return impl_->res->shaders.GetHot(h);
 }
 
 Handle<DynamicBuffers> ResourceManager::CreateDynamicBuffers(
@@ -901,32 +895,12 @@ Handle<DynamicBuffers> ResourceManager::CreateDynamicBuffers(
     return Handle<DynamicBuffers>::Null;
 }
 
-void ResourceManager::Destroy(Handle<Buffer> h) {
-    Buffer::Hot* hot = impl_->buffers.GetHot(h);
-    Buffer::Cold* cold = impl_->buffers.GetCold(h);
-    if (!hot || !cold) {
-        return;
-    }
-    impl_->alloc->impl_->memory.FreeBuffer(hot->heap_buffer_index, cold->alloc,
-                             impl_->frame_index + kFramesInFlight);
-    impl_->buffers.Release(h);
-}
+void ResourceManager::Destroy(Handle<Buffer> h) { impl_->res->Destroy(h); }
 
-void ResourceManager::Destroy(Handle<Texture> h) {
-    Texture::Hot* hot = impl_->textures.GetHot(h);
-    Texture::Cold* cold = impl_->textures.GetCold(h);
-    if (!hot || !cold) {
-        return;
-    }
-    impl_->alloc->impl_->memory.FreeImage(cold->heap_buffer_index, cold->alloc,
-                            static_cast<VkImage>(cold->api_image),
-                            static_cast<VkImageView>(hot->api_view),
-                            impl_->frame_index + kFramesInFlight);
-    impl_->textures.Release(h);
-}
+void ResourceManager::Destroy(Handle<Texture> h) { impl_->res->Destroy(h); }
 
 void ResourceManager::Destroy(Handle<Sampler> h) {
-    Sampler::Hot* hot = impl_->samplers.GetHot(h);
+    Sampler::Hot* hot = impl_->res->samplers.GetHot(h);
     if (!hot) {
         return;
     }
@@ -934,19 +908,19 @@ void ResourceManager::Destroy(Handle<Sampler> h) {
         vkDestroySampler(impl_->params.device,
                          static_cast<VkSampler>(hot->api_sampler), nullptr);
     }
-    impl_->samplers.Release(h);
+    impl_->res->samplers.Release(h);
 }
 
 void ResourceManager::Destroy(Handle<BindGroup> h) {
-    impl_->bind_groups.Release(h);
+    impl_->res->bind_groups.Release(h);
 }
 
 void ResourceManager::Destroy(Handle<DynamicBuffers> h) {
-    impl_->dynamic_buffers.Release(h);
+    impl_->res->dynamic_buffers.Release(h);
 }
 
 void ResourceManager::Destroy(Handle<Kernel> h) {
-    impl_->kernels.Release(h);
+    impl_->res->kernels.Release(h);
 }
 
 namespace {
@@ -1213,11 +1187,11 @@ Handle<Shader> ResourceManager::CreateGraphicsPipeline(
         return Handle<Shader>::Null;
     }
 
-    Handle<Shader> h = impl_->shaders.Acquire();
-    Shader::Hot* hot = impl_->shaders.GetHot(h);
+    Handle<Shader> h = impl_->res->shaders.Acquire();
+    Shader::Hot* hot = impl_->res->shaders.GetHot(h);
     hot->vk_pipeline = pipeline;
     hot->vk_layout = layout;
-    impl_->shaders.GetCold(h)->debug_name = desc.debug_name;
+    impl_->res->shaders.GetCold(h)->debug_name = desc.debug_name;
     return h;
 }
 
@@ -1268,16 +1242,16 @@ Handle<Kernel> ResourceManager::CreateComputePipeline(
         return Handle<Kernel>::Null;
     }
 
-    Handle<Kernel> h = impl_->kernels.Acquire();
-    Kernel::Hot* hot = impl_->kernels.GetHot(h);
+    Handle<Kernel> h = impl_->res->kernels.Acquire();
+    Kernel::Hot* hot = impl_->res->kernels.GetHot(h);
     hot->vk_pipeline = pipeline;
     hot->vk_layout = layout;
-    impl_->kernels.GetCold(h)->debug_name = desc.debug_name;
+    impl_->res->kernels.GetCold(h)->debug_name = desc.debug_name;
     return h;
 }
 
 Kernel::Hot* ResourceManager::GetHot(Handle<Kernel> h) {
-    return impl_->kernels.GetHot(h);
+    return impl_->res->kernels.GetHot(h);
 }
 
 Handle<BindGroup> ResourceManager::CreateBindlessRegistry(
@@ -1355,15 +1329,15 @@ Handle<BindGroup> ResourceManager::CreateBindlessRegistry(
     impl_->bindless_attr_infos.clear();
     impl_->bindless_sampler_infos.clear();
 
-    Handle<BindGroup> h = impl_->bind_groups.Acquire();
-    impl_->bind_groups.GetHot(h)->api_descriptor_set = impl_->bindless_set;
-    impl_->bind_groups.GetCold(h)->debug_name = desc.debug_name;
+    Handle<BindGroup> h = impl_->res->bind_groups.Acquire();
+    impl_->res->bind_groups.GetHot(h)->api_descriptor_set = impl_->bindless_set;
+    impl_->res->bind_groups.GetCold(h)->debug_name = desc.debug_name;
     impl_->bindless_handle = h;
     return h;
 }
 
 uint32_t ResourceManager::BindlessAddTexture(Handle<BindGroup>, Handle<Texture> tex) {
-    Texture::Hot* hot = impl_->textures.GetHot(tex);
+    Texture::Hot* hot = impl_->res->textures.GetHot(tex);
     VkDescriptorImageInfo img{};
     img.imageView = static_cast<VkImageView>(hot->api_view);
     img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1383,7 +1357,7 @@ uint32_t ResourceManager::BindlessAddAttrBuffer(Handle<BindGroup>, Handle<Buffer
 }
 
 uint32_t ResourceManager::BindlessAddSampler(Handle<BindGroup>, Handle<Sampler> samp) {
-    Sampler::Hot* hot = impl_->samplers.GetHot(samp);
+    Sampler::Hot* hot = impl_->res->samplers.GetHot(samp);
     VkDescriptorImageInfo info{};
     info.sampler = static_cast<VkSampler>(hot->api_sampler);
     impl_->bindless_sampler_infos.push_back(info);
@@ -1433,33 +1407,32 @@ void ResourceManager::BindlessFinalize(Handle<BindGroup>) {
 }
 
 Buffer::Hot* ResourceManager::GetHot(Handle<Buffer> h) {
-    return impl_->buffers.GetHot(h);
+    return impl_->res->buffers.GetHot(h);
 }
 
 Texture::Hot* ResourceManager::GetHot(Handle<Texture> h) {
-    return impl_->textures.GetHot(h);
+    return impl_->res->textures.GetHot(h);
 }
 
 Sampler::Hot* ResourceManager::GetHot(Handle<Sampler> h) {
-    return impl_->samplers.GetHot(h);
+    return impl_->res->samplers.GetHot(h);
 }
 
 BindGroup::Hot* ResourceManager::GetHot(Handle<BindGroup> h) {
-    return impl_->bind_groups.GetHot(h);
+    return impl_->res->bind_groups.GetHot(h);
 }
 
 DynamicBuffers::Hot* ResourceManager::GetHot(Handle<DynamicBuffers> h) {
-    return impl_->dynamic_buffers.GetHot(h);
+    return impl_->res->dynamic_buffers.GetHot(h);
 }
 
 void ResourceManager::BeginFrame() {
-    impl_->frame_index++;
-    impl_->alloc->AdvanceFrame(impl_->frame_index);
+    impl_->res->AdvanceFrame();
 }
 
 
 uint32_t ResourceManager::GetBufferByteSize(Handle<Buffer> h) const {
-    Buffer::Cold* cold = impl_->buffers.GetCold(h);
+    Buffer::Cold* cold = impl_->res->buffers.GetCold(h);
     if (!cold) {
         return 0;
     }
@@ -1486,7 +1459,7 @@ VkBuffer ResourceManager::GetVkBuffer(Handle<Buffer> h, uint32_t* out_offset) {
         }
         return impl_->alloc->impl_->memory.HeapMasterBuffer(h.index);
     }
-    Buffer::Hot* hot = impl_->buffers.GetHot(h);
+    Buffer::Hot* hot = impl_->res->buffers.GetHot(h);
     if (!hot) {
         if (out_offset) {
             *out_offset = 0;
@@ -1500,7 +1473,7 @@ VkBuffer ResourceManager::GetVkBuffer(Handle<Buffer> h, uint32_t* out_offset) {
 }
 
 uint8_t* ResourceManager::MappedPtr(Handle<Buffer> h) {
-    Buffer::Hot* hot = impl_->buffers.GetHot(h);
+    Buffer::Hot* hot = impl_->res->buffers.GetHot(h);
     if (!hot) {
         return nullptr;
     }

@@ -33,6 +33,7 @@
 #include "util/unique_ptr.hpp"
 #include "rhi/device.hpp"
 #include "rhi/allocator.hpp"
+#include "rhi/resources.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/command_recorder.hpp"
 
@@ -116,7 +117,10 @@ public:
         if (!alloc_.Init(device_)) {
             return false;
         }
-        if (!rm_.InitDevice(device_, alloc_)) {
+        if (!resources_.Init(device_, alloc_)) {
+            return false;
+        }
+        if (!rm_.InitDevice(device_, alloc_, resources_)) {
             return false;
         }
         if ( !initSwapChain(window)) {
@@ -609,6 +613,7 @@ public:
     bool deinit() {
         swapchain_.Deinit();
         rm_.Deinit();
+        resources_.Deinit();
         alloc_.Deinit();
         device_.Deinit();
         return true;
@@ -638,6 +643,7 @@ private:
     
     rhi::Device device_;
     rhi::Allocator alloc_;
+    rhi::Resources resources_;
     rhi::ResourceManager rm_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
     rhi::Handle<rhi::BindGroup> bindless_bg_;

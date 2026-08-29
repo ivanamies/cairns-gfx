@@ -27,6 +27,7 @@
 #include "rhi/metal/internal/device_impl.hpp"
 #include "rhi/allocator.hpp"
 #include "rhi/metal/internal/allocator_impl.hpp"
+#include "rhi/resources.hpp"
 #include "rhi/swap_chain.hpp"
 #include "gpu_scene_registry.hpp"
 
@@ -44,15 +45,7 @@ struct ResourceManager::Impl {
     Handle<Texture> msaa_handle = Handle<Texture>::Null;
     Handle<Texture> depth_handle = Handle<Texture>::Null;
 
-    Pool<Buffer> buffers;
-    Pool<Texture> textures;
-    Pool<Sampler> samplers;
-    Pool<BindGroup> bind_groups;
-    Pool<DynamicBuffers> dynamic_buffers;
-    Pool<Shader> shaders;
-    Pool<Kernel> kernels;
-
-    uint32_t frame_index = 1;
+    Resources* res = nullptr;  // borrowed; owns the 7 pools + frame counter
 
     // Bindless registry builder (one in-flight at a time).
     MTL::ArgumentEncoder* bindless_encoder = nullptr;
@@ -153,13 +146,14 @@ void ResourceManager::Deinit() {
 }
 
 
-bool ResourceManager::InitDevice(Device& dev, Allocator& alloc) {
+bool ResourceManager::InitDevice(Device& dev, Allocator& alloc, Resources& res) {
     impl_ = new Impl();
-    // Mirror the device/queue owned by Device; borrow the Allocator (already
-    // Init'd, owns the MemoryAllocator). Device owns device/queue teardown.
+    // Mirror the device/queue owned by Device; borrow the Allocator + Resources
+    // (already Init'd). Device owns device/queue teardown.
     impl_->params.device = dev.impl_->device;
     impl_->params.queue = dev.impl_->queue;
     impl_->alloc = &alloc;
+    impl_->res = &res;
     impl_->frame_semaphore = dispatch_semaphore_create(kFramesInFlight);
     {
         MTL::DepthStencilDescriptor* dsd = MTL::DepthStencilDescriptor::alloc()->init();
@@ -220,13 +214,13 @@ Handle<Buffer> ResourceManager::CreateBuffer(const BufferDesc& d) {
         return Handle<Buffer>::Null;
     }
 
-    Handle<Buffer> h = impl_->buffers.Acquire();
-    Buffer::Hot* hot = impl_->buffers.GetHot(h);
+    Handle<Buffer> h = impl_->res->buffers.Acquire();
+    Buffer::Hot* hot = impl_->res->buffers.GetHot(h);
     hot->heap_buffer_index = static_cast<uint16_t>(r.heap_index);
     hot->pad = 0;
     hot->offset_in_heap = r.offset;
 
-    Buffer::Cold* cold = impl_->buffers.GetCold(h);
+    Buffer::Cold* cold = impl_->res->buffers.GetCold(h);
     cold->alloc = r.alloc;
     cold->size_bytes = d.byte_size;
     cold->usage = d.usage;
@@ -300,16 +294,16 @@ Handle<Texture> ResourceManager::CreateTexture(const TextureDesc& d) {
     td->release();
     if (!tex) {
         impl_->alloc->impl_->memory.FreeImage(r.heap_index, r.alloc, nullptr,
-                                impl_->frame_index + kFramesInFlight);
+                                impl_->res->FrameIndex() + kFramesInFlight);
         return Handle<Texture>::Null;
     }
 
-    Handle<Texture> h = impl_->textures.Acquire();
-    Texture::Hot* hot = impl_->textures.GetHot(h);
+    Handle<Texture> h = impl_->res->textures.Acquire();
+    Texture::Hot* hot = impl_->res->textures.GetHot(h);
     hot->api_view = tex;
     hot->descriptor_index = 0;
 
-    Texture::Cold* cold = impl_->textures.GetCold(h);
+    Texture::Cold* cold = impl_->res->textures.GetCold(h);
     cold->alloc = r.alloc;
     cold->api_image = tex;
     cold->width = static_cast<uint32_t>(d.dimensions.x);
@@ -373,11 +367,11 @@ Handle<Sampler> ResourceManager::CreateSampler(const SamplerDesc& d) {
         return Handle<Sampler>::Null;
     }
 
-    Handle<Sampler> h = impl_->samplers.Acquire();
-    Sampler::Hot* hot = impl_->samplers.GetHot(h);
+    Handle<Sampler> h = impl_->res->samplers.Acquire();
+    Sampler::Hot* hot = impl_->res->samplers.GetHot(h);
     hot->api_sampler = sampler;
 
-    Sampler::Cold* cold = impl_->samplers.GetCold(h);
+    Sampler::Cold* cold = impl_->res->samplers.GetCold(h);
     cold->debug_name = d.debug_name;
 
     return h;
@@ -392,31 +386,12 @@ Handle<DynamicBuffers> ResourceManager::CreateDynamicBuffers(
     return Handle<DynamicBuffers>::Null;
 }
 
-void ResourceManager::Destroy(Handle<Buffer> h) {
-    Buffer::Hot* hot = impl_->buffers.GetHot(h);
-    Buffer::Cold* cold = impl_->buffers.GetCold(h);
-    if (!hot || !cold) {
-        return;
-    }
-    impl_->alloc->impl_->memory.FreeBuffer(hot->heap_buffer_index, cold->alloc,
-                             impl_->frame_index + kFramesInFlight);
-    impl_->buffers.Release(h);
-}
+void ResourceManager::Destroy(Handle<Buffer> h) { impl_->res->Destroy(h); }
 
-void ResourceManager::Destroy(Handle<Texture> h) {
-    Texture::Hot* hot = impl_->textures.GetHot(h);
-    Texture::Cold* cold = impl_->textures.GetCold(h);
-    if (!hot || !cold) {
-        return;
-    }
-    impl_->alloc->impl_->memory.FreeImage(cold->heap_buffer_index, cold->alloc,
-                            hot->api_view,
-                            impl_->frame_index + kFramesInFlight);
-    impl_->textures.Release(h);
-}
+void ResourceManager::Destroy(Handle<Texture> h) { impl_->res->Destroy(h); }
 
 void ResourceManager::Destroy(Handle<Sampler> h) {
-    Sampler::Hot* hot = impl_->samplers.GetHot(h);
+    Sampler::Hot* hot = impl_->res->samplers.GetHot(h);
     if (!hot) {
         return;
     }
@@ -424,19 +399,19 @@ void ResourceManager::Destroy(Handle<Sampler> h) {
         hot->api_sampler->release();
         hot->api_sampler = nullptr;
     }
-    impl_->samplers.Release(h);
+    impl_->res->samplers.Release(h);
 }
 
 void ResourceManager::Destroy(Handle<BindGroup> h) {
-    impl_->bind_groups.Release(h);
+    impl_->res->bind_groups.Release(h);
 }
 
 void ResourceManager::Destroy(Handle<DynamicBuffers> h) {
-    impl_->dynamic_buffers.Release(h);
+    impl_->res->dynamic_buffers.Release(h);
 }
 
 void ResourceManager::Destroy(Handle<Shader> h) {
-    Shader::Hot* hot = impl_->shaders.GetHot(h);
+    Shader::Hot* hot = impl_->res->shaders.GetHot(h);
     if (!hot) {
         return;
     }
@@ -444,11 +419,11 @@ void ResourceManager::Destroy(Handle<Shader> h) {
         hot->api_pso->release();
         hot->api_pso = nullptr;
     }
-    impl_->shaders.Release(h);
+    impl_->res->shaders.Release(h);
 }
 
 void ResourceManager::Destroy(Handle<Kernel> h) {
-    Kernel::Hot* hot = impl_->kernels.GetHot(h);
+    Kernel::Hot* hot = impl_->res->kernels.GetHot(h);
     if (!hot) {
         return;
     }
@@ -456,35 +431,35 @@ void ResourceManager::Destroy(Handle<Kernel> h) {
         hot->api_pso->release();
         hot->api_pso = nullptr;
     }
-    impl_->kernels.Release(h);
+    impl_->res->kernels.Release(h);
 }
 
 Buffer::Hot* ResourceManager::GetHot(Handle<Buffer> h) {
-    return impl_->buffers.GetHot(h);
+    return impl_->res->buffers.GetHot(h);
 }
 
 Texture::Hot* ResourceManager::GetHot(Handle<Texture> h) {
-    return impl_->textures.GetHot(h);
+    return impl_->res->textures.GetHot(h);
 }
 
 Sampler::Hot* ResourceManager::GetHot(Handle<Sampler> h) {
-    return impl_->samplers.GetHot(h);
+    return impl_->res->samplers.GetHot(h);
 }
 
 BindGroup::Hot* ResourceManager::GetHot(Handle<BindGroup> h) {
-    return impl_->bind_groups.GetHot(h);
+    return impl_->res->bind_groups.GetHot(h);
 }
 
 DynamicBuffers::Hot* ResourceManager::GetHot(Handle<DynamicBuffers> h) {
-    return impl_->dynamic_buffers.GetHot(h);
+    return impl_->res->dynamic_buffers.GetHot(h);
 }
 
 Shader::Hot* ResourceManager::GetHot(Handle<Shader> h) {
-    return impl_->shaders.GetHot(h);
+    return impl_->res->shaders.GetHot(h);
 }
 
 Kernel::Hot* ResourceManager::GetHot(Handle<Kernel> h) {
-    return impl_->kernels.GetHot(h);
+    return impl_->res->kernels.GetHot(h);
 }
 
 namespace {
@@ -626,9 +601,9 @@ Handle<Shader> ResourceManager::CreateGraphicsPipeline(
         return Handle<Shader>::Null;
     }
 
-    Handle<Shader> h = impl_->shaders.Acquire();
-    impl_->shaders.GetHot(h)->api_pso = pso;
-    impl_->shaders.GetCold(h)->debug_name = desc.debug_name;
+    Handle<Shader> h = impl_->res->shaders.Acquire();
+    impl_->res->shaders.GetHot(h)->api_pso = pso;
+    impl_->res->shaders.GetCold(h)->debug_name = desc.debug_name;
     return h;
 }
 
@@ -655,20 +630,19 @@ Handle<Kernel> ResourceManager::CreateComputePipeline(
         std::cerr << "rhi/metal: newComputePipelineState failed" << std::endl;
         return Handle<Kernel>::Null;
     }
-    Handle<Kernel> h = impl_->kernels.Acquire();
-    impl_->kernels.GetHot(h)->api_pso = cps;
-    impl_->kernels.GetCold(h)->debug_name = desc.debug_name;
+    Handle<Kernel> h = impl_->res->kernels.Acquire();
+    impl_->res->kernels.GetHot(h)->api_pso = cps;
+    impl_->res->kernels.GetCold(h)->debug_name = desc.debug_name;
     return h;
 }
 
 void ResourceManager::BeginFrame() {
-    impl_->frame_index++;
-    impl_->alloc->AdvanceFrame(impl_->frame_index);
+    impl_->res->AdvanceFrame();
 }
 
 
 uint32_t ResourceManager::GetBufferByteSize(Handle<Buffer> h) const {
-    Buffer::Cold* cold = impl_->buffers.GetCold(h);
+    Buffer::Cold* cold = impl_->res->buffers.GetCold(h);
     if (!cold) {
         return 0;
     }
@@ -689,7 +663,7 @@ MTL::Buffer* ResourceManager::GetMtlBuffer(Handle<Buffer> h,
         }
         return impl_->alloc->impl_->memory.HeapMasterBuffer(h.index);
     }
-    Buffer::Hot* hot = impl_->buffers.GetHot(h);
+    Buffer::Hot* hot = impl_->res->buffers.GetHot(h);
     if (!hot) {
         if (out_offset) {
             *out_offset = 0;
@@ -703,7 +677,7 @@ MTL::Buffer* ResourceManager::GetMtlBuffer(Handle<Buffer> h,
 }
 
 uint8_t* ResourceManager::MappedPtr(Handle<Buffer> h) {
-    Buffer::Hot* hot = impl_->buffers.GetHot(h);
+    Buffer::Hot* hot = impl_->res->buffers.GetHot(h);
     if (!hot) {
         return nullptr;
     }
@@ -765,16 +739,16 @@ Handle<BindGroup> ResourceManager::CreateBindlessRegistry(
     impl_->bindless_num_attr = 0;
     impl_->bindless_num_samp = 0;
 
-    Handle<BindGroup> h = impl_->bind_groups.Acquire();
-    BindGroup::Hot* hot = impl_->bind_groups.GetHot(h);
+    Handle<BindGroup> h = impl_->res->bind_groups.Acquire();
+    BindGroup::Hot* hot = impl_->res->bind_groups.GetHot(h);
     hot->api_descriptor_set = arg_buf;
     hot->arg_buf_offset = arg_off;
-    impl_->bind_groups.GetCold(h)->debug_name = desc.debug_name;
+    impl_->res->bind_groups.GetCold(h)->debug_name = desc.debug_name;
     return h;
 }
 
 uint32_t ResourceManager::BindlessAddTexture(Handle<BindGroup>, Handle<Texture> tex) {
-    MTL::Texture* t = impl_->textures.GetHot(tex)->api_view;
+    MTL::Texture* t = impl_->res->textures.GetHot(tex)->api_view;
     const uint32_t slot = impl_->bindless_num_tex;
     impl_->bindless_encoder->setTexture(t, impl_->bindless_tex_base + slot);
     impl_->bindless_num_tex = slot + 1;
@@ -791,7 +765,7 @@ uint32_t ResourceManager::BindlessAddAttrBuffer(Handle<BindGroup>, Handle<Buffer
 }
 
 uint32_t ResourceManager::BindlessAddSampler(Handle<BindGroup>, Handle<Sampler> samp) {
-    MTL::SamplerState* s = impl_->samplers.GetHot(samp)->api_sampler;
+    MTL::SamplerState* s = impl_->res->samplers.GetHot(samp)->api_sampler;
     const uint32_t slot = impl_->bindless_num_samp;
     impl_->bindless_encoder->setSamplerState(s, impl_->bindless_samp_base + slot);
     impl_->bindless_num_samp = slot + 1;
