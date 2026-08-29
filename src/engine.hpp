@@ -37,6 +37,7 @@
 #include "util/draw.hpp"
 #include "util/draw_key.hpp"
 #include "util/material_gpu.hpp"
+#include "util/worker_pool.hpp"
 #include "util/scene_gpu.hpp"
 #include "util/timer.hpp"
 #include "util/frame_clock.hpp"
@@ -543,6 +544,18 @@ public:
     
     bool GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
         engine_cfg_ = ecfg;
+
+        // #221 build_draws worker pool. Cap at 4 so M-series fan-out stays
+        // on P-cores (M2 Max has 8P + 4E; hardware_concurrency() returns 12,
+        // which pushed half the workers onto E-cores and ate the win).
+        // hardware_concurrency() may return 0 if the OS can't report it --
+        // clamp to 1 so the fan-out degenerates to a single-threaded pass.
+        const unsigned hw = std::thread::hardware_concurrency();
+        unsigned n = hw > 0 ? hw : 1u;
+        if (n > 4u) {
+            n = 4u;
+        }
+        build_pool_ = std::make_unique<cairns::WorkerPool>(n);
         // Clock selection: a dump_path => FixedClock (golden); else WallClock.
         golden_ = !engine_cfg_.dump_path.empty();
         tiny_quad_test_ = engine_cfg_.tiny_quad;
@@ -1017,60 +1030,104 @@ public:
         s.draw_entity_ids = {
             s.arena.AllocateArray<uint32_t>(total_draws), total_draws};
 
-        // Fill pass -- stable_idx assigned by prefix sum over the proxy walk
-        // (deterministic of input order, independent of execution order so a
-        // future parallel_for is a drop-in).
-        uint32_t stable_idx = 0;
-        for (const cairns::MeshProxy& mp : s.proxies.meshes) {
-            const BufHandle pos = mp.pos;
-            [[maybe_unused]] const BufHandle attr = mp.attr;
-            const BufHandle index = mp.index;
-            const glm::mat4& world_mat = mp.world_matrix;
-            const uint32_t index_base_off = rhi_.resources.BufferBaseOffset(rhi_.alloc, index);
-            for (uint32_t p = 0; p < mp.primitive_count; ++p) {
-                const cairns::PrimitiveProxy& prim = s.proxies.primitives[mp.first_primitive + p];
-                const MatId mat_id = prim.material_id;
-
-                cairns::Draw draw{};
-                // #220 Step 1: bind group lives in LoadedMaterial::Hot.
-                draw.bind_groups[1] = materials_.GetHot(mat_id)->set2;
-                draw.index_buffer = index;
-                draw.index_offset = index_base_off + (prim.first_index * sizeof(uint32_t));
-                draw.vertex_offset = prim.vertex_offset;
-                draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot] = pos;
-                draw.vertex_buffers[cairns::Draw::kVertexBufferAttrSlot] = attr;
-                draw.instance_offset = 0;
-                draw.instance_count = 1;
-                draw.dynamic_buffer_offsets[0] = UINT32_MAX;  // material   - filled by EncodeDraws
-                draw.dynamic_buffer_offsets[1] = UINT32_MAX;  // draw_tmp   - filled by EncodeDraws
-                assert(prim.index_count % 3 == 0);
-                draw.triangle_count =
-                    tiny_quad_test_ ? 2 : prim.index_count / 3;
-
-                // P2: depth_q dropped from the sort key (pass 0). Including
-                // it would make the sort camera-dependent and force a per-
-                // viewport re-sort. Material + pipeline ordering still
-                // preserves batching across both viewports.
-                s.drawListSorted[stable_idx] = std::make_pair(
-                    // #220 Step 1: BuildDrawKey wants a uint32 material id;
-                    // feed it Handle::index (uint16; 0x3FFFFFFF mask is a
-                    // no-op but kept for shape parity with prior code).
-                    cairns::BuildDrawKey(static_cast<uint32_t>(mat_id.index) & 0x3FFFFFFFu,
-                                         /*depth=*/0,
-                                         kMockTranslucency, kMockViewport,
-                                         kMockViewportLayer, kMockFullscreenLayer),
-                    stable_idx);
-                s.drawList[stable_idx] = draw;
-                s.draw_world_matrices[stable_idx] = world_mat;
-                // Always emit the real entity id; outline.frag does the
-                // highlight-set filter via the highlights texture so pick
-                // can readback the real id from id_target_ regardless of
-                // outline state.
-                s.draw_entity_ids[stable_idx] = mp.entity_id;
-                ++stable_idx;
+        // Per-proxy starting stable_idx via prefix sum over primitive_count.
+        // Lives on the per-slot arena so the workers can read it concurrently
+        // without further allocation.
+        const uint32_t n_proxies =
+            static_cast<uint32_t>(s.proxies.meshes.size());
+        uint32_t* proxy_first_draw =
+            s.arena.AllocateArray<uint32_t>(n_proxies ? n_proxies : 1);
+        {
+            uint32_t acc = 0;
+            for (uint32_t i = 0; i < n_proxies; ++i) {
+                proxy_first_draw[i] = acc;
+                acc += s.proxies.meshes[i].primitive_count;
             }
         }
-        assert(stable_idx == total_draws);
+
+        // #221 multithreaded fill. Each worker takes a disjoint proxy range
+        // [proxy_lo, proxy_hi) and writes draws starting at
+        // proxy_first_draw[proxy_lo]. Subchunks are non-overlapping by
+        // construction so there's no shared writer state -- the only shared
+        // reads are materials_.GetHot / rhi_.resources.BufferBaseOffset,
+        // both pure ResourceManager indexed loads with no internal mutation.
+        auto fill_chunk = [&](uint32_t proxy_lo, uint32_t proxy_hi) {
+            for (uint32_t i = proxy_lo; i < proxy_hi; ++i) {
+                const cairns::MeshProxy& mp = s.proxies.meshes[i];
+                const BufHandle pos = mp.pos;
+                [[maybe_unused]] const BufHandle attr = mp.attr;
+                const BufHandle index = mp.index;
+                const glm::mat4& world_mat = mp.world_matrix;
+                const uint32_t index_base_off =
+                    rhi_.resources.BufferBaseOffset(rhi_.alloc, index);
+                uint32_t stable_idx = proxy_first_draw[i];
+                for (uint32_t p = 0; p < mp.primitive_count; ++p) {
+                    const cairns::PrimitiveProxy& prim =
+                        s.proxies.primitives[mp.first_primitive + p];
+                    const MatId mat_id = prim.material_id;
+
+                    cairns::Draw draw{};
+                    // #220 Step 1: bind group lives in LoadedMaterial::Hot.
+                    draw.bind_groups[1] = materials_.GetHot(mat_id)->set2;
+                    draw.index_buffer = index;
+                    draw.index_offset =
+                        index_base_off + (prim.first_index * sizeof(uint32_t));
+                    draw.vertex_offset = prim.vertex_offset;
+                    draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot] =
+                        pos;
+                    draw.vertex_buffers[cairns::Draw::kVertexBufferAttrSlot] =
+                        attr;
+                    draw.instance_offset = 0;
+                    draw.instance_count = 1;
+                    // filled by EncodeDraws.
+                    draw.dynamic_buffer_offsets[0] = UINT32_MAX;
+                    draw.dynamic_buffer_offsets[1] = UINT32_MAX;
+                    assert(prim.index_count % 3 == 0);
+                    draw.triangle_count =
+                        tiny_quad_test_ ? 2 : prim.index_count / 3;
+
+                    // P2: depth_q dropped from the sort key (pass 0). Including
+                    // it would make the sort camera-dependent and force a per-
+                    // viewport re-sort. Material + pipeline ordering still
+                    // preserves batching across both viewports.
+                    s.drawListSorted[stable_idx] = std::make_pair(
+                        // #220 Step 1: BuildDrawKey wants a uint32 material id;
+                        // feed it Handle::index (uint16; 0x3FFFFFFF mask is a
+                        // no-op but kept for shape parity with prior code).
+                        cairns::BuildDrawKey(
+                            static_cast<uint32_t>(mat_id.index) & 0x3FFFFFFFu,
+                            /*depth=*/0, kMockTranslucency, kMockViewport,
+                            kMockViewportLayer, kMockFullscreenLayer),
+                        stable_idx);
+                    s.drawList[stable_idx] = draw;
+                    s.draw_world_matrices[stable_idx] = world_mat;
+                    // Always emit the real entity id; outline.frag does the
+                    // highlight-set filter via the highlights texture so pick
+                    // can readback the real id from id_target_ regardless of
+                    // outline state.
+                    s.draw_entity_ids[stable_idx] = mp.entity_id;
+                    ++stable_idx;
+                }
+            }
+        };
+
+        if (n_proxies > 0) {
+            uint32_t n_workers = build_pool_->num_workers();
+            if (n_workers > n_proxies) {
+                n_workers = n_proxies;
+            }
+            // Range for worker w is [w*N/W, (w+1)*N/W) -- arithmetic
+            // partition, no scratch table, no `per+rem` ceremony.
+            const uint32_t n_proxies_local = n_proxies;
+            const uint32_t n_workers_local = n_workers;
+            build_pool_->RunIndices(n_workers, [&](uint32_t w) {
+                const uint32_t lo =
+                    (n_proxies_local * w) / n_workers_local;
+                const uint32_t hi =
+                    (n_proxies_local * (w + 1)) / n_workers_local;
+                fill_chunk(lo, hi);
+            });
+        }
 
         return true;
     }
@@ -2234,6 +2291,13 @@ private:
     // kFramesInFlight is compile-time anyway -- the runtime resize was
     // never needed.
     std::array<PerSlot, kFramesInFlight> slots_{};
+
+    // #221 / multithreaded build_draws pool. Taskflow-backed persistent
+    // worker pool behind a pimpl (lives in cairns_render_thread). Workers
+    // are parked on a condition_variable so the per-frame fan-out cost is
+    // wake/notify, not pthread_create. Sized once at GreaterInit from
+    // std::thread::hardware_concurrency().
+    std::unique_ptr<cairns::WorkerPool> build_pool_;
 
     // EnTT scene-layer path. worlds_ pre-reserved at startup
     // (kMaxWorlds Acquire+Release cycle) to keep World::Cold* pointer

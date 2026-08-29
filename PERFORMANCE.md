@@ -5,6 +5,125 @@ Newest first.
 
 ---
 
+## `88f7d70+` (2026-06-08) — #220 Steps 1+2+3 (handle-ify LoadedMaterial / Mesh / Scene) + render_graph PassRecord vectors -> std::array push_or_die + multithreaded build_draws experiment (WorkerPool, max-4 cap)
+
+What changed since `dc9b669+`:
+- `4e2189a` #220 Step 1: `LoadedMaterial -> ResourceManager<LoadedMaterial>`,
+  `MatId = Handle<LoadedMaterial>`, set-2 bind group folded into
+  `LoadedMaterial::Hot`. Parallel `material_bind_groups_` vector deleted.
+- `94c12a5` #220 Step 2: `Mesh -> ResourceManager<Mesh>`, lifted out of
+  `Scene::meshes` into engine-owned `meshes_`; `Scene::meshes` is now
+  `std::vector<MeshId>`. CPU temporaries moved to `Mesh::Cold`.
+- `18c922e` #220 Step 3: `Scene -> ResourceManager<Scene>`,
+  `SceneId = Handle<Scene>`; `Asset::Cold::cpu_graph` flipped from
+  `const Scene*` to `SceneId`. Engine carries a parallel
+  `std::vector<SceneId> scene_ids_` for order-stable iteration.
+- `5796e4d` `PassRecord::baked_color` `std::vector` ->
+  `std::array<ColorAttachment, kMaxColorFormats=4>` + `uint8_t count`,
+  overflow = fprintf+abort. -77 KB / -1849 grows seen in 3300-hero
+  trace.
+- `88f7d70` All five PassRecord `std::vector<uint16_t>` fields
+  (`reads` / `writes` / `buf_reads` / `buf_writes` /
+  `attachment_inputs`) plus `color_outputs` (already in `kMaxColorFormats`)
+  and `baked_inputs` converted to fixed `std::array<,N>` + `uint8_t`
+  count with push_or_die. Caps: reads=16, writes=8, buf_reads=4,
+  buf_writes=4, attachment_inputs=16, baked_inputs=16 (sized for swap
+  pass at `kNumViewports=8` headroom).
+- Working tree (uncommitted): `BuildMeshOpaqueDraws` fan-out via a
+  taskflow-backed `cairns::WorkerPool` pimpl
+  (`src/util/worker_pool.{hpp,cpp}`, lives in `cairns_render_thread`
+  static lib alongside `render_thread.cpp`). Pool sized to
+  `min(hardware_concurrency(), 4)`; raised to that cap deliberately
+  after a max-12 sweep showed the same regression. Result: net
+  regression on all platforms; see below.
+
+Workload: `CAIRNS_N=3300` (~100 GLBs × 33 slices), ~11220 draws. Release.
+Steady-state medians (last 3 of 9–10 timer reports per backend per run).
+macOS at 1280×720 (M2-class), S22 at 2115×1008. V-synced at 60 Hz on
+macOS; thermally-pinned on S22 (~7–8 fps GPU-bound at this workload).
+
+### macOS Metal Release — 1280×720
+
+| Pass                  | ST baseline | std::thread (12) | taskflow pool (max 4) |
+|-----------------------|-------------|------------------|------------------------|
+| `frame` (CPU, vsync)  |  16.67 ms   |  16.66 ms        |  16.65 ms              |
+| `build_draws` (CPU)   |   2.33 ms   |   2.40 ms (+3 %) |   3.06 ms (+31 %)      |
+| `record` (CPU)        |   1.33 ms   |   1.28 ms        |   1.49 ms              |
+| `particle_sim` (GPU)  |   0.010 ms  |   0.010 ms       |   0.010 ms             |
+| `forward_vp0` (GPU)   |  8.6–9.2 ms |   8.1–9.0 ms     |   8.8–9.7 ms           |
+| `swap` (GPU)          |   0.27 ms   |   0.24 ms        |   0.25 ms              |
+
+vs `dc9b669+` ST: `build_draws` +0.23 (2.10 -> 2.33); `record` -0.04;
+`forward_vp0` flat within run variance.
+
+### macOS Vulkan / MoltenVK Release — 1280×720
+
+| Pass                  | ST baseline | std::thread (12) | taskflow pool (max 4) |
+|-----------------------|-------------|------------------|------------------------|
+| `frame` (CPU, vsync)  |  16.65 ms   |  16.65 ms        |  16.62 ms              |
+| `build_draws` (CPU)   |   2.20 ms   |   2.31 ms (+5 %) |   3.06 ms (+39 %)      |
+| `record` (CPU)        |   0.56 ms   |   0.55 ms        |   0.64 ms              |
+| `particle_sim` (GPU)  |   0.015 ms  |   0.016 ms       |   0.015 ms             |
+| `forward_vp0` (GPU)   |  8.9–10.3 ms|   9.8–10.2 ms    |   8.4–10.2 ms          |
+| `swap` (GPU)          |   0.04 ms   |   0.04 ms        |   0.04 ms              |
+
+vs `dc9b669+` ST: `build_draws` +0.22 (1.98 -> 2.20).
+
+### Android Vulkan Release — Samsung Galaxy S22 (Adreno 730), 2115×1008
+
+Cold-start onwards. Workload here loads 98 of 100 GLBs (missing 2
+from the apk assets; same 33-slice grid -> 11179 draws not 11220).
+Reports captured per run before sweep killed.
+
+| Pass                  | ST baseline (2 runs) | taskflow pool (max 4, 3 runs) |
+|-----------------------|----------------------|-------------------------------|
+| `frame` (CPU, wall)   | 117955 / 130952 us   | 141093 / 142284 / 144392 us   |
+| `build_draws` (CPU)   |  8538 /  8052 us     |  8622 /  9092 /  8577 us      |
+| `record` (CPU)        | 10504 / 10516 us     | 10861 / 11221 / 10971 us      |
+| `particle_sim` (GPU)  |     0 /     0 us     |     0 /     0 /     0 us      |
+| `forward_vp0` (GPU)   | 73881 / 87074 us     | 94797 / 94687 / 98774 us      |
+| `swap` (GPU)          |   574 /   674 us     |   761 /   739 /   786 us      |
+
+`build_draws` taskflow-max-4 vs ST: +0.4 ms average (8.30 -> 8.76).
+`forward_vp0` GPU sustained at the high end (~95 ms) -- consistent
+with the user-noted 85–120 ms thermal range on this device.
+
+### Reading
+
+Multithreaded `BuildMeshOpaqueDraws` at this workload is a net loss on
+every platform tested, with both dispatch backends:
+- raw `std::thread` fan-out (per-frame spawn): +3 % on metal, +5 % on
+  vk macOS.
+- taskflow `tf::Executor::silent_async` + mutex/cv join, max 4 workers:
+  +31 % on metal, +39 % on vk macOS, +5 % on S22 vk.
+
+Two effects compounding:
+1. Per-chunk work is small (~290 µs on macOS, ~2 ms on S22 at hw=4)
+   relative to the dispatch tax (per-task `std::function` construction
+   inside `silent_async` + cv-join). At max-4 the regression matched
+   max-12, ruling out E-core poisoning as the dominant cost on macOS.
+2. `BuildMeshOpaqueDraws` is largely memory-bound (writing ~2.7 MB of
+   `Draw` structs per frame); extra cores don't add DRAM bandwidth and
+   shared-read calls (`materials_.GetHot`, `BufferBaseOffset`) bounce
+   cache lines.
+
+`WorkerPool` infrastructure is committed for later use (the larger
+3-stage #221 pipeline will have units of work big enough to amortize
+the dispatch cost). The fan-out at the build_draws site is left in
+place but should be considered "experiment landed for record-keeping,
+revisit with a coarser-grained workload or a tighter dispatch path
+(e.g. `tf::Taskflow::for_each_index` with a single queue insertion)
+before pulling".
+
+Note on M-series scheduling: the cap-at-4 didn't recover the regression
+because (per user) "M-series will still kick you to the bad cores" --
+the OS does not honor a soft request to stay on P-cores when 4 workers
+are unpinned. A real fix would need explicit QoS class hints
+(`pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE)`) inside the
+taskflow Executor's worker init, which is out of scope for this commit.
+
+---
+
 ## `dc9b669+` (2026-06-06) — #201 / #202 / #204 / #205 landed + Frames::End -> EndSubmit/Present split (vkQueuePresentKHR hoisted to main)
 
 What changed since `0b51ce3+`:

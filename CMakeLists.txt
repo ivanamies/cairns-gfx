@@ -153,7 +153,8 @@ target_link_libraries(cairns_control PRIVATE cairns_core quickjs)
 # Taskflow needs exceptions + has size_t->int narrowing in its headers, so the
 # one TU that includes it lives in its own static library with relaxed flags.
 add_library(cairns_render_thread STATIC
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/render/render_thread.cpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/render/render_thread.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/util/worker_pool.cpp")
 target_include_directories(cairns_render_thread PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_BINARY_DIR}/generated"
@@ -186,13 +187,15 @@ file(GLOB_RECURSE CAIRNS_CORE_SOURCES
 list(FILTER CAIRNS_CORE_SOURCES EXCLUDE REGEX "/src/control/")
 # Exclude:
 #  - entry points (main.cpp, serve_main.cpp)
-#  - render_thread.cpp (separate lib, exceptions enabled)
+#  - render_thread.cpp / worker_pool.cpp (separate lib, exceptions enabled
+#    because taskflow needs them)
 #  - src/control/** (lives in cairns_control STATIC lib; nlohmann/json wants
 #    exceptions which cairns_core forbids)
 list(REMOVE_ITEM CAIRNS_CORE_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/serve_main.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/render/render_thread.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/util/worker_pool.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/control/command_registry.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/control/command_registry.hpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/control/transport_stdio.cpp"

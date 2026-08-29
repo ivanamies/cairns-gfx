@@ -37,7 +37,9 @@ session: `CommandRegistry::Register/RegisterAlias/PublishEvent`,
 SetHighlights/AddSelection/RemoveSelection`. All were initial-pass-by-value
 and had to be retro-fitted on prompt.
 
-## Wrote allocators and then just didn't use them
+## Wrote allocators and then just didn't use them (counter: 2)
+
+### Incident 1 — original
 
 Wrote `src/util/cpu_arena.hpp` (`BumpArena`, `FrameArena`) and
 `src/util/chunk_allocator.hpp` (`ChunkAllocator`, `ChunkStdAllocator<T>`)
@@ -54,13 +56,32 @@ call. None of that should ever malloc; the slab was right there.
 Because I only have a theoretical understanding of allocators and my
 human caught them when he fired up the profiler.
 
-Rule: when a CPU arena lands, the SAME commit retrofits at least one
-real consumer to use it. No standalone "infrastructure" commits with
-zero call sites. The wiring is the proof the arena is right; without
-it, the arena is academic. Audit existing `std::vector` /
-`std::function` / `std::string` members on per-frame structures
-(`FramePacket`, `PassRecord`, render-graph scratch) the moment a frame
-arena exists, not when the profiler shouts.
+### Incident 2 — 2026-06-08, build_draws worker pool
+
+Adding multithreaded fan-out for `BuildMeshOpaqueDraws`, I reached for
+`std::vector<std::thread> build_workers_;` as the worker storage and
+sized it with `build_workers_.resize(hardware_concurrency())` in
+`GreaterInit`. Yes it was a one-time alloc, but it was also a default
+`std::vector` member on `Engine` for storage whose shape is fixed by
+the hardware. Human said: "no std::vector temps. do I have an
+increment on how many times you've messed up not using allocators?"
+
+The right shape is a fixed-cap `std::array<std::thread, kMaxBuildWorkers>`
+with a runtime `n_build_workers_` set from
+`std::thread::hardware_concurrency()`. The cap is generous (64; covers
+Threadripper-class CPUs); `std::thread` is 8 bytes here so unused
+slots are free. Zero heap.
+
+## Didn't use the threading library that is already vendored (counter: 1)
+
+Rolled raw `std::thread` spawn-and-join across
+`hardware_concurrency()` workers per frame for the build_draws
+fan-out -- without checking that `third_party/taskflow/` was already
+vendored and used in `src/render/render_thread.cpp` behind a pimpl,
+with the CMake split-library template (`cairns_render_thread`)
+already there to keep taskflow's exceptions out of cairns_core. Same
+class as the allocator regression above: the primitive existed; I
+went and hand-rolled what it was for.
 
 ## Added maps without permission — two separate times
 
