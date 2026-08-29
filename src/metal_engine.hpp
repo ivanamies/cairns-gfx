@@ -434,10 +434,18 @@ public:
                 rhi::Span<const rhi::VertexInputAttribute>(&pos_attr, 1);
             desc.vertex_buffers =
                 rhi::Span<const rhi::VertexBufferLayout>(&pos_layout, 1);
+            desc.topology = rhi::PrimitiveTopology::kTriangleList;
+            desc.cull = rhi::CullMode::kBack;
+            desc.front_face = rhi::FrontFace::kCounterClockwise;
+            desc.depth_test = true;
+            desc.depth_write = true;
+            desc.depth_compare = rhi::CompareOp::kLess;
             desc.color_format = rhi::Format::kBgra8Unorm;
             desc.depth_format = rhi::Format::kD32F;
             desc.sample_count = sampleCount;
+            desc.push_constant_bytes = sizeof(uint32_t);
             desc.debug_name = "unlit";
+            desc.swap_chain = &swapchain_;
             unlit_ = rm_.CreateGraphicsPipeline(desc);
             if (unlit_.IsNull()) {
                 std::exit(0);
@@ -490,6 +498,12 @@ public:
         return true;
     }
     
+    struct Particle {
+        float position[2];
+        float velocity[2];
+        float color[4];
+    };
+
     bool initParticles() {
         const char* base = SDL_GetBasePath();
         const std::string shader_dir = base ? base : "";
@@ -504,10 +518,27 @@ public:
             }
         }
         {  // particle render pipeline via rhi
+            const rhi::VertexInputAttribute attrs[2] = {
+                {0, 0, rhi::Format::kRg32F,
+                 static_cast<uint32_t>(offsetof(Particle, position))},
+                {1, 0, rhi::Format::kRgba32F,
+                 static_cast<uint32_t>(offsetof(Particle, color))},
+            };
+            const rhi::VertexBufferLayout layout{
+                0, static_cast<uint32_t>(sizeof(Particle))};
             rhi::GraphicsPipelineDesc desc{};
             desc.logical_shader = "particle";
             desc.shader_dir = shader_dir.c_str();
+            desc.vertex_attributes =
+                rhi::Span<const rhi::VertexInputAttribute>(attrs, 2);
+            desc.vertex_buffers =
+                rhi::Span<const rhi::VertexBufferLayout>(&layout, 1);
             desc.topology = rhi::PrimitiveTopology::kPointList;
+            desc.cull = rhi::CullMode::kBack;
+            desc.front_face = rhi::FrontFace::kCounterClockwise;
+            desc.depth_test = true;
+            desc.depth_write = true;
+            desc.depth_compare = rhi::CompareOp::kLess;
             desc.blend.enable = true;
             desc.blend.src_color = rhi::BlendFactor::kSrcAlpha;
             desc.blend.dst_color = rhi::BlendFactor::kOneMinusSrcAlpha;
@@ -516,18 +547,15 @@ public:
             desc.color_format = rhi::Format::kBgra8Unorm;
             desc.depth_format = rhi::Format::kD32F;
             desc.sample_count = sampleCount;
+            desc.push_constant_bytes = 0;
             desc.debug_name = "particle_render";
+            desc.swap_chain = &swapchain_;
             particle_render_shader_ = rm_.CreateGraphicsPipeline(desc);
             if (particle_render_shader_.IsNull()) {
                 return false;
             }
         }
 
-        struct Particle {
-            float position[2];
-            float velocity[2];
-            float color[4];
-        };
         std::vector<Particle> particles(kParticleCount);
         for (uint32_t i = 0; i < kParticleCount; ++i) {
             const float r = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
