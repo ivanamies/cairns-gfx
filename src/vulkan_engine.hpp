@@ -820,6 +820,7 @@ private:
             vkUpdateDescriptorSets(device,
                 static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
         }
+        bindless_bg_ = rm_.CreateBindGroupFromVkDescriptorSet(bindlessSet_);
         return true;
     }
 
@@ -1523,9 +1524,12 @@ private:
             vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
         }
         {
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+            const rhi::Shader::Hot* unlit = rm_.GetHot(unlit_shader_);
+            VkDescriptorSet bindless_set =
+                static_cast<VkDescriptorSet>(rm_.GetHot(bindless_bg_)->api_descriptor_set);
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_pipeline);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                pipelineLayout, 0, 1, &bindlessSet_, 0, nullptr);
+                unlit->vk_layout, 0, 1, &bindless_set, 0, nullptr);
 
             for (const auto& [key, draw_idx] : drawListSorted_) {
                 const cairns::Draw& draw = drawList_[draw_idx];
@@ -1547,11 +1551,11 @@ private:
                     draw_drawtmp_offsets_[draw_idx]
                 };
                 vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    pipelineLayout, 1, 1, &dynUboSets_[currentFrame],
+                    unlit->vk_layout, 1, 1, &dynUboSets_[currentFrame],
                     static_cast<uint32_t>(dyn_offsets.size()), dyn_offsets.data());
 
                 const uint32_t base_vertex = draw.vertex_offset;
-                vkCmdPushConstants(commandBuffer, pipelineLayout,
+                vkCmdPushConstants(commandBuffer, unlit->vk_layout,
                     VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(uint32_t), &base_vertex);
 
                 vkCmdDrawIndexed(commandBuffer,
@@ -1563,14 +1567,15 @@ private:
             }
         }
         {
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline2);
+            const rhi::Shader::Hot* particle = rm_.GetHot(particle_render_shader_);
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, particle->vk_pipeline);
 
             uint32_t ssboOffset = 0;
             VkBuffer ssboBuf = rm_.GetVkBuffer(ssbo_[currentFrame], &ssboOffset);
             std::array<VkBuffer,1> vertexBuffers = {ssboBuf};
             VkDeviceSize offsets[] = { ssboOffset };
             vkCmdBindVertexBuffers(commandBuffer, 0, vertexBuffers.size(), vertexBuffers.data(), offsets);
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout2, 0, 1, &descriptorSets2[currentFrame], 0, nullptr);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, particle->vk_layout, 0, 1, &descriptorSets2[currentFrame], 0, nullptr);
 
             vkCmdDraw(commandBuffer, PARTICLE_COUNT, 1, 0, 0);
         }
@@ -1589,8 +1594,9 @@ private:
         if ( vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS ) {
             return false;
         }
-        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline);
-        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout, 0, 1, &computeDescriptorSets[currentFrame], 0, 0);
+        const rhi::Kernel::Hot* particle_compute = rm_.GetHot(particle_kernel_);
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, particle_compute->vk_pipeline);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, particle_compute->vk_layout, 0, 1, &computeDescriptorSets[currentFrame], 0, 0);
         vkCmdDispatch(commandBuffer, PARTICLE_COUNT / 256, 1, 1);
 
         if ( vkEndCommandBuffer(commandBuffer) != VK_SUCCESS ) {
@@ -1897,6 +1903,9 @@ private:
             }
             vkDestroyShaderModule(device, fragShaderModule, nullptr);
             vkDestroyShaderModule(device, vertShaderModule, nullptr);
+            unlit_shader_ = rm_.CreateShader({.debug_name = "unlit",
+                                              .vk_pipeline = graphicsPipeline,
+                                              .vk_layout = pipelineLayout});
         }
         { // create graphics pipeline 2
             std::vector<char> vertShaderCode;
@@ -2058,6 +2067,9 @@ private:
             }
             vkDestroyShaderModule(device, fragShaderModule, nullptr);
             vkDestroyShaderModule(device, vertShaderModule, nullptr);
+            particle_render_shader_ = rm_.CreateShader({.debug_name = "particle_render",
+                                                        .vk_pipeline = graphicsPipeline2,
+                                                        .vk_layout = pipelineLayout2});
         }
         { // create graphics pipeline 3
             std::vector<char> vertShaderCode;
@@ -2222,6 +2234,9 @@ private:
             }
 
             vkDestroyShaderModule(device, computeShaderModule, nullptr);
+            particle_kernel_ = rm_.CreateKernel({.debug_name = "particle_compute",
+                                                 .vk_pipeline = computePipeline,
+                                                 .vk_layout = computePipelineLayout});
         }
         return true;
     }
@@ -3048,6 +3063,11 @@ private:
     VkDescriptorSetLayout bindlessLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool bindlessPool_ = VK_NULL_HANDLE;
     VkDescriptorSet bindlessSet_ = VK_NULL_HANDLE;
+
+    rhi::Handle<rhi::Shader> unlit_shader_;
+    rhi::Handle<rhi::Shader> particle_render_shader_;
+    rhi::Handle<rhi::Kernel> particle_kernel_;
+    rhi::Handle<rhi::BindGroup> bindless_bg_;
     VkDescriptorSetLayout dynamicUboLayout_ = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> dynUboSets_;
 
