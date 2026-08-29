@@ -255,6 +255,47 @@ bool SetEntityName(Engine* engine, int scene_index, uint32_t entity,
     return engine ? engine->SetEntityName(scene_index, entity, name) : false;
 }
 
+bool HasComponent(Engine* engine, int scene_index, uint32_t entity,
+                  ComponentType type) {
+    return engine ? engine->HasComponent(scene_index, entity, type) : false;
+}
+bool RemoveComponent(Engine* engine, int scene_index, uint32_t entity,
+                     ComponentType type) {
+    return engine ? engine->RemoveComponent(scene_index, entity, type) : false;
+}
+bool GetEntityName(Engine* engine, int scene_index, uint32_t entity,
+                   std::string& out) {
+    return engine ? engine->GetEntityName(scene_index, entity, out) : false;
+}
+bool SetEntityCamera(Engine* engine, int scene_index, uint32_t entity,
+                     float fov_y_rad, float near_z, float far_z, bool is_main) {
+    return engine ? engine->SetEntityCamera(scene_index, entity, fov_y_rad,
+                                            near_z, far_z, is_main)
+                  : false;
+}
+bool GetEntityCamera(Engine* engine, int scene_index, uint32_t entity,
+                     float& fov_y_rad, float& near_z, float& far_z,
+                     bool& is_main) {
+    return engine ? engine->GetEntityCamera(scene_index, entity, fov_y_rad,
+                                            near_z, far_z, is_main)
+                  : false;
+}
+bool AddParticleEmitter(Engine* engine, int scene_index, uint32_t entity) {
+    return engine ? engine->AddParticleEmitter(scene_index, entity) : false;
+}
+bool SetEntityRenderable(Engine* engine, int scene_index, uint32_t entity,
+                         uint32_t layer_mask, uint32_t flags) {
+    return engine ? engine->SetEntityRenderable(scene_index, entity, layer_mask,
+                                                flags)
+                  : false;
+}
+bool GetEntityRenderable(Engine* engine, int scene_index, uint32_t entity,
+                         uint32_t& layer_mask, uint32_t& flags) {
+    return engine ? engine->GetEntityRenderable(scene_index, entity, layer_mask,
+                                                flags)
+                  : false;
+}
+
 uint32_t ClearActiveScene(Engine* engine) {
     return engine ? engine->ClearActiveScene() : 0;
 }

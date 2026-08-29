@@ -578,3 +578,75 @@ SCENARIO("C6 pick: centre-click resolves to the spawned champion (end-to-end)",
     REQUIRE(id != 0u);         // hit the champion, not empty background (id 0)
     REQUIRE(id == ent + 1u);   // pick ids are 1-based (entity+1; 0 = background)
 }
+
+// #229 C4.2/C4.3: the generic component-type table + its studio.js lowering.
+// Covers the op path (add/get/remove + unknown-type reject + componentTypes)
+// and the Unity GameObject.AddComponent/GetComponent path (script.eval).
+SCENARIO("C4.2 generic component ops: table round-trip + studio.js lowering",
+         "[spec][scenarios][component]") {
+    if (!seam::AssetsPresent({"aatrox.glb"})) {
+        SKIP("assets absent");
+    }
+    seam::EnsureImguiContext();
+    cairns::rhi::InitConfig icfg{};
+    icfg.surfaceless = true;
+    icfg.width = 256;
+    icfg.height = 256;
+    cairns::EngineConfig ecfg{};
+    ecfg.use_fixed_clock = true;
+    cairns::Engine e;
+    REQUIRE(e.GreaterInit(icfg, ecfg));
+    cairns::control::CommandRegistry& reg = cairns::golden::SetupJs(e);
+    auto disp = [&](const char* op, const cairns::json& args) -> cairns::json {
+        return reg.Dispatch({{"op", op}, {"args", args}});
+    };
+    disp("cairns.scene.spawnFitted",
+         {{"glbs", {"aatrox.glb"}}, {"instances", 1}});
+    const cairns::json l =
+        disp("cairns.scene.listEntities", cairns::json::object());
+    const uint32_t ent = l["result"]["entities"][0].get<uint32_t>();
+
+    // The table advertises itself.
+    const cairns::json ct =
+        disp("cairns.entity.componentTypes", cairns::json::object());
+    REQUIRE(ct["result"]["types"].size() >= 4u);
+
+    // Camera add -> get round-trip (1.25 / 42.0 are exact in float).
+    disp("cairns.entity.addComponent",
+         {{"entity", ent},
+          {"type", "Camera"},
+          {"props", {{"fovYRad", 1.25}, {"farZ", 42.0}, {"isMain", true}}}});
+    const cairns::json gc =
+        disp("cairns.entity.getComponent", {{"entity", ent}, {"type", "Camera"}});
+    REQUIRE(gc["result"]["has"] == true);
+    REQUIRE(gc["result"]["fovYRad"].get<float>() == 1.25f);
+    REQUIRE(gc["result"]["farZ"].get<float>() == 42.0f);
+    REQUIRE(gc["result"]["isMain"] == true);
+
+    // Remove -> gone.
+    disp("cairns.entity.removeComponent", {{"entity", ent}, {"type", "Camera"}});
+    const cairns::json gone =
+        disp("cairns.entity.getComponent", {{"entity", ent}, {"type", "Camera"}});
+    REQUIRE(gone["result"]["has"] == false);
+
+    // Unknown type rejected.
+    const cairns::json bogus =
+        disp("cairns.entity.addComponent", {{"entity", ent}, {"type", "Nope"}});
+    REQUIRE(bogus["result"]["ok"] == false);
+
+    // studio.js path: GameObject.AddComponent/GetComponent lower to the ops.
+    const std::string code =
+        "var e=" + std::to_string(ent) + ";"
+        "var go=new GameObject(e,0);"
+        "go.AddComponent('Renderable',{layerMask:7,flags:1});"
+        "var c=go.GetComponent('Renderable');"
+        "var none=go.GetComponent('Camera');"
+        "JSON.stringify({has:!!c, lm:c._data.layerMask, camNull:none===null});";
+    const cairns::json ev = disp("cairns.script.eval", {{"code", code}});
+    REQUIRE(ev["ok"] == true);
+    const cairns::json out =
+        cairns::json::parse(ev["result"]["result"].get<std::string>());
+    REQUIRE(out["has"] == true);
+    REQUIRE(out["lm"].get<uint32_t>() == 7u);
+    REQUIRE(out["camNull"] == true);
+}

@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "scene/component_type.hpp"  // #229 C4.2 ComponentType
 #include "scene/selection.hpp"
 #include "util/load_trace.hpp"
 
@@ -115,6 +116,24 @@ uint32_t FindEntityByName(Engine* engine, int scene_index,
                           const std::string& name);
 bool SetEntityName(Engine* engine, int scene_index, uint32_t entity,
                    const std::string& name);
+// #229 C4.2 generic component ops. type = ComponentType; add/get are typed
+// (props differ per component), has/remove switch on the type id.
+bool HasComponent(Engine* engine, int scene_index, uint32_t entity,
+                  ComponentType type);
+bool RemoveComponent(Engine* engine, int scene_index, uint32_t entity,
+                     ComponentType type);
+bool GetEntityName(Engine* engine, int scene_index, uint32_t entity,
+                   std::string& out);
+bool SetEntityCamera(Engine* engine, int scene_index, uint32_t entity,
+                     float fov_y_rad, float near_z, float far_z, bool is_main);
+bool GetEntityCamera(Engine* engine, int scene_index, uint32_t entity,
+                     float& fov_y_rad, float& near_z, float& far_z,
+                     bool& is_main);
+bool AddParticleEmitter(Engine* engine, int scene_index, uint32_t entity);
+bool SetEntityRenderable(Engine* engine, int scene_index, uint32_t entity,
+                         uint32_t layer_mask, uint32_t flags);
+bool GetEntityRenderable(Engine* engine, int scene_index, uint32_t entity,
+                         uint32_t& layer_mask, uint32_t& flags);
 uint32_t ClearActiveScene(Engine* engine);
 // #229 M0b: per-Engine synthetic scene id (was the g_scene_counter global).
 uint64_t NextSceneId(Engine* engine);

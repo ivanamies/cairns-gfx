@@ -64,6 +64,7 @@
 #include "util/signpost.hpp"
 #include "scene/asset_registry.hpp"
 #include "scene/components.hpp"
+#include "scene/component_type.hpp"  // #229 C4.2 ComponentType (generic ops)
 #include "scene/world.hpp"
 #include "scene/viewport.hpp"
 #include "scene/selection.hpp"
@@ -698,6 +699,160 @@ public:
             return false;
         }
         reg.emplace_or_replace<cairns::Name>(e, cairns::Name{name});
+        return true;
+    }
+
+    // #229 C4.2 generic component ops. Presence/removal switch on ComponentType
+    // (entt needs the concrete type). Add/Get are per-type (props differ) --
+    // the control-side table binds each to a typed method below.
+    bool HasComponent(int scene_index, uint32_t entity_int,
+                      cairns::ComponentType t) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!wc->registry.valid(e)) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        switch (t) {
+            case cairns::ComponentType::kName:
+                return reg.all_of<cairns::Name>(e);
+            case cairns::ComponentType::kCamera:
+                return reg.all_of<cairns::CameraComponent>(e);
+            case cairns::ComponentType::kParticleEmitter:
+                return reg.all_of<cairns::ParticleEmitterComponent>(e);
+            case cairns::ComponentType::kRenderable:
+                return reg.all_of<cairns::Renderable>(e);
+            case cairns::ComponentType::kTransform:
+                return reg.all_of<cairns::Transform>(e);
+            default:
+                return false;
+        }
+    }
+    bool RemoveComponent(int scene_index, uint32_t entity_int,
+                         cairns::ComponentType t) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!wc->registry.valid(e)) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        switch (t) {
+            case cairns::ComponentType::kName:
+                reg.remove<cairns::Name>(e);
+                break;
+            case cairns::ComponentType::kCamera:
+                reg.remove<cairns::CameraComponent>(e);
+                break;
+            case cairns::ComponentType::kParticleEmitter:
+                reg.remove<cairns::ParticleEmitterComponent>(e);
+                break;
+            case cairns::ComponentType::kRenderable:
+                reg.remove<cairns::Renderable>(e);
+                break;
+            default:
+                return false;  // Transform is not removable (draw needs it)
+        }
+        MarkSceneDirty(scene_index);
+        return true;
+    }
+    bool GetEntityName(int scene_index, uint32_t entity_int, std::string& out) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!reg.valid(e) || !reg.all_of<cairns::Name>(e)) {
+            return false;
+        }
+        out = reg.get<cairns::Name>(e).value;
+        return true;
+    }
+    bool SetEntityCamera(int scene_index, uint32_t entity_int, float fov_y_rad,
+                         float near_z, float far_z, bool is_main) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!reg.valid(e)) {
+            return false;
+        }
+        reg.emplace_or_replace<cairns::CameraComponent>(
+            e, cairns::CameraComponent{fov_y_rad, near_z, far_z, is_main});
+        return true;
+    }
+    bool GetEntityCamera(int scene_index, uint32_t entity_int, float& fov_y_rad,
+                         float& near_z, float& far_z, bool& is_main) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!reg.valid(e) || !reg.all_of<cairns::CameraComponent>(e)) {
+            return false;
+        }
+        const cairns::CameraComponent& c = reg.get<cairns::CameraComponent>(e);
+        fov_y_rad = c.fov_y_rad;
+        near_z = c.near_z;
+        far_z = c.far_z;
+        is_main = c.is_main;
+        return true;
+    }
+    bool AddParticleEmitter(int scene_index, uint32_t entity_int) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!reg.valid(e)) {
+            return false;
+        }
+        if (!reg.all_of<cairns::ParticleEmitterComponent>(e)) {
+            reg.emplace<cairns::ParticleEmitterComponent>(e);
+        }
+        MarkSceneDirty(scene_index);
+        return true;
+    }
+    bool SetEntityRenderable(int scene_index, uint32_t entity_int,
+                             uint32_t layer_mask, uint32_t flags) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!reg.valid(e)) {
+            return false;
+        }
+        reg.emplace_or_replace<cairns::Renderable>(
+            e, cairns::Renderable{layer_mask, flags});
+        MarkSceneDirty(scene_index);
+        return true;
+    }
+    bool GetEntityRenderable(int scene_index, uint32_t entity_int,
+                             uint32_t& layer_mask, uint32_t& flags) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!reg.valid(e) || !reg.all_of<cairns::Renderable>(e)) {
+            return false;
+        }
+        const cairns::Renderable& r = reg.get<cairns::Renderable>(e);
+        layer_mask = r.layer_mask;
+        flags = r.flags;
         return true;
     }
 

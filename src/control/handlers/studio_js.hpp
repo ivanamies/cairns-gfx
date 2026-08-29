@@ -173,7 +173,14 @@ class GameObject {
         return new GameObject(r.result.entity, scene_id);
     }
 
-    AddComponent(typeName) {
+    // #229 C4.2/C4.3: lower onto the generic component ops (was a JS-only Map).
+    // props optional (type-specific; see cairns.entity.componentTypes). Returns
+    // a Component handle caching the engine-side data.
+    AddComponent(typeName, props) {
+        cairns.dispatch("cairns.entity.addComponent", {
+            scene: this._scene, entity: this._entity,
+            type: typeName, props: props || {},
+        });
         let c = this._components.get(typeName);
         if (!c) {
             c = new Component(this, typeName);
@@ -181,8 +188,27 @@ class GameObject {
         }
         return c;
     }
-    GetComponent(typeName) { return this._components.get(typeName) || null; }
-    RemoveComponent(typeName) { this._components.delete(typeName); }
+    GetComponent(typeName) {
+        const r = cairns.dispatch("cairns.entity.getComponent", {
+            scene: this._scene, entity: this._entity, type: typeName,
+        });
+        if (!r.ok || !r.result || !r.result.has) {
+            return null;
+        }
+        let c = this._components.get(typeName);
+        if (!c) {
+            c = new Component(this, typeName);
+            this._components.set(typeName, c);
+        }
+        c._data = r.result;
+        return c;
+    }
+    RemoveComponent(typeName) {
+        cairns.dispatch("cairns.entity.removeComponent", {
+            scene: this._scene, entity: this._entity, type: typeName,
+        });
+        this._components.delete(typeName);
+    }
 
     SetActive(active) { this._active = !!active; }
     get activeSelf()  { return this._active; }
