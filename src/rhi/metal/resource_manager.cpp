@@ -31,6 +31,7 @@ struct ResourceManager::Impl {
     BackendInitParams params;
     metal::MemoryAllocator memory;
     MtlFrameResources frame_res;
+    std::filesystem::path dump_path;
 
     Pool<Buffer> buffers;
     Pool<Texture> textures;
@@ -808,6 +809,10 @@ void ResourceManager::MtlRegisterFrame(const MtlFrameResources& res) {
     impl_->frame_res = res;
 }
 
+void ResourceManager::SetDumpPath(const std::filesystem::path& path) {
+    impl_->dump_path = path;
+}
+
 struct CommandRecorder::Impl {
     ResourceManager* rm = nullptr;
     MtlFrameResources fr;
@@ -931,7 +936,7 @@ void ResourceManager::EndFrame(FrameContext& fc) {
     MtlFrameResources& fr = impl_->frame_res;
     MTL::CommandBuffer* cmd = ri->cmd;
 
-    if (!fr.dump_path->empty()) {
+    if (!impl_->dump_path.empty()) {
         MTL::Texture* drawableTex = fr.sc->GetDrawable()->texture();
         const NS::UInteger w = drawableTex->width();
         const NS::UInteger h = drawableTex->height();
@@ -953,10 +958,10 @@ void ResourceManager::EndFrame(FrameContext& fc) {
             rgba[i * 4 + 2] = bgra[i * 4 + 0];
             rgba[i * 4 + 3] = bgra[i * 4 + 3];
         }
-        stbi_write_png(fr.dump_path->string().c_str(), static_cast<int>(w),
+        stbi_write_png(impl_->dump_path.string().c_str(), static_cast<int>(w),
                        static_cast<int>(h), 4, rgba.data(), static_cast<int>(bytesPerRow));
         readback->release();
-        fr.dump_path->clear();
+        impl_->dump_path.clear();
     } else {
         cmd->presentDrawable(fr.sc->GetDrawable());
         cmd->commit();

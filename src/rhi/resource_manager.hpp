@@ -543,11 +543,6 @@ struct BackendInitParams {
     VkCommandPool command_pool = VK_NULL_HANDLE;
     bool enable_bda = false;
 };
-// App-owned per-frame Vulkan resources, registered once so BeginFrame/EndFrame +
-// CommandRecorder can drive them. Pointers are to MAX_FRAMES_IN_FLIGHT arrays.
-struct VkFrameResources {
-    std::filesystem::path* dump_path = nullptr;
-};
 #elif CAIRNS_METAL
 struct BackendInitParams {
     MTL::Device* device = nullptr;
@@ -563,7 +558,6 @@ struct MtlFrameResources {
     MTL::Buffer* mesh_master = nullptr;
     MTL::Device* device = nullptr;
     SwapChain* sc = nullptr;
-    std::filesystem::path* dump_path = nullptr;
     const Handle<Texture>* msaa = nullptr;
     const Handle<Texture>* depth = nullptr;
 };
@@ -589,6 +583,9 @@ public:
     // the memory allocator. Replaces app-side device creation + Init.
     bool InitDevice(SDL_Window* window);
     void Deinit();
+    // Request a one-shot swapchain dump on the next EndFrame (neutral; both
+    // backends honor it). Cleared after the dump is written.
+    void SetDumpPath(const std::filesystem::path& path);
 
     Handle<Buffer> CreateBuffer(const BufferDesc& desc);
     Handle<Texture> CreateTexture(const TextureDesc& desc);
@@ -651,8 +648,6 @@ public:
     // The VkDescriptorSetLayout backing a bindless registry, for pipeline layout
     // creation. Valid after CreateBindlessRegistry.
     VkDescriptorSetLayout GetBindlessLayout(Handle<BindGroup> reg);
-    // Register app-owned per-frame resources for BeginFrame/EndFrame to drive.
-    void VkRegisterFrame(const VkFrameResources& res);
     // Transitional accessors for the device objects InitDevice now owns, so the
     // app's still-raw init can borrow them until that init also moves rhi-side.
     VkInstance GetVkInstance() const;

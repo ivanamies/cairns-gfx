@@ -34,7 +34,7 @@ namespace cairns::rhi {
 struct ResourceManager::Impl {
     BackendInitParams params;
     vulkan::MemoryAllocator memory;
-    VkFrameResources frame_res;
+    std::filesystem::path dump_path;
     uint32_t recorder_frame = 0;
 
     // Device objects owned by InitDevice.
@@ -1859,8 +1859,8 @@ uint8_t* ResourceManager::MappedPtr(Handle<Buffer> h) {
     return base + hot->offset_in_heap;
 }
 
-void ResourceManager::VkRegisterFrame(const VkFrameResources& res) {
-    impl_->frame_res = res;
+void ResourceManager::SetDumpPath(const std::filesystem::path& path) {
+    impl_->dump_path = path;
 }
 
 struct CommandRecorder::Impl {
@@ -2050,7 +2050,6 @@ FrameContext ResourceManager::BeginFrame(SwapChain& sc) {
 
 void ResourceManager::EndFrame(FrameContext& fc) {
     CommandRecorder::Impl* ri = fc.cmd.impl_;
-    VkFrameResources& fr = impl_->frame_res;
     const uint32_t cf = fc.frame_index;
 
     vkEndCommandBuffer(ri->comp);
@@ -2088,7 +2087,7 @@ void ResourceManager::EndFrame(FrameContext& fc) {
     pi.pImageIndices = &fc.swapchain_image_index;
     vkQueuePresentKHR(impl_->present_queue, &pi);
 
-    if (fr.dump_path && !fr.dump_path->empty()) {
+    if (!impl_->dump_path.empty()) {
         vkQueueWaitIdle(impl_->present_queue);
         dump_swapchain_image(impl_->params.device, impl_->params.physical,
                              impl_->params.command_pool, impl_->params.queue,
@@ -2096,8 +2095,8 @@ void ResourceManager::EndFrame(FrameContext& fc) {
                              ri->sc->swapChainImageFormat,
                              ri->sc->swapChainExtent.width,
                              ri->sc->swapChainExtent.height,
-                             fr.dump_path->string().c_str());
-        fr.dump_path->clear();
+                             impl_->dump_path.string().c_str());
+        impl_->dump_path.clear();
     }
 
     impl_->recorder_frame = (cf + 1) % impl_->frames_in_flight;

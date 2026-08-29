@@ -90,7 +90,7 @@ public:
     }
 
     bool RequestViewportDump(const std::filesystem::path& path) {
-        dumpPath_ = path;
+        rm_.SetDumpPath(path);
         return true;
     }
     
@@ -241,7 +241,6 @@ public:
             fr.mesh_master = mesh_master_buf_;
             fr.device = device_;
             fr.sc = swapChain_.get();
-            fr.dump_path = &dumpPath_;
             fr.msaa = &msaaHandle_;
             fr.depth = &depthHandle_;
             rm_.MtlRegisterFrame(fr);
@@ -482,8 +481,8 @@ public:
     
     bool draw() {
         frame_++;
-        if (frame_ == 5 && dumpPath_.empty()) {
-            dumpPath_ = "/tmp/cairns_dump.png";
+        if (frame_ == 5) {
+            rm_.SetDumpPath("/tmp/cairns_dump.png");
         }
 
         rhi::FrameContext fc = rm_.BeginFrame(*swapChain_);
@@ -766,7 +765,6 @@ private:
         uint32_t height = std::numeric_limits<uint32_t>::max();
     };
     std::optional<ResizeFrameBufferRequest> resizeFrameBufferRequest_ = std::nullopt;
-    std::filesystem::path dumpPath_;
 
     std::unique_ptr<cairns::rhi::SwapChain> swapChain_ = nullptr;
     // command queue

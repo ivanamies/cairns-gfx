@@ -470,11 +470,6 @@ private:
         if (!createComputePipeline()) return false;
         if (!createGraphicsPipeline()) return false;
         if (!createShaderStorageBuffers()) return false;
-        {
-            rhi::VkFrameResources fr{};
-            fr.dump_path = &dumpPath_;
-            rm_.VkRegisterFrame(fr);
-        }
         return true;
     }
 
@@ -1890,8 +1885,8 @@ private:
 
     bool drawFrame() {
         frame_++;
-        if (frame_ == 5 && dumpPath_.empty()) {
-            dumpPath_ = "/tmp/cairns_dump.png";
+        if (frame_ == 5) {
+            rm_.SetDumpPath("/tmp/cairns_dump.png");
         }
 
         rhi::FrameContext fc = rm_.BeginFrame(sc_);
@@ -2215,7 +2210,6 @@ private:
     uint32_t particle_parity_ = 0;
     uint64_t last_ticks_ = 0;
     int frame_ = 0;
-    std::filesystem::path dumpPath_;
 
     VkDescriptorPool descriptorPool;
     std::vector<VkDescriptorSet> descriptorSets;
