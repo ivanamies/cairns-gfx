@@ -343,8 +343,14 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
     resources.AdvanceFrame(alloc);  // bump ring reset
 
     uint32_t image_index = 0;
-    vkAcquireNextImageKHR(dev, sc.swapChain, UINT64_MAX, image_available_[cf],
-                          VK_NULL_HANDLE, &image_index);
+    VkResult acquire = vkAcquireNextImageKHR(dev, sc.swapChain, UINT64_MAX,
+                                             image_available_[cf], VK_NULL_HANDLE,
+                                             &image_index);
+    if (acquire == VK_ERROR_OUT_OF_DATE_KHR) {
+        sc.RecreateSwapChain();
+        vkAcquireNextImageKHR(dev, sc.swapChain, UINT64_MAX, image_available_[cf],
+                              VK_NULL_HANDLE, &image_index);
+    }
     vkResetFences(dev, 1, &in_flight_[cf]);
     vkResetCommandBuffer(graphics_cmds_[cf], 0);
 
@@ -404,7 +410,7 @@ void Frames::End(SwapChain& sc, FrameContext& fc) {
     pi.swapchainCount = 1;
     pi.pSwapchains = swapchains;
     pi.pImageIndices = &fc.swapchain_image_index;
-    vkQueuePresentKHR(present_queue_, &pi);
+    const VkResult present = vkQueuePresentKHR(present_queue_, &pi);
 
     if (!dump_path_.empty()) {
         vkQueueWaitIdle(present_queue_);
@@ -416,6 +422,10 @@ void Frames::End(SwapChain& sc, FrameContext& fc) {
                              sc.swapChainExtent.height,
                              dump_path_.string().c_str());
         dump_path_.clear();
+    }
+
+    if (present == VK_ERROR_OUT_OF_DATE_KHR || present == VK_SUBOPTIMAL_KHR) {
+        sc.RecreateSwapChain();
     }
 
     recorder_frame_ = (cf + 1) % frames_in_flight_;
