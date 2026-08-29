@@ -5,6 +5,40 @@ Newest first.
 
 ---
 
+## `f2625d1` (2026-06-03) — gpu_frame row, per-pass GPU timing landed
+
+Workload: `100 GLBs × 33 slices = 3300 entities`, 11517 draws. Release.
+
+**Metal macOS (M2 Max), 2556×1179:**
+```
+draws 11517 | 100 GLBs x 33 slices = 3300 entities | resolution 2556 x 1179
+slot 0 (frame):                       accum 3759220 us, avg 31326 us over 120 frames
+slot 1 (build_draws):                 accum  943232 us, avg  7860 us over 120 frames
+slot 2 (record):                      accum  363615 us, avg  3030 us over 120 frames
+slot 3 (set up render pass globals):  accum       3 us, avg     0 us over 120 frames
+slot 4 (build opaque draw list):      accum  942902 us, avg  7857 us over 120 frames
+slot 5 (particle_sim):                accum     285 us, avg     2 us over 120 frames
+slot 6 (forward):                     accum 4265284 us, avg 35544 us over 120 frames
+```
+
+**iPhone 15 Pro (screenshot):**
+```
+CPU 25.65 ms | 39 FPS    avg 34.62 ms | peak 53.72 ms
+gpu_frame              35.56 ms
+frame                  30.81 ms
+build_draws             8.03 ms
+record                  3.06 ms
+set up render pass globals  0 ms
+build opaque draw list  8.03 ms
+particle_sim            0.00 ms
+forward                35.56 ms
+```
+
+**Samsung S22 (SM-S901U) Android Vulkan:** ~2-3× slower than iPhone 15 Pro,
+matches subjective experience.
+
+---
+
 ## `b6c7785` (2026-05-31) — fragment / rasterization proof
 
 iPhone 15 Release. Two runs, same workload (`100 GLBs × 33 slices = 3300
