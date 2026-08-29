@@ -1929,6 +1929,77 @@ public:
     uint32_t PendingPickX() const { return pick_x_; }
     uint32_t PendingPickY() const { return pick_y_; }
 
+    // CPU ray-cast pick: unproject the click to a world ray, intersect every
+    // entity's world AABB (the mesh bind-pose AABB transformed by WorldTransform),
+    // nearest hit wins. Returns entt id + 1 (0 = clicked empty space, matching the
+    // old id-buffer convention). SYNCHRONOUS + identical on metal/vulkan/webgpu --
+    // no GPU id-buffer readback (the browser cannot read back synchronously, which
+    // is the asymmetry this replaces). The GPU id buffer stays only for the outline
+    // edge-detect, which is GPU-side and already symmetric.
+    //
+    // TODO(picking-accel): O(entities) linear scan + first-mesh bind AABB only.
+    // Add a BVH/grid (sub-linear) and union all meshes / use the live animated
+    // AABB before the 3300-GLB rung. See TODO.md #picking-accel.
+    uint32_t ResolvePickRaycast(int vp, uint32_t px, uint32_t py,
+                                const glm::mat4& inv_view_proj) {
+        cairns::Scene::Cold* wc = scenes_.GetCold(active_scene_);
+        if (!wc) { return 0u; }
+        const float fw = static_cast<float>(FrameWidth());
+        const float fh = static_cast<float>(FrameHeight());
+        if (fw <= 0.0f || fh <= 0.0f) { return 0u; }
+        (void)vp;
+        const float ndc_x = (static_cast<float>(px) / fw) * 2.0f - 1.0f;
+        const float ndc_y = 1.0f - (static_cast<float>(py) / fh) * 2.0f;
+        // WebGPU/Metal clip space is z in [0,1]: near plane z=0, far z=1.
+        const glm::vec4 nc = inv_view_proj * glm::vec4(ndc_x, ndc_y, 0.0f, 1.0f);
+        const glm::vec4 fc = inv_view_proj * glm::vec4(ndc_x, ndc_y, 1.0f, 1.0f);
+        const glm::vec3 ro = glm::vec3(nc) / nc.w;
+        const glm::vec3 rf = glm::vec3(fc) / fc.w;
+        const glm::vec3 rd = glm::normalize(rf - ro);
+        const glm::vec3 inv_d = 1.0f / rd;  // 0-component -> inf, slab test handles it
+        float best_t = 1.0e30f;
+        uint32_t best_id1 = 0u;
+        auto pick_view = wc->registry.view<const cairns::WorldTransform,
+                                           const cairns::AssetRef>();
+        for (entt::entity e : pick_view) {
+            const cairns::AssetRef& ref = pick_view.get<const cairns::AssetRef>(e);
+            cairns::Asset::Cold* ac = assets_.Pool().GetCold(ref.asset);
+            if (!ac) { continue; }
+            cairns::Prefab::Hot* sh = prefabs_.GetHot(ac->cpu_graph);
+            if (!sh || sh->meshes.empty()) { continue; }
+            cairns::Mesh::Hot* mh = meshes_.GetHot(sh->meshes[0]);
+            if (!mh || mh->bind_aabb_min.x > mh->bind_aabb_max.x) { continue; }
+            const glm::mat4& world =
+                pick_view.get<const cairns::WorldTransform>(e).world;
+            glm::vec3 wmin(1.0e30f);
+            glm::vec3 wmax(-1.0e30f);
+            for (int i = 0; i < 8; ++i) {
+                const glm::vec3 corner(
+                    (i & 1) ? mh->bind_aabb_max.x : mh->bind_aabb_min.x,
+                    (i & 2) ? mh->bind_aabb_max.y : mh->bind_aabb_min.y,
+                    (i & 4) ? mh->bind_aabb_max.z : mh->bind_aabb_min.z);
+                const glm::vec4 wc4 = world * glm::vec4(corner, 1.0f);
+                const glm::vec3 wcv = glm::vec3(wc4) / wc4.w;
+                wmin = glm::min(wmin, wcv);
+                wmax = glm::max(wmax, wcv);
+            }
+            const glm::vec3 t0 = (wmin - ro) * inv_d;
+            const glm::vec3 t1 = (wmax - ro) * inv_d;
+            const glm::vec3 tmn = glm::min(t0, t1);
+            const glm::vec3 tmx = glm::max(t0, t1);
+            const float tnear = glm::max(glm::max(tmn.x, tmn.y), tmn.z);
+            const float tfar = glm::min(glm::min(tmx.x, tmx.y), tmx.z);
+            if (tnear <= tfar && tfar >= 0.0f) {
+                const float t = tnear >= 0.0f ? tnear : tfar;
+                if (t < best_t) {
+                    best_t = t;
+                    best_id1 = entt::to_integral(e) + 1u;
+                }
+            }
+        }
+        return best_id1;
+    }
+
     // Last resolved pick. Updated by ResolvePendingPick once per frame when
     // pick_pending_ was true at the top of the frame. PickResolved() flips
     // true on the frame the readback completes; ConsumePickResult()
@@ -3612,12 +3683,14 @@ public:
         // pass writes entt::to_integral(entity)+1 there; value 0 = clear
         // background (clicked empty space). Drop the result into highlights_
         // so the outline pass activates on the next frame.
-        if (pick_pending_ && pick_viewport_ < kNumViewports &&
-            !id_target_[pick_viewport_].IsNull()) {
-            uint32_t entity_plus_one = 0;
-            const bool ok = rhi_.resources.ReadBackTextureR32UTexel(
-                id_target_[pick_viewport_], pick_x_, pick_y_,
-                entity_plus_one);
+        if (pick_pending_ && pick_viewport_ < kNumViewports) {
+            // CPU ray-cast pick -- synchronous + identical on metal/vulkan/webgpu,
+            // no GPU id-buffer readback (the browser can't read back synchronously).
+            // The id buffer stays only for the outline edge-detect (GPU-side).
+            const uint32_t entity_plus_one = ResolvePickRaycast(
+                pick_viewport_, pick_x_, pick_y_,
+                s.pending_globals[pick_viewport_].inv_view_proj);
+            const bool ok = true;
             // #267: resolve hero name + world AABB from the clicked id so
             // the [PICK] line answers "which hero + where" in one printf.
             const char* hero_name = "<none>";

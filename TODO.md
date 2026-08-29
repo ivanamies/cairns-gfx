@@ -7,6 +7,25 @@ here.
 
 ---
 
+## #picking-accel — CPU ray-cast pick is a linear scan (2026-06-22)
+
+Picking was moved from the GPU id-buffer readback to a CPU ray-cast
+(`Engine::ResolvePickRaycast`) so it is SYNCHRONOUS + identical on metal/vulkan/
+webgpu -- the browser cannot read the GPU id buffer back synchronously, which was
+the only API asymmetry. The GPU id buffer stays only for the outline edge-detect
+(GPU-side, already symmetric).
+
+Current shortcuts, fine at hundreds of actors, fix before the 3300-GLB rung:
+- **O(entities) linear scan** every pick. Add a BVH or uniform grid so it's
+  sub-linear. (Deliberately NOT done yet.)
+- **First-mesh bind-pose AABB only.** Union all of a prefab's meshes, and use the
+  live animated AABB for skinned actors (the bind pose can be loose/tight vs the
+  current pose). Today an animated actor's pick box is the bind-pose box.
+- Ray-AABB only (no triangle test) -- a click just inside the box but off the
+  silhouette still selects. Acceptable for now.
+
+---
+
 ## #resize-surface-bugs — window/surface resize is broken across backends (2026-06-22)
 
 One bug class, three surfaces. The engine renders correctly (golden gate is green
