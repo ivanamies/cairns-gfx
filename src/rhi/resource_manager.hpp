@@ -425,7 +425,14 @@ struct BindlessRegistryDesc {
 // BackendInitParams lives in the per-backend resource_manager_plat header.
 
 // rhi-wide config constants (formerly ResourceManager statics).
-inline constexpr uint32_t kFramesInFlight = 2;
+// #222 Phase T.2: triple-buffer for 30 FPS camera-app pacing. Memory
+// scaling: each kDynamic/kUpload/kReadback ring slot is allocated per
+// frame-in-flight (bump_.slot_size[m] * kFramesInFlight in vulkan/metal
+// memory_allocator). At slot sizes 32/64/8 MB, FIF=3 adds +52 MB host-
+// visible vs FIF=2. PerSlot + descriptor sets + sync vectors scale
+// linearly; cpu_arena.hpp's FrameArena ring kMaxFrames=4 still covers
+// us. See PERFORMANCE.md triple-buffer ledger for the bill.
+inline constexpr uint32_t kFramesInFlight = 3;
 inline constexpr uint32_t kHeapBlockBytes = 128u * 1024u * 1024u;
 inline constexpr uint32_t kLargeThreshold = 64u * 1024u * 1024u;
 

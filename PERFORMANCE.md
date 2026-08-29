@@ -5,6 +5,44 @@ Newest first.
 
 ---
 
+## `<222 phase T>` (2026-06-11) — triple buffering: kFramesInFlight 2 -> 3
+
+**Driver:** product requirement (30 FPS phone-camera applications).
+Steady-state pacing wants three frames in flight so the CPU pipeline
+build + render-thread submit + GPU execute can overlap at the 33 ms
+budget. Pacing only -- no per-pass perf delta expected today.
+
+**Memory bill (FIF 2 -> 3, both backends):**
+
+| ring / arena | per-slot | FIF=2 total | FIF=3 total | delta |
+|---|---|---|---|---|
+| `kDynamic` (host-visible bump)   | 32 MB | 64 MB  | 96 MB  | +32 MB |
+| `kUpload`  (host-visible bump)   | 64 MB | 128 MB | 192 MB | +64 MB |
+| `kReadback`                      | 8 MB  | 16 MB  | 24 MB  | +8 MB  |
+| **bump heap subtotal**           |       | 208 MB | 312 MB | **+104 MB** |
+| CPU `kArenaBytesPerSlot`         | 16 MB | 32 MB  | 48 MB  | +16 MB |
+| Sync vectors / FrameArena ring   | -     | dynamic via `frames_in_flight_` | scales with constant | n/a |
+| Descriptor pool `maxSets`        | -     | `3*n + n*kStepsPerFrame + n*kCompositeRingSize + n + kMaxSkinnedMeshes + n` scales linearly with `n` | same formula | n/a |
+
+`cpu_arena.hpp` already caps the FrameArena ring at `kMaxFrames = 4` --
+3 fits without bump.
+
+**Latency ledger.** Adding a third frame trades up to one frame of
+photon-to-photon latency for pipeline overlap. At 33 ms vsync that's a
+worst-case +33 ms. Acceptable for capture preview, not free. Two
+mitigations to keep in mind, NOT implemented now:
+(a) `Frames::Begin` already late-latches the acquire/fence;
+    BuildSkinFrame + camera-pose sampling stay as late as possible on
+    the game thread.
+(b) If preview-latency complaints arrive, the knob is dropping back to
+    2-deep on the preview path, not reworking the engine.
+
+**Acceptance.** `scripts/verify_headless.sh` byte-identical pre/post the
+flip (no rendering change). S22 pacing verification deferred until the
+S22 build session.
+
+---
+
 ## `<skinning P3>` (2026-06-09) — #221 Skinning Phase 3: ring growth + persistent skin output pool
 
 Memory budget note (no perf rows yet -- skinned content not loaded yet):
