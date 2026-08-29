@@ -46,6 +46,7 @@
 #include "util/timer.hpp"
 #include "util/frame_clock.hpp"
 #include "util/log.hpp"
+#include "util/print_allocator.hpp"
 #include "util/signpost.hpp"
 #include "scene/asset_registry.hpp"
 #include "scene/components.hpp"
@@ -4943,7 +4944,19 @@ private:
     // skinned mesh in the batch reads the same handle) -- only across
     // batches do they differ. Per-mesh resolution:
     //   ResolvedSharedSkin(mhot) == per_batch_shared_skin_[mhot.batch_id]
-    std::vector<rhi::Handle<rhi::Buffer>> per_batch_shared_skin_;
+    // E (allocator-survey demo): per_batch_shared_skin_ wears the
+    // print_allocator so CAIRNS_ALLOC_TRACE=1 builds emit a tagged
+    // [ALLOC] line on every grow. Lifecycle: per-batch (push on every
+    // LoadPrefabBatch with a skinned mesh; cleared on UnloadAllPrefabs).
+    struct kTagPerBatchSharedSkin {
+        static constexpr const char* name() {
+            return "Engine::per_batch_shared_skin_";
+        }
+    };
+    std::vector<rhi::Handle<rhi::Buffer>,
+                cairns::print_allocator<rhi::Handle<rhi::Buffer>,
+                                          kTagPerBatchSharedSkin>>
+        per_batch_shared_skin_;
     // #224 L3: the instrument. Populated each LoadPrefabBatch call.
     // #224 L8: editor-chrome toggle (selection outline pass gate).
     // Default on; remixer/canvas flips to false to suppress meta-UI
