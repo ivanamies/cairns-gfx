@@ -72,6 +72,15 @@ void Pipelines::Deinit(Resources& resources) {
             vkDestroyPipelineLayout(dev, hot.vk_layout, nullptr);
             hot.vk_layout = VK_NULL_HANDLE;
         }
+        if (hot.vk_imgui_pool) {
+            vkDestroyDescriptorPool(dev, hot.vk_imgui_pool, nullptr);
+            hot.vk_imgui_pool = VK_NULL_HANDLE;
+            hot.vk_imgui_set = VK_NULL_HANDLE;
+        }
+        if (hot.vk_imgui_set_layout) {
+            vkDestroyDescriptorSetLayout(dev, hot.vk_imgui_set_layout, nullptr);
+            hot.vk_imgui_set_layout = VK_NULL_HANDLE;
+        }
     });
     resources.kernels.ForEachLive([dev](Kernel::Hot& hot, Kernel::Cold&) {
         if (hot.vk_pipeline) {
@@ -305,11 +314,25 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     pc_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pc_range.offset = 0;
     pc_range.size = desc.push_constant_bytes;
+    const std::string ls = desc.logical_shader ? desc.logical_shader : "";
     std::vector<VkDescriptorSetLayout> set_layouts;
-    if (desc.logical_shader && std::string(desc.logical_shader) == "unlit") {
+    VkDescriptorSetLayout imgui_set_layout = VK_NULL_HANDLE;
+    if (ls == "unlit") {
         set_layouts = {frames.globals_set_layout_,      // set 0: globals (once/frame)
                        resources.MaterialSetLayout(),   // set 1: per-material
                        frames.drawtmp_set_layout_};     // set 2: drawtmp (per draw)
+    } else if (ls == "imgui") {
+        VkDescriptorSetLayoutBinding b{};
+        b.binding = 0;
+        b.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b.descriptorCount = 1;
+        b.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutCreateInfo dl{};
+        dl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dl.bindingCount = 1;
+        dl.pBindings = &b;
+        vkCreateDescriptorSetLayout(device, &dl, nullptr, &imgui_set_layout);
+        set_layouts = {imgui_set_layout};
     } else {
         set_layouts = {frames.point_layout_};
     }
@@ -359,6 +382,24 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     Shader::Hot* hot = resources.shaders.GetHot(h);
     hot->vk_pipeline = pipeline;
     hot->vk_layout = layout;
+    if (imgui_set_layout) {
+        hot->vk_imgui_set_layout = imgui_set_layout;
+        VkDescriptorPoolSize ps{};
+        ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        ps.descriptorCount = 1;
+        VkDescriptorPoolCreateInfo pci{};
+        pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pci.maxSets = 1;
+        pci.poolSizeCount = 1;
+        pci.pPoolSizes = &ps;
+        vkCreateDescriptorPool(device, &pci, nullptr, &hot->vk_imgui_pool);
+        VkDescriptorSetAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai.descriptorPool = hot->vk_imgui_pool;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &imgui_set_layout;
+        vkAllocateDescriptorSets(device, &ai, &hot->vk_imgui_set);
+    }
     resources.shaders.GetCold(h)->debug_name = desc.debug_name;
     return h;
 }

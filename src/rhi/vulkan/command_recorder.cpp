@@ -20,6 +20,8 @@
 #include "util/material_gpu.hpp"
 #include "util/render_pass_globals.hpp"
 
+#include "imgui.h"
+
 namespace cairns::rhi {
 
 void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDispatch& d) {
@@ -191,6 +193,98 @@ void CommandRecorder::DrawPoints(Resources& res, Allocator& alloc, const PointDr
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p->vk_layout, 0, 1,
                             &point_set, 0, nullptr);
     vkCmdDraw(cb, pd.vertex_count, 1, 0, 0);
+}
+
+void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader> pipeline,
+                                Handle<Texture> font, Handle<Sampler> sampler,
+                                const ImDrawData* dd) {
+    if (!dd || dd->CmdListsCount == 0 || dd->DisplaySize.x <= 0.0f) {
+        return;
+    }
+    Shader::Hot* sh = res.GetHot(pipeline);
+    if (!sh || !sh->vk_imgui_set) {
+        return;
+    }
+
+    VkDescriptorImageInfo ii{};
+    ii.sampler = reinterpret_cast<VkSampler>(res.GetHot(sampler)->api_sampler);
+    ii.imageView = reinterpret_cast<VkImageView>(res.GetHot(font)->api_view);
+    ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet w{};
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = sh->vk_imgui_set;
+    w.dstBinding = 0;
+    w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.pImageInfo = &ii;
+    vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
+
+    vkCmdBindPipeline(gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->vk_pipeline);
+    vkCmdBindDescriptorSets(gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->vk_layout, 0, 1,
+                            &sh->vk_imgui_set, 0, nullptr);
+
+    const float fsx = dd->FramebufferScale.x;
+    const float fsy = dd->FramebufferScale.y;
+    const float disp_w = dd->DisplaySize.x;
+    const float disp_h = dd->DisplaySize.y;
+    const float fb_w = disp_w * fsx;
+    const float fb_h = disp_h * fsy;
+    float pc[4];
+    pc[0] = 2.0f / disp_w;
+    pc[1] = 2.0f / disp_h;
+    pc[2] = -1.0f - dd->DisplayPos.x * pc[0];
+    pc[3] = -1.0f - dd->DisplayPos.y * pc[1];
+    vkCmdPushConstants(gfx_, sh->vk_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, 16, pc);
+
+    VkViewport vp{};
+    vp.x = 0.0f;
+    vp.y = 0.0f;
+    vp.width = fb_w;
+    vp.height = fb_h;
+    vp.minDepth = 0.0f;
+    vp.maxDepth = 1.0f;
+    vkCmdSetViewport(gfx_, 0, 1, &vp);
+
+    VkBuffer master = res.GetVkBumpMasterBuffer(alloc, Memory::kDynamic);
+    const ImVec2 clip_off = dd->DisplayPos;
+    for (int n = 0; n < dd->CmdListsCount; ++n) {
+        const ImDrawList* cl = dd->CmdLists[n];
+        const size_t vbytes = static_cast<size_t>(cl->VtxBuffer.Size) * sizeof(ImDrawVert);
+        const size_t ibytes = static_cast<size_t>(cl->IdxBuffer.Size) * sizeof(ImDrawIdx);
+        uint32_t voff = 0;
+        uint32_t ioff = 0;
+        void* vptr = alloc.BumpAllocate(static_cast<uint32_t>(vbytes), 16,
+                                        Memory::kDynamic, &voff);
+        void* iptr = alloc.BumpAllocate(static_cast<uint32_t>(ibytes), 4,
+                                        Memory::kDynamic, &ioff);
+        std::memcpy(vptr, cl->VtxBuffer.Data, vbytes);
+        std::memcpy(iptr, cl->IdxBuffer.Data, ibytes);
+        VkDeviceSize vbo = voff;
+        vkCmdBindVertexBuffers(gfx_, 0, 1, &master, &vbo);
+        vkCmdBindIndexBuffer(gfx_, master, ioff,
+                             sizeof(ImDrawIdx) == 2 ? VK_INDEX_TYPE_UINT16
+                                                    : VK_INDEX_TYPE_UINT32);
+        for (int c = 0; c < cl->CmdBuffer.Size; ++c) {
+            const ImDrawCmd* cmd = &cl->CmdBuffer[c];
+            float cx = (cmd->ClipRect.x - clip_off.x) * fsx;
+            float cy = (cmd->ClipRect.y - clip_off.y) * fsy;
+            float cz = (cmd->ClipRect.z - clip_off.x) * fsx;
+            float cw = (cmd->ClipRect.w - clip_off.y) * fsy;
+            cx = cx < 0.0f ? 0.0f : cx;
+            cy = cy < 0.0f ? 0.0f : cy;
+            cz = cz > fb_w ? fb_w : cz;
+            cw = cw > fb_h ? fb_h : cw;
+            if (cz <= cx || cw <= cy) {
+                continue;
+            }
+            VkRect2D scis{};
+            scis.offset = {static_cast<int32_t>(cx), static_cast<int32_t>(cy)};
+            scis.extent = {static_cast<uint32_t>(cz - cx), static_cast<uint32_t>(cw - cy)};
+            vkCmdSetScissor(gfx_, 0, 1, &scis);
+            vkCmdDrawIndexed(gfx_, cmd->ElemCount, 1, cmd->IdxOffset,
+                             static_cast<int32_t>(cmd->VtxOffset), 0);
+        }
+    }
 }
 
 void CommandRecorder::EndRenderPass() {

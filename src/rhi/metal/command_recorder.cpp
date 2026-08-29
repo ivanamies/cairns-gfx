@@ -14,9 +14,12 @@
 #include "rhi/command_recorder.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/resources.hpp"
+#include "rhi/allocator.hpp"
 #include "rhi/swap_chain.hpp"
 #include "gpu_scene_registry.hpp"
 #include "util/draw.hpp"
+
+#include "imgui.h"
 
 namespace cairns::rhi {
 
@@ -125,6 +128,80 @@ void CommandRecorder::DrawPoints(Resources& res, Allocator& alloc, const PointDr
     enc_->setVertexBuffer(buf, off, 0);
     enc_->drawPrimitives(MTL::PrimitiveTypePoint, NS::UInteger(pd.vertex_offset),
                                NS::UInteger(pd.vertex_count));
+}
+
+void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader> pipeline,
+                                Handle<Texture> font, Handle<Sampler> sampler,
+                                const ImDrawData* dd) {
+    if (!dd || dd->CmdListsCount == 0 || dd->DisplaySize.x <= 0.0f) {
+        return;
+    }
+    MTL::RenderCommandEncoder* enc = enc_;
+    enc->setRenderPipelineState(res.GetHot(pipeline)->api_pso);
+    enc->setFragmentTexture(res.GetHot(font)->api_view, 0);
+    enc->setFragmentSamplerState(res.GetHot(sampler)->api_sampler, 0);
+
+    const float fsx = dd->FramebufferScale.x;
+    const float fsy = dd->FramebufferScale.y;
+    const float disp_w = dd->DisplaySize.x;
+    const float disp_h = dd->DisplaySize.y;
+    const float fb_w = disp_w * fsx;
+    const float fb_h = disp_h * fsy;
+    float pc[4];
+    pc[0] = 2.0f / disp_w;
+    pc[1] = -2.0f / disp_h;
+    pc[2] = -1.0f - dd->DisplayPos.x * pc[0];
+    pc[3] = 1.0f - dd->DisplayPos.y * pc[1];
+    enc->setVertexBytes(pc, sizeof(pc), 1);
+
+    MTL::Viewport vp{0.0, 0.0, static_cast<double>(fb_w), static_cast<double>(fb_h),
+                     0.0, 1.0};
+    enc->setViewport(vp);
+
+    MTL::Buffer* master = res.GetBumpMasterBuffer(alloc, Memory::kDynamic);
+    const ImVec2 clip_off = dd->DisplayPos;
+    for (int n = 0; n < dd->CmdListsCount; ++n) {
+        const ImDrawList* cl = dd->CmdLists[n];
+        const size_t vbytes = static_cast<size_t>(cl->VtxBuffer.Size) * sizeof(ImDrawVert);
+        const size_t ibytes = static_cast<size_t>(cl->IdxBuffer.Size) * sizeof(ImDrawIdx);
+        uint32_t voff = 0;
+        uint32_t ioff = 0;
+        void* vptr = alloc.BumpAllocate(static_cast<uint32_t>(vbytes), 16,
+                                        Memory::kDynamic, &voff);
+        void* iptr = alloc.BumpAllocate(static_cast<uint32_t>(ibytes), 4,
+                                        Memory::kDynamic, &ioff);
+        std::memcpy(vptr, cl->VtxBuffer.Data, vbytes);
+        std::memcpy(iptr, cl->IdxBuffer.Data, ibytes);
+        enc->setVertexBuffer(master, voff, 0);
+        for (int c = 0; c < cl->CmdBuffer.Size; ++c) {
+            const ImDrawCmd* cmd = &cl->CmdBuffer[c];
+            float cx = (cmd->ClipRect.x - clip_off.x) * fsx;
+            float cy = (cmd->ClipRect.y - clip_off.y) * fsy;
+            float cz = (cmd->ClipRect.z - clip_off.x) * fsx;
+            float cw = (cmd->ClipRect.w - clip_off.y) * fsy;
+            cx = cx < 0.0f ? 0.0f : cx;
+            cy = cy < 0.0f ? 0.0f : cy;
+            cz = cz > fb_w ? fb_w : cz;
+            cw = cw > fb_h ? fb_h : cw;
+            if (cz <= cx || cw <= cy) {
+                continue;
+            }
+            MTL::ScissorRect scis{};
+            scis.x = static_cast<NS::UInteger>(cx);
+            scis.y = static_cast<NS::UInteger>(cy);
+            scis.width = static_cast<NS::UInteger>(cz - cx);
+            scis.height = static_cast<NS::UInteger>(cw - cy);
+            enc->setScissorRect(scis);
+            const NS::UInteger idx_off =
+                ioff + static_cast<NS::UInteger>(cmd->IdxOffset) * sizeof(ImDrawIdx);
+            enc->drawIndexedPrimitives(MTL::PrimitiveTypeTriangle,
+                                       static_cast<NS::UInteger>(cmd->ElemCount),
+                                       MTL::IndexTypeUInt16, master, idx_off,
+                                       NS::UInteger(1),
+                                       static_cast<NS::Integer>(cmd->VtxOffset),
+                                       NS::UInteger(0));
+        }
+    }
 }
 
 void CommandRecorder::EndRenderPass() {

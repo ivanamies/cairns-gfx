@@ -405,6 +405,9 @@ struct Shader {
 #if CAIRNS_VULKAN
         VkPipeline vk_pipeline = VK_NULL_HANDLE;
         VkPipelineLayout vk_layout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout vk_imgui_set_layout = VK_NULL_HANDLE;
+        VkDescriptorPool vk_imgui_pool = VK_NULL_HANDLE;
+        VkDescriptorSet vk_imgui_set = VK_NULL_HANDLE;
 #endif
     };
     struct Cold {
