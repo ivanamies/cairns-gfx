@@ -464,21 +464,113 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.viewport.setCamera",
         json::object(),
-        "Set a viewport's camera pose. Records intent today; actual "
-        "camera plumbing lands with the resizing-and-cameras plan.",
-        [](const json& args) -> json {
-            return {{"viewport", args.value("viewport", uint64_t{0})}};
+        "Set viewport `viewport` (index) camera pose {x,y,z,yaw,pitch}.",
+        [engine = &engine](const json& args) -> json {
+            const int vp = static_cast<int>(args.value("viewport", 0));
+            const float x = args.value("x", 0.0f);
+            const float y = args.value("y", 0.0f);
+            const float z = args.value("z", 0.0f);
+            const float yaw = args.value("yaw", 0.0f);
+            const float pitch = args.value("pitch", 0.0f);
+            return {{"ok", cairns::headless::SetViewportCamera(engine, vp, x, y,
+                                                              z, yaw, pitch)}};
         });
 
     registry.Register(
         "cairns.viewport.setScene",
         json::object(),
-        "Bind a viewport to a Scene (the composition surface: multiple "
-        "viewports each bound to a different Scene composite into one "
-        "image). Stub today; engine bind plumbing lands with #226.",
-        [](const json& args) -> json {
-            return {{"viewport", args.value("viewport", uint64_t{0})},
-                    {"scene", args.value("scene", uint64_t{0})}};
+        "Bind viewport `viewport` (index) to scene `scene` (0 primary, "
+        "1 secondary). Each viewport renders only its bound scene (#195).",
+        [engine = &engine](const json& args) -> json {
+            const int vp = static_cast<int>(args.value("viewport", 0));
+            const uint32_t scene = args.value("scene", 0u);
+            return {{"ok", cairns::headless::SetViewportScene(engine, vp,
+                                                             scene)}};
+        });
+
+    registry.Register(
+        "cairns.viewport.particles",
+        json::object(),
+        "Toggle per-viewport particle rendering: {viewport (index), on}.",
+        [engine = &engine](const json& args) -> json {
+            const int vp = static_cast<int>(args.value("viewport", 0));
+            const bool on = args.value("on", true);
+            return {{"ok",
+                     cairns::headless::SetViewportParticles(engine, vp, on)}};
+        });
+
+    registry.Register(
+        "cairns.scene.use",
+        json::object(),
+        "Retarget the active scene for subsequent spawns: {index} "
+        "(0 primary, 1 secondary).",
+        [engine = &engine](const json& args) -> json {
+            cairns::headless::UseScene(engine, args.value("index", 0u));
+            return json::object();
+        });
+
+    registry.Register(
+        "cairns.scene.spawnFitted",
+        json::object(),
+        "Load + fit-to-frame + center `instances` actors cycling over `glbs`, "
+        "spawned into the active scene. {glbs:[name...], instances, animated}.",
+        [engine = &engine](const json& args) -> json {
+            std::vector<std::string> glbs;
+            if (args.contains("glbs") && args["glbs"].is_array()) {
+                for (const auto& g : args["glbs"]) {
+                    glbs.push_back(g.get<std::string>());
+                }
+            }
+            const uint32_t instances =
+                args.value("instances", static_cast<uint32_t>(glbs.size()));
+            const bool animated = args.value("animated", false);
+            if (!cairns::headless::SpawnFitted(engine, glbs, instances,
+                                               animated)) {
+                throw std::runtime_error("SpawnFitted failed");
+            }
+            return {{"instances", instances}};
+        });
+
+    registry.Register(
+        "cairns.render.advanceFrames",
+        json::object(),
+        "Render `count` headless frames forward (fixed clock).",
+        [engine = &engine](const json& args) -> json {
+            const uint32_t count = args.value("count", 1u);
+            if (!cairns::headless::AdvanceFrames(engine, count)) {
+                throw std::runtime_error("AdvanceFrames failed");
+            }
+            return {{"count", count}};
+        });
+
+    registry.Register(
+        "cairns.particles.enable",
+        json::object(),
+        "Enable/disable the particle compute+draw globally: {on}.",
+        [engine = &engine](const json& args) -> json {
+            cairns::headless::EnableParticles(engine, args.value("on", true));
+            return json::object();
+        });
+
+    registry.Register(
+        "cairns.imgui.golden",
+        json::object(),
+        "Draw the imgui overlay in golden/headless mode: {on}. Pair with "
+        "cairns.hud.set for a byte-stable overlay.",
+        [engine = &engine](const json& args) -> json {
+            cairns::headless::SetImguiInGolden(engine, args.value("on", true));
+            return json::object();
+        });
+
+    registry.Register(
+        "cairns.hud.set",
+        json::object(),
+        "Inject fixed HUD numbers so the overlay is byte-stable: {cpu_ms, fps}.",
+        [engine = &engine](const json& args) -> json {
+            cairns::headless::SetInjectedHud(engine,
+                                             args.value("cpu_ms", 16.6f),
+                                             args.value("fps", 60.0f));
+            return json::object();
         });
 
     registry.Register(

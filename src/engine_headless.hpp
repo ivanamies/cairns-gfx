@@ -140,6 +140,20 @@ LoadBatchExport RuntimeLoadGlbs(Engine* engine,
 // tables happen inside, same as the multi-path batch.
 uint32_t RuntimeLoadGlbPath(Engine* engine, const std::string& path);
 
+// #195 JS-driven golden primitives. The SCENARIO choreography lives in JS
+// (cairns.dispatch); these are the general engine ops it composes.
+bool SpawnFitted(Engine* engine, const std::vector<std::string>& glbs,
+                 uint32_t instances, bool animated);
+void UseScene(Engine* engine, uint32_t index);
+bool SetViewportScene(Engine* engine, int viewport, uint32_t scene_index);
+bool SetViewportParticles(Engine* engine, int viewport, bool on);
+bool SetViewportCamera(Engine* engine, int viewport, float x, float y, float z,
+                       float yaw, float pitch);
+bool AdvanceFrames(Engine* engine, uint32_t n);
+void EnableParticles(Engine* engine, bool on);
+void SetImguiInGolden(Engine* engine, bool on);
+void SetInjectedHud(Engine* engine, float cpu_ms, float fps);
+
 // #224 L5: instantiate `prefab_count` prefabs starting at `first_prefab_idx`
 // into active scene + slide all existing actors to the new fitted grid.
 // Returns the new entity ids.

@@ -1693,38 +1693,92 @@ public:
                         : InstantiatePrefabNoSkin(pidx, world);
     }
 
-    // G3: two viewports bound to two DISTINCT scenes -- a different hero in
-    // each. vp0 keeps active_scene_ (left hero); vp1 binds secondary_scene_
-    // (right hero). The per-viewport draw fan-out (#195) then renders each
-    // scene into its own viewport.
-    bool SetupTwoSceneViewports(const std::string& left_glb,
-                                const std::string& right_glb,
-                                bool right_particles) {
-        if (SpawnHeroFramed(left_glb, /*animated=*/false) == UINT32_MAX) {
+    // ---- General scene/viewport primitives composed from JS (cairns.dispatch).
+    // These replace the bespoke C++ test seams; the SCENARIO-specific choreography
+    // (which glbs, how many viewports) lives in JS, not here.
+    cairns::SceneId SceneByIndex(uint32_t index) const {
+        return index == 1 ? secondary_scene_ : primary_scene_;
+    }
+    // Retarget where subsequent InstantiatePrefab* spawn (0 primary, 1 secondary).
+    void UseScene(uint32_t index) { active_scene_ = SceneByIndex(index); }
+    bool SetViewportScene(int vp, uint32_t index) {
+        if (vp < 0 || vp >= active_viewport_count_) {
             return false;
         }
-        // Spawn the right hero into secondary_scene_: InstantiatePrefab writes
-        // active_scene_, so retarget it for the one spawn, then restore.
-        const cairns::SceneId saved = active_scene_;
-        active_scene_ = secondary_scene_;
-        const uint32_t rh = SpawnHeroFramed(right_glb, /*animated=*/false);
-        active_scene_ = saved;
-        if (rh == UINT32_MAX) {
+        if (cairns::Viewport::Hot* vh = viewports_.GetHot(viewport_ids_[vp])) {
+            vh->scene = SceneByIndex(index);
+            vh->camera_dirty = true;
+            return true;
+        }
+        return false;
+    }
+    bool SetViewportParticles(int vp, bool on) {
+        if (vp < 0 || vp >= active_viewport_count_) {
             return false;
         }
-        const uint32_t name = OpenViewport();
-        if (name == UINT32_MAX) {
+        if (cairns::Viewport::Cold* vc = viewports_.GetCold(viewport_ids_[vp])) {
+            vc->particles_enabled = on;
+            return true;
+        }
+        return false;
+    }
+    bool SetViewportCamera(int vp, const glm::vec3& pos, float yaw,
+                           float pitch) {
+        if (vp < 0 || vp >= active_viewport_count_) {
             return false;
         }
-        const int vp1 = active_viewport_count_ - 1;
-        if (cairns::Viewport::Hot* vh =
-                viewports_.GetHot(viewport_ids_[vp1])) {
-            vh->scene = secondary_scene_;
+        if (cairns::Viewport::Cold* vc = viewports_.GetCold(viewport_ids_[vp])) {
+            vc->fly.position = pos;
+            vc->fly.yaw = yaw;
+            vc->fly.pitch = pitch;
+        }
+        if (cairns::Viewport::Hot* vh = viewports_.GetHot(viewport_ids_[vp])) {
             vh->camera_dirty = true;
         }
-        if (cairns::Viewport::Cold* vc =
-                viewports_.GetCold(viewport_ids_[vp1])) {
-            vc->particles_enabled = right_particles;
+        return true;
+    }
+    // Load + normalize-to-frame + center `instances` actors cycling over `glbs`,
+    // spawned into the active scene. The general fit-place primitive (#224).
+    bool SpawnFitted(const std::vector<std::string>& glbs, uint32_t instances,
+                     bool animated) {
+        if (glbs.empty() || instances == 0) {
+            return true;
+        }
+        std::vector<uint32_t> pidx;
+        pidx.reserve(glbs.size());
+        for (const std::string& name : glbs) {
+            const uint32_t idx =
+                cairns::headless::RuntimeLoadGlbPath(this, name);
+            if (idx == UINT32_MAX) {
+                return false;
+            }
+            pidx.push_back(idx);
+        }
+        std::vector<float> extents(instances);
+        for (uint32_t i = 0; i < instances; ++i) {
+            extents[i] = PrefabExtentMax(pidx[i % pidx.size()]);
+        }
+        const std::vector<glm::mat4> worlds =
+            FitGridToViewport(instances, extents);
+        for (uint32_t i = 0; i < instances; ++i) {
+            const uint32_t scene_idx = pidx[i % pidx.size()];
+            const glm::vec3 center = PrefabAabbCenter(scene_idx);
+            const glm::mat4 world =
+                worlds[i] * glm::translate(glm::mat4(1.0f), -center);
+            const uint32_t out = animated
+                ? InstantiatePrefab(scene_idx, world, /*time_phase=*/0.0f)
+                : InstantiatePrefabNoSkin(scene_idx, world);
+            if (out == UINT32_MAX) {
+                return false;
+            }
+        }
+        return true;
+    }
+    bool AdvanceFrames(uint32_t n) {
+        for (uint32_t i = 0; i < n; ++i) {
+            if (!RenderHeadlessFrame()) {
+                return false;
+            }
         }
         return true;
     }
@@ -2463,6 +2517,7 @@ public:
             scenes_.Release(tmp);
         }
         active_scene_ = scenes_.Acquire();
+        primary_scene_ = active_scene_;  // index-0; UseScene may move active_
         if (cairns::Scene::Hot* wh = scenes_.GetHot(active_scene_)) {
             if (cairns::Scene::Cold* wc =
                     scenes_.GetCold(active_scene_)) {
@@ -5658,6 +5713,7 @@ private:
     std::vector<cairns::RenderProxyArrays> scene_proxies_;
     cairns::SceneId active_scene_;
     cairns::SceneId secondary_scene_;  // P6 multi-scene coexistence test
+    cairns::SceneId primary_scene_;    // index-0 scene; stable as active_ moves
 
     // #220 Step 4: handle-pilled Viewport pool. viewports_ owns Hot+Cold;
     // viewport_ids_[0..active_viewport_count_) carry the slot ordering

@@ -194,13 +194,6 @@ bool OpenSecondViewport(cairns::Engine& engine, const char* glb,
     return engine.OpenSecondViewport(glb ? glb : "", yaw_rad, with_particles);
 }
 
-bool SetupTwoSceneViewports(cairns::Engine& engine, const char* left_glb,
-                            const char* right_glb, bool right_particles) {
-    return engine.SetupTwoSceneViewports(left_glb ? left_glb : "",
-                                         right_glb ? right_glb : "",
-                                         right_particles);
-}
-
 bool ConfigureNestedGraph(cairns::Engine& engine) {
     // A.6: opens vp1 + vp2 at ±60° yaw so the existing render graph
     // composes 3 forward passes (G4's "third camera" + nested). The

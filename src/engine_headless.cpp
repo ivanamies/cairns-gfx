@@ -383,4 +383,58 @@ std::vector<uint32_t> InstantiateGridFitted(Engine* engine,
     return new_entities;
 }
 
+bool SpawnFitted(Engine* engine, const std::vector<std::string>& glbs,
+                 uint32_t instances, bool animated) {
+    return engine ? engine->SpawnFitted(glbs, instances, animated) : false;
+}
+
+void UseScene(Engine* engine, uint32_t index) {
+    if (engine) {
+        engine->UseScene(index);
+    }
+}
+
+bool SetViewportScene(Engine* engine, int viewport, uint32_t scene_index) {
+    return engine ? engine->SetViewportScene(viewport, scene_index) : false;
+}
+
+bool SetViewportParticles(Engine* engine, int viewport, bool on) {
+    return engine ? engine->SetViewportParticles(viewport, on) : false;
+}
+
+bool SetViewportCamera(Engine* engine, int viewport, float x, float y, float z,
+                       float yaw, float pitch) {
+    return engine ? engine->SetViewportCamera(viewport, glm::vec3(x, y, z), yaw,
+                                              pitch)
+                  : false;
+}
+
+bool AdvanceFrames(Engine* engine, uint32_t n) {
+    return engine ? engine->AdvanceFrames(n) : false;
+}
+
+void EnableParticles(Engine* engine, bool on) {
+    if (engine) {
+        engine->EnableParticles(on);
+    }
+}
+
+void SetImguiInGolden(Engine* engine, bool on) {
+    if (engine) {
+        engine->SetImguiInGolden(on);
+    }
+}
+
+void SetInjectedHud(Engine* engine, float cpu_ms, float fps) {
+    if (!engine) {
+        return;
+    }
+    cairns::HudStats s;
+    s.cpu_ms = cpu_ms;
+    s.fps = fps;
+    s.frame_ms.fill(cpu_ms);
+    s.graph_head = 0;
+    engine->SetInjectedHudStats(s);
+}
+
 }  // namespace cairns::headless

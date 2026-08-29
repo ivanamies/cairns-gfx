@@ -66,12 +66,6 @@ bool ClearSpawned(cairns::Engine& engine);
 bool OpenSecondViewport(cairns::Engine& engine, const char* glb,
                         float yaw_rad, bool with_particles);
 
-// G3 helper: two viewports bound to two DISTINCT scenes -- a different hero in
-// each (vp0 left, vp1 right + optional particles). Exercises the multi-scene
-// per-viewport draw fan-out.
-bool SetupTwoSceneViewports(cairns::Engine& engine, const char* left_glb,
-                            const char* right_glb, bool right_particles);
-
 // G4 helper: program the render graph for one color + resolved-depth +
 // third-camera pass.
 bool ConfigureNestedGraph(cairns::Engine& engine);

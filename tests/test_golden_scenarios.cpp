@@ -17,6 +17,7 @@
 #include "test_seams.hpp"
 #include "test_refs.hpp"
 #include "golden_subject.hpp"
+#include "golden_js.hpp"
 #include "util/hud_stats.hpp"
 
 namespace seam = cairns::test_seams;
@@ -134,15 +135,36 @@ SCENARIO("hot reload: spawn, replace, and clear stay correct",
 //    the multi-scene per-viewport draw fan-out (#195) -- a single-scene engine
 //    renders the SAME hero in both halves, which is exactly the gap this catches.
 //    Building block: [spec][draw_key] (viewport ordering) + [spec][schedule].
-SCENARIO("two viewports, two scenes: a different hero in each",
+SCENARIO("two viewports, two scenes: a different hero in each (JS-driven)",
          "[golden][scenarios][render_graph]") {
     if (!seam::AssetsPresent({"aatrox.glb","ahri.glb"})) {
         SKIP("assets absent");
     }
+    seam::EnsureImguiContext();
+    cairns::rhi::InitConfig icfg{};
+    icfg.surfaceless = true;
+    icfg.width = 1024;
+    icfg.height = 512;
+    cairns::EngineConfig ecfg{};
+    ecfg.use_fixed_clock = true;
     cairns::Engine e;
-    REQUIRE(seam::BootHeadless(e, 1024, 512));
-    REQUIRE(seam::SetupTwoSceneViewports(e, "aatrox.glb", "ahri.glb",
-                                         /*right_particles=*/true));
+    REQUIRE(e.GreaterInit(icfg, ecfg));
+
+    // The whole scenario is composed in JS via cairns.dispatch -- no bespoke
+    // C++ seam. Left hero -> scene 0 (vp0); right hero -> scene 1 (vp1) with
+    // particles; the per-viewport draw fan-out (#195) renders each scene.
+    cairns::golden::DriveJs(e, R"JS(
+        cairns.dispatch("cairns.scene.spawnFitted",
+                        { glbs: ["aatrox.glb"], instances: 1, animated: false });
+        cairns.dispatch("cairns.scene.use", { index: 1 });
+        cairns.dispatch("cairns.scene.spawnFitted",
+                        { glbs: ["ahri.glb"], instances: 1, animated: false });
+        cairns.dispatch("cairns.scene.use", { index: 0 });
+        cairns.dispatch("cairns.viewport.open", {});
+        cairns.dispatch("cairns.viewport.setScene", { viewport: 1, scene: 1 });
+        cairns.dispatch("cairns.viewport.particles", { viewport: 1, on: true });
+    )JS");
+
     REQUIRE(seam::AdvanceToGoldenFrame(e));
 
     std::vector<uint8_t> rgba;
