@@ -16,6 +16,7 @@
 #include "rhi/resource_manager.hpp"  // kFramesInFlight
 #include "rhi/swap_chain.hpp"
 #include "rhi/command_recorder.hpp"
+#include "util/timer.hpp"
 
 namespace cairns::rhi {
 
@@ -100,7 +101,17 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc) {
 
     MTL::CommandBuffer* cmd = queue_->commandBuffer();
     dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(frame_semaphore_);
-    cmd->addCompletedHandler([sem](MTL::CommandBuffer*) { dispatch_semaphore_signal(sem); });
+    // GPU frame timing: capture start (CPU wall) on commit and report
+    // elapsed at completion. Captures display + queue wait in addition to
+    // actual GPU work; treat as "submit-to-presented latency", which is
+    // what we actually care about for hitting vsync.
+    const uint64_t start_ns = cairns::timestamp_ns();
+    cmd->addCompletedHandler([sem, start_ns](MTL::CommandBuffer*) {
+        const uint64_t end_ns = cairns::timestamp_ns();
+        const uint64_t elapsed_us = (end_ns - start_ns) / 1000;
+        cairns::Timer::Accum(cairns::Timer::kGpuSlot, "gpu frame", elapsed_us);
+        dispatch_semaphore_signal(sem);
+    });
 
     swapchain_acquired_ = false;
     FrameContext fc;

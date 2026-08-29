@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <string_view>
 
@@ -39,9 +40,15 @@ class Timer {
  public:
 
     static constexpr uint32_t kMaxSlots = 16;
+    // Reserved slot for GPU frame time written by Metal/Vk command-buffer
+    // completion callbacks (different thread than Timer::End).
+    static constexpr uint32_t kGpuSlot = 8;
     static std::array<uint64_t, kMaxSlots> accum_times_;
     static std::array<uint64_t, kMaxSlots> accum_itrs_;
     static std::array<const char*, kMaxSlots> slot_names_;
+    // Guards accum_times_/accum_itrs_ when the completion handler races
+    // PrintReport/Reset/Timer::End on the main/game thread.
+    static std::mutex mu_;
 
   explicit Timer(const char* task_name, uint32_t slot)
       : slot_(slot),
@@ -64,13 +71,27 @@ class Timer {
     uint64_t end_time = timestamp_ns();
     uint64_t elapsed_us = (end_time - start_time_)/1000;
 
+    {
+      std::lock_guard<std::mutex> lk(mu_);
       accum_times_[slot_] += elapsed_us;
       accum_itrs_[slot_]++;
+    }
 
     is_running_ = false;
   }
 
+    // Accumulator setter for callers that don't have a scoped Timer (e.g. the
+    // Metal/Vk command-buffer completion callback writing GPU frame time
+    // from a queue thread).
+    static void Accum(uint32_t slot, const char* task_name, uint64_t elapsed_us) {
+      std::lock_guard<std::mutex> lk(mu_);
+      slot_names_[slot] = task_name;
+      accum_times_[slot] += elapsed_us;
+      accum_itrs_[slot]++;
+    }
+
     static void PrintReport() {
+        std::lock_guard<std::mutex> lk(mu_);
         CAIRNS_PRINT("==============\n");
         for ( uint32_t i = 0; i < kMaxSlots; ++i ) {
             if ( accum_itrs_[i] == 0 ) {
@@ -83,6 +104,7 @@ class Timer {
     }
 
     static void Reset() {
+        std::lock_guard<std::mutex> lk(mu_);
         accum_times_ = {};
         accum_itrs_ = {};
     }
@@ -105,9 +127,11 @@ class Timer {
   uint64_t start_time_;
 };
 
+
 // todo @iamies move this out
-std::array<uint64_t, Timer::kMaxSlots> Timer::accum_times_ = {};
-std::array<uint64_t, Timer::kMaxSlots> Timer::accum_itrs_ = {};
-std::array<const char*, Timer::kMaxSlots> Timer::slot_names_ = {};
+inline std::array<uint64_t, Timer::kMaxSlots> Timer::accum_times_ = {};
+inline std::array<uint64_t, Timer::kMaxSlots> Timer::accum_itrs_ = {};
+inline std::array<const char*, Timer::kMaxSlots> Timer::slot_names_ = {};
+inline std::mutex Timer::mu_;
 
 } // namespace cairns
