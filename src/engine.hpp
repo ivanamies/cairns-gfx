@@ -432,7 +432,6 @@ public:
         cd.buffers = std::span<const rhi::BoundBuffer>(cbufs, 3);
         cd.groups_x = kParticleCount / 256;
         cd.local_x = 256;
-        fc.cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
 
         rhi::MeshDrawList ml{};
         ml.draws = std::span<const cairns::Draw>(drawList_.data(), drawList_.size());
@@ -484,9 +483,16 @@ public:
                     cairns::Timer::accum_times_[s] / static_cast<double>(n) /
                     1000.0);
             };
-            ImGui::Text("frame       %5.2f ms", slot_avg_ms(0));
-            ImGui::Text("build_draws %5.2f ms", slot_avg_ms(1));
-            ImGui::Text("record      %5.2f ms", slot_avg_ms(2));
+            for (uint32_t s = 0; s < cairns::Timer::kMaxSlots; ++s) {
+                if (cairns::Timer::accum_itrs_[s] == 0) {
+                    continue;
+                }
+                ImGui::Text("%-12s %5.2f ms",
+                            cairns::Timer::slot_names_[s]
+                                ? cairns::Timer::slot_names_[s]
+                                : "?",
+                            slot_avg_ms(s));
+            }
             char overlay[32];
             std::snprintf(overlay, sizeof(overlay), "%.2f ms", cpu_ms_last_);
             ImGui::PlotLines("##cpuhist", cpu_ms_history_, kCpuMsHistory,
@@ -498,7 +504,9 @@ public:
         }
 
         // particle_sim (compute)
+        fc.cmd.PassTimerBegin("particle_sim");
         fc.cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
+        fc.cmd.PassTimerEnd();
 
         // forward (graphics, MSAA -> swapchain resolve)
         rhi::ColorAttachment ca{};
@@ -512,6 +520,7 @@ public:
         rp.color = std::span<const rhi::ColorAttachment>(&ca, 1);
         rp.width = swapchain_.Width();
         rp.height = swapchain_.Height();
+        fc.cmd.PassTimerBegin("forward");
         fc.cmd.BeginRenderPass(swapchain_, rp);
         fc.cmd.DrawMeshes(rhi_.resources, rhi_.alloc, ml);
         fc.cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
@@ -520,6 +529,7 @@ public:
                              imgui_sampler_, ImGui::GetDrawData());
         }
         fc.cmd.EndRenderPass();
+        fc.cmd.PassTimerEnd();
         t_record.End();
         rhi_.frames.End(swapchain_, fc);
         particle_parity_ ^= 1;

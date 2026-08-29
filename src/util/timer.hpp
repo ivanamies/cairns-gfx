@@ -112,22 +112,27 @@ inline std::array<const char*, Timer::kMaxSlots> Timer::slot_names_ = {};
 
 class TimerStorage {
  public:
+  // Walks Timer::slot_names_ (the shared global mapping). If name already lives
+  // in a slot (whether claimed by a Timer CPU ctor or a prior SlotForPass call),
+  // returns it; otherwise claims the first unused slot. Returns -1 when full.
   static int SlotForPass(const char* name) {
     std::lock_guard<std::mutex> lk(mu_);
-    for (uint32_t i = 0; i < count_; ++i) {
-      if (names_[i] == name) {
-        return static_cast<int>(i);
+    for (uint32_t i = 0; i < Timer::kMaxSlots; ++i) {
+      const char* slot = Timer::slot_names_[i];
+      if (slot == nullptr) {
+        continue;
       }
-      if (names_[i] && std::strcmp(names_[i], name) == 0) {
+      if (slot == name || std::strcmp(slot, name) == 0) {
         return static_cast<int>(i);
       }
     }
-    if (count_ >= Timer::kMaxSlots) {
-      return -1;
+    for (uint32_t i = 0; i < Timer::kMaxSlots; ++i) {
+      if (Timer::slot_names_[i] == nullptr) {
+        Timer::slot_names_[i] = name;
+        return static_cast<int>(i);
+      }
     }
-    const int s = static_cast<int>(count_++);
-    names_[s] = name;
-    return s;
+    return -1;
   }
 
   static void Span(int slot, const char* name, uint64_t us) {
@@ -142,12 +147,8 @@ class TimerStorage {
 
  private:
   static std::mutex mu_;
-  static std::array<const char*, Timer::kMaxSlots> names_;
-  static uint32_t count_;
 };
 
 inline std::mutex TimerStorage::mu_;
-inline std::array<const char*, Timer::kMaxSlots> TimerStorage::names_ = {};
-inline uint32_t TimerStorage::count_ = 0;
 
 } // namespace cairns
