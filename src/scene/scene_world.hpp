@@ -1,5 +1,6 @@
 #pragma once
 
+#include "render/render_proxy.hpp"
 #include "rhi/resource_manager.hpp"
 #include "scene/scene_entity.hpp"
 #include "util/gltf_loader.hpp"
@@ -17,6 +18,10 @@ namespace cairns {
 struct SceneWorld {
     rhi::ResourceManager<SceneEntity> entities;
     std::vector<rhi::Handle<SceneEntity>> live_entities;
+    // Persistent light set (D). Currently empty -- placed here so future light
+    // spawn/edit goes through the generational handle path from day one.
+    rhi::ResourceManager<LightProxy> lights;
+    std::vector<rhi::Handle<LightProxy>> live_lights;
     const Scene* scenes = nullptr;
     size_t scene_count = 0;
     glm::mat4 root_transform = glm::mat4(1.0f);

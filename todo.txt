@@ -146,3 +146,23 @@ DONE — Aaltonen slide 26 (Pack Meshes), now packed ACROSS all GLBs:
       build_draws ~18.2ms, record ~17.0ms (~57ms GPU/present remainder).
   NOTE: resource aliasing (the hand-rolled attr_alias) is a stopgap -- proper aliasing
   with tracked lifetimes will come with the render-graph impl.
+
+XX. SIM-TIME != REAL-TIME BUG (fixed-clock accumulator).
+  The Fiedler accumulator in engine.hpp draw() (the kFixedDt loop) does:
+    while (acc >= kFixedDt && steps < kMaxStepsPerFrame) { sim_angle_deg_ += rate*dt; ++sim_frame_; acc -= dt; }
+    if (steps == kMaxStepsPerFrame && acc >= dt) { acc = 0; }
+  When a render frame is slow (e.g. 10k actors) and the steps cap (kMaxStepsPerFrame=5) trips,
+  we ZERO the accumulator -- which makes the sim run in SLOW MOTION relative to wall time.
+  Observed: at high actor counts the world rotation perceptibly lags. Per the source plan that
+  is "intentional, a slow-but-correct sim beats an unrecoverable lockup", but the user is
+  right: animation/UI time shouldn't slow down just because the render frame is heavy.
+  Options:
+    (a) raise kMaxStepsPerFrame (5 -> 8/16); pay more CPU on slow frames.
+    (b) split sim_time into TWO clocks: deterministic fixed-dt for physics (capped),
+        and a real-time animation_time for rotation/animation that just uses Tick() directly
+        (golden capture still pins it via FixedClock).
+    (c) reset behavior on cap: instead of acc=0, set acc=dt (run exactly one step next frame)
+        and accept a one-frame lag. Smoother visually than full slow-mo.
+  My read: (b) is the right fix -- the fixed-clock plan conflated "all sim" with "deterministic
+  physics-style sim"; rotation/anim don't need the latter and shouldn't slow down. Defer until
+  we revisit determinism after skinning lands.

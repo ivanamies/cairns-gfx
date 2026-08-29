@@ -58,7 +58,26 @@ struct SkinnedAttachment {
     uint32_t joint_count = 0;
 };
 
+// Persistent light, owned by SceneWorld::lights (ResourceManager). The per-frame
+// ProxyArray<LightProxy> in RenderProxyArrays stays as the transient "visible this
+// frame" extract output -- those are computed each Extract from the persistent set.
 struct LightProxy {
+    struct Hot {
+        glm::vec4 position = glm::vec4(0.0f);
+        glm::vec4 direction = glm::vec4(0.0f);
+        glm::vec4 color = glm::vec4(1.0f);
+        float range = 0.0f;
+        uint32_t layer_mask = 0xFFFFFFFFu;
+        uint32_t flags = kProxyVisible | kProxyCastShadow;
+    };
+    struct Cold {
+        const char* debug_name = nullptr;
+    };
+
+    // BACKWARDS-COMPAT for the per-frame ProxyArray<LightProxy>: the transient
+    // visible-this-frame proxy still uses the flat field layout below for now.
+    // When the persistent set actually gets lights, the Extract pass will pull
+    // from SceneWorld::lights and emit into a renamed transient array.
     glm::vec4 position = glm::vec4(0.0f);
     glm::vec4 direction = glm::vec4(0.0f);
     glm::vec4 color = glm::vec4(1.0f);

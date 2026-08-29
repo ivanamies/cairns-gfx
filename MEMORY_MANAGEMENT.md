@@ -68,14 +68,31 @@ an offset (`PoolSlice`).
 ### D — resource manager (`ResourceManager<T>`; `Handle<T>` generational)
 Persistent objects with individual create/destroy and **stable identity** (so stale handles
 are detected, not silently aliased).
-- All GPU resources (existing): `Buffer`, `Texture`, `Sampler`, `BindGroup`, `DynamicBuffers`,
-  `Shader`, `Kernel` (`src/rhi/resources.hpp`)
-- `SceneEntity` (replaces `SceneWorld::entities` raw `std::vector`)
-- `LightProxy` (replaces `ProxyArray<LightProxy>` whose free list has **no generation** — a
-  stale index silently aliases a reused light)
-- `Node` (so reparenting / selection survive deletion)
-- `LoadedMaterial` (so materials can be edited / deleted at runtime in an editor)
-- Future: physics bodies / colliders
+
+Currently wired:
+- All GPU resources: `Buffer`, `Texture`, `Sampler`, `BindGroup`, `DynamicBuffers`, `Shader`,
+  `Kernel` (`src/rhi/resources.hpp`).
+- `SceneEntity` (Hot/Cold; `SceneWorld::entities` + packed `live_entities`; `Extract` walks the
+  live list and `GetHot`s per handle — stale-detect skip on null).
+- `LightProxy` (Hot/Cold; `SceneWorld::lights` + packed `live_lights`). **No users yet** —
+  scaffolded so future light spawn/edit goes through the generational path from day one. The
+  per-frame `ProxyArray<LightProxy>` in `RenderProxyArrays` stays as the transient
+  visible-this-frame extract output; the persistent set lives in `SceneWorld`.
+
+**Deferred until an editor or runtime spawn lands** (these are load-once + index-stable today,
+so D's generational handles add cost without buying anything testable):
+- `Node` (`Scene::nodes` is `std::vector<Node>`). It's a TREE, not a flat pool — `Node::children`
+  carries node indices, `Extract` walks `scene.nodes[node_idx]` deeply. Converting to
+  `ResourceManager<Node>` means children become `Handle<Node>` (or live in a side array) and the
+  tree walk becomes handle-resolution per step. Mechanical refactor, but no spawn/despawn
+  exercises it today. Land it the day reparenting/selection-survives-deletion needs it.
+- `LoadedMaterial` (engine `materials_` is `std::vector<LoadedMaterial>`, indexed by `MatId`,
+  which is packed into `DrawKey` + parallels `material_bind_groups_`). `MatId` becoming
+  `Handle<LoadedMaterial>` ripples through the draw key encoding and every prim's
+  `material_id`. Same call: land it the day an editor lets materials be created/edited/deleted
+  at runtime.
+
+Future (when they exist): physics bodies / colliders.
 
 The Hot/Cold split per type: per-draw / per-frame fields in **Hot** (transform, mesh handle,
 flags); names, editor metadata, undo refs in **Cold**. The hot path walks the **packed live
