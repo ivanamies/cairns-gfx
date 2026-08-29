@@ -1,14 +1,15 @@
-// scene/view.hpp
+// scene/viewport.hpp
 //
-// A View is a single viewport: which world it shows, the per-view
-// camera, and the offscreen color target it composites onto the
-// swapchain. Editors keep >= 4 of these (one per dock pane). The
-// camera is per-view, NOT per-world -- multiple panes can show the
+// A Viewport is the rendered pane: a Camera + offscreen color target
+// looking at a World. Editor-engine vocabulary (Document-View):
+// World = Document (data + edit state); Viewport = the pane onto it;
+// Camera = the math. Editors keep N of these (one per dock pane). The
+// camera is per-viewport, NOT per-world -- multiple panes can show the
 // same world from different angles.
 //
 // Target lifetime: PERSISTENT imported texture, NOT a per-frame
-// transient. Allocated on view open, sized to the viewport pane;
-// re-allocated on resize. The render graph imports it each frame.
+// transient. Allocated on viewport open, sized to the pane; re-allocated
+// on resize. The render graph imports it each frame.
 
 #pragma once
 
@@ -30,7 +31,7 @@ struct Camera {
     float far_z = 100.0f;
 };
 
-struct View {
+struct Viewport {
     WorldId world;
     Camera camera;
     rhi::Handle<rhi::Texture> target;
