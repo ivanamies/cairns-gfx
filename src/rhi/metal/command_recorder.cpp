@@ -71,12 +71,17 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
     }
 
     MTL::RenderPassDescriptor* rpd = MTL::RenderPassDescriptor::alloc()->init();
-    if (!desc.color.empty()) {
-        const float* c = desc.color[0].clear;
-        MTL::Texture* tex = res.GetHot(desc.color[0].target)->api_view;
-        MTL::RenderPassColorAttachmentDescriptor* ca = rpd->colorAttachments()->object(0);
+    // #206 MRT: bind every color attachment so the R32U id_target_ (slot 1
+    // in the forward pass) actually receives unlit.frag's location-1
+    // output. Previously only desc.color[0] was bound, which left the id
+    // buffer un-touched -- pick readback got uninitialized memory.
+    for (size_t i = 0; i < desc.color.size(); ++i) {
+        const float* c = desc.color[i].clear;
+        MTL::Texture* tex = res.GetHot(desc.color[i].target)->api_view;
+        MTL::RenderPassColorAttachmentDescriptor* ca =
+            rpd->colorAttachments()->object(static_cast<NS::UInteger>(i));
         ca->setTexture(tex);
-        ca->setLoadAction(to_mtl_load(desc.color[0].load));
+        ca->setLoadAction(to_mtl_load(desc.color[i].load));
         ca->setStoreAction(MTL::StoreActionStore);
         ca->setClearColor(MTL::ClearColor(c[0], c[1], c[2], c[3]));
     }

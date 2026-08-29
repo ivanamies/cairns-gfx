@@ -1356,9 +1356,14 @@ public:
         if (pick_pending_ && pick_viewport_ < kNumViewports &&
             !id_target_[pick_viewport_].IsNull()) {
             uint32_t entity_plus_one = 0;
-            if (rhi_.resources.ReadBackTextureR32UTexel(
-                    id_target_[pick_viewport_], pick_x_, pick_y_,
-                    entity_plus_one)) {
+            const bool ok = rhi_.resources.ReadBackTextureR32UTexel(
+                id_target_[pick_viewport_], pick_x_, pick_y_,
+                entity_plus_one);
+            fprintf(stderr,
+                    "[PICK] vp=%d xy=(%u,%u) tex_dims=(%u,%u) ok=%d id+1=%u\n",
+                    pick_viewport_, pick_x_, pick_y_, id_target_w_,
+                    id_target_h_, ok ? 1 : 0, entity_plus_one);
+            if (ok) {
                 last_pick_result_.viewport = pick_viewport_;
                 last_pick_result_.x = pick_x_;
                 last_pick_result_.y = pick_y_;

@@ -516,9 +516,11 @@ bool Resources::ReadBackTextureRgba(Handle<Texture> h,
     return true;
 }
 
-// #207 single-texel R32U readback for pick. Blits a 1x1 region into a
-// shared MTL::Buffer, waits, returns the uint32_t. Caller drains in-flight
-// work targeting |h| beforehand (we don't add cross-frame sync here).
+// #207 single-texel R32U readback for pick. Apple GPUs (especially the
+// M-series) reject small-region blits with under-aligned destination row
+// pitches; copy the whole row that contains (y) and index in. R32U row
+// = width * 4 bytes, naturally aligned. Caller drains in-flight work
+// before calling.
 bool Resources::ReadBackTextureR32UTexel(Handle<Texture> h, uint32_t x,
                                          uint32_t y, uint32_t& out_value) {
     Texture::Hot* hot = textures.GetHot(h);
@@ -526,10 +528,12 @@ bool Resources::ReadBackTextureR32UTexel(Handle<Texture> h, uint32_t x,
         return false;
     }
     MTL::Texture* tex = hot->api_view;
-    if (x >= tex->width() || y >= tex->height()) {
+    const NS::UInteger w = tex->width();
+    const NS::UInteger hgt = tex->height();
+    if (x >= w || y >= hgt) {
         return false;
     }
-    const NS::UInteger bpr = 4;  // R32U = 4 bytes / texel; 1-texel row.
+    const NS::UInteger bpr = w * 4;  // R32U row.
     MTL::Buffer* readback = plat.device_->newBuffer(
         bpr, MTL::ResourceStorageModeShared);
     if (!readback) {
@@ -537,13 +541,13 @@ bool Resources::ReadBackTextureR32UTexel(Handle<Texture> h, uint32_t x,
     }
     MTL::CommandBuffer* cb = plat.queue_->commandBuffer();
     MTL::BlitCommandEncoder* blit = cb->blitCommandEncoder();
-    blit->copyFromTexture(tex, 0, 0, MTL::Origin{x, y, 0},
-                          MTL::Size{1, 1, 1}, readback, 0, bpr, 0);
+    blit->copyFromTexture(tex, 0, 0, MTL::Origin{0, y, 0},
+                          MTL::Size{w, 1, 1}, readback, 0, bpr, 0);
     blit->endEncoding();
     cb->commit();
     cb->waitUntilCompleted();
     const uint32_t* p = static_cast<const uint32_t*>(readback->contents());
-    out_value = *p;
+    out_value = p[x];
     readback->release();
     return true;
 }

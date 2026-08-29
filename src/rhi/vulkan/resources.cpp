@@ -913,15 +913,14 @@ bool Resources::ReadBackTextureR32UTexel(Handle<Texture> h, uint32_t x,
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cb, &bi);
 
-    // id_off was last written as a color attachment in the forward pass --
-    // its finalLayout is COLOR_ATTACHMENT_OPTIMAL. Outline reads it via a
-    // shader sample which transitions it to SHADER_READ_ONLY_OPTIMAL. Use
-    // SHADER_READ_ONLY as the oldLayout so the barrier is correct for the
-    // typical post-outline state; if it's in COLOR_ATTACHMENT_OPTIMAL the
-    // tracker's transition() upstream of this call will have updated it.
+    // id_target_'s actual layout depends on whether the outline pass ran
+    // this frame (SHADER_READ_ONLY) or not (still COLOR_ATTACHMENT from
+    // the forward pass). Read the layout tracker maintained by
+    // command_recorder's transition() and feed that as oldLayout so the
+    // barrier is correct in both cases.
     VkImageMemoryBarrier to_src{};
     to_src.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    to_src.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    to_src.oldLayout = cold->plat.vk_layout;
     to_src.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     to_src.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     to_src.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -940,14 +939,17 @@ bool Resources::ReadBackTextureR32UTexel(Handle<Texture> h, uint32_t x,
     vkCmdCopyImageToBuffer(cb, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                             buf, 1, &region);
 
-    VkImageMemoryBarrier to_shader = to_src;
-    to_shader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    to_shader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    to_shader.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    to_shader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    // Restore the original layout so the graph's per-pass transition()
+    // doesn't emit a redundant barrier next frame (and so the tracker
+    // stays consistent with what the GPU sees).
+    VkImageMemoryBarrier to_orig = to_src;
+    to_orig.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    to_orig.newLayout = cold->plat.vk_layout;
+    to_orig.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    to_orig.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
     vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-                          0, nullptr, 0, nullptr, 1, &to_shader);
+                          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
+                          0, nullptr, 0, nullptr, 1, &to_orig);
 
     vkEndCommandBuffer(cb);
     VkSubmitInfo si{};

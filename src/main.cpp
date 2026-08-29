@@ -182,15 +182,36 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event) {
             // viewport for input routing; LMB+Shift ALSO records a pick
             // intent at the click coord in viewport-local pixels (engine
             // resolves it once the GPU ID buffer + readback path lands).
-            app->engine->SetActiveViewportFromClickX(event->button.x);
+            // SDL3 mouse events are in window units (points). With
+            // SDL_WINDOW_HIGH_PIXEL_DENSITY the framebuffer / id_target_ is
+            // in pixels (2x on Retina). Scale to pixel space before
+            // passing to the engine.
+            const float density = SDL_GetWindowPixelDensity(app->window);
+            const float pix_x = event->button.x * density;
+            const float pix_y = event->button.y * density;
+            app->engine->SetActiveViewportFromClickX(pix_x);
             const SDL_Keymod mods = SDL_GetModState();
             if (mods & SDL_KMOD_SHIFT) {
                 const int vp = app->engine->ActiveViewport();
-                const uint32_t vp_w = app->engine->FrameWidth() / 2;
+                const uint32_t fb_w = app->engine->FrameWidth();
+                const uint32_t fb_h = app->engine->FrameHeight();
+                // Side-by-side split assumed by the existing viewport
+                // pane logic (#190 / #194). vp_w = fb_w / 2 for 2-up;
+                // single-viewport mode picks vp_w = fb_w.
+                const int n_live =
+                    app->engine->ActiveViewportCount() <= 0
+                        ? 1
+                        : app->engine->ActiveViewportCount();
+                const uint32_t vp_w = fb_w / static_cast<uint32_t>(n_live);
                 const uint32_t local_x = static_cast<uint32_t>(
-                    event->button.x - static_cast<float>(vp) *
-                                       static_cast<float>(vp_w));
-                const uint32_t local_y = static_cast<uint32_t>(event->button.y);
+                    pix_x - static_cast<float>(vp) *
+                            static_cast<float>(vp_w));
+                // No Y-flip: the forward pass's negative-height viewport
+                // maps NDC y=+1 (logical screen top) -> fragcoord_y=0
+                // (texture top-left), so screen-space y already matches
+                // id_target_ texel-space y directly.
+                const uint32_t local_y = static_cast<uint32_t>(pix_y);
+                (void)fb_h;
                 app->engine->RequestPick(vp, local_x, local_y);
             }
         }
