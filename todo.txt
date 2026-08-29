@@ -124,14 +124,15 @@ HUMAN TODO — kill the pimpl `Impl* impl_` heap indirection (make it compile-ti
   guarded backend headers (Vk*/MTL::*) — keep that contained, or use a fixed-size
   aligned storage buffer if header hygiene matters more than simplicity.
 
-DONE (mesh-level) — Aaltonen slide 26 (Pack Meshes): the draw-call structure is in.
-  Recorders now select each primitive via baseVertex/baseIndex in the draw call and
-  change-track the VB/IB binds (skip when the mesh buffer is unchanged), so per-draw
-  pos+attr+index binds collapse across same-mesh primitive runs. Byte-identical on metal.
-  REMAINING (full block-level pack, guaranteed 2-3 calls/draw): bind each stream ONCE per
-  frame at the 128MB block base and fold the mesh's region offset into baseVertex. Blocked
-  on co-aligning the pos and attr allocations: a single vkCmdDrawIndexed vertexOffset must
-  address both streams, which needs pos_region_off/16 == attr_region_off/64 (they are
-  separate bump allocations today, so this only holds within a mesh, not across the block).
-  Fix = co-allocate pos+attr in lockstep (or pull verts from one interleaved buffer), then
-  bind-once-per-block. Plan: ~/dev/plans/2026-05-27_gfx_drawcall-reduction-pack-meshes.md
+DONE — Aaltonen slide 26 (Pack Meshes). Two parts landed:
+  1. Recorders select each primitive via baseVertex/baseIndex in the draw call and
+     change-track the VB/IB binds (bind only when the mesh buffer changes).
+  2. LoadSceneGpu co-allocates the whole scene's verts in lockstep -- one shared pos
+     buffer + one shared attr buffer (vertex-aligned, NOT interleaved) + one shared index
+     buffer; every mesh shares those handles and prims carry a scene-global baseVertex/
+     baseIndex. So all of a scene's draws now resolve to the same buffers and the recorder
+     binds each stream ONCE per scene (was per mesh/draw). Byte-identical on metal.
+  Optional polish (not required): pos+attr are two lockstep-aligned buffers; physically
+  combining them into one [pos|attr] buffer needs a non-owning alias handle for the attr
+  section. And packing ACROSS scenes (one buffer set for all heroes) would need vertex-
+  quantized 128MB blocks so pos (16B/v) and attr (64B/v) don't desync at block edges.
