@@ -17,6 +17,7 @@
 
 #include <stb_image_write.h>
 
+#include "gfx_api.hpp"
 #include "rhi/swap_chain.hpp"
 #include "gpu_scene_registry.hpp"
 #include "util/misc.hpp"

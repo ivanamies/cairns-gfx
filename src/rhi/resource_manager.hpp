@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <compare>
+#include <filesystem>
 #include <initializer_list>
 #include <vector>
 
@@ -38,6 +39,8 @@ class Texture;
 class SamplerState;
 class RenderPipelineState;
 class ComputePipelineState;
+class RenderPassDescriptor;
+class DepthStencilState;
 }  // namespace MTL
 #endif  // CAIRNS_METAL
 
@@ -565,6 +568,20 @@ struct BackendInitParams {
     MTL::Device* device = nullptr;
     MTL::CommandQueue* queue = nullptr;
 };
+// App-owned per-frame Metal resources, registered once so BeginFrame/EndFrame +
+// CommandRecorder can drive them.
+struct MtlFrameResources {
+    MTL::CommandQueue* queue = nullptr;
+    void* semaphore = nullptr;  // dispatch_semaphore_t
+    MTL::RenderPassDescriptor* render_pass_desc = nullptr;
+    MTL::DepthStencilState* depth_stencil = nullptr;
+    MTL::Buffer* mesh_master = nullptr;
+    MTL::Device* device = nullptr;
+    SwapChain* sc = nullptr;
+    std::filesystem::path* dump_path = nullptr;
+    const Handle<Texture>* msaa = nullptr;
+    const Handle<Texture>* depth = nullptr;
+};
 #else
 struct BackendInitParams;
 #endif  // CAIRNS_VULKAN
@@ -655,6 +672,8 @@ public:
     MTL::Heap* GetMtlHeap(Handle<Buffer> h);
     MTL::Buffer* GetBumpMasterBuffer(Memory mem) const;
     Handle<BindGroup> CreateBindGroupFromMtlBuffer(MTL::Buffer* buf, uint32_t offset);
+    // Register app-owned per-frame resources for BeginFrame/EndFrame to drive.
+    void MtlRegisterFrame(const MtlFrameResources& res);
 #endif  // CAIRNS_METAL
 
 private:

@@ -51,6 +51,10 @@ struct ComputeDispatch {
     uint32_t groups_x = 1;
     uint32_t groups_y = 1;
     uint32_t groups_z = 1;
+    // Metal threadsPerThreadgroup (Vulkan ignores; encoded in the SPIR-V).
+    uint32_t local_x = 1;
+    uint32_t local_y = 1;
+    uint32_t local_z = 1;
 };
 
 struct MeshDrawList {

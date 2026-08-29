@@ -14,15 +14,23 @@
 #include <sstream>
 #include <string>
 
+#include <dispatch/dispatch.h>
+#include <vector>
+
 #include <Metal/Metal.hpp>
+#include <stb_image_write.h>
 
 #include "rhi/metal/memory_allocator.hpp"
+#include "rhi/command_recorder.hpp"
+#include "rhi/swap_chain.hpp"
+#include "gpu_scene_registry.hpp"
 
 namespace cairns::rhi {
 
 struct ResourceManager::Impl {
     BackendInitParams params;
     metal::MemoryAllocator memory;
+    MtlFrameResources frame_res;
 
     Pool<Buffer> buffers;
     Pool<Texture> textures;
@@ -769,6 +777,163 @@ void ResourceManager::BindlessFinalize(Handle<BindGroup>) {
         impl_->bindless_encoder->release();
         impl_->bindless_encoder = nullptr;
     }
+}
+
+void ResourceManager::MtlRegisterFrame(const MtlFrameResources& res) {
+    impl_->frame_res = res;
+}
+
+struct CommandRecorder::Impl {
+    ResourceManager* rm = nullptr;
+    MtlFrameResources fr;
+    MTL::CommandBuffer* cmd = nullptr;
+    MTL::RenderCommandEncoder* enc = nullptr;
+};
+
+void CommandRecorder::Dispatch(const ComputeDispatch& d) {
+    MTL::ComputeCommandEncoder* cenc = impl_->cmd->computeCommandEncoder();
+    cenc->setComputePipelineState(impl_->rm->GetHot(d.kernel)->api_pso);
+    for (size_t i = 0; i < d.buffers.size(); ++i) {
+        const BoundBuffer& b = d.buffers[i];
+        uint32_t off = 0;
+        MTL::Buffer* buf = impl_->rm->GetMtlBuffer(b.buffer, &off);
+        cenc->setBuffer(buf, off + b.offset, b.slot);
+    }
+    cenc->dispatchThreadgroups(MTL::Size{d.groups_x, d.groups_y, d.groups_z},
+                               MTL::Size{d.local_x, d.local_y, d.local_z});
+    cenc->endEncoding();
+}
+
+void CommandRecorder::BeginRenderPass(const RenderPassDesc&) {
+    impl_->enc = impl_->cmd->renderCommandEncoder(impl_->fr.render_pass_desc);
+}
+
+void CommandRecorder::DrawMeshes(const MeshDrawList& list) {
+    MTL::RenderCommandEncoder* enc = impl_->enc;
+    enc->setRenderPipelineState(impl_->rm->GetHot(list.pipeline)->api_pso);
+    enc->setDepthStencilState(impl_->fr.depth_stencil);
+    enc->setFrontFacingWinding(MTL::WindingCounterClockwise);
+    enc->setCullMode(MTL::CullModeBack);
+    {
+        BindGroup::Hot* bg = impl_->rm->GetHot(list.bindless);
+        MTL::Buffer* bg_buf = bg->api_descriptor_set;
+        const uint32_t bg_off = bg->arg_buf_offset;
+        enc->setVertexBuffer(bg_buf, bg_off, GpuSceneRegistry::kBindSlot);
+        enc->setFragmentBuffer(bg_buf, bg_off, GpuSceneRegistry::kBindSlot);
+    }
+    for (size_t i = 0; i < list.resident_textures.size(); ++i) {
+        MTL::Texture* tex = impl_->rm->GetHot(list.resident_textures[i])->api_view;
+        if (tex) {
+            enc->useResource(tex, MTL::ResourceUsageRead, MTL::RenderStageFragment);
+        }
+    }
+    enc->useResource(impl_->fr.mesh_master, MTL::ResourceUsageRead, MTL::RenderStageVertex);
+    enc->setVertexBuffer(impl_->fr.mesh_master, 0, 0);
+    MTL::Buffer* dyn_master = impl_->rm->GetBumpMasterBuffer(Memory::kDynamic);
+    enc->setVertexBuffer(dyn_master, 0, cairns::kRenderPassGlobalBindSlot);
+    enc->setVertexBuffer(dyn_master, 0, cairns::kMaterialBindSlot);
+    enc->setVertexBuffer(dyn_master, 0, cairns::kDrawTmpBindSlot);
+
+    uint32_t last_mat_off = std::numeric_limits<uint32_t>::max();
+    for (size_t i = 0; i < list.sorted_indices.size(); ++i) {
+        const cairns::Draw& draw = list.draws[list.sorted_indices[i]];
+        {
+            uint32_t pos_off = 0;
+            impl_->rm->GetMtlBuffer(draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot],
+                                    &pos_off);
+            enc->setVertexBufferOffset(pos_off, 0);
+        }
+        {
+            const uint32_t mat_off = draw.dynamic_buffer_offsets[0];
+            if (mat_off != last_mat_off) {
+                last_mat_off = mat_off;
+                enc->setVertexBufferOffset(mat_off, cairns::kMaterialBindSlot);
+            }
+        }
+        enc->setVertexBufferOffset(draw.dynamic_buffer_offsets[1], cairns::kDrawTmpBindSlot);
+        {
+            uint32_t index_master_off = 0;
+            MTL::Buffer* index_buffer = impl_->rm->GetMtlBuffer(draw.index_buffer, &index_master_off);
+            enc->drawIndexedPrimitives(MTL::PrimitiveTypeTriangle, draw.triangle_count * 3,
+                                       MTL::IndexTypeUInt32, index_buffer, draw.index_offset, 1,
+                                       draw.vertex_offset, 0);
+        }
+    }
+}
+
+void CommandRecorder::DrawPoints(const PointDraw& pd) {
+    impl_->enc->setRenderPipelineState(impl_->rm->GetHot(pd.pipeline)->api_pso);
+    uint32_t off = 0;
+    MTL::Buffer* buf = impl_->rm->GetMtlBuffer(pd.vertex_buffer, &off);
+    impl_->enc->setVertexBuffer(buf, off, 0);
+    impl_->enc->drawPrimitives(MTL::PrimitiveTypePoint, NS::UInteger(pd.vertex_offset),
+                               NS::UInteger(pd.vertex_count));
+}
+
+void CommandRecorder::EndRenderPass() {
+    impl_->enc->endEncoding();
+}
+
+FrameContext ResourceManager::BeginFrame(SwapChain& sc) {
+    MtlFrameResources& fr = impl_->frame_res;
+    dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(fr.semaphore),
+                            DISPATCH_TIME_FOREVER);
+    BeginFrame();  // bump ring reset
+
+    sc.NextDrawable();
+    MTL::Texture* msaa = GetHot(*fr.msaa)->api_view;
+    MTL::Texture* depth = GetHot(*fr.depth)->api_view;
+    UpdateRenderPassDescriptor(fr.render_pass_desc, msaa, depth, sc);
+
+    MTL::CommandBuffer* cmd = fr.queue->commandBuffer();
+    dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(fr.semaphore);
+    cmd->addCompletedHandler([sem](MTL::CommandBuffer*) { dispatch_semaphore_signal(sem); });
+
+    FrameContext fc;
+    fc.frame_index = 0;
+    fc.swapchain_image_index = 0;
+    fc.cmd.impl_ = new CommandRecorder::Impl{this, fr, cmd, nullptr};
+    return fc;
+}
+
+void ResourceManager::EndFrame(FrameContext& fc) {
+    CommandRecorder::Impl* ri = fc.cmd.impl_;
+    MtlFrameResources& fr = impl_->frame_res;
+    MTL::CommandBuffer* cmd = ri->cmd;
+
+    if (!fr.dump_path->empty()) {
+        MTL::Texture* drawableTex = fr.sc->GetDrawable()->texture();
+        const NS::UInteger w = drawableTex->width();
+        const NS::UInteger h = drawableTex->height();
+        const NS::UInteger bytesPerRow = w * 4;
+        const NS::UInteger bufSize = bytesPerRow * h;
+        MTL::Buffer* readback = fr.device->newBuffer(bufSize, MTL::ResourceStorageModeShared);
+        MTL::BlitCommandEncoder* blitEnc = cmd->blitCommandEncoder();
+        blitEnc->copyFromTexture(drawableTex, 0, 0, MTL::Origin{0, 0, 0}, MTL::Size{w, h, 1},
+                                 readback, 0, bytesPerRow, 0);
+        blitEnc->endEncoding();
+        cmd->presentDrawable(fr.sc->GetDrawable());
+        cmd->commit();
+        cmd->waitUntilCompleted();
+        std::vector<uint8_t> rgba(bufSize);
+        const uint8_t* bgra = static_cast<const uint8_t*>(readback->contents());
+        for (NS::UInteger i = 0; i < w * h; ++i) {
+            rgba[i * 4 + 0] = bgra[i * 4 + 2];
+            rgba[i * 4 + 1] = bgra[i * 4 + 1];
+            rgba[i * 4 + 2] = bgra[i * 4 + 0];
+            rgba[i * 4 + 3] = bgra[i * 4 + 3];
+        }
+        stbi_write_png(fr.dump_path->string().c_str(), static_cast<int>(w),
+                       static_cast<int>(h), 4, rgba.data(), static_cast<int>(bytesPerRow));
+        readback->release();
+        fr.dump_path->clear();
+    } else {
+        cmd->presentDrawable(fr.sc->GetDrawable());
+        cmd->commit();
+    }
+
+    delete ri;
+    fc.cmd.impl_ = nullptr;
 }
 
 }  // namespace cairns::rhi

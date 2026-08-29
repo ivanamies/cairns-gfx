@@ -578,7 +578,11 @@ private:
 
 #elif CAIRNS_METAL
 
-#include "gfx_api.hpp"
+#include <SDL3/SDL.h>
+#include <Foundation/Foundation.hpp>
+#include <Metal/Metal.hpp>
+#include <QuartzCore/QuartzCore.hpp>
+
 #include "util/size.hpp"
 
 namespace cairns::rhi {
@@ -631,9 +635,9 @@ private:
     CA::MetalLayer* metalLayer_ = nullptr;
 };
 
-bool InitRenderPassDescriptor(MTL::RenderPassDescriptor*& renderPassDescriptor,
-                              MTL::Texture* msaa, MTL::Texture* depth,
-                              SwapChain& swap_chain) {
+inline bool InitRenderPassDescriptor(MTL::RenderPassDescriptor*& renderPassDescriptor,
+                                     MTL::Texture* msaa, MTL::Texture* depth,
+                                     SwapChain& swap_chain) {
     renderPassDescriptor = MTL::RenderPassDescriptor::alloc()->init();
     MTL::RenderPassColorAttachmentDescriptor* colorAttachment =
         renderPassDescriptor->colorAttachments()->object(0);
@@ -652,9 +656,9 @@ bool InitRenderPassDescriptor(MTL::RenderPassDescriptor*& renderPassDescriptor,
     return true;
 }
 
-bool UpdateRenderPassDescriptor(MTL::RenderPassDescriptor* render_pass_desc,
-                                MTL::Texture* msaa, MTL::Texture* depth,
-                                SwapChain& swap_chain) {
+inline bool UpdateRenderPassDescriptor(MTL::RenderPassDescriptor* render_pass_desc,
+                                       MTL::Texture* msaa, MTL::Texture* depth,
+                                       SwapChain& swap_chain) {
     render_pass_desc->colorAttachments()->object(0)->setTexture(msaa);
     render_pass_desc->colorAttachments()->object(0)->setResolveTexture(
         swap_chain.GetDrawable()->texture());
