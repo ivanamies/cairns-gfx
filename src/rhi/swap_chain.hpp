@@ -7,6 +7,7 @@
 #pragma once
 
 #include "util/define.hpp"
+#include "util/log.hpp"
 
 #if CAIRNS_VULKAN
 
@@ -382,6 +383,23 @@ private:
         VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
         VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
         VkExtent2D extent = chooseSwapExtent(swapChainSupport.capabilities);
+
+        // Android Vulkan pre-rotation: currentTransform may be ROTATE_90/180/270.
+        // If we set preTransform=currentTransform we claim we pre-rotated the
+        // content -- but we didn't, so the OS doesn't rotate at present and
+        // display ends up rotated 90deg. Fix: request preTransform=IDENTITY
+        // when IDENTITY is supported; WSI handles the compositor rotation.
+        VkSurfaceTransformFlagBitsKHR preTransform =
+            swapChainSupport.capabilities.currentTransform;
+        const bool is_non_identity =
+            preTransform != VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+        const bool identity_supported =
+            (swapChainSupport.capabilities.supportedTransforms &
+             VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) != 0;
+        if (is_non_identity && identity_supported) {
+            preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+        }
+
         uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1;
         if (swapChainSupport.capabilities.maxImageCount > 0 &&
             imageCount > swapChainSupport.capabilities.maxImageCount) {
@@ -411,7 +429,7 @@ private:
             createInfo.queueFamilyIndexCount = 0;
             createInfo.pQueueFamilyIndices = nullptr;
         }
-        createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
+        createInfo.preTransform = preTransform;
         createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
         createInfo.presentMode = presentMode;
         createInfo.clipped = VK_TRUE;
