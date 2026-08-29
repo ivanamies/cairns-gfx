@@ -709,8 +709,22 @@ Handle<BindGroup> Resources::CreateSkinGroupA(Allocator& alloc,
 }
 
 Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
-    const DynamicBuffersDesc&) {
-    return Handle<DynamicBuffers>::Null;
+    const DynamicBuffersDesc& desc) {
+    // #222 Phase D.1 (vk minimal): store the binding layout in Cold +
+    // record binding_count on Hot. The VkDescriptorSetLayout + descriptor
+    // set construction is deferred to D.2 when the first consumer wires
+    // up (engine pre-allocates pool capacity by then). Returning a valid
+    // handle lets future code reference DynamicBuffers without rerouting
+    // through the old plat.*_set_layout_ path.
+    Handle<DynamicBuffers> h = dynamic_buffers.Acquire();
+    DynamicBuffers::Hot* hot = dynamic_buffers.GetHot(h);
+    DynamicBuffers::Cold* cold = dynamic_buffers.GetCold(h);
+    hot->api_descriptor_set = nullptr;
+    hot->binding_count =
+        static_cast<uint8_t>(desc.bindings.size());
+    cold->layout.assign(desc.bindings.begin(), desc.bindings.end());
+    cold->debug_name = desc.debug_name;
+    return h;
 }
 
 VkBuffer ResourcesPlat::GetVkBumpMasterBuffer(Allocator& alloc, Memory mem) {
