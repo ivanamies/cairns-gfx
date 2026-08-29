@@ -7,6 +7,41 @@ here.
 
 ---
 
+## Deferred — AFTER all #229 allocation-less milestones (M0b, M3–M7) land
+
+### Reload skinning-compute-binding crash (pre-existing, do AFTER #229)
+Hot-reloading a SKINNED/animated prefab while it is being rendered crashes the
+render thread ~`kFramesInFlight` frames after the reload. Pre-existing —
+confirmed byte-for-byte identical at the safepoint `21c893a` (before any #229
+work), so NOT a #229 regression. Park it until the allocation milestones are
+done, then fix.
+
+- **Symptom:** Metal API Validation:
+  `-[MTLDebugComputeCommandEncoder setBuffer:offset:attributeStride:atIndex:]:464:
+  failed assertion 'offset(71202720) must be 0.'` → `SIGSEGV` (exit 139) in the
+  render thread's `drawIndexedPrimitives`/compute encode. A compute kernel
+  (anim_eval / skinning) gets a garbage ~71 MB offset for a buffer that must be
+  bound at offset 0.
+- **Repro:** load a skinned glb (`aatrox.glb`) + instantiate + render + reload
+  the SAME path + render ≥2–3 frames. `build/spec-mac-metal/Release/wC3.ndjson`
+  reproduces; `MTL_DEBUG_LAYER=1 MTL_DEBUG_LAYER_ERROR_MODE=assert` surfaces the
+  assertion. `wC0`/`wC1` (0–1 post-reload frames) DON'T crash → it's the old
+  resources retiring at `+kFIF` while a draw still binds them.
+- **Already fixed (related):** the `UnloadAllPrefabs` variant of this race — it
+  released pool slots with no render-thread/GPU quiesce. Added `Drain()` +
+  `device.WaitIdle()` guard (#229 serve-SIGSEGV work). The reload path already
+  quiesces via `RuntimeLoadBatch`'s `WaitIdle`, so the reload crash is NOT a
+  mutation race — it's a stale skin offset after the `*oldH = std::move(*newH)`
+  swap (`ReloadPrefab`, engine.hpp). Suspect a stale `Mesh::Hot::batch_id` /
+  `per_batch_shared_skin_` index or a `skin_output_pool_` offset that isn't
+  re-pointed when the new prefab's meshes move into the old slot.
+- **CONSTRAINT:** the fix may touch the skin pool offsets (`skin_output_pool_`
+  / `RangePool`) — that's Aaltonen-canon. Get explicit permission before
+  modifying the offset allocator / pool; prefer fixing the BINDING code (which
+  offset is passed) over the pool.
+
+---
+
 ## Active
 
 ### #224 Loading system (P0) — COMPLETE (2026-06-13)

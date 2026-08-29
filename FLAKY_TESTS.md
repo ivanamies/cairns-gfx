@@ -76,12 +76,17 @@ The deterministic correctness gate for #229 is **macOS metal isolated runs**.
 
 ## Related non-test known issue (not a flake)
 
-- **`cairns_serve` exits 139 (SIGSEGV) at teardown** on a heavy scene (e.g. the
-  500-actor boot scene + reload). PRE-EXISTING and backend-independent (the
-  non-trace and trace binaries both crash identically); happens AFTER all work +
-  receipts flush, so it does not affect test results or the #229 alloc receipts.
-  Likely a shutdown teardown-order issue (engine deinit / ImGui / global dtors
-  with resident GPU resources). Separate from the flakes above.
+- **`cairns_serve` exit 139 (SIGSEGV)** — two distinct PRE-EXISTING causes:
+  - **unloadAll path: FIXED** (2026-06-19). `UnloadAllPrefabs` released pool
+    slots + freed resources with no render-thread/GPU quiesce, so an in-flight
+    frame drew freed meshes. Added `render_thread_->Drain()` +
+    `device.WaitIdle()` guard; `load+instantiate+render+clear+unloadAll` exits 0.
+  - **reload path: still open, DEFERRED to after #229** (TODO.md "Deferred").
+    Hot-reloading a skinned prefab mid-render crashes ~kFIF frames later. Metal
+    validation: `setBuffer ... offset(71202720) must be 0` — a skinning/anim
+    compute kernel binds a stale ~71 MB offset. Confirmed identical at safepoint
+    `21c893a`, NOT a #229 regression. Repro: `wC3.ndjson` under
+    `MTL_DEBUG_LAYER=1`.
 
 ---
 

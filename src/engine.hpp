@@ -1415,6 +1415,16 @@ public:
         if (n == 0) {
             return 0;
         }
+        // Quiesce the render thread + GPU before releasing pool slots and
+        // freeing resources. Otherwise an in-flight frame records draws against
+        // the meshes we Release here -- the render thread crashes in
+        // drawIndexedPrimitives on a freed index buffer (cairns_serve exit 139
+        // on the load+reload+unload path). Same guard RuntimeLoadBatch uses
+        // before mutating the pools.
+        if (render_thread_) {
+            render_thread_->Drain();
+        }
+        rhi_.device.WaitIdle();
         for (cairns::PrefabId pid : prefab_ids_) {
             cairns::Prefab::Hot* phot = prefabs_.GetHot(pid);
             cairns::Prefab::Cold* pcold = prefabs_.GetCold(pid);
