@@ -326,6 +326,12 @@ void ResourceManager::Deinit() {
             hot.api_sampler = nullptr;
         }
     });
+    if (impl_->bindless_pool) {
+        vkDestroyDescriptorPool(dev, impl_->bindless_pool, nullptr);
+    }
+    if (impl_->bindless_layout) {
+        vkDestroyDescriptorSetLayout(dev, impl_->bindless_layout, nullptr);
+    }
     delete impl_;
     impl_ = nullptr;
 }
