@@ -3,10 +3,13 @@
 // cairns_serve, ios, android). If this file is missing the asset bundle
 // is broken and the app aborts on launch.
 //
-// Default: 100 GLBs x 5 instantiateGrid passes = 500 actors, the perf
-// benchmark workload.
+// 100 GLBs, instantiated cairns.instancePasses times. The engine sets that
+// platform-aware: 5 on desktop = 500 actors, 1 on mobile = 100 actors, to fit
+// the Adreno/Apple tile budget. Falls back to 5 if unset.
 cairns.dispatch("cairns.prefab.loadBatch", { cursor: 0, count: 100 });
-for (let k = 0; k < 5; ++k) {
+const passes = (typeof cairns.instancePasses === "number")
+    ? cairns.instancePasses : 5;
+for (let k = 0; k < passes; ++k) {
     cairns.dispatch("cairns.scene.instantiateGrid",
                     { first_prefab_idx: 0, prefab_count: 100 });
 }

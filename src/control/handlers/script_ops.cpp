@@ -142,6 +142,15 @@ void BindAndAutoloadStudio(JSContext* ctx) {
     JSValue cairns_obj = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, cairns_obj, "dispatch",
                       JS_NewCFunction(ctx, &JsDispatch, "dispatch", 2));
+    // #229: instantiate-pass count for the boot workload, platform-aware so
+    // run.js renders 100 actors on mobile (Adreno/Apple tile budget) vs 500 on
+    // desktop. Derived from the persistent budget (mobile is floored to 256 MB)
+    // to avoid duplicating the __ANDROID__/iOS guard from memory_budget.hpp.
+    const bool mobile =
+        cairns::MemoryBudget::Default().cpu_persistent_bytes <=
+        512ull * 1024 * 1024;
+    JS_SetPropertyStr(ctx, cairns_obj, "instancePasses",
+                      JS_NewInt32(ctx, mobile ? 1 : 5));
     JS_SetPropertyStr(ctx, global, "cairns", cairns_obj);
     JS_FreeValue(ctx, global);
 
