@@ -43,6 +43,7 @@
 #include "render/render_graph.hpp"
 #include "render/render_scene.hpp"
 #include "render/render_thread.hpp"
+#include "scene/transform_propagation.hpp"
 
 #include <memory>
 #include "rhi/rhi.hpp"
@@ -433,16 +434,17 @@ public:
         s.pending_near_z = near_z;
         s.pending_far_z = far_z;
 
-        // Set the active world's root_transform + extract from its
-        // entt::registry. Pre-P7 there's no hierarchy, so
-        // WorldTransform.world is the leaf-instance transform set at
-        // world build; Extract composes node.globalTransform * (world *
+        // Set the active world's root_transform, run TRS hierarchy
+        // propagation (no-op when no entity carries a Transform; the
+        // current scene-load emplaces WorldTransform directly), then
+        // extract. Extract composes node.globalTransform * (world *
         // root_transform).
         {
             cairns::World::Hot* wh = worlds_.GetHot(active_world_);
             cairns::World::Cold* wc = worlds_.GetCold(active_world_);
             if (wh && wc) {
                 wh->root_transform = rot_matrix;
+                cairns::PropagateTransforms(*wc, glm::mat4(1.0f));
                 cairns::ExtractFromWorld(*wc, wh->root_transform, assets_,
                                          s.proxies);
             }
