@@ -124,7 +124,7 @@ one small op still to add so "left" composes from the current pose.)
 | **macOS Vulkan** | ✅ identical (one binary per backend) | ✅ identical | identical |
 | **iOS (sim/device, Metal)** | ✅ goldens on the simulator (xcodebuild) | ⚠ transport gap — no on-device stdin; needs a socket/USB NDJSON bridge | in-test PNG dump |
 | **Android (Vulkan)** | ✅ goldens via `adb` on AVD/device | ⚠ transport gap — `adb forward` socket NDJSON not yet wired | PNG pulled via `adb` |
-| **WebGPU native (macOS)** | ✅ surfaceless wgpu-native + NDJSON (`CAIRNS_GFX_BACKEND=webgpu`); golden gate renders triangle + die/two-die/viking, matches macos-metal | — no native window / no SDL; windowed WebGPU lives in the browser (next row) | offscreen readback → PNG |
+| **WebGPU native (macOS)** | ✅ surfaceless wgpu-native + NDJSON (`CAIRNS_GFX_BACKEND=webgpu`); golden gate renders triangle + die/two-die/viking, matches macos-metal | 🟡 M5: `SDL_WINDOW_METAL` + metal-layer surface (sdl3webgpu glue) + present-by-copy; `dev_drive.sh start wgpu`. Builds + boots clean (surface/device/pipelines OK); on-screen render unconfirmed in headless CI — verify interactively | offscreen readback → PNG |
 | **Web / Chrome (WASM)** | ✅ the SAME `src/main.cpp` SDL shell; boots + renders in headed AND headless Chrome (WebGPU via emdawnwebgpu); `[Timer]`/`[STEADY]` over the CDP console | ✅ headed Chrome: CDP `Input.dispatchMouseEvent` → SDL event → ImGui picker → scenario; `window.cairns.dispatch` bridge for sync ops (picker click needs headed) | CDP `Page.captureScreenshot` → PNG |
 
 ✅ wired · ⚠ partial (transport gap) · 🔭 planned (see `~/dev/plans/2026-06-21_gfx_webgpu-wgpu-native-standup.md`).

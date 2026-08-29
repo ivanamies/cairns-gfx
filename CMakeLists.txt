@@ -424,6 +424,10 @@ target_sources(${EXECUTABLE_NAME} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp"
 )
 target_link_libraries(${EXECUTABLE_NAME} PRIVATE cairns_core)
+# main.cpp gates the window's hi-dpi flags on the backend (webgpu present-by-copy
+# wants a 1:1 window); mirror the cairns_core/control backend define here.
+target_compile_definitions(${EXECUTABLE_NAME} PRIVATE
+    $<$<BOOL:${CAIRNS_GFX_BACKEND_WEBGPU}>:CAIRNS_WEBGPU=1>)
 
 # To get an app icon on Apple platforms, add it to your executable.
 if(APPLE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/logo.png")
@@ -621,6 +625,18 @@ if (APPLE)
         set_source_files_properties("${SPV_FILE}" PROPERTIES
             HEADER_FILE_ONLY TRUE
             XCODE_EXPLICIT_FILE_TYPE "file"
+        )
+    endforeach()
+
+    # 2.6 Add Shaders (*.wgsl) as RAW TEXT. Native windowed WebGPU (sdl-min,
+    # BACKEND=webgpu) reads them at runtime from Resources/, same as the .metal /
+    # .spv the other backends load; harmless (unused) in the metal/vk apps.
+    file(GLOB SHADER_FILES "${input_root}/*.wgsl")
+    foreach(WGSL_FILE ${SHADER_FILES})
+        add_resource("${WGSL_FILE}")
+        set_source_files_properties("${WGSL_FILE}" PROPERTIES
+            HEADER_FILE_ONLY TRUE
+            XCODE_EXPLICIT_FILE_TYPE "text"
         )
     endforeach()
 

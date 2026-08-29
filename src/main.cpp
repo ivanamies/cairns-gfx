@@ -162,10 +162,12 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     SDL_Window* window = nullptr;
     cairns::Engine* engine = nullptr;
 
-    // Web: fixed 1280x720, no HIGH_PIXEL_DENSITY -- the canvas is 1:1 with the
-    // final_target + surface; a dpr-scaled canvas would fight the copy-present.
+    // Fixed 1280x720, no HIGH_PIXEL_DENSITY on BOTH webgpu shells (web canvas +
+    // native metal-layer): they present by copying the 1280x720 final_target
+    // into the surface, so a dpr-scaled window would blit-scale (blurry). Only
+    // metal/vk (direct swapchain) take the window's native hi-dpi backing.
     SDL_WindowFlags win_flags = cairns::shell::BackendWindowFlag();
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !CAIRNS_WEBGPU
     win_flags |= SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
 #endif
     window = SDL_CreateWindow(

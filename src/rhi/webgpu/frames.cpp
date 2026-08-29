@@ -91,7 +91,13 @@ void Frames::Present(const SwapResolveTarget& target, FrameCapture& frame_captur
                                                  WGPUTextureUsage_CopyDst);
         sc.width = target.width;
         sc.height = target.height;
-        sc.alphaMode = WGPUCompositeAlphaMode_Auto;
+#ifdef __EMSCRIPTEN__
+        sc.alphaMode = WGPUCompositeAlphaMode_Auto;  // browser canvas is opaque
+#else
+        // A fresh CAMetalLayer is transparent under Auto -> the alpha-0 render
+        // lets the desktop show through the window. Force opaque on native.
+        sc.alphaMode = WGPUCompositeAlphaMode_Opaque;
+#endif
         sc.presentMode = WGPUPresentMode_Fifo;
         wgpuSurfaceConfigure(plat.surface_, &sc);
         plat.surface_w_ = target.width;

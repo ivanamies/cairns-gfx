@@ -65,6 +65,7 @@ case "$cmd" in
     case "$backend" in
       metal) app=build/metal/Debug/sdl-min.app/Contents/MacOS/sdl-min ;;
       vk)    app=build/vk/Debug/sdl-min.app/Contents/MacOS/sdl-min ;;
+      wgpu)  app=build/wgpu/Debug/sdl-min.app/Contents/MacOS/sdl-min ;;
       *) echo "unknown backend: $backend" >&2; exit 2 ;;
     esac
     [ -x "$app" ] || { echo "$app missing -- build sdl-min first" >&2; exit 1; }
