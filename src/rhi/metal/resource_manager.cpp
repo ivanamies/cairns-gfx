@@ -810,7 +810,12 @@ void CommandRecorder::Dispatch(const ComputeDispatch& d) {
     cenc->endEncoding();
 }
 
-void CommandRecorder::BeginRenderPass(const RenderPassDesc&) {
+void CommandRecorder::BeginRenderPass(const RenderPassDesc& desc) {
+    if (!desc.color.empty()) {
+        const float* c = desc.color[0].clear;
+        impl_->fr.render_pass_desc->colorAttachments()->object(0)->setClearColor(
+            MTL::ClearColor(c[0], c[1], c[2], c[3]));
+    }
     impl_->enc = impl_->cmd->renderCommandEncoder(impl_->fr.render_pass_desc);
 }
 

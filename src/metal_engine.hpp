@@ -537,7 +537,16 @@ public:
         cd.local_x = 256;
         fc.cmd.Dispatch(cd);
 
+        rhi::ColorAttachment col[1]{};
+        col[0].clear[0] = 41.0f / 255.0f;
+        col[0].clear[1] = 42.0f / 255.0f;
+        col[0].clear[2] = 48.0f / 255.0f;
+        col[0].clear[3] = 1.0f;
         rhi::RenderPassDesc rp{};
+        rp.color = rhi::Span<const rhi::ColorAttachment>(col, 1);
+        rp.depth.clear_depth = 1.0f;
+        rp.width = swapChain_->GetDrawableSize().width;
+        rp.height = swapChain_->GetDrawableSize().height;
         fc.cmd.BeginRenderPass(rp);
 
         rhi::MeshDrawList ml{};

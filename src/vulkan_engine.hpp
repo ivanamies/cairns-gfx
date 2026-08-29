@@ -2062,9 +2062,9 @@ private:
         fc.cmd.Dispatch(cd);
 
         rhi::ColorAttachment col[1]{};
-        col[0].clear[0] = 0.0f;
-        col[0].clear[1] = 0.0f;
-        col[0].clear[2] = 0.0f;
+        col[0].clear[0] = 41.0f / 255.0f;
+        col[0].clear[1] = 42.0f / 255.0f;
+        col[0].clear[2] = 48.0f / 255.0f;
         col[0].clear[3] = 1.0f;
         rhi::RenderPassDesc rp{};
         rp.color = rhi::Span<const rhi::ColorAttachment>(col, 1);
