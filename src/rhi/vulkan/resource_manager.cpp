@@ -626,6 +626,26 @@ void ResourceManager::Deinit() {
     if (impl_->point_layout) {
         vkDestroyDescriptorSetLayout(dev, impl_->point_layout, nullptr);
     }
+    impl_->shaders.ForEachLive([dev](Shader::Hot& hot, Shader::Cold&) {
+        if (hot.vk_pipeline) {
+            vkDestroyPipeline(dev, hot.vk_pipeline, nullptr);
+            hot.vk_pipeline = VK_NULL_HANDLE;
+        }
+        if (hot.vk_layout) {
+            vkDestroyPipelineLayout(dev, hot.vk_layout, nullptr);
+            hot.vk_layout = VK_NULL_HANDLE;
+        }
+    });
+    impl_->kernels.ForEachLive([dev](Kernel::Hot& hot, Kernel::Cold&) {
+        if (hot.vk_pipeline) {
+            vkDestroyPipeline(dev, hot.vk_pipeline, nullptr);
+            hot.vk_pipeline = VK_NULL_HANDLE;
+        }
+        if (hot.vk_layout) {
+            vkDestroyPipelineLayout(dev, hot.vk_layout, nullptr);
+            hot.vk_layout = VK_NULL_HANDLE;
+        }
+    });
     const VkInstance inst = impl_->instance;
     const VkDebugUtilsMessengerEXT dbg = impl_->debug_messenger;
     const VkSurfaceKHR surf = impl_->surface;
