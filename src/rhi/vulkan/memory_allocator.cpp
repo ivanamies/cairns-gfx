@@ -7,6 +7,8 @@
 #include "rhi/vulkan/memory_allocator.hpp"
 
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 
 namespace cairns::rhi::vulkan {
 
@@ -148,6 +150,17 @@ bool MemoryAllocator::CreateBumpHeap() {
     void* mapped = nullptr;
     vkMapMemory(device_, memory, 0, VK_WHOLE_SIZE, 0, &mapped);
 
+    // V-METAL flake defense: HOST_VISIBLE Vulkan memory is NOT
+    // zero-initialized; the mapped region carries prior VRAM contents. The
+    // bump ring is meant to be CPU-fills-then-GPU-reads each frame, so
+    // contents should not matter -- but pre-allocating a known state
+    // eliminates an entire class of "GPU reads bytes the CPU didn't write"
+    // bugs from the suspect list. Matches the Metal allocator pattern.
+    if (mapped) {
+        const uint8_t pat = std::getenv("CAIRNS_GARBAGE_BUMP") ? 0xCC : 0x00;
+        std::memset(mapped, pat, total);
+    }
+
     uint64_t bda = 0;
     if (bda_enabled_) {
         VkBufferDeviceAddressInfo info{};
@@ -283,7 +296,18 @@ bool MemoryAllocator::CreateBufferBlock(uint32_t bytes, BufferUsage usage,
         mem_props_.memoryTypes[type_idx].propertyFlags;
     if (prop_flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
         vkMapMemory(device_, memory, 0, VK_WHOLE_SIZE, 0, &mapped);
+        // Match the bump heap: HOST_VISIBLE memory is not zero-initialized.
+        if (mapped) {
+            const uint8_t pat = std::getenv("CAIRNS_GARBAGE_BUMP") ? 0xCC : 0x00;
+            std::memset(mapped, pat, bytes);
+        }
     }
+    // DEVICE_LOCAL memory cannot be CPU-memset. Defense-in-depth: any code
+    // path that reads a sub-region BEFORE the corresponding UploadBuffer
+    // blit would consume prior VRAM contents -- which is the V-METAL flake
+    // signature. Eliminating this requires a vkCmdFillBuffer on the master
+    // buffer at init; not yet wired (would need a one-shot command pool
+    // here). Documented in the V-METAL memory.
 
     uint64_t bda = 0;
     if (bda_enabled_) {
