@@ -38,6 +38,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <cstdint>
+#include <numbers>
 #include <string>
 
 namespace cairns {
@@ -83,6 +84,27 @@ struct DirtyTransform {};
 // signature explicitly does not get the Name component).
 struct Name {
     std::string value;
+};
+
+// Camera role #2 (Camera as a placed entity, per the resizing+cameras
+// plan): attach this + a WorldTransform to an entity to make it a
+// camera that a Viewport can bind to. Pose comes from the entity's
+// WorldTransform; intrinsics live here.
+//
+// Convention: camera looks down -Z in its local frame (right-hand
+// system, matching the engine's fly-cam math). The view matrix is
+// inverse(WorldTransform.world) once Engine resolves the binding.
+//
+// is_main: convenience flag for tooling -- the studio surface's
+// Camera.main returns the first entity with is_main = true in the
+// active world. Multiple is_main entities is a configuration error;
+// the studio surface complains loudly (no implicit fallback per
+// Refinement 1 of the resizing+cameras plan).
+struct CameraComponent {
+    float fov_y_rad = 90.0f * std::numbers::pi_v<float> / 180.0f;
+    float near_z = 0.1f;
+    float far_z = 100.0f;
+    bool is_main = false;
 };
 
 }  // namespace cairns

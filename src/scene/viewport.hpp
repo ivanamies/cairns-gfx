@@ -17,6 +17,7 @@
 #include "rhi/resource_manager.hpp"
 #include "scene/world.hpp"
 
+#include <entt/entt.hpp>
 #include <glm/glm.hpp>
 
 #include <cstdint>
@@ -39,6 +40,11 @@ struct Viewport {
     uint32_t target_w = 0;
     uint32_t target_h = 0;
     bool camera_dirty = true;
+    // Camera role #2: when non-null, the viewport's Camera is resolved
+    // from this entity's WorldTransform + CameraComponent each frame.
+    // entt::null means "use FlyController" (Camera role #1). Resolution
+    // happens once per frame in BuildMeshOpaqueDraws.
+    entt::entity camera_entity = entt::null;
 };
 
 // Per-viewport navigation state. yaw rotates around world up (Y); pitch around

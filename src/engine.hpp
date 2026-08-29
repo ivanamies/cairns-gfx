@@ -687,30 +687,64 @@ public:
         const float fov = 90 * (std::numbers::pi / 180.0f);
         const float near_z = 0.1f;
         const float far_z = 100.0f;
-        const glm::mat4 proj_matrix = glm::perspectiveRH_ZO(fov, aspect_ratio, near_z, far_z);
+        // proj built per-viewport below since CameraComponent may override
+        // fov / near_z / far_z.
+        // Per-viewport camera resolve. Camera role #1 (FlyController):
+        // viewport.camera_entity == entt::null; FlyController state drives
+        // pose. Camera role #2 (placed CameraComponent entity): the entity
+        // owns a WorldTransform (pose) + CameraComponent (intrinsics) in
+        // the active world's registry. WorldTransform.world is the camera-
+        // to-world matrix; the view matrix is its inverse.
+        cairns::World::Cold* wc_cam = worlds_.GetCold(active_world_);
         for (int v = 0; v < kNumViewports; ++v) {
-            cairns::FlyController& fc = fly_[v];
-            const float cy = std::cos(fc.yaw);
-            const float sy = std::sin(fc.yaw);
-            const float cp = std::cos(fc.pitch);
-            const float sp = std::sin(fc.pitch);
-            const glm::vec3 camera_pos = fc.position;
-            const glm::vec3 camera_dir(-cp * sy, sp, -cp * cy);
-            const glm::vec3 world_up(0, 1, 0);
-            const glm::mat4 view_matrix = glm::lookAtRH(camera_pos,
-                                                          camera_pos + camera_dir,
-                                                          world_up);
-            const glm::mat4 view_proj = proj_matrix * view_matrix;
+            const cairns::Viewport& vp = viewports_[v];
+            const bool entity_cam =
+                vp.camera_entity != entt::null && wc_cam &&
+                wc_cam->registry.all_of<cairns::WorldTransform,
+                                         cairns::CameraComponent>(vp.camera_entity);
+            glm::vec3 camera_pos;
+            glm::vec3 camera_dir;
+            glm::mat4 view_matrix;
+            float vp_fov = fov;
+            float vp_near = near_z;
+            float vp_far = far_z;
+            if (entity_cam) {
+                const cairns::CameraComponent& cc =
+                    wc_cam->registry.get<cairns::CameraComponent>(vp.camera_entity);
+                const cairns::WorldTransform& wt =
+                    wc_cam->registry.get<cairns::WorldTransform>(vp.camera_entity);
+                vp_fov = cc.fov_y_rad;
+                vp_near = cc.near_z;
+                vp_far = cc.far_z;
+                view_matrix = glm::inverse(wt.world);
+                camera_pos = glm::vec3(wt.world[3]);
+                // -Z in local space is the camera's forward in world space.
+                camera_dir = glm::normalize(glm::vec3(-wt.world[2]));
+            } else {
+                const cairns::FlyController& fc = fly_[v];
+                const float cy = std::cos(fc.yaw);
+                const float sy = std::sin(fc.yaw);
+                const float cp = std::cos(fc.pitch);
+                const float sp = std::sin(fc.pitch);
+                camera_pos = fc.position;
+                camera_dir = glm::vec3(-cp * sy, sp, -cp * cy);
+                view_matrix = glm::lookAtRH(camera_pos,
+                                             camera_pos + camera_dir,
+                                             glm::vec3(0, 1, 0));
+            }
+            const glm::mat4 vp_proj =
+                glm::perspectiveRH_ZO(vp_fov, aspect_ratio, vp_near, vp_far);
+            const glm::mat4 view_proj = vp_proj * view_matrix;
             s.pending_globals[v] = cairns::rhi::RenderPassGlobals {
                 .view_proj = view_proj,
                 .inv_view_proj = glm::inverse(view_proj),
                 .camera_pos = glm::vec4(camera_pos, 1.0f /*exposure */),
-                .camera_dir = glm::vec4(camera_dir, near_z),
+                .camera_dir = glm::vec4(camera_dir, vp_near),
                 .screen_params = glm::vec4(vp_w, vp_h, 1.0f / vp_w, 1.0f / vp_h)
             };
             s.pending_view_matrix[v] = view_matrix;
-            s.pending_near_z[v] = near_z;
-            s.pending_far_z[v] = far_z;
+            s.pending_near_z[v] = vp_near;
+            s.pending_far_z[v] = vp_far;
         }
 
         // Set the active world's root_transform, run TRS hierarchy
