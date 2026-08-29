@@ -73,3 +73,45 @@ always-on total; `print_allocator` (already deployed on e.g.
 _No-regression gate for later milestones:_ frame ≤ 6666 us, skinning_compute
 ≤ 3921 us, correctness suites green (spec 105/105, scenarios 96/97 [G6 #9b
 pre-existing], stress 8/8, jsmoke 4/4).
+
+---
+
+## M1 — AnimationSampler flat read (commit pending)
+
+Parse now stores glTF accessor handles only; the selected walk clip's keyframes
+are read straight into the flat `gpu_times/gpu_values` at flatten time. The
+per-sampler `vector<float> times` / `vector<vec4> values` heap pairs (one per
+sampler, all clips) are gone, and unused clips cost zero keyframe reads. Dead
+`SampleSampler`/`SampleClip` deleted. **GPU anim data byte-identical.**
+
+### Correctness
+spec 105/105, **stress 8/8** (100 animated champions byte-identical), scenarios
+96/97 (only G6 imgui #9b, pre-existing), animated subject hashes unchanged.
+
+### Perf (no regression)
+frame avg **6670 us** (run 2; baseline 6666), skinning_compute 3928 us
+(baseline 3921). Run-to-run noise ±5% — M1 touches only the load path, GPU
+passes read byte-identical buffers.
+
+### Alloc (the kill)
+
+| phase | M0 baseline | M1 | reduction |
+|---|---|---|---|
+| **reload aatrox.glb** | 65,687 a / **65,652 f** | 2,025 a / **1,990 f** | **97%** |
+| load aatrox.glb | 65,632 a | 1,970 a | 97% |
+| load ahri.glb | 80,389 a | 12,009 a | 85% |
+| load aatrox_blood_moon.glb | 68,016 a | 2,158 a | 97% |
+| boot load (100 GLBs) | 5,400,016 a | **500,872 a** | **91%** |
+
+The reload allocation storm is gone (65.7k frees → 2.0k). Residual ~2k/load is
+the remaining load-time vectors (mesh cpu*, the flat `gpu_*` push_back growth,
+node/clip/channel vectors) — M3 (pre-size from accessor metadata) + M5 targets.
+ahri's larger residual = more keyframes in its walk clip.
+
+**vk goldens are STALE (pre-existing, NOT an M1 regression).** vk
+`[stress]`/`[scenarios]` fail on STATIC subjects too (one die, viking room) —
+impossible for M1 (anim-only) to cause, and the identical M1 code renders them
+byte-identical on metal. The vk refs were never re-baked after the JS conversion
+(`4f87f47`, metal-only). **Metal is the trusted correctness gate** for #229; vk
+is compile-checked + the no-behavior-change argument. vk re-bake is a separate
+follow-up.

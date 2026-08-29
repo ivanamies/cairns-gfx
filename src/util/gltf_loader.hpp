@@ -241,11 +241,14 @@ enum class AnimationPath : uint8_t {
 };
 
 struct AnimationSampler {
-    // For T/S/weights: x/y/z in .xyz (w ignored). For R: full quat in .xyzw.
-    // Packing as vec4 keeps the sampler payload backend-agnostic and avoids
-    // a tagged union; readers branch on the channel's path.
-    std::vector<float> times;
-    std::vector<glm::vec4> values;
+    // #229 M1: keyframes are NOT read at parse. Parse stores the glTF accessor
+    // handles + the output's value shape; only the SELECTED walk clip's
+    // samplers are read (into the flat gpu_times/gpu_values) at flatten time,
+    // so the dozens of unused clips cost zero keyframe allocations. value_kind:
+    // 0=Vec3 (T/S, widen w=0), 1=Vec4 (R quat), 2=Scalar (weights, .x).
+    uint32_t input_accessor = 0;
+    uint32_t output_accessor = 0;
+    uint8_t value_kind = 0;
     AnimationInterpolation interp = AnimationInterpolation::kLinear;
 };
 
@@ -700,34 +703,16 @@ inline bool LoadPrefabFromGltf(const std::filesystem::path& path,
                     s.interp = AnimationInterpolation::kLinear;
                     break;
             }
-            auto& tAcc = asset.accessors[gs.inputAccessor];
-            s.times.reserve(tAcc.count);
-            fastgltf::iterateAccessor<float>(asset, tAcc,
-                [&](float t) { s.times.push_back(t); });
-            if (!s.times.empty() && s.times.back() > out.duration) {
-                out.duration = s.times.back();
-            }
-            auto& vAcc = asset.accessors[gs.outputAccessor];
-            s.values.reserve(vAcc.count);
-            // fastgltf maps SCALAR/VEC2/VEC3/VEC4 accessors uniformly when
-            // read as vec4 by widening with zeros; quat output (VEC4) maps
-            // cleanly. For SCALAR (weights) we widen via the vec4 iterator
-            // pattern by reading raw and packing into .x.
-            if (vAcc.type == fastgltf::AccessorType::Vec3) {
-                fastgltf::iterateAccessor<glm::vec3>(asset, vAcc,
-                    [&](glm::vec3 v) {
-                        s.values.push_back(glm::vec4(v, 0.0f));
-                    });
-            } else if (vAcc.type == fastgltf::AccessorType::Vec4) {
-                fastgltf::iterateAccessor<glm::vec4>(asset, vAcc,
-                    [&](glm::vec4 v) { s.values.push_back(v); });
-            } else if (vAcc.type == fastgltf::AccessorType::Scalar) {
-                fastgltf::iterateAccessor<float>(asset, vAcc,
-                    [&](float v) {
-                        s.values.push_back(glm::vec4(v, 0.0f, 0.0f, 0.0f));
-                    });
-            }
-            out.samplers.push_back(std::move(s));
+            // #229 M1: store accessor handles only -- the keyframes are read
+            // lazily for the selected walk clip below, so dozens of unused
+            // clips cost zero keyframe allocations.
+            s.input_accessor = static_cast<uint32_t>(gs.inputAccessor);
+            s.output_accessor = static_cast<uint32_t>(gs.outputAccessor);
+            const auto& vAcc = asset.accessors[gs.outputAccessor];
+            s.value_kind = (vAcc.type == fastgltf::AccessorType::Vec4)     ? 1
+                           : (vAcc.type == fastgltf::AccessorType::Scalar) ? 2
+                                                                           : 0;
+            out.samplers.push_back(s);
         }
         out.channels.reserve(ganim.channels.size());
         for (const auto& gc : ganim.channels) {
@@ -837,20 +822,44 @@ inline bool LoadPrefabFromGltf(const std::filesystem::path& path,
     }
     if (!cold.clips.empty()) {
         const Clip& clip = cold.clips[static_cast<size_t>(walk_clip)];
-        cold.gpu_clip_duration = clip.duration;
         cold.gpu_samplers.reserve(clip.samplers.size());
+        float clip_dur = 0.0f;
         for (const AnimationSampler& s : clip.samplers) {
             GpuSampler gs{};
             gs.times_off = static_cast<uint32_t>(cold.gpu_times.size());
             gs.values_off = static_cast<uint32_t>(cold.gpu_values.size());
-            gs.count = static_cast<uint32_t>(s.times.size());
             gs.interp = static_cast<uint32_t>(s.interp);
+            // #229 M1: read keyframes straight from the glTF accessors into the
+            // flat tables -- only the walk clip pays the read + the allocation.
+            const auto& tAcc = asset.accessors[s.input_accessor];
+            const size_t t_begin = cold.gpu_times.size();
+            cold.gpu_times.reserve(t_begin + tAcc.count);
+            fastgltf::iterateAccessor<float>(asset, tAcc,
+                [&](float t) { cold.gpu_times.push_back(t); });
+            gs.count = static_cast<uint32_t>(cold.gpu_times.size() - t_begin);
+            if (cold.gpu_times.size() > t_begin &&
+                cold.gpu_times.back() > clip_dur) {
+                clip_dur = cold.gpu_times.back();
+            }
+            const auto& vAcc = asset.accessors[s.output_accessor];
+            cold.gpu_values.reserve(cold.gpu_values.size() + vAcc.count);
+            if (s.value_kind == 1) {  // Vec4 (rotation quat, .xyzw)
+                fastgltf::iterateAccessor<glm::vec4>(asset, vAcc,
+                    [&](glm::vec4 v) { cold.gpu_values.push_back(v); });
+            } else if (s.value_kind == 2) {  // Scalar (weights -> .x)
+                fastgltf::iterateAccessor<float>(asset, vAcc,
+                    [&](float v) {
+                        cold.gpu_values.push_back(glm::vec4(v, 0.0f, 0.0f, 0.0f));
+                    });
+            } else {  // Vec3 (T/S -> widen w=0)
+                fastgltf::iterateAccessor<glm::vec3>(asset, vAcc,
+                    [&](glm::vec3 v) {
+                        cold.gpu_values.push_back(glm::vec4(v, 0.0f));
+                    });
+            }
             cold.gpu_samplers.push_back(gs);
-            cold.gpu_times.insert(cold.gpu_times.end(),
-                                   s.times.begin(), s.times.end());
-            cold.gpu_values.insert(cold.gpu_values.end(),
-                                    s.values.begin(), s.values.end());
         }
+        cold.gpu_clip_duration = clip_dur;
         cold.gpu_channels.reserve(clip.channels.size());
         for (const AnimationChannel& ch : clip.channels) {
             GpuChannel gc{};
