@@ -38,8 +38,8 @@ struct ParticleSystem {
 
     // Particle RNG seed; takes effect on the next initParticles.
     uint32_t random_seed = 42;
-    // A.2 gate: particle_sim + particle_draw omitted entirely when false.
-    bool enabled = false;
+    // #229 C3: the sim/draw gate moved to a per-scene ParticleEmitterComponent
+    // (Engine::AnyBoundSceneHasEmitter). No global enable flag here.
 };
 
 }  // namespace cairns

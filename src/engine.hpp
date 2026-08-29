@@ -671,13 +671,59 @@ public:
     // = false). G1 particles scenario + G3 right-viewport flip on; everything
     // else stays off so the captured frames are "pipeline + clear + meshes",
     // no std::rand-shaped contamination.
-    void EnableParticles(bool on) { particles_.enabled = on; }
+    // #229 C3: the emitter is a per-scene component (ParticleEmitterComponent)
+    // on the active scene, not an engine flag. Presence gates the global sim +
+    // draw; Viewport::Cold::particles_enabled still filters per-viewport draw.
+    void EnableParticles(bool on) {
+        cairns::Scene::Cold* sc = scene_mgr_.pool.GetCold(scene_mgr_.active);
+        if (!sc) {
+            return;
+        }
+        auto& reg = sc->registry;
+        if (on) {
+            if (reg.view<cairns::ParticleEmitterComponent>().empty()) {
+                reg.emplace<cairns::ParticleEmitterComponent>(reg.create());
+            }
+        } else {
+            const auto v = reg.view<cairns::ParticleEmitterComponent>();
+            const std::vector<entt::entity> doomed(v.begin(), v.end());
+            for (entt::entity e : doomed) {
+                reg.destroy(e);
+            }
+        }
+    }
+    bool ParticlesEnabled() { return AnyBoundSceneHasEmitter(); }
     // A.3 single red NDC triangle (no scene): pipeline + clear + one draw.
     void SetTinyTriangle(bool on) { tiny_quad_test_ = on; }
     // G4: compose color + resolved-depth + extra-camera passes (the viewports
     // supplying the extra cameras are opened/aimed by the caller in JS).
     void SetNestedGraphMode(bool on) { nested_graph_mode_ = on; }
-    bool ParticlesEnabled() const { return particles_.enabled; }
+    // #229 C3: particle sim + draw gate -- any active viewport's bound scene
+    // (or the active scene) carrying a ParticleEmitterComponent.
+    bool AnyBoundSceneHasEmitter() {
+        if (cairns::Scene::Cold* sc =
+                scene_mgr_.pool.GetCold(scene_mgr_.active)) {
+            if (!sc->registry.view<cairns::ParticleEmitterComponent>()
+                     .empty()) {
+                return true;
+            }
+        }
+        for (int v = 0; v < viewport_mgr_.active_count; ++v) {
+            cairns::Viewport::Hot* vh =
+                viewport_mgr_.pool.GetHot(viewport_mgr_.ids[v]);
+            if (!vh) {
+                continue;
+            }
+            if (cairns::Scene::Cold* sc =
+                    scene_mgr_.pool.GetCold(vh->scene)) {
+                if (!sc->registry.view<cairns::ParticleEmitterComponent>()
+                         .empty()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
 
     // #229 imgui panel hook: the app (sdl-min) hands a callback that draws extra
     // imgui windows (the scenario launcher) into the HUD frame. Raw fn ptr + ctx

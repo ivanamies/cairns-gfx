@@ -127,4 +127,11 @@ struct CameraComponent {
     bool is_main = false;
 };
 
+// #229 C3: presence in a scene's registry gates the particle compute + draw
+// (was the global Engine flag particles_.enabled). Per-scene, so [N-node] node
+// K can emit while node J doesn't. Empty tag today -- the sim reads its params
+// from the engine-global ParticleSystem; a future per-emitter config adds
+// render::EmitterParams here once the kernel consumes them.
+struct ParticleEmitterComponent {};
+
 }  // namespace cairns

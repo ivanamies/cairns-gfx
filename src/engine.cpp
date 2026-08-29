@@ -1479,8 +1479,11 @@ void Engine::RecordFrame(FramePacket& pkt) {
         // it (external side effect -- game thread reads particle_parity_out).
         // A.2 gate: when particles_.enabled=false the pass is omitted entirely;
         // sim_out stays default-null, no readers downstream so prune drops it.
+        // #229 C3: emitter-component presence gates the sim (was the global
+        // particles_.enabled flag). Computed once; the draw pass reuses it.
+        const bool particles_active = AnyBoundSceneHasEmitter();
         rhi::GraphBuffer sim_out;
-        if (particles_.enabled) {
+        if (particles_active) {
         graph_->AddPass(
             "particle_sim", rhi::PassType::kCompute,
             [&](rhi::PassBuilder& b) {
@@ -1509,7 +1512,7 @@ void Engine::RecordFrame(FramePacket& pkt) {
                     cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
                 }
             });
-        }  // particles_.enabled
+        }  // particles_active (emitter gate)
 
         // pass 2: forward, ONCE PER VIEWPORT. Each pass writes to a private
         // half-width color+depth target. Particles render into both viewports
@@ -1568,7 +1571,7 @@ void Engine::RecordFrame(FramePacket& pkt) {
                     if (auto* vc = viewport_mgr_.pool.GetCold(viewport_mgr_.ids[vp_idx])) {
                         vp_particles = vc->particles_enabled;
                     }
-                    if (particles_.enabled && vp_particles) {
+                    if (particles_active && vp_particles) {
                         cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
                     }
                     // A.3: L1 single red triangle. tiny_quad_test_ flips this
@@ -2831,7 +2834,8 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
         dump_and_exit_ = !engine_cfg_.dump_path.empty();
         golden_ = engine_cfg_.use_fixed_clock || dump_and_exit_;
         tiny_quad_test_ = engine_cfg_.tiny_quad;
-        particles_.enabled = engine_cfg_.particles_enabled;
+        // #229 C3: particles_enabled config -> emitter on the active scene,
+        // installed after InitInitialViewport() below (the scene must exist).
 
         if (golden_) {
             clock_ = std::make_unique<cairns::FixedClock>(cairns::kFixedDt);
@@ -2862,6 +2866,12 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
         // layout / viewport_mgr_.active / name table. Runs AFTER initResourceManagers
         // so viewport_mgr_.pool is already Reserve'd onto cpu_block_ (chunk-backed).
         InitInitialViewport();
+
+        // #229 C3: config-driven default emitter (CLI/serve `particles_enabled`)
+        // now that the active scene + viewport exist.
+        if (engine_cfg_.particles_enabled) {
+            EnableParticles(true);
+        }
 
         // Pin every viewport's fly controller to the override pose so byte-
         // gate dumps are deterministic. Pre-P1 reference pose is
