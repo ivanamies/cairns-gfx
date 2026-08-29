@@ -2053,6 +2053,12 @@ private:
         for (const auto& [key, idx] : drawListSorted_) {
             sorted_draw_indices_.push_back(idx);
         }
+        resident_textures_.clear();
+        for (auto& s : scenes_) {
+            for (const auto th : s.textureHandles) {
+                resident_textures_.push_back(th);
+            }
+        }
 
         rhi::ComputeDispatch cd{};
         cd.kernel = particle_kernel_;
@@ -2080,6 +2086,8 @@ private:
         ml.pipeline = unlit_shader_;
         ml.bindless = bindless_bg_;
         ml.globals_offset = globals_offset_;
+        ml.resident_textures = rhi::Span<const rhi::Handle<rhi::Texture>>(
+            resident_textures_.data(), resident_textures_.size());
         fc.cmd.DrawMeshes(ml);
 
         rhi::PointDraw pd{};
@@ -2373,6 +2381,7 @@ private:
     std::vector<cairns::Draw> drawList_;
     std::vector<std::pair<cairns::DrawKey, uint32_t>> drawListSorted_;
     std::vector<uint32_t> sorted_draw_indices_;
+    std::vector<rhi::Handle<rhi::Texture>> resident_textures_;
 
     VkDescriptorPool descriptorPool;
     std::vector<VkDescriptorSet> descriptorSets;
