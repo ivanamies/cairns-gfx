@@ -12,6 +12,7 @@
 
 #include "rhi/frames.hpp"
 #include "rhi/device.hpp"
+#include "rhi/frame_capture.hpp"
 #include "rhi/gpu_profiler.hpp"
 #include "rhi/resources.hpp"
 #include "rhi/resource_manager.hpp"  // kFramesInFlight
@@ -154,8 +155,7 @@ void dump_swapchain_image(VkDevice device, VkPhysicalDevice phys,
 
 Frames::~Frames() { Deinit(); }
 
-bool Frames::Init(Device& device, GpuProfiler& gpu_profiler) {
-    plat.gpu_profiler_ = &gpu_profiler;
+bool Frames::Init(Device& device) {
     if (inited_) {
         return true;
     }
@@ -484,10 +484,6 @@ void Frames::Deinit() {
     inited_ = false;
 }
 
-void Frames::SetDumpPath(const std::filesystem::path& path) {
-    capture_.dump_path = path;
-}
-
 // Framebuffers in the offscreen cache are sized at create-time against the
 // prior swap dims; the (w, h) check inside get_offscreen_fb wouldn't match
 // the new dims so they'd grow unboundedly. Wipe them on resize; render passes
@@ -532,6 +528,7 @@ void Frames::WriteUnlitDescriptors(Resources& resources, Allocator& alloc) {
 }
 
 FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
+                            GpuProfiler& gpu_profiler,
                             const SwapResolveTarget& target) {
     // Surfaceless mode (target.plat.swap_chain == nullptr): no swapchain
     // image to acquire, no image_available semaphore to signal, no present.
@@ -551,7 +548,7 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
 
     // Both queues' slot-`cf` timestamps are now resolved -- read them BEFORE
     // resetting fences / cmd buffers / the query pool itself.
-    GpuProfilerPlat& gp = plat.gpu_profiler_->plat;
+    GpuProfilerPlat& gp = gpu_profiler.plat;
     {
         const uint32_t ncomp = gp.compute_pass_count_[cf];
         const uint32_t ngfx = gp.pass_count_[cf];
@@ -652,7 +649,8 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
 
 // Render-thread safe. End all open command buffers + vkQueueSubmit both
 // queues. Does NOT call vkQueuePresentKHR -- see Present below.
-void Frames::EndSubmit(const SwapResolveTarget& target, FrameContext& fc) {
+void Frames::EndSubmit(const SwapResolveTarget& target,
+                        FrameCapture& /*frame_capture*/, FrameContext& fc) {
     const bool surfaceless = target.plat.swap_chain == nullptr;
     CommandRecorder& ri = fc.cmd;
     const uint32_t cf = fc.frame_index;
@@ -690,7 +688,8 @@ void Frames::EndSubmit(const SwapResolveTarget& target, FrameContext& fc) {
 // (-[CALayer setNeedsDisplayInRect:]) which is documented main-thread-only.
 // Calling from a render-thread worker fires CA_ASSERT_MAIN_THREAD_TRANSACTIONS
 // under Instruments (and is undefined behavior otherwise).
-void Frames::Present(const SwapResolveTarget& target, FrameContext& fc) {
+void Frames::Present(const SwapResolveTarget& target,
+                      FrameCapture& frame_capture, FrameContext& fc) {
     if (fc.skip_frame) {
         return;
     }
@@ -721,7 +720,7 @@ void Frames::Present(const SwapResolveTarget& target, FrameContext& fc) {
         plat.recreate_pending_.store(true, std::memory_order_release);
     }
 
-    if (!capture_.dump_path.empty()) {
+    if (frame_capture.Pending()) {
         vkQueueWaitIdle(plat.present_queue_);
         dump_swapchain_image(plat.device_, plat.physical_,
                              plat.command_pool_, plat.graphics_queue_,
@@ -729,8 +728,8 @@ void Frames::Present(const SwapResolveTarget& target, FrameContext& fc) {
                              sc.plat.swapChainImageFormat,
                              sc.plat.swapChainExtent.width,
                              sc.plat.swapChainExtent.height,
-                             capture_.dump_path.string().c_str());
-        capture_.dump_path.clear();
+                             frame_capture.Path().string().c_str());
+        frame_capture.Clear();
     }
 
 }

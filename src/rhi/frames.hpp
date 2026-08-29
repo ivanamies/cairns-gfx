@@ -28,6 +28,7 @@ class Device;
 class Resources;
 class Allocator;
 class GpuProfiler;
+class FrameCapture;
 struct SwapChain;
 
 class Frames {
@@ -37,10 +38,9 @@ public:
     Frames(const Frames&) = delete;
     Frames& operator=(const Frames&) = delete;
 
-    // CALLER: ENGINE. #222 Phase F.1: profiler owned by Rhi; Frames
-    // stashes a pointer so Begin can stamp it onto the recorder + run
-    // the per-FIF readback against ts_pool_.
-    [[nodiscard]] bool Init(Device& device, GpuProfiler& gpu_profiler);
+    // CALLER: ENGINE. Stateless wrt the sibling subsystems --
+    // GpuProfiler / FrameCapture are passed per-call to Begin/EndSubmit.
+    [[nodiscard]] bool Init(Device& device);
     // CALLER: ENGINE.
     void Deinit();
 
@@ -50,8 +50,10 @@ public:
     [[nodiscard]] bool InitTargets(Resources& resources, Allocator& alloc,
                                     uint32_t width, uint32_t height);
 
-    // CALLER: ENGINE (per-frame draw loop).
+    // CALLER: ENGINE (per-frame draw loop). #222 Phase F.1: profiler
+    // passed per-call so Frames doesn't hold a sibling pointer.
     FrameContext Begin(Resources& resources, Allocator& alloc,
+                       GpuProfiler& gpu_profiler,
                        const SwapResolveTarget& target);
 
     // Two-phase frame end. EndSubmit runs on the render thread: it commits
@@ -69,11 +71,19 @@ public:
     //
     // Vulkan: vkQueueSubmit is thread-safe; vkQueuePresentKHR on MoltenVK
     // touches CALayer and MUST run on main.
-    void EndSubmit(const SwapResolveTarget& target, FrameContext& fc);
-    void Present(const SwapResolveTarget& target, FrameContext& fc);
+    // #222 Phase F.2: frame_capture passed per-call so the dump path
+    // doesn't live as engine-side back-pointer state. vk fires the dump
+    // inside Present (post vkQueuePresentKHR); metal inside EndSubmit
+    // (after the blit + waitUntilCompleted). The unused side ignores it.
+    void EndSubmit(const SwapResolveTarget& target,
+                    FrameCapture& frame_capture, FrameContext& fc);
+    void Present(const SwapResolveTarget& target,
+                  FrameCapture& frame_capture, FrameContext& fc);
 
-    // Request a one-shot swapchain dump on the next End(). CALLER: ENGINE.
-    void SetDumpPath(const std::filesystem::path& path);
+    // #222 Phase F.2: SetDumpPath retired -- call
+    // Rhi::frame_capture.SetDumpPath() instead. The dump still fires
+    // inside EndSubmit (needs the backend swap image), but the request
+    // surface lives on FrameCapture.
 
     // #222 Phase D.3 cleanup: WriteSkinGroupBDescriptors +
     // WriteAnimEvalDescriptors retired -- skin Group B + anim_eval set 0
@@ -96,13 +106,6 @@ public:
 
     // Backend state. Pipelines reads plat.*_set_layout_ (vk pipeline layouts).
     FramesPlat plat;
-    // #222 Phase F.2: FrameCapture nest -- the swap-image dump path. Frames
-    // checks capture_.dump_path on EndSubmit and runs the stb_image_write
-    // path when set. Grouped so the capture surface (currently one field;
-    // future: format, ROI) reads as a unit.
-    struct FrameCapture {
-        std::filesystem::path dump_path;
-    } capture_;
 
 private:
     bool inited_ = false;

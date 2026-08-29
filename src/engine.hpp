@@ -220,7 +220,7 @@ public:
     }
 
     bool RequestViewportDump(const std::filesystem::path& path) {
-        rhi_.frames.SetDumpPath(path);
+        rhi_.frame_capture.SetDumpPath(path);
         return true;
     }
 
@@ -790,7 +790,7 @@ public:
             CAIRNS_PRINT("GreaterInit: gpu_profiler.Init failed\n");
             return false;
         }
-        if (!rhi_.frames.Init(rhi_.device, rhi_.gpu_profiler)) {
+        if (!rhi_.frames.Init(rhi_.device)) {
             CAIRNS_PRINT("GreaterInit: frames.Init failed\n");
             return false;
         }
@@ -2004,7 +2004,7 @@ public:
             rhi::SwapResolveTarget present_target = ps.present_target;
             ps.present_ready = false;
             lk.unlock();
-            rhi_.frames.Present(present_target, present_fc);
+            rhi_.frames.Present(present_target, rhi_.frame_capture, present_fc);
         }
         prev_present_slot_ = static_cast<int32_t>(slot);
 
@@ -2112,14 +2112,15 @@ public:
         parity_cv_.notify_all();
 
         if (pkt.request_dump) {
-            rhi_.frames.SetDumpPath(pkt.dump_path);
+            rhi_.frame_capture.SetDumpPath(pkt.dump_path);
         }
 
         // Engine -- not the RHI -- picks the per-frame swap target. Windowed:
         // pull the next drawable from the SwapChain. Surfaceless: hand Frames
         // the engine-owned offscreen, with no drawable so it doesn't present.
         rhi::SwapResolveTarget swap_target = AcquireFrameSwapTarget();
-        rhi::FrameContext fc = rhi_.frames.Begin(rhi_.resources, rhi_.alloc, swap_target);
+        rhi::FrameContext fc = rhi_.frames.Begin(
+            rhi_.resources, rhi_.alloc, rhi_.gpu_profiler, swap_target);
         if (fc.skip_frame) {
             std::lock_guard<std::mutex> lk(present_m_);
             s.present_fc = fc;
@@ -2602,7 +2603,7 @@ public:
         graph_->SetOutput(swap_tex);
         if (!graph_->Bake(pkt.slot) || !graph_->Execute(fc, swap_target)) {
             t_record.End();
-            rhi_.frames.EndSubmit(swap_target, fc);
+            rhi_.frames.EndSubmit(swap_target, rhi_.frame_capture, fc);
             {
                 std::lock_guard<std::mutex> lk(present_m_);
                 s.present_fc = fc;
@@ -2628,7 +2629,7 @@ public:
             fprintf(stderr, "\n");
         }
         t_record.End();
-        rhi_.frames.EndSubmit(swap_target, fc);
+        rhi_.frames.EndSubmit(swap_target, rhi_.frame_capture, fc);
         {
             std::lock_guard<std::mutex> lk(present_m_);
             s.present_fc = fc;

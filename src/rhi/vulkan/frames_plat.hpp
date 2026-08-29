@@ -13,11 +13,6 @@
 #include "rhi/command_recorder.hpp"  // OffscreenTargetCache + kMaxPasses + kCompositeRingSize
 
 namespace cairns::rhi {
-class GpuProfiler;
-}  // namespace cairns::rhi
-
-
-namespace cairns::rhi {
 
 struct FramesPlat {
     VkDevice device_ = VK_NULL_HANDLE;          // mirrored from Device
@@ -63,10 +58,6 @@ struct FramesPlat {
     // last-bound-wins fix).
     std::vector<std::array<VkDescriptorSet, kCompositeRingSize>> composite_sets_;
     OffscreenTargetCache offscreen_target_cache_;
-    // #222 Phase F.1: GpuProfiler state moved out of Frames. The recorder
-    // pointer chain (CommandRecorderPlat::profiler_) is stamped by
-    // Frames::Begin to address into Rhi::gpu_profiler.plat instead.
-    GpuProfiler* gpu_profiler_ = nullptr;
 };
 
 }  // namespace cairns::rhi

@@ -12,6 +12,8 @@
 
 #include "rhi/frames.hpp"
 #include "rhi/device.hpp"
+#include "rhi/frame_capture.hpp"
+#include "rhi/gpu_profiler.hpp"
 #include "rhi/resources.hpp"
 #include "rhi/resource_manager.hpp"  // kFramesInFlight
 #include "rhi/swap_chain.hpp"
@@ -72,7 +74,7 @@ void update_render_pass_desc(MTL::RenderPassDescriptor* rpd,
 
 Frames::~Frames() { Deinit(); }
 
-bool Frames::Init(Device& device, GpuProfiler& /*gpu_profiler*/) {
+bool Frames::Init(Device& device) {
     if (inited_) {
         return true;
     }
@@ -121,10 +123,6 @@ void Frames::Deinit() {
     inited_ = false;
 }
 
-void Frames::SetDumpPath(const std::filesystem::path& path) {
-    capture_.dump_path = path;
-}
-
 // Metal: drawable resize is implicit per-frame (see frames.cpp:101-120 -- the
 // MSAA + depth targets are reallocated when drawable size changes). Nothing
 // to flush.
@@ -138,6 +136,7 @@ void Frames::WriteUnlitDescriptors(Resources& /*resources*/,
 }
 
 FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
+                            GpuProfiler& /*gpu_profiler*/,
                             const SwapResolveTarget& target) {
     dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(plat.frame_semaphore_),
                             DISPATCH_TIME_FOREVER);
@@ -177,6 +176,7 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
 }
 
 void Frames::Present(const SwapResolveTarget& /*target*/,
+                       FrameCapture& /*frame_capture*/,
                        FrameContext& /*fc*/) {
     // Metal presentDrawable is enqueued via the command buffer in
     // EndSubmit (thread-safe per Apple's command-buffer rules). No
@@ -184,7 +184,8 @@ void Frames::Present(const SwapResolveTarget& /*target*/,
     // the vk path -- the engine calls this on the main thread regardless.
 }
 
-void Frames::EndSubmit(const SwapResolveTarget& target, FrameContext& fc) {
+void Frames::EndSubmit(const SwapResolveTarget& target,
+                        FrameCapture& frame_capture, FrameContext& fc) {
     CommandRecorder& ri = fc.cmd;
     if (ri.plat.cmd_ != nullptr) {
         // Encoded work without a PassTimerEnd -- commit the orphan so the GPU
@@ -197,7 +198,7 @@ void Frames::EndSubmit(const SwapResolveTarget& target, FrameContext& fc) {
     MTL::Texture* swap_tex = target.plat.texture;
     CA::MetalDrawable* drawable = target.plat.drawable;
 
-    if (!capture_.dump_path.empty() && swap_tex) {
+    if (frame_capture.Pending() && swap_tex) {
         const NS::UInteger w = swap_tex->width();
         const NS::UInteger h = swap_tex->height();
         const NS::UInteger bytesPerRow = w * 4;
@@ -241,10 +242,10 @@ void Frames::EndSubmit(const SwapResolveTarget& target, FrameContext& fc) {
             rgba[i * 4 + 2] = bgra[i * 4 + 0];
             rgba[i * 4 + 3] = bgra[i * 4 + 3];
         }
-        stbi_write_png(capture_.dump_path.string().c_str(), static_cast<int>(w),
+        stbi_write_png(frame_capture.Path().string().c_str(), static_cast<int>(w),
                        static_cast<int>(h), 4, rgba.data(), static_cast<int>(bytesPerRow));
         readback->release();
-        capture_.dump_path.clear();
+        frame_capture.Clear();
     } else {
         if (drawable) {
             term->presentDrawable(drawable);
