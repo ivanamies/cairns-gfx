@@ -12,6 +12,9 @@
 #include <numbers>
 #include <variant>
 
+#include <condition_variable>
+#include <mutex>
+
 #include <stb_image_write.h>
 
 #include "gfx_api.hpp"
@@ -399,8 +402,9 @@ public:
     // byte layout in the kDynamic ring is byte-equivalent to pre-refactor.
     // Writes s.globals_offset, s.drawList[*].dynamic_buffer_offsets[0..1],
     // s.dt_off. delta_time pulled in by parameter (carried in pkt).
-    void EncodeDraws(uint32_t slot, float delta_time) {
-        PerSlot& s = slots_[slot];
+    void EncodeDraws(const FramePacket& pkt) {
+        PerSlot& s = slots_[pkt.slot];
+        const float delta_time = pkt.delta_time;
         // 1. globals UBO.
         void* gptr = rhi_.alloc.BumpAllocate(
             sizeof(cairns::rhi::RenderPassGlobals), rhi_.alloc.UboAlign(),
@@ -415,7 +419,7 @@ public:
                     "vp22=%.9f vp32=%.9f goff=%u parity=%u\n",
                     frame_, swapchain_.Width(), swapchain_.Height(), aspect_ratio,
                     vp[0][0], vp[1][1], vp[2][2], vp[3][2],
-                    s.globals_offset, particle_parity_);
+                    s.globals_offset, pkt.particle_parity_in);
         }
 
         // 2. Per-draw material + draw_tmp UBOs in stable_idx order.
@@ -509,7 +513,16 @@ public:
         s.pkt.near_z = s.pending_near_z;
         s.pkt.far_z = s.pending_far_z;
         s.pkt.delta_time = delta_time;
-        s.pkt.particle_parity_in = particle_parity_;
+        // Wait for the previous frame's render-thread-published parity. In
+        // steady state Acquire(slot) already established the happens-after,
+        // so this rarely actually blocks.
+        {
+            std::unique_lock<std::mutex> lk(parity_m_);
+            parity_cv_.wait(lk, [&] {
+                return latest_parity_frame_ + 1 >= frame_;
+            });
+            s.pkt.particle_parity_in = latest_parity_out_;
+        }
         s.pkt.draws = std::span<const cairns::Draw>(s.drawList.data(), s.drawList.size());
         s.pkt.sorted = std::span<const std::pair<cairns::DrawKey, uint32_t>>(
             s.drawListSorted.data(), s.drawListSorted.size());
@@ -593,7 +606,6 @@ public:
             render_thread_->Drain();
         }
 
-        particle_parity_ ^= 1;
         t_frame.End();
         if (frame_ % 120 == 0) {
             const size_t loaded = scenes_.size();
@@ -620,6 +632,17 @@ public:
 #endif
         PerSlot& s = slots_[pkt.slot];
 
+        // Publish parity early -- it's a pure function of pkt.particle_parity_in
+        // (no GPU dependency), so the game thread's parity_cv wait clears
+        // immediately, not gated on GPU completion.
+        pkt.particle_parity_out = pkt.particle_parity_in ^ 1;
+        {
+            std::lock_guard<std::mutex> lk(parity_m_);
+            latest_parity_out_ = pkt.particle_parity_out;
+            latest_parity_frame_ = pkt.frame_idx;
+        }
+        parity_cv_.notify_all();
+
         if (pkt.request_dump) {
             rhi_.frames.SetDumpPath(pkt.dump_path);
         }
@@ -627,7 +650,7 @@ public:
         rhi::FrameContext fc = rhi_.frames.Begin(rhi_.resources, rhi_.alloc, swapchain_);
 
         cairns::Timer t_record("record", 2);
-        EncodeDraws(pkt.slot, pkt.delta_time);
+        EncodeDraws(pkt);
 
         rhi::BoundBuffer cbufs[3] = {
             {0, rhi_.alloc.BumpMasterBuffer(rhi::Memory::kDynamic), s.dt_off},
@@ -684,8 +707,6 @@ public:
         fc.cmd.PassTimerEnd();
         t_record.End();
         rhi_.frames.End(swapchain_, fc);
-
-        pkt.particle_parity_out = pkt.particle_parity_in ^ 1;
 #if CAIRNS_METAL
         rt_pool->release();
 #endif
@@ -973,8 +994,15 @@ private:
     rhi::Handle<rhi::Kernel> particle_kernel_;
     rhi::Handle<rhi::Shader> particle_render_shader_;
     rhi::Handle<rhi::Buffer> particle_ssbo_[2];
-    uint32_t particle_parity_ = 0;
     std::unique_ptr<cairns::RenderThread> render_thread_;
+    // Render thread writes back particle_parity_out under parity_m_ so the
+    // game thread can chain frame N+1's parity_in from frame N's parity_out
+    // without sharing a mutable counter. In steady state Acquire(slot N+1)
+    // already happens-after Release of slot N, so the cv wait is a no-op.
+    std::mutex parity_m_;
+    std::condition_variable parity_cv_;
+    uint32_t latest_parity_out_ = 0;
+    uint64_t latest_parity_frame_ = 0;
     uint64_t last_ticks_ = 0;
     // cpu frame-time history (wall-clock between draw() calls) for the imgui graph
     static constexpr int kCpuMsHistory = 128;
