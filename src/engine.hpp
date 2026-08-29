@@ -1057,17 +1057,27 @@ public:
         return true;
     }
 
-    // #269: nuke every entity in active_scene_'s registry. Best-effort:
-    // the registry is cleared but skin_output_pool_ slices + per-actor
-    // alias buffer handles are leaked (no skin Release path yet). Fine
-    // for a handful of clears during a debug session; do NOT loop this
-    // unbounded -- the pool fills. Returns the entity count cleared.
     uint32_t ClearActiveScene() {
         cairns::Scene::Cold* wc = scenes_.GetCold(active_scene_);
         if (!wc) {
             return 0;
         }
         auto& reg = wc->registry;
+        auto skin_view = reg.view<const cairns::SkinRef>();
+        for (auto e : skin_view) {
+            const cairns::SkinId sid = skin_view.get<const cairns::SkinRef>(e).id;
+            if (auto* sc = skins_.GetCold(sid)) {
+                if (sc->slice.IsValid()) {
+                    skin_output_pool_.Free(sc->slice);
+                }
+            }
+            if (auto* sh = skins_.GetHot(sid)) {
+                if (!sh->pos_stream.IsNull()) {
+                    rhi_.resources.buffers.Release(sh->pos_stream);
+                }
+            }
+            skins_.Release(sid);
+        }
         const uint32_t n =
             static_cast<uint32_t>(reg.storage<entt::entity>().size());
         reg.clear();
@@ -1899,7 +1909,7 @@ public:
         // MemoryAllocator::AllocBuffer, so we land in our own VkDeviceMemory.
         {
             static constexpr uint32_t kSkinOutputBytes =
-                256u * 1024u * 1024u;
+                1024u * 1024u * 1024u;
             rhi::BufferDesc bd{};
             bd.byte_size = kSkinOutputBytes;
             bd.usage = rhi::kUsageStorage | rhi::kUsageVertex;
