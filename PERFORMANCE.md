@@ -1302,7 +1302,10 @@ Different present model: MoltenVK swapchain (`present_wait`+`acquire_wait`+`fenc
 
 ### Takeaways
 - **GPU skinning (`skinning_compute` ~5.4 ms)** is the single biggest cost on both
-  backends — 500 skinned actors through the anim_eval/palette compute path.
+  backends — 500 skinned actors through the anim_eval/palette compute path. NOTE:
+  5.4 ms is misleadingly high — the GPU isn't really engaged here (low clock /
+  power-saving state). Profiled with the GPU forced to maximum, `skinning_compute`
+  is **~2 ms**. Treat the 5.4 ms as an idle-clock reading, not the real ceiling.
 - CPU frame work is cheap (~1.4–1.6 ms); `build_draws` dominates it (~1.2–1.4 ms).
 - Metal `record` (0.93 ms) is ~2.5× vk `record` (0.37 ms).
 - Present accounting differs by backend (Metal main-thread pacing vs MoltenVK
