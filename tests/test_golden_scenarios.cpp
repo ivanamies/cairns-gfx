@@ -21,43 +21,30 @@
 namespace seam = cairns::test_seams;
 namespace refs = cairns::test_refs;
 
-// 1) PARTICLES -- VK-tutorial style compute particles.
-//    Building block: [spec][particles][determinism] (deterministic emitter).
-SCENARIO("particles render deterministically across platforms",
+// 1) PARTICLES -- VK-tutorial style compute particles. NO render output: the
+//    sim runs headless and we hash the particle STATE buffer (CPU-side
+//    readback) after a fixed number of fixed-dt steps. Deterministic by the
+//    portable ParticleRng seed + fixed clock, so a SHARED cross-platform ref --
+//    a divergence is a real GPU-sim difference, not an RNG or render-readback
+//    flake. Building block: [spec][particles][determinism].
+SCENARIO("particles simulate deterministically (no render, state hash)",
          "[golden][scenarios][particles]") {
     cairns::Engine e;
     REQUIRE(seam::BootHeadless(e, 512, 512));
-    REQUIRE(seam::AdvanceToGoldenFrame(e));
-
-    // G1 image SECTION: A.1 switched initParticles to ParticleRng, so
-    // particles are now byte-stable across runs. Re-enabled.
     seam::EnableParticles(e, true);  // override the default-off Phase A.2 gate
-    REQUIRE(seam::AdvanceFrames(e, 9));
-    SECTION("golden image (per-platform)") {
-        std::vector<uint8_t> rgba;
-        uint32_t w = 0;
-        uint32_t h = 0;
-        REQUIRE(seam::ReadFinalTargetRgba(e, rgba, w, h));
-        const std::string observed = seam::Md5Hex(rgba);
-        const std::string ref = refs::LoadImageRef("particles", seam::PlatformKey(), observed);
-        if (ref.empty()) {
-            SKIP("bake particles image ref");
-        }
-        REQUIRE(observed == ref);
+    REQUIRE(seam::AdvanceFrames(e, 64));  // settle the sim at a fixed frame
+
+    std::vector<uint8_t> buf;
+    if (!seam::ReadParticleBuffer(e, buf)) {
+        SKIP("ReadBackBuffer not wired on this backend");
     }
-    SECTION("cross-platform particle buffer (shared ref)") {
-        std::vector<uint8_t> buf;
-        if (!seam::ReadParticleBuffer(e, buf)) {
-            SKIP("particle buffer diff requires the deterministic emitter "
-                 "(replace std::rand) -- see [spec][particles][determinism]");
-        }
-        const std::string observed = seam::Md5Hex(buf);
-        const std::string ref = refs::LoadSkinRef("particles.buf", observed);
-        if (ref.empty()) {
-            SKIP("bake shared particle buffer ref");
-        }
-        REQUIRE(observed == ref);
+    REQUIRE(!buf.empty());
+    const std::string observed = seam::Md5Hex(buf);
+    const std::string ref = refs::LoadSkinRef("particles.state", observed);
+    if (ref.empty()) {
+        SKIP("bake shared particle state ref");
     }
+    REQUIRE(observed == ref);
 }
 
 // 2) HOT LOAD / RELOAD -- spawn 4, check; spawn 5 different, check; clear, check.
@@ -68,7 +55,7 @@ SCENARIO("hot reload: spawn, replace, and clear stay correct",
     // exist). 4 + 5 distinct heroes; the 5-after-4 path exercises the
     // ResourceManager generation-bump recycle (#228 regression).
     const std::vector<std::string> first  = {"aatrox.glb","ahri.glb","akali.glb","alistar.glb"};
-    const std::vector<std::string> second = {"amumu.glb","anivia.glb","aatrox_blood_moon.glb","ahri_academy.glb","akali_2022_prestige_k_da.glb"};
+    const std::vector<std::string> second = {"amumu.glb","aatrox_drx.glb","aatrox_blood_moon.glb","ahri_academy.glb","akali_2022_prestige_k_da.glb"};
     if (!seam::AssetsPresent(first) || !seam::AssetsPresent(second)) {
         SKIP("hot-reload assets absent");
     }
@@ -82,6 +69,7 @@ SCENARIO("hot reload: spawn, replace, and clear stay correct",
         uint32_t w = 0;
         uint32_t h = 0;
         REQUIRE(seam::ReadFinalTargetRgba(e, rgba, w, h));
+        seam::DumpFinalTargetPng(e, tag);
         const std::string observed = seam::Md5Hex(rgba);
         const std::string ref = refs::LoadImageRef(tag, seam::PlatformKey(), observed);
         if (ref.empty()) {
@@ -99,19 +87,20 @@ SCENARIO("hot reload: spawn, replace, and clear stay correct",
     checkpoint("hot_reload.empty");
 }
 
-// 3) RENDER GRAPH 1 -- two framebuffers side by side. LEFT glb has NO particles;
-//    RIGHT glb HAS particles.
-//    Building block: [spec][draw_key] (viewport ordering) + [spec][schedule]
-//                    + [spec][particles].
-SCENARIO("two viewports: left plain, right with particles",
+// 3) RENDER GRAPH 1 -- two viewports bound to two DISTINCT scenes: a different
+//    hero in each (vp0 left = scene A, vp1 right = scene B + particles). This is
+//    the multi-scene per-viewport draw fan-out (#195) -- a single-scene engine
+//    renders the SAME hero in both halves, which is exactly the gap this catches.
+//    Building block: [spec][draw_key] (viewport ordering) + [spec][schedule].
+SCENARIO("two viewports, two scenes: a different hero in each",
          "[golden][scenarios][render_graph]") {
-    if (!seam::AssetsPresent({"lol_a.glb","lol_b.glb"})) {
+    if (!seam::AssetsPresent({"aatrox.glb","ahri.glb"})) {
         SKIP("assets absent");
     }
     cairns::Engine e;
     REQUIRE(seam::BootHeadless(e, 1024, 512));
-    REQUIRE(seam::SpawnGlbs(e, {"lol_a.glb"}, false));
-    REQUIRE(seam::OpenSecondViewport(e, "lol_b.glb", 0.0f, true));
+    REQUIRE(seam::SetupTwoSceneViewports(e, "aatrox.glb", "ahri.glb",
+                                         /*right_particles=*/true));
     REQUIRE(seam::AdvanceToGoldenFrame(e));
 
     std::vector<uint8_t> rgba;
@@ -119,10 +108,11 @@ SCENARIO("two viewports: left plain, right with particles",
     uint32_t h = 0;
     REQUIRE(seam::ReadFinalTargetRgba(e, rgba, w, h));
     REQUIRE(w == 1024);
+    seam::DumpFinalTargetPng(e, "rg_two_scenes");
     const std::string observed = seam::Md5Hex(rgba);
-    const std::string ref = refs::LoadImageRef("rg_side_by_side", seam::PlatformKey(), observed);
+    const std::string ref = refs::LoadImageRef("rg_two_scenes", seam::PlatformKey(), observed);
     if (ref.empty()) {
-        SKIP("bake side-by-side ref");
+        SKIP("bake two-scenes ref");
     }
     REQUIRE(observed == ref);
 }
@@ -148,6 +138,7 @@ SCENARIO("nested graph: color + resolved depth + third camera",
         uint32_t w = 0;
         uint32_t h = 0;
         REQUIRE(seam::ReadFinalTargetRgba(e, rgba, w, h));
+        seam::DumpFinalTargetPng(e, "nested.color");
         const std::string observed = seam::Md5Hex(rgba);
         const std::string ref = refs::LoadImageRef("nested.color", seam::PlatformKey(), observed);
         if (ref.empty()) {
@@ -212,6 +203,7 @@ SCENARIO("imgui overlay is stable when fed mocked numbers",
         uint32_t w = 0;
         uint32_t h = 0;
         REQUIRE(seam::ReadFinalTargetRgba(e, rgba, w, h));
+        seam::DumpFinalTargetPng(e, "imgui.overlay");
         const std::string observed = seam::Md5Hex(rgba);
         const std::string ref = refs::LoadImageRef("imgui.overlay", seam::PlatformKey(), observed);
         if (ref.empty()) {

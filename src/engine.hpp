@@ -182,6 +182,22 @@ public:
         // #207 parallel to draw_world_matrices; baked from MeshProxy::entity_id
         // by BuildMeshOpaqueDraws so unlit.frag can write the per-fragment id.
         std::span<uint32_t> draw_entity_ids;
+        // #195 multi-scene fan-out: every distinct scene any viewport binds is
+        // extracted into the single s.proxies union; this records each scene's
+        // [mesh) range (at extract) and [draw) range (after the prefix sum) so
+        // a viewport draws only its own scene's sorted sub-span. Fixed-cap, on
+        // PerSlot -> zero heap, same lifetime as drawList.
+        struct SceneDrawRange {
+            cairns::SceneId scene{};
+            uint32_t mesh_lo = 0;
+            uint32_t mesh_hi = 0;
+            uint32_t draw_lo = 0;
+            uint32_t draw_hi = 0;
+        };
+        static constexpr int kMaxScenesPerSlot = 8;
+        std::array<SceneDrawRange, kMaxScenesPerSlot> scene_ranges{};
+        uint32_t scene_ranges_count = 0;
+        std::array<int, kNumViewportsPerSlot> viewport_scene_idx{};
         // Per-viewport camera state. One RenderPassGlobals upload per
         // viewport at distinct globals_offset; RecordFrame issues one
         // forward pass per viewport with the matching offset.
@@ -1070,6 +1086,30 @@ public:
         return 0.0f;
     }
 
+    // Bind-pose AABB center of the prefab's first mesh, in mesh-local space.
+    // Champions have their origin at the feet, so a fit that anchors the
+    // origin pushes the body out the top of frame; subtract this to center.
+    glm::vec3 PrefabAabbCenter(uint32_t scene_idx) {
+        if (scene_idx >= prefab_ids_.size()) {
+            return glm::vec3(0.0f);
+        }
+        cairns::Prefab::Hot* shot = prefabs_.GetHot(prefab_ids_[scene_idx]);
+        if (!shot) {
+            return glm::vec3(0.0f);
+        }
+        for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
+            cairns::Mesh::Hot* mh = meshes_.GetHot(mid);
+            if (!mh) {
+                continue;
+            }
+            if (mh->bind_aabb_min.x > mh->bind_aabb_max.x) {
+                continue;
+            }
+            return (mh->bind_aabb_min + mh->bind_aabb_max) * 0.5f;
+        }
+        return glm::vec3(0.0f);
+    }
+
     // #269: list every live entity in active_scene_'s registry. The
     // values are entt::to_integral(entity), the same encoding InstantiatePrefab
     // returns. Caller pairs them with SetEntityTransform to drive a
@@ -1486,10 +1526,13 @@ public:
     // being implemented -- today returns false so G1 buffer SECTION SKIPs
     // honestly. When ReadBackBuffer lands, this resolves
     // particle_ssbo_[latest_parity_out_] and copies its bytes into `out`.
-    bool ReadParticleBuffer(std::vector<uint8_t>& /*out*/) {
-        // TODO(A.10): wire to rhi_.resources.ReadBackBuffer(
-        //   particle_ssbo_[latest_parity_out_], kParticleCount*sizeof(Particle), out);
-        return false;
+    bool ReadParticleBuffer(std::vector<uint8_t>& out) {
+        if (particle_ssbo_[latest_parity_out_].IsNull()) {
+            return false;
+        }
+        return rhi_.resources.ReadBackBuffer(
+            rhi_.alloc, particle_ssbo_[latest_parity_out_],
+            kParticleCount * static_cast<uint32_t>(sizeof(Particle)), out);
     }
 
     // A.5: open viewport 1, place its camera, spawn one glb into the active
@@ -1618,9 +1661,71 @@ public:
         if (prefab_idx == UINT32_MAX) {
             return false;
         }
-        const uint32_t entity = InstantiatePrefab(prefab_idx, glm::mat4(1.0f),
+        // Normalize + place in front of the origin camera, same as the ladder
+        // spawn path, so the (large) champion fits the viewport instead of
+        // engulfing it.
+        const float extent = PrefabExtentMax(prefab_idx);
+        const std::vector<glm::mat4> worlds =
+            FitGridToViewport(1, std::span<const float>(&extent, 1));
+        const glm::vec3 center = PrefabAabbCenter(prefab_idx);
+        const glm::mat4 world =
+            worlds[0] * glm::translate(glm::mat4(1.0f), -center);
+        const uint32_t entity = InstantiatePrefab(prefab_idx, world,
                                                    /*time_phase=*/0.0f);
         return entity != UINT32_MAX;
+    }
+
+    // Load + normalize-to-frame + center one hero, spawn into the CURRENT
+    // active_scene_. animated=false uses the no-skin variant.
+    uint32_t SpawnHeroFramed(const std::string& glb, bool animated) {
+        const uint32_t pidx = cairns::headless::RuntimeLoadGlbPath(this, glb);
+        if (pidx == UINT32_MAX) {
+            return UINT32_MAX;
+        }
+        const float extent = PrefabExtentMax(pidx);
+        const std::vector<glm::mat4> worlds =
+            FitGridToViewport(1, std::span<const float>(&extent, 1));
+        const glm::vec3 center = PrefabAabbCenter(pidx);
+        const glm::mat4 world =
+            worlds[0] * glm::translate(glm::mat4(1.0f), -center);
+        return animated ? InstantiatePrefab(pidx, world, /*time_phase=*/0.0f)
+                        : InstantiatePrefabNoSkin(pidx, world);
+    }
+
+    // G3: two viewports bound to two DISTINCT scenes -- a different hero in
+    // each. vp0 keeps active_scene_ (left hero); vp1 binds secondary_scene_
+    // (right hero). The per-viewport draw fan-out (#195) then renders each
+    // scene into its own viewport.
+    bool SetupTwoSceneViewports(const std::string& left_glb,
+                                const std::string& right_glb,
+                                bool right_particles) {
+        if (SpawnHeroFramed(left_glb, /*animated=*/false) == UINT32_MAX) {
+            return false;
+        }
+        // Spawn the right hero into secondary_scene_: InstantiatePrefab writes
+        // active_scene_, so retarget it for the one spawn, then restore.
+        const cairns::SceneId saved = active_scene_;
+        active_scene_ = secondary_scene_;
+        const uint32_t rh = SpawnHeroFramed(right_glb, /*animated=*/false);
+        active_scene_ = saved;
+        if (rh == UINT32_MAX) {
+            return false;
+        }
+        const uint32_t name = OpenViewport();
+        if (name == UINT32_MAX) {
+            return false;
+        }
+        const int vp1 = active_viewport_count_ - 1;
+        if (cairns::Viewport::Hot* vh =
+                viewports_.GetHot(viewport_ids_[vp1])) {
+            vh->scene = secondary_scene_;
+            vh->camera_dirty = true;
+        }
+        if (cairns::Viewport::Cold* vc =
+                viewports_.GetCold(viewport_ids_[vp1])) {
+            vc->particles_enabled = right_particles;
+        }
+        return true;
     }
 
     // #194 runtime viewport management. #220 Step 4: handle-pilled +
@@ -2365,6 +2470,16 @@ public:
                 wh->dirty = true;
             }
         }
+        // InitInitialViewport() acquired vp0 BEFORE active_scene_ existed, so
+        // its scene handle is stale-null. Bind it now that active_scene_ is
+        // real -- the per-viewport draw fan-out (#195) extracts each viewport's
+        // bound scene, so a stale bind renders nothing.
+        for (int v = 0; v < active_viewport_count_; ++v) {
+            if (cairns::Viewport::Hot* vh =
+                    viewports_.GetHot(viewport_ids_[v])) {
+                vh->scene = active_scene_;
+            }
+        }
         scene_proxies_.resize(1);
 
         // P6 multi-scene coexistence: secondary slot is acquired but
@@ -2614,53 +2729,53 @@ public:
         // slot's BumpArena. Capacity headroom for the 3300-hero benchmark
         // (~3300 / ~11220); pushes beyond cap assert. Other 6 ProxyArrays
         // stay on default heap (untouched in current code).
+        // #195 multi-scene fan-out: extract EVERY distinct scene any viewport
+        // binds into the ONE s.proxies union (appended), recording each scene's
+        // [mesh) range. Viewports on the same scene share its range (dedup).
+        // The draw build later carves a per-viewport [draw) sub-range from
+        // these, so two viewports on two scenes render different content.
         s.proxies.Reset(s.arena);
+        s.scene_ranges_count = 0;
         for (int v = 0; v < active_viewport_count_; ++v) {
-            const cairns::SceneId wid =
-                viewports_.GetHot(viewport_ids_[v])->scene;
-            cairns::Scene::Hot* wh = scenes_.GetHot(wid);
-            cairns::Scene::Cold* wc = scenes_.GetCold(wid);
+            s.viewport_scene_idx[v] = -1;
+        }
+        auto extract_scene_once = [&](cairns::SceneId sid) -> int {
+            for (uint32_t k = 0; k < s.scene_ranges_count; ++k) {
+                if (s.scene_ranges[k].scene.index == sid.index) {
+                    return static_cast<int>(k);
+                }
+            }
+            cairns::Scene::Hot* wh = scenes_.GetHot(sid);
+            cairns::Scene::Cold* wc = scenes_.GetCold(sid);
             if (!wh || !wc) {
-                continue;
+                return -1;
+            }
+            if (s.scene_ranges_count >=
+                static_cast<uint32_t>(PerSlot::kMaxScenesPerSlot)) {
+                return -1;
             }
             wh->root_transform = rot_matrix;
             cairns::PropagateTransforms(*wc, glm::mat4(1.0f));
-            if (wid.index == active_scene_.index) {
-                cairns::ExtractFromScene(*wc, wh->root_transform, assets_,
-                                         prefabs_, meshes_, s.proxies);
-            } else {
-                if (wh->proxy_slot < scene_proxies_.size()) {
-                    // #219 Chunk B: secondary-world proxies share this CPU
-                    // slot's arena. Caps smaller than s.proxies' since
-                    // secondary scenes are lighter today. No reader of
-                    // scene_proxies_[i] exists yet (#194/#190 path stub).
-                    scene_proxies_[wh->proxy_slot].Reset(s.arena, 2048, 8192);
-                    cairns::ExtractFromScene(*wc, wh->root_transform, assets_,
-                                             prefabs_, meshes_,
-                                             scene_proxies_[wh->proxy_slot]);
-                }
-            }
-        }
-        // Always extract active_scene_ even if no viewport currently binds to
-        // it (legacy contract: BuildMeshOpaqueDraws consumes s.proxies).
-        if (cairns::Scene::Hot* wh_a = scenes_.GetHot(active_scene_)) {
-            if (cairns::Scene::Cold* wc_a = scenes_.GetCold(active_scene_)) {
-                bool already_extracted = false;
-                for (int v = 0; v < active_viewport_count_; ++v) {
-                    if (viewports_.GetHot(viewport_ids_[v])->scene.index
-                            == active_scene_.index) {
-                        already_extracted = true;
-                        break;
-                    }
-                }
-                if (!already_extracted) {
-                    wh_a->root_transform = rot_matrix;
-                    cairns::PropagateTransforms(*wc_a, glm::mat4(1.0f));
-                    cairns::ExtractFromScene(*wc_a, wh_a->root_transform,
-                                             assets_, prefabs_, meshes_,
-                                             s.proxies);
-                }
-            }
+            const uint32_t mesh_lo =
+                static_cast<uint32_t>(s.proxies.meshes.size());
+            cairns::ExtractFromScene(*wc, wh->root_transform, assets_,
+                                     prefabs_, meshes_, s.proxies,
+                                     /*append=*/true);
+            const uint32_t mesh_hi =
+                static_cast<uint32_t>(s.proxies.meshes.size());
+            const uint32_t k = s.scene_ranges_count++;
+            PerSlot::SceneDrawRange& r = s.scene_ranges[k];
+            r.scene = sid;
+            r.mesh_lo = mesh_lo;
+            r.mesh_hi = mesh_hi;
+            r.draw_lo = 0;
+            r.draw_hi = 0;
+            return static_cast<int>(k);
+        };
+        for (int v = 0; v < active_viewport_count_; ++v) {
+            const cairns::SceneId wid =
+                viewports_.GetHot(viewport_ids_[v])->scene;
+            s.viewport_scene_idx[v] = extract_scene_once(wid);
         }
 
         // Counting pass -> total_draws.
@@ -2695,6 +2810,15 @@ public:
                 proxy_first_draw[i] = acc;
                 acc += s.proxies.meshes[i].primitive_count;
             }
+        }
+        // #195: convert each scene's [mesh) range into its [draw) range via the
+        // prefix sum, so each viewport's sorted sub-span covers only its scene.
+        for (uint32_t k = 0; k < s.scene_ranges_count; ++k) {
+            PerSlot::SceneDrawRange& r = s.scene_ranges[k];
+            r.draw_lo = (r.mesh_lo < n_proxies) ? proxy_first_draw[r.mesh_lo]
+                                                : total_draws;
+            r.draw_hi = (r.mesh_hi < n_proxies) ? proxy_first_draw[r.mesh_hi]
+                                                : total_draws;
         }
 
         // #221 multithreaded fill. Each worker takes a disjoint proxy range
@@ -3073,7 +3197,13 @@ public:
             return false;
         }
         t_build.End();
-        std::sort(s.drawListSorted.begin(), s.drawListSorted.end());
+        // #195: sort PER-SCENE-RANGE so each viewport's sorted sub-span orders
+        // (and indexes) only its own scene's draws.
+        for (uint32_t k = 0; k < s.scene_ranges_count; ++k) {
+            const PerSlot::SceneDrawRange& r = s.scene_ranges[k];
+            std::sort(s.drawListSorted.begin() + r.draw_lo,
+                      s.drawListSorted.begin() + r.draw_hi);
+        }
 
         // #219 Chunk A: count-then-allocate the resident-textures gather on
         // the per-slot BumpArena. prefabs_ + textureHandles are persistent
@@ -3133,6 +3263,13 @@ public:
         if (draw_imgui) {
             if (!surfaceless) {
                 ImGui_ImplSDL3_NewFrame();
+            } else {
+                // surfaceless skips ImGui_ImplSDL3_NewFrame, which sets
+                // DisplaySize; NewFrame asserts on the default (-1,-1).
+                ImGuiIO& io = ImGui::GetIO();
+                io.DisplaySize = ImVec2(static_cast<float>(FrameWidth()),
+                                        static_cast<float>(FrameHeight()));
+                io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
             }
             ImGui::NewFrame();
             ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_FirstUseEver);
@@ -3141,12 +3278,29 @@ public:
             ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.1f, 0.1f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_PlotLines, ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
             ImGui::Begin("cairns", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
-            const float fps = cpu_ms_last_ > 0.0f ? 1000.0f / cpu_ms_last_ : 0.0f;
+            // Golden mode injects fixed HudStats so the overlay is byte-stable;
+            // live cpu_ms_last_ / Timer slots are wall-clock and would flake.
+            const bool hud_injected = injected_hud_stats_.has_value();
+            const float cpu_ms_disp =
+                hud_injected ? injected_hud_stats_->cpu_ms : cpu_ms_last_;
+            const float fps =
+                hud_injected
+                    ? injected_hud_stats_->fps
+                    : (cpu_ms_last_ > 0.0f ? 1000.0f / cpu_ms_last_ : 0.0f);
+            const float* graph_data = hud_injected
+                                          ? injected_hud_stats_->frame_ms.data()
+                                          : cpu_ms_history_;
+            const int graph_count =
+                hud_injected ? static_cast<int>(cairns::HudStats::kGraph)
+                             : kCpuMsHistory;
+            const int graph_head =
+                hud_injected ? static_cast<int>(injected_hud_stats_->graph_head)
+                             : cpu_ms_head_;
             float ms_max = 1.0f;
             float ms_avg = 0.0f;
             int ms_n = 0;
-            for (int i = 0; i < kCpuMsHistory; ++i) {
-                const float v = cpu_ms_history_[i];
+            for (int i = 0; i < graph_count; ++i) {
+                const float v = graph_data[i];
                 if (!std::isfinite(v) || v < 0.0f || v > 1.0e6f) {
                     continue;
                 }
@@ -3155,51 +3309,53 @@ public:
                 ++ms_n;
             }
             ms_avg /= static_cast<float>(ms_n > 0 ? ms_n : 1);
-            ImGui::Text("CPU %6.2f ms   |   %3.0f FPS", cpu_ms_last_, fps);
+            ImGui::Text("CPU %6.2f ms   |   %3.0f FPS", cpu_ms_disp, fps);
             ImGui::Text("avg %6.2f ms   |   peak %6.2f ms", ms_avg, ms_max);
-            auto slot_avg_ms = [this](int s) -> float {
-                const uint64_t n = cairns::Timer::accum_itrs_[s];
-                if (n == 0) {
+            if (!hud_injected) {
+                auto slot_avg_ms = [this](int s) -> float {
+                    const uint64_t n = cairns::Timer::accum_itrs_[s];
+                    if (n == 0) {
+                        return slot_ms_cache_[s];
+                    }
+                    const double v =
+                        cairns::Timer::accum_times_[s] /
+                        static_cast<double>(n) / 1000.0;
+                    if (!std::isfinite(v) || v < 0.0 || v > 1.0e6) {
+                        return slot_ms_cache_[s];
+                    }
+                    slot_ms_cache_[s] = static_cast<float>(v);
                     return slot_ms_cache_[s];
+                };
+                const uint32_t gpu_mask = cairns::TimerStorage::GpuSlotMask();
+                float gpu_frame_ms = 0.0f;
+                for (uint32_t s = 0; s < cairns::Timer::kMaxSlots; ++s) {
+                    if (gpu_mask & (1u << s)) {
+                        gpu_frame_ms += slot_avg_ms(s);
+                    }
                 }
-                const double v =
-                    cairns::Timer::accum_times_[s] /
-                    static_cast<double>(n) / 1000.0;
-                if (!std::isfinite(v) || v < 0.0 || v > 1.0e6) {
-                    return slot_ms_cache_[s];
+                ImGui::Text("%-12s %5.2f ms", "gpu_frame", gpu_frame_ms);
+                for (uint32_t s = 0; s < cairns::Timer::kMaxSlots; ++s) {
+                    const char* nm = cairns::Timer::slot_names_[s];
+                    if (!nm) {
+                        continue;
+                    }
+                    if (cairns::Timer::accum_itrs_[s] == 0 &&
+                        slot_ms_cache_[s] == 0.0f) {
+                        continue;
+                    }
+                    if (std::strcmp(nm, "set up render pass globals") == 0 ||
+                        std::strcmp(nm, "build opaque draw list") == 0 ||
+                        std::strcmp(nm, "particle_sim") == 0 ||
+                        std::strcmp(nm, "forward") == 0) {
+                        continue;
+                    }
+                    ImGui::Text("%-12s %6.2f ms", nm, slot_avg_ms(s));
                 }
-                slot_ms_cache_[s] = static_cast<float>(v);
-                return slot_ms_cache_[s];
-            };
-            const uint32_t gpu_mask = cairns::TimerStorage::GpuSlotMask();
-            float gpu_frame_ms = 0.0f;
-            for (uint32_t s = 0; s < cairns::Timer::kMaxSlots; ++s) {
-                if (gpu_mask & (1u << s)) {
-                    gpu_frame_ms += slot_avg_ms(s);
-                }
-            }
-            ImGui::Text("%-12s %5.2f ms", "gpu_frame", gpu_frame_ms);
-            for (uint32_t s = 0; s < cairns::Timer::kMaxSlots; ++s) {
-                const char* nm = cairns::Timer::slot_names_[s];
-                if (!nm) {
-                    continue;
-                }
-                if (cairns::Timer::accum_itrs_[s] == 0 &&
-                    slot_ms_cache_[s] == 0.0f) {
-                    continue;
-                }
-                if (std::strcmp(nm, "set up render pass globals") == 0 ||
-                    std::strcmp(nm, "build opaque draw list") == 0 ||
-                    std::strcmp(nm, "particle_sim") == 0 ||
-                    std::strcmp(nm, "forward") == 0) {
-                    continue;
-                }
-                ImGui::Text("%-12s %6.2f ms", nm, slot_avg_ms(s));
             }
             char overlay[32];
-            std::snprintf(overlay, sizeof(overlay), "%.2f ms", cpu_ms_last_);
-            ImGui::PlotLines("##cpuhist", cpu_ms_history_, kCpuMsHistory,
-                             cpu_ms_head_, overlay, 0.0f, ms_max * 1.15f,
+            std::snprintf(overlay, sizeof(overlay), "%.2f ms", cpu_ms_disp);
+            ImGui::PlotLines("##cpuhist", graph_data, graph_count,
+                             graph_head, overlay, 0.0f, ms_max * 1.15f,
                              ImVec2(300.0f, 110.0f));
             ImGui::End();
             ImGui::PopStyleColor(4);
@@ -3496,8 +3652,19 @@ public:
             id_path ? unlit_offscreen_ : unlit_offscreen_noid_;
         std::array<rhi::MeshDrawList, kNumViewports> mls{};
         for (int v = 0; v < active_viewport_count_; ++v) {
+            // #195 per-viewport scene: draws stays the FULL list (sorted_draws
+            // holds global indices into it); sorted_draws is the sub-span for
+            // this viewport's bound scene, so each viewport renders only its
+            // own scene's content.
             mls[v].draws = pkt.draws;
-            mls[v].sorted_draws = pkt.sorted;
+            const int sk = s.viewport_scene_idx[v];
+            if (sk >= 0 && static_cast<uint32_t>(sk) < s.scene_ranges_count) {
+                const PerSlot::SceneDrawRange& r = s.scene_ranges[sk];
+                mls[v].sorted_draws =
+                    pkt.sorted.subspan(r.draw_lo, r.draw_hi - r.draw_lo);
+            } else {
+                mls[v].sorted_draws = pkt.sorted;
+            }
             mls[v].pipeline = forward_pso;
             // #222 Phase D.2: route set 0 (pass globals) through dyn_globals_.
             mls[v].dyn_globals = dyn_globals_;

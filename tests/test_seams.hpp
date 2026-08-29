@@ -66,6 +66,12 @@ bool ClearSpawned(cairns::Engine& engine);
 bool OpenSecondViewport(cairns::Engine& engine, const char* glb,
                         float yaw_rad, bool with_particles);
 
+// G3 helper: two viewports bound to two DISTINCT scenes -- a different hero in
+// each (vp0 left, vp1 right + optional particles). Exercises the multi-scene
+// per-viewport draw fan-out.
+bool SetupTwoSceneViewports(cairns::Engine& engine, const char* left_glb,
+                            const char* right_glb, bool right_particles);
+
 // G4 helper: program the render graph for one color + resolved-depth +
 // third-camera pass.
 bool ConfigureNestedGraph(cairns::Engine& engine);
@@ -104,6 +110,8 @@ bool EnableParticles(cairns::Engine& engine, bool on);
 // engine.hpp twice.
 bool ReadFinalTargetRgba(cairns::Engine& engine, std::vector<uint8_t>& rgba,
                          uint32_t& w, uint32_t& h);
+
+void DumpFinalTargetPng(cairns::Engine& engine, const std::string& name);
 
 // L6/L7 skin-output buffer readback. Returns false until the stash@{0}
 // ReadBackBuffer salvage is applied; that day the rungs' buffer SECTION

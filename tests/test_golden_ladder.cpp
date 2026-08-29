@@ -30,6 +30,7 @@
 
 #include "engine.hpp"
 #include "engine_headless.hpp"
+#include "util/debug_asset.hpp"  // kDebugGlbs -- 100 distinct champion names
 #include "test_seams.hpp"
 #include "test_refs.hpp"
 
@@ -53,18 +54,33 @@ struct Rung {
 // now that die.glb + viking_room.glb are in assets/. C.17 honors the
 // `animated` flag via InstantiatePrefabNoSkin (Phase A.11) so L5 static
 // diverges from L6 anim.
-// C.19 cam tunes: zoomed back so subject is fully in frame (the previous
-// poses cropped to feet). Models are roughly Y-up 2-3 units tall; cams at
-// y=2 z=8..25 fit the subject + headroom in a 512x512 viewport.
-const std::vector<Rung> kLadder = {
-    {"triangle",           {},                                             1,   false, false, {0, 0, 3,  0, 0}},
-    {"one_die",            {"die.glb"},                                    1,   false, false, {0, 1, 5,  0, 0}},
-    {"two_die",            {"die.glb"},                                    2,   false, false, {0, 1, 6,  0, 0}},
-    {"viking_room",        {"viking_room.glb"},                            1,   false, false, {0, 1, 4, 0, 0}},
-    {"three_champ_static", {"ahri.glb","akali.glb","alistar.glb"},          3,   false, false, {0, 4, 16, 0, -0.15f}},
-    {"three_champ_anim",   {"ahri.glb","akali.glb","alistar.glb"},          3,   true,  true,  {0, 4, 16, 0, -0.15f}},
-    {"hundred_champ_anim", {"ahri.glb","akali.glb","alistar.glb"},          100, true,  true,  {0, 18, 48, 0, -0.35f}},
-};
+// Reframe: BuildLadderScene normalizes each actor by its bind-AABB and places
+// it in front of the origin camera (FitGridToViewport). The camera is the
+// default origin pose for most mesh rungs (the fit is self-scaling); cam.z > 0
+// pulls the camera straight back to shrink a too-large single subject (one_die,
+// viking_room). The triangle rung is NDC, so its cam is irrelevant.
+inline std::vector<Rung> MakeLadder() {
+    std::vector<Rung> l = {
+        {"triangle",           {},                                             1, false, false, {0, 0, 3, 0, 0}},
+        {"one_die",            {"die.glb"},                                    1, false, false, {0, 0, 4, 0, 0}},
+        {"two_die",            {"die.glb"},                                    2, false, false, {0, 0, 0, 0, 0}},
+        {"viking_room",        {"viking_room.glb"},                            1, false, false, {0, 0, 5, 0, 0}},
+        {"three_champ_static", {"ahri.glb","akali.glb","alistar.glb"},          3, false, false, {0, 0, 0, 0, 0}},
+        {"three_champ_anim",   {"ahri.glb","akali.glb","alistar.glb"},          3, true,  true,  {0, 0, 0, 0, 0}},
+    };
+    // L7: 100 DISTINCT champions, one instance per glb, from the engine's debug
+    // manifest kDebugGlbs[3..103). (Was 3 glbs cycled 100x -- same 3 meshes.)
+    std::vector<std::string> hundred;
+    hundred.reserve(cairns::kDebugGlbsToParse);
+    for (uint32_t i = cairns::kDebugGlbsToParseStart;
+         i < cairns::kDebugGlbsToParseStart + cairns::kDebugGlbsToParse; ++i) {
+        hundred.emplace_back(cairns::kDebugGlbs[i]);
+    }
+    l.push_back(Rung{"hundred_champ_anim", std::move(hundred),
+                     cairns::kDebugGlbsToParse, true, true, {0, 0, 0, 0, 0}});
+    return l;
+}
+const std::vector<Rung> kLadder = MakeLadder();
 
 constexpr uint32_t kGoldenW = 512;
 constexpr uint32_t kGoldenH = 512;

@@ -656,6 +656,34 @@ bool Resources::ReadBackTextureR32UTexel(Handle<Texture> h, uint32_t x,
     return true;
 }
 
+bool Resources::ReadBackBuffer(Allocator& alloc, Handle<Buffer> h,
+                               uint32_t byte_size,
+                               std::vector<uint8_t>& out) {
+    if (byte_size == 0) {
+        return false;
+    }
+    uint32_t offset = 0;
+    MTL::Buffer* src = plat.GetMtlBuffer(alloc, h, &offset);
+    if (!src) {
+        return false;
+    }
+    MTL::Buffer* readback = plat.device_->newBuffer(
+        byte_size, MTL::ResourceStorageModeShared);
+    if (!readback) {
+        return false;
+    }
+    MTL::CommandBuffer* cb = plat.queue_->commandBuffer();
+    MTL::BlitCommandEncoder* blit = cb->blitCommandEncoder();
+    blit->copyFromBuffer(src, offset, readback, 0, byte_size);
+    blit->endEncoding();
+    cb->commit();
+    cb->waitUntilCompleted();
+    out.resize(byte_size);
+    std::memcpy(out.data(), readback->contents(), byte_size);
+    readback->release();
+    return true;
+}
+
 // One-shot clear via a render-pass with loadActionClear / storeActionStore.
 bool Resources::ClearColorTexture(Handle<Texture> h, const float color[4]) {
     Texture::Hot* hot = textures.GetHot(h);

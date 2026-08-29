@@ -149,6 +149,11 @@ public:
     // waitUntilCompleted on its own blit command buffer.
     bool ReadBackTextureR32UTexel(Handle<Texture> h, uint32_t x, uint32_t y,
                                   uint32_t& out_value);
+    // Blit |byte_size| bytes of |h| (from its base offset) into a host-visible
+    // buffer, wait, copy out. Caller drains in-flight work targeting |h| first.
+    // Backs CPU-side particle/skin state hashing (no render output).
+    bool ReadBackBuffer(Allocator& alloc, Handle<Buffer> h, uint32_t byte_size,
+                        std::vector<uint8_t>& out);
     bool ClearColorTexture(Handle<Texture> h, const float color[4]);
     SwapResolveTarget MakeSurfacelessSwapResolveTarget(Handle<Texture> h,
                                                         uint32_t w, uint32_t h_px);

@@ -26,8 +26,13 @@ inline void ExtractFromScene(Scene::Cold& wc, const glm::mat4& root,
                              AssetRegistry& assets,
                              cairns::ResourceManager<Prefab>& prefabs_pool,
                              cairns::ResourceManager<Mesh>& meshes_pool,
-                             RenderProxyArrays& out) {
-    out.Clear();
+                             RenderProxyArrays& out, bool append) {
+    // append=true unions multiple scenes into one proxy array (multi-scene
+    // per-viewport draw fan-out); first_primitive/mesh indices stay relative
+    // to the accumulating arrays so ranges carve cleanly.
+    if (!append) {
+        out.Clear();
+    }
     constexpr uint32_t kStackCap = 256;
     int32_t stack[kStackCap];
     uint32_t top;

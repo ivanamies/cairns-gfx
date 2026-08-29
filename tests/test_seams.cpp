@@ -140,24 +140,23 @@ bool BuildLadderScene(cairns::Engine& engine,
     if (prefab_idxs.empty()) {
         return false;
     }
-    // Layout: 1-3 instances centered around origin; 4+ falls into the grid.
-    // L1-L3 (1-2 dies) and L4 (1 viking) were rendering empty because the
-    // i%10*2 - 9 placement put a single instance at -9 way off-camera.
-    auto place_for = [instances](uint32_t i) -> glm::vec3 {
-        if (instances <= 3) {
-            const float step = 2.0f;
-            const float x0 = -step * 0.5f * static_cast<float>(instances - 1);
-            return glm::vec3(x0 + step * static_cast<float>(i), 0.0f, 0.0f);
-        }
-        const float x = static_cast<float>(i % 10) * 2.0f - 9.0f;
-        const float z = static_cast<float>(i / 10) * 2.0f;
-        return glm::vec3(x, 0.0f, z);
-    };
+    // Reframe: normalize each actor to a uniform on-screen footprint and place
+    // it in front of the origin camera (z=-4) via the engine's own content-fit.
+    // Self-tuning for arbitrary GLB scale -- the prior raw-scale placement +
+    // hand-tuned cam_pose cropped the (large) champions to the waist.
+    std::vector<float> extents(instances);
     for (uint32_t i = 0; i < instances; ++i) {
-        const uint32_t scene_idx =
-            prefab_idxs[i % prefab_idxs.size()];
+        extents[i] = engine.PrefabExtentMax(prefab_idxs[i % prefab_idxs.size()]);
+    }
+    const std::vector<glm::mat4> worlds =
+        engine.FitGridToViewport(instances, extents);
+    for (uint32_t i = 0; i < instances; ++i) {
+        const uint32_t scene_idx = prefab_idxs[i % prefab_idxs.size()];
+        // Center each actor's bind-AABB in its grid cell (feet-origin would
+        // otherwise push the body out the top of frame).
+        const glm::vec3 center = engine.PrefabAabbCenter(scene_idx);
         const glm::mat4 world =
-            glm::translate(glm::mat4(1.0f), place_for(i));
+            worlds[i] * glm::translate(glm::mat4(1.0f), -center);
         // C.17: honor `animated`. Static rungs use the no-skin variant so
         // L5 actually diverges from L6 instead of being byte-identical.
         const uint32_t out = animated
@@ -193,6 +192,13 @@ bool OpenSecondViewport(cairns::Engine& engine, const char* glb,
     // the per-viewport particle gate. Returns false on viewport-cap or
     // asset-resolve failure.
     return engine.OpenSecondViewport(glb ? glb : "", yaw_rad, with_particles);
+}
+
+bool SetupTwoSceneViewports(cairns::Engine& engine, const char* left_glb,
+                            const char* right_glb, bool right_particles) {
+    return engine.SetupTwoSceneViewports(left_glb ? left_glb : "",
+                                         right_glb ? right_glb : "",
+                                         right_particles);
 }
 
 bool ConfigureNestedGraph(cairns::Engine& engine) {
@@ -263,6 +269,18 @@ bool ReadFinalTargetRgba(cairns::Engine& engine,
                          std::vector<uint8_t>& rgba, uint32_t& w,
                          uint32_t& h) {
     return engine.ReadFinalTargetRgba(rgba, w, h);
+}
+
+void DumpFinalTargetPng(cairns::Engine& engine, const std::string& name) {
+    const char* dump_dir = std::getenv("CAIRNS_DUMP_PNGS");
+    if (!dump_dir || !dump_dir[0]) {
+        return;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(dump_dir, ec);
+    const std::string path =
+        std::string(dump_dir) + "/" + name + "." + PlatformKey() + ".png";
+    (void)engine.DumpFinalTarget(path);
 }
 
 bool ReadSkinOutputUsedBytes(cairns::Engine& /*engine*/,

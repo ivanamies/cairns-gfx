@@ -1106,6 +1106,14 @@ bool Resources::ReadBackTextureRgba(Handle<Texture> h,
 // 1x1 region into a host-visible staging buffer, waits, reads the uint32.
 // Caller is expected to have drained in-flight rendering before calling
 // (we don't add cross-frame sync beyond an immediate queueWaitIdle).
+bool Resources::ReadBackBuffer(Allocator& /*alloc*/, Handle<Buffer> /*h*/,
+                               uint32_t /*byte_size*/,
+                               std::vector<uint8_t>& /*out*/) {
+    // Not yet wired on vk: particle/skin state hashing SKIPs on this backend
+    // until a vkCmdCopyBuffer-to-host-visible-staging readback lands.
+    return false;
+}
+
 bool Resources::ReadBackTextureR32UTexel(Handle<Texture> h, uint32_t x,
                                          uint32_t y, uint32_t& out_value) {
     Texture::Cold* cold = textures.GetCold(h);

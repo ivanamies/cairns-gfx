@@ -60,6 +60,32 @@ pass for `Editor.compose`. Each is real rendering plumbing that moves
 pixels, needs its own goldens, and must NOT share commits with the
 rename.
 
+### Golden capture is CPU-side readback at a fixed frame — never a screenshot
+Capture is `ReadFinalTargetRgba` / `DumpFinalTarget` off the offscreen target,
+taken after a fixed frame interval (deterministic frame N) — NOT an OS
+`screencapture` / window grab. WHY: a screenshot is non-deterministic
+(compositor timing, DPI, window chrome, async present) and can't be
+byte-gated; the fixed interval pins sim/particle state to the same frame every
+run. (The 2026-06-19 G1 particle flake is the symptom of getting the *timing*
+wrong even on the correct CPU-side path — see modularization-notes #9b.)
+
+### Over-specialized test seams -> JS snippets / primitives
+`Engine::SetupTwoSceneViewports(left, right, particles)`, `Engine::SpawnHeroFramed
+(glb, animated)` (src/engine.hpp), and `test_seams::AdvanceToGoldenFrame` are
+bespoke compositions baked in to drive ONE golden each. That is backwards for an
+AI-first/headless engine: the engine should expose PRIMITIVE ops — load-glb,
+fit+center, instantiate-into-scene, open-viewport, bind-viewport-scene, set-
+viewport-particles, advance-N-frames — and a setup like "two scenes, a different
+hero in each" should be a few lines of run.js / a studio_js snippet via
+`cairns.dispatch`, not an engine method. `AdvanceToGoldenFrame` just hardcodes
+`kGoldenDumpFrame+1` over the real primitive `AdvanceFrames(N)` (see
+modularization-notes #11) — the test should pick N. Same root as
+modularization-notes #9 (the open-viewport sequence repeats because the test
+harness bypasses JS dispatch). Needs: a scene-targeted instantiate op (today
+`InstantiatePrefab` hardcodes active_scene_, so the seam swaps active_scene_
+around the spawn — a smell) + a `viewport.setScene` op. Delete the seams once
+those primitives exist and the tests drive JS.
+
 ### Two-sort screenshot + test strategy (chrome on / chrome off)
 The editor canvas has two pixel surfaces and the test matrix must
 cover BOTH:
@@ -81,7 +107,7 @@ global state). Both screenshot kinds need byte-gate golden coverage so
 a chrome-leak regression on either surface fails the dev build.
 Locks the §6 separation from #224.
 
-### #270 Fix broken animations on Samsung S22 (vk release)
+### ~~#270 Fix broken animations on Samsung S22 (vk release)~~ — DONE (2026-06-19)
 Driven by `scripts/dev_drive.sh` post-#269 spawn flow. Spawn one prefab
 at a time until `[SKIN-FAIL]` fires; the log already names the failing
 scene_id + reason. Needs in-app driver for on-device iteration (no NDJSON
@@ -220,5 +246,5 @@ porting dead shaders to WGSL.
 
 ---
 
-Last touched 2026-06-13. When adding a row: name the issue/branch in
+Last touched 2026-06-19. When adding a row: name the issue/branch in
 the heading (e.g. `### #299 thing`) so `git log --grep` can find it.
