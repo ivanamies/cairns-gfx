@@ -96,7 +96,7 @@ const Mathf = {
 
 // =====================================================================
 // Entity wrappers. Today's stub-id world: GameObject wraps an entity
-// id (returned by cairns.world.instantiate). Transform setters store
+// id (returned by cairns.scene.instantiate). Transform setters store
 // the value on the wrapper -- the cairns side doesn't yet honor
 // per-entity transforms, so dispatching today would be a no-op. When
 // `cairns.entity.setTransform` lands the setter body becomes a single
@@ -121,33 +121,32 @@ class Transform {
 }
 
 class GameObject {
-    constructor(entity_id, world_id) {
+    // #225 R4: `scene_id` IS the composition binding (Unity Scene == cairns
+    // container of GameObjects). Old `world_id` parameter kept as a positional
+    // alias for one release.
+    constructor(entity_id, scene_id) {
         this._entity = entity_id;
-        this._world = world_id;
+        this._scene = scene_id;
         this.transform = new Transform(this);
         this._components = new Map();
         this._active = true;
     }
 
-    static InstantiateAsync(asset_id, world_id = 0) {
-        // The `Async` suffix + caller's `await` preserves the SYNTACTIC
-        // divergence (Refinement 1) that makes spawn+upload's eventual
-        // asynchrony visible. Today the body is sync and returns the
-        // GameObject directly -- `await` on a non-Promise resolves to
-        // the value immediately, so call sites don't change. When real
-        // async upload lands this returns a Promise and the `await` does
-        // genuine work. Deliberately NOT a Promise today: QuickJS's
-        // promise machinery leaves shutdown state that trips an assert at
-        // runtime free time (see studio_notes.md "QuickJS async
-        // limitation").
-        const r = cairns.dispatch("cairns.world.instantiate", {
-            world: world_id, asset: asset_id,
+    static InstantiateAsync(prefab_or_asset_id, scene_id = 0) {
+        // Refused-wart compatibility shim: Unity's global Instantiate
+        // silently targets the active scene, which is the multi-scene wart
+        // cairns refuses (§4 of the rename plan). Use Scene.instantiate
+        // (a method on a specific Scene handle) instead. Kept for one
+        // release for legacy call sites; lowers to cairns.scene.instantiate
+        // with the active scene's NDJSON-side id.
+        const r = cairns.dispatch("cairns.scene.instantiate", {
+            scene: scene_id, prefab: prefab_or_asset_id,
         });
         if (!r.ok) {
             throw new Error("InstantiateAsync: " +
                 (r.error && r.error.message ? r.error.message : "?"));
         }
-        return new GameObject(r.result.entity, world_id);
+        return new GameObject(r.result.entity, scene_id);
     }
 
     AddComponent(typeName) {
@@ -164,7 +163,9 @@ class GameObject {
     SetActive(active) { this._active = !!active; }
     get activeSelf()  { return this._active; }
     get entity()      { return this._entity; }
-    get world()       { return this._world; }
+    get scene()       { return this._scene; }
+    // Legacy alias (one release).
+    get world()       { return this._scene; }
 }
 
 class Component {
@@ -216,6 +217,152 @@ const Cairns = {
 };
 
 // =====================================================================
+// #225 R4: Unity-shaped Prefab + Scene + Editor surface.
+//
+//   Prefab  = a loaded GLB (Unity's Instantiate target).
+//   Scene   = a container of GameObjects (Unity Scene == cairns container).
+//   Prefabs = Resources.Load-shaped sync loaders, returns Prefab[].
+//   Editor  = the multi-scene compositor. A NEW NOUN Unity has no word for
+//             (a viewport whose pixels are a shader function of other
+//             viewports' targets). New names because there is no Unity
+//             concept to clone, not to signal a divergence.
+//
+// Instantiate is a METHOD ON A SCENE -- there is no global Instantiate()
+// (the active-scene Unity wart is the one Unity feature cairns refuses;
+// see plan §4 "Refuse" bin). Every Instantiate() carries an explicit
+// scene target.
+// =====================================================================
+
+function _dispatchOk(op, args, fnName) {
+    const r = cairns.dispatch(op, args || {});
+    if (!r || r.ok === false) {
+        const msg = (r && r.error && r.error.message) ? r.error.message : "?";
+        throw new Error(fnName + ": " + msg);
+    }
+    return (r && r.result !== undefined) ? r.result : r;
+}
+
+class Prefab {
+    constructor(id, name, extent) {
+        this.id = id;
+        this.name = name || ("prefab" + id);
+        this.extent = +extent || 0.0;
+    }
+}
+
+class Scene {
+    constructor(id) { this.id = id; }
+
+    // Unity: Object.Instantiate(prefab, position, rotation) -- but BOUND
+    // to THIS scene (no implicit active scene). Returns a GameObject.
+    // position is a Vector3 or undefined (default 0,0,-3 today).
+    // rotation is a Quaternion or undefined (default identity).
+    instantiate(prefab, position, rotation) {
+        const args = { scene: this.id, prefab: prefab && prefab.id };
+        if (position) {
+            args.x = position.x; args.y = position.y; args.z = position.z;
+        }
+        if (rotation) {
+            args.rotation = rotation.toArray();
+        }
+        const r = _dispatchOk("cairns.scene.instantiate", args,
+                              "Scene.instantiate");
+        return new GameObject(r.entity, this.id);
+    }
+
+    instantiateGrid(prefabs, viewport) {
+        const r = _dispatchOk("cairns.scene.instantiateGrid", {
+            scene: this.id,
+            count: prefabs ? prefabs.length : 0,
+            prefabs: prefabs ? prefabs.map(p => p.id) : [],
+            fit_viewport: viewport ? viewport.id : 0,
+        }, "Scene.instantiateGrid");
+        return (r.entities || []).map(e => new GameObject(e, this.id));
+    }
+
+    clear() {
+        return _dispatchOk("cairns.scene.clear", { scene: this.id },
+                           "Scene.clear");
+    }
+
+    // Camera entities: per the plan worked example (§4b), cameras are
+    // entities IN the scene. Stub today (#226 CAP-1 wires up real cameras
+    // as entities); throws loud so call sites don't silently succeed.
+    addCamera(/*lookAtOrPose*/) {
+        throw new Error(
+            "Scene.addCamera: per-scene camera entities not wired yet (#226 CAP-1)");
+    }
+}
+
+const Prefabs = {
+    // Unity Resources.Load shape: SYNC main-thread load. Returns Prefab[].
+    // `source` is a logical label (today: ignored; just returns Prefabs
+    // with sequential ids out of the pre-loaded GLB pool from cairns init).
+    load(source, count, cursor = 0) {
+        const r = _dispatchOk("cairns.prefab.loadBatch", {
+            source, cursor, count,
+        }, "Prefabs.load");
+        return (r.prefabs || []).map(
+            p => new Prefab(p.id, p.name, p.extent));
+    },
+    loadOne(source, index) {
+        return Prefabs.load(source, 1, index)[0];
+    },
+
+    // Snapshot of the pre-loaded Prefab pool (cairns init populated this
+    // from kDebugGlbs[]). Useful while cairns.prefab.loadBatch is still
+    // a stub: lets a script enumerate what's already there.
+    list() {
+        const count = _dispatchOk(
+            "cairns.prefab.count", {}, "Prefabs.list").count || 0;
+        const out = [];
+        for (let i = 0; i < count; i++) {
+            const dims = _dispatchOk(
+                "cairns.prefab.dims", { prefab: i }, "Prefabs.list");
+            out.push(new Prefab(i, "prefab" + i, dims.extent_max));
+        }
+        return out;
+    },
+};
+
+const Editor = {
+    scenes: [],
+
+    // NOT SceneManager.LoadScene (single-active model is refused).
+    // Each Editor.newScene returns a fresh Scene handle; they are all
+    // simultaneously live, instantiable, and viewport-bindable.
+    newScene() {
+        const r = _dispatchOk("cairns.scene.create", {},
+                              "Editor.newScene");
+        const s = new Scene(r.scene);
+        Editor.scenes.push(s);
+        return s;
+    },
+
+    // Bind a scene to a viewport. With multiple Editor.show() calls each
+    // routing a different Scene to a different viewport, the engine
+    // composes them into one swap image -- the multi-scene compositor.
+    show(scene, viewport) {
+        return _dispatchOk("cairns.viewport.setScene", {
+            viewport: viewport && viewport.id,
+            scene: scene && scene.id,
+        }, "Editor.show");
+    },
+
+    // #225 R6 stubs reserving #226 capabilities. Loud throws so the
+    // Unity prior (active scene; SceneManager.LoadScene) never fires
+    // here and nothing silently half-works (the Cairns.onFrame precedent).
+    thumbnails(/*scene, opts*/) {
+        throw new Error(
+            "Editor.thumbnails: virtualized RT pool not wired yet (#226 CAP-2)");
+    },
+    compose(/*scene, viewport, opts*/) {
+        throw new Error(
+            "Editor.compose: multi-target composition pass not wired yet (#226 CAP-3)");
+    },
+};
+
+// =====================================================================
 // Publish to global. script.eval snippets see all of these by name.
 // =====================================================================
 globalThis.Vector3    = Vector3;
@@ -228,6 +375,11 @@ globalThis.Component  = Component;
 globalThis.Camera     = Camera;
 globalThis.Application= Application;
 globalThis.Cairns     = Cairns;
+// #225 R4: Unity-shaped Prefab/Scene/Prefabs + the non-Unity Editor.
+globalThis.Prefab     = Prefab;
+globalThis.Scene      = Scene;
+globalThis.Prefabs    = Prefabs;
+globalThis.Editor     = Editor;
 )JS";
 
 }  // namespace cairns::control
