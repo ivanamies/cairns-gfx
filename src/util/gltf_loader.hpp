@@ -46,31 +46,40 @@ struct Primitive {
 };
 
 struct Mesh {
+    explicit Mesh(Arena& arena)
+        : primitives(cairns::Allocator<Primitive>(arena)),
+          cpuPositions(cairns::Allocator<glm::vec4>(arena)),
+          cpuAttrs(cairns::Allocator<VertexAttribute>(arena)),
+          cpuIndices(cairns::Allocator<uint32_t>(arena)) {}
+
     std::string name;
-    
+
     // GPU Handles
     rhi::Handle<rhi::Buffer> posHandle;
     rhi::Handle<rhi::Buffer> attrHandle; // Bindless attributes (UV, Norm, etc)
     rhi::Handle<rhi::Buffer> indexHandle;
-    
+
     // Sub-sections of this mesh
-    std::vector<Primitive> primitives;
-    
+    std::vector<Primitive, cairns::Allocator<Primitive>> primitives;
+
     /////////////////
     // temporaries //
-    std::vector<glm::vec4> cpuPositions;
-    std::vector<VertexAttribute> cpuAttrs;
-    std::vector<uint32_t> cpuIndices;
+    std::vector<glm::vec4, cairns::Allocator<glm::vec4>> cpuPositions;
+    std::vector<VertexAttribute, cairns::Allocator<VertexAttribute>> cpuAttrs;
+    std::vector<uint32_t, cairns::Allocator<uint32_t>> cpuIndices;
     /////////////////
 };
 
 struct Node {
+    explicit Node(Arena& arena)
+        : children(cairns::Allocator<int32_t>(arena)) {}
+
     std::string name;
     glm::mat4 localTransform = glm::mat4(1.0f);
     glm::mat4 globalTransform = glm::mat4(1.0f);
 
     int32_t meshIndex = -1; // Index into Scene.meshes
-    std::vector<int32_t> children;
+    std::vector<int32_t, cairns::Allocator<int32_t>> children;
 };
 
 struct LoadedTexture {
@@ -101,23 +110,27 @@ struct Scene {
     meshes(cairns::Allocator<Mesh>(arena_)),
     nodes(cairns::Allocator<Node>(arena_)),
     rootNodes(cairns::Allocator<int32_t>(arena_)),
+    loaded_samplers(cairns::Allocator<LoadedSampler>(arena_)),
+    loaded_textures(cairns::Allocator<LoadedTexture>(arena_)),
+    materialToTextureIndex(cairns::Allocator<uint32_t>(arena_)),
+    materialToSamplerIndex(cairns::Allocator<uint32_t>(arena_)),
     textureHandles(cairns::Allocator<rhi::Handle<rhi::Texture>>(arena_)),
     samplerHandles(cairns::Allocator<rhi::Handle<rhi::Sampler>>(arena_)),
     materialIds(cairns::Allocator<uint32_t>(arena_))
     { }
-    
+
     Arena& arena_;
-    
+
     std::vector<Mesh, cairns::Allocator<Mesh>> meshes;
     std::vector<Node, cairns::Allocator<Node>> nodes;
     std::vector<int32_t, cairns::Allocator<int32_t>> rootNodes;
-    
+
     /////////////////
     // temporaries //
-    std::vector<LoadedSampler> loaded_samplers;
-    std::vector<LoadedTexture> loaded_textures;
-    std::vector<uint32_t> materialToTextureIndex;
-    std::vector<uint32_t> materialToSamplerIndex;
+    std::vector<LoadedSampler, cairns::Allocator<LoadedSampler>> loaded_samplers;
+    std::vector<LoadedTexture, cairns::Allocator<LoadedTexture>> loaded_textures;
+    std::vector<uint32_t, cairns::Allocator<uint32_t>> materialToTextureIndex;
+    std::vector<uint32_t, cairns::Allocator<uint32_t>> materialToSamplerIndex;
     /////////////////
     
     // Bindless Registry Data
@@ -333,13 +346,13 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene) {
 
     // 4. Meshes
     for (size_t i = 0; i < asset.meshes.size(); ++i) {
-        scene.meshes.push_back(Mesh());
+        scene.meshes.emplace_back(scene.arena_);
         LoadMeshFromGltf(asset, asset.meshes[i], scene.meshes[i]);
     }
-    
+
     // 5. Nodes
     for (size_t i = 0; i < asset.nodes.size(); ++i) {
-        scene.nodes.push_back(Node());
+        scene.nodes.emplace_back(scene.arena_);
         auto& gn = asset.nodes[i];
         auto& on = scene.nodes[i];
         on.name = std::string(gn.name);
