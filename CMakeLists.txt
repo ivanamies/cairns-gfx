@@ -446,45 +446,34 @@ if(EMSCRIPTEN AND CAIRNS_GFX_BACKEND_WEBGPU)
         "-sSTACK_SIZE=4MB"
         "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString"
         "-sASSERTIONS=1"
-        # The 50-hero web bundle preloads ~0.9 GB of GLBs into MEMFS (held in the
-        # WASM heap); ALLOW_MEMORY_GROWTH alone caps at 2 GB on wasm32, so lift the
-        # ceiling to the 4 GB wasm32 max for headroom at load.
-        "-sMAXIMUM_MEMORY=4294967296"
+        # LAZY GLB LOADING: champion GLBs are NOT bundled into the .data (that put
+        # ~0.9-1.2 GB resident in MEMFS and OOM-killed the tab). They're served as
+        # loose files (symlinked into the output dir below) and fetched ON DEMAND in
+        # platform_web.cpp ReadAsset -- so only ~one GLB (~18 MB) is resident at a
+        # time, baseline ~40 MB. ASYNCIFY lets the synchronous loader await the
+        # fetch (emscripten_wget_data); the deep QuickJS+load stack needs the larger
+        # asyncify stack.
+        "-sASYNCIFY"
+        "-sASYNCIFY_STACK_SIZE=1048576"
         # NOTE: NOT --use-preload-cache -- emscripten stores the whole package as a
-        # single IndexedDB value, which silently fails at this size. The .data is
-        # instead cached via a service worker (Cache API); see the POST_BUILD sw.js
-        # stamp below + src/web/sw.js.in.
-        # The 100/300-actor perf smokes OOM-kill the browser (100 unique champions
-        # peak ~3.7 GB at load), so keep them out of the WEB build entirely -- web
-        # ships only perf_smoke_50. Native still has them.
+        # single IndexedDB value, which silently fails at large sizes. The (now
+        # small) .data is cached via a service worker (Cache API); the loose GLBs
+        # are browser-HTTP-cached. See the POST_BUILD sw.js stamp + src/web/sw.js.in.
+        # The 100/300-actor perf smokes are kept out of the WEB build (web ships only
+        # perf_smoke_50); native still has them.
         "--exclude-file=*perf_smoke_100*"
         "--exclude-file=*perf_smoke_300*"
         "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/src/web/shell.html"
         "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/assets@/")
-    # Web bundles ONLY the first 50 of the roster (kDebugGlbs[0..49]) -- the 100-hero
-    # bundle preloaded ~1.2 GB into MEMFS and OOM-killed the browser; 50 is ~0.9 GB.
-    # perf_smoke_50.js loads exactly this set (loadBatch count:50). KEEP IN SYNC with
-    # the first 50 of kDebugGlbs (src/util/debug_asset.hpp).
-    set(_cairns_web_glbs50
-        aatrox aatrox_blood_moon aatrox_drx aatrox_justicar
-        aatrox_lunar_eclipse aatrox_mecha aatrox_odyessy aatrox_prestige_blood_moon
-        aatrox_prestige_blood_moon2 aatrox_prestige_drx aatrox_primordian aatrox_sea_hunter
-        aatrox_victorious ahri ahri_2022_prestige_k_da ahri_academy
-        ahri_after_hours_spirit_blossom_springs ahri_arcade ahri_arcana ahri_challenger
-        ahri_coven ahri_dynasty ahri_elderwood ahri_foxfire
-        ahri_immortalized_legend ahri_k_da ahri_k_da_all_out ahri_midnight
-        ahri_popstar ahri_prestige_k_da ahri_risen_legend ahri_snow_moon
-        ahri_spirit_blossom ahri_spirit_blossom_springs ahri_star_guardian akali
-        akali_2022_prestige_k_da akali_all-star akali_blood_moon akali_coven
-        akali_crime_city_nightmare akali_drx akali_empyrean akali_headhunter
-        akali_infernal akali_k_da akali_k_da_all_out akali_nurse
-        akali_prestige_coven akali_prestige_k_da)
-    foreach(_c ${_cairns_web_glbs50})
-        set(_glb "/Users/ivanamies/dev/gfx/assets/riot/lol_champions/staging/${_c}.glb")
-        if(EXISTS "${_glb}")
-            target_link_options(cairns_web PRIVATE "--preload-file=${_glb}@/${_c}.glb")
-        endif()
-    endforeach()
+    # Serve the champion GLBs as loose files (lazy-fetched, NOT bundled). Symlink
+    # the whole staging roster into the output dir next to cairns_web.html so the
+    # dev http server hands them out on demand. No disk duplication, no MEMFS cost.
+    add_custom_command(TARGET cairns_web POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+            -DSTAGING=/Users/ivanamies/dev/gfx/assets/riot/lol_champions/staging
+            -DOUT=$<TARGET_FILE_DIR:cairns_web>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/link_glbs.cmake
+        VERBATIM)
     # Stamp sw.js next to cairns_web.html with the built .data's content hash as
     # the Cache API version, so a rebuilt bundle auto-invalidates the cache.
     add_custom_command(TARGET cairns_web POST_BUILD
