@@ -13,7 +13,8 @@ android {
         namespace "org.libsdl.app"
     }
     defaultConfig {
-        minSdkVersion 21
+        // tagiamies THIS MUST BE 24+ TO LINK VULKAN
+        minSdkVersion 33
         targetSdkVersion 34
         versionCode 1
         versionName "1.0"

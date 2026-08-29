@@ -1,0 +1,66 @@
+
+
+product: DirectX(D3D12)/Vulkan/Metal C++20 user generated (UGC) differentiable physics engine; architecture: bindless rendering, render graph, rendering hardware interface, bitwise reproducible; keywords: typescript bindings, swapchains, graphics pipelines, samplers, textures, shaders, meshes, render targets.
+
+must have:
+- 720 x 1280 resolution
+- js engine
+- gltfs
+- cross platform, ios/macosx/android
+- rhi abstractions
+- no lighting, unlit materials only
+- forward rendering only
+- no culling. everything stays in the fustrum.
+- NO multithreading and NO instancing "This is using a single render thread. Ten thousand actual draw calls without any instancing tricks" sl28/pg44
+- no batching "No batching." sl28/pg44
+- no gpu driven rendering
+- not astc or other offline compressed textures.
+
+fine:
+- fences
+- handles, no shared_ptrs
+- error codes, no exceptions
+- tags, no rtti
+- cpu/gpu allocators
+- bindless rendering in general 
+- mipmaps
+- I can enable MSAA and anisotropy on myself, but not LensCore
+
+"I fear not the man who has practiced 10,000 kicks once, but I fear the man who has practiced one kick 10,000 times." -- Bruce Lee
+There is no trick, no special technique, no new tool, no great idea, hidden knowledge or sublime realization beyond memory management taken to a logical extreme. This engines practices "one kick 10000 times."
+
+goal:
+10k draws in less than 16ms on an iphone 6
+
+current state:
+1.2 ms creating 350 draw calls -- est 6pm 26/01/18
+this went down to 200 us creating 350 draw calls -- est 8pm 26/01/18. idk what happend.
+200 us consuming 350 draw calls
+
+it takes 1 ms to multiply 10,000 glm::mat4
+
+architectural notes:
+- take ideas from https://realtimecollisiondetection.net/blog/?p=86
+- 2 bits full screen layer
+- 3 bits viewport
+- 3 bits viewport layer
+- 2 bits translucency type
+- 24 bits depth
+- 30 bits material id
+swap material id and depth for opaque calls
+
+dont use cringe names
+draw IR = draw command
+draw IR generator on eg a mesh = mesh pass processor. Im calling it DrawEmitter.
+draw IR collector = draw list
+PSO = pso. too bad, unreals name won.
+
+
+
+
+reach:
+- imgui
+- spawn 10k particles
+- interact with particles
+
+

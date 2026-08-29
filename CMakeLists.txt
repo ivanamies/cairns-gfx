@@ -24,6 +24,9 @@ if(MSVC)
     endif()
 endif()
 
+set(DEBUG_OVERRIDE_IAMIES_USE_METAL 1)
+set(DEBUG_OVERRIDE_IAMIES_USE_VULKAN 1)
+
 # Set the name of the executable
 set(EXECUTABLE_NAME ${PROJECT_NAME})
 
@@ -36,31 +39,90 @@ else()
 	add_executable(${EXECUTABLE_NAME})
 endif()
 
-# Add your sources to the target
-target_sources(${EXECUTABLE_NAME} 
-PRIVATE 
-    src/main.cpp
-    src/iosLaunchScreen.storyboard
+# GCC and Clang (Linux, macOS, Android, Emscripten)
+target_compile_options(${EXECUTABLE_NAME} PRIVATE 
+  -Wall 
+  -Wextra 
+  -Werror
+  -fno-exceptions # no crutches to hide behind
+  -fno-rtti # ditto
+  # -O2
 )
+
+target_compile_definitions(${EXECUTABLE_NAME} PRIVATE DEBUG_OVERRIDE_IAMIES_USE_METAL=${DEBUG_OVERRIDE_IAMIES_USE_METAL} DEBUG_OVERRIDE_IAMIES_USE_VULKAN=${DEBUG_OVERRIDE_IAMIES_USE_VULKAN})
+
 # What is iosLaunchScreen.storyboard? This file describes what Apple's mobile platforms
 # should show the user while the application is starting up. If you don't include one,
 # then you get placed in a compatibility mode that does not allow HighDPI.
 # This file is referenced inside Info.plist.in, where it is marked as the launch screen file.
-# It is also ignored on non-Apple platforms. 
+# It is also ignored on non-Apple platforms.
 
 # To get an app icon on Apple platforms, add it to your executable.
 # Afterward, the image file in Info.plist.in.
 if(APPLE)
-    target_sources("${EXECUTABLE_NAME}" PRIVATE "src/logo.png")
+    target_sources("${EXECUTABLE_NAME}" PRIVATE "assets/logo.png")
 endif()
+
+if(DEBUG_OVERRIDE_IAMIES_USE_METAL)
+  message("tagiamies using metal")
+    # --- START METAL-CPP CONFIGURATION ---
+    # Point to the metal-cpp directory in the root of your project
+    target_include_directories(${EXECUTABLE_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/metal-cpp")
+    
+    # Find system frameworks required by Metal
+    find_library(METAL_LIB Metal REQUIRED)
+    find_library(FOUNDATION_LIB Foundation REQUIRED)
+    find_library(QUARTZ_LIB QuartzCore REQUIRED)
+    
+    # Link the frameworks
+    target_link_libraries(${EXECUTABLE_NAME} PRIVATE ${METAL_LIB} ${FOUNDATION_LIB} ${QUARTZ_LIB})
+    # --- END METAL-CPP CONFIGURATION ---    
+endif()
+if(DEBUG_OVERRIDE_IAMIES_USE_VULKAN)
+  if (APPLE)
+  message("tagiamies using vulkan too!!")
+    find_package(Vulkan REQUIRED)
+    target_link_libraries(${EXECUTABLE_NAME} PRIVATE Vulkan::Vulkan)
+  elseif (ANDROID)
+    # the vulkan lib sorta just shows up on android...
+    target_link_libraries(${EXECUTABLE_NAME} PUBLIC vulkan android log)
+  endif()
+endif()
+
+if ( !DEBUG_OVERRIDE_IAMIES_USE_METAL AND !DEBUG_OVERRIDE_IAMIES_USE_METAL ) 
+  message(FATAL_ERROR "You MUST pick one of metal or vulkan, perhaps both")
+endif()
+
+
+# Add your sources to the target
+file(GLOB_RECURSE ALL_SOURCES
+  "src/*.cpp"
+  "src/*.hpp"
+  "src/iosLaunchScreen.storyboard"
+)
+
+target_sources(${EXECUTABLE_NAME} PRIVATE ${ALL_SOURCES})
 
 # Set C++ version
 target_compile_features(${EXECUTABLE_NAME} PUBLIC cxx_std_20)
+
+target_include_directories(${EXECUTABLE_NAME} PRIVATE 
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/glm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb"
+)
 
 # on Web targets, we need CMake to generate a HTML webpage. 
 if(EMSCRIPTEN)
 	set(CMAKE_EXECUTABLE_SUFFIX ".html" CACHE INTERNAL "")
 endif()
+
+# import fastgltf
+set(FASTGLTF_ENABLE_ASSET_DEBUGGER OFF CACHE BOOL "" FORCE)
+set(FASTGLTF_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(FASTGLTF_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+
+add_subdirectory(third_party/fastgltf EXCLUDE_FROM_ALL)
 
 # Configure SDL by calling its CMake file.
 # we use EXCLUDE_FROM_ALL so that its install targets and configs don't
@@ -97,7 +159,8 @@ target_link_libraries(${EXECUTABLE_NAME} PUBLIC
 	SDL3_ttf::SDL3_ttf      # remove if you are not using SDL_ttf
 	SDL3_mixer::SDL3_mixer  # remove if you are not using SDL_mixer
 	SDL3_image::SDL3_image	# remove if you are not using SDL_image
-    SDL3::SDL3              # If using satelite libraries, SDL must be the last item in the list. 
+        SDL3::SDL3              # If using satelite libraries, SDL must be the last item in the list.
+        fastgltf::fastgltf   
 )
 
 # SDL_Image bug: https://github.com/libsdl-org/SDL_image/issues/506
@@ -113,25 +176,69 @@ endif()
 # Dealing with assets
 # We have some non-code resources that our application needs in order to work. How we deal with those differs per platform.
 if (APPLE)
-    # on Apple targets, the application bundle has a "resources" subfolder where we can place our assets.
-    # SDL_GetBasePath() gives us easy access to that location.
-    set(input_root "${CMAKE_CURRENT_LIST_DIR}/src")
+    # Define the base directory for assets
+    set(input_root "${CMAKE_CURRENT_SOURCE_DIR}/assets")
+
+    # This macro ensures files end up in the "Resources" folder of the .app bundle
     macro(add_resource FILE)
-        file(RELATIVE_PATH relpath "${input_root}" "${FILE}")
-        get_filename_component(relpath "${relpath}" DIRECTORY)
-        target_sources(${EXECUTABLE_NAME} PRIVATE ${FILE})
-        set_property(SOURCE ${FILE} PROPERTY MACOSX_PACKAGE_LOCATION "Resources/${relpath}")
+        # We target_sources so Xcode sees the file in the project tree
+        target_sources(${EXECUTABLE_NAME} PRIVATE "${FILE}")
+        
+        # We strip the path to get just the filename
+        get_filename_component(FILENAME "${FILE}" NAME)
+        
+        # We force the file into the "Resources" root. 
+        # On iOS and macOS, this is where the app looks by default.
+        set_property(SOURCE "${FILE}" PROPERTY MACOSX_PACKAGE_LOCATION "Resources")
     endmacro()
-    add_resource("${CMAKE_CURRENT_LIST_DIR}/src/Inter-VariableFont.ttf")
-    add_resource("${CMAKE_CURRENT_LIST_DIR}/src/the_entertainer.ogg")
-    add_resource("${CMAKE_CURRENT_LIST_DIR}/src/gs_tiger.svg")
+
+    # 1. Add specific known files
+    add_resource("${input_root}/Inter-VariableFont.ttf")
+    add_resource("${input_root}/the_entertainer.ogg")
+    add_resource("${input_root}/gs_tiger.svg")
+    add_resource("${input_root}/mc_grass.jpeg")
+
+    # 2. Add Shaders (*.metal) as RAW TEXT
+    file(GLOB SHADER_FILES "${input_root}/*.metal")
+    foreach(METAL_FILE ${SHADER_FILES})
+        add_resource("${METAL_FILE}")
+        set_source_files_properties("${METAL_FILE}" PROPERTIES 
+            HEADER_FILE_ONLY TRUE
+            XCODE_EXPLICIT_FILE_TYPE "text"
+        )
+    endforeach()
+
+    # 2.5 Add Shaders (*.spv) as RAW BINARY
+    file(GLOB SHADER_FILES "${input_root}/*.spv")
+    foreach(SPV_FILE ${SHADER_FILES})
+      add_resource("${SPV_FILE}")
+        set_source_files_properties("${SPV_FILE}" PROPERTIES 
+            HEADER_FILE_ONLY TRUE
+            XCODE_EXPLICIT_FILE_TYPE "file"
+        )
+    endforeach()
+
+    # 3. Add GLB Models (*.glb)
+    # Using GLOB is fine as long as add_resource flattens the path
+    file(GLOB GLB_FILES "${input_root}/*.glb")
+    foreach(GLB_FILE ${GLB_FILES})
+        add_resource("${GLB_FILE}")
+    endforeach()
+
+    # 4. Hack in copying all of my league of legends assets
+    set(EXTERNAL_ASSETS_DIR "/Users/ivanamies/Documents/academics/cs/gfx/assets/riot/lol_champions/staging")
+    file(GLOB EXTERNAL_GLB_FILES "${EXTERNAL_ASSETS_DIR}/*.glb")
+    foreach(EXT_GLB ${EXTERNAL_GLB_FILES})
+        add_resource("${EXT_GLB}")
+    endforeach()
+
 elseif(EMSCRIPTEN)
     # on the web, we have to put the files inside of the webassembly
     # somewhat unintuitively, this is done via a linker argument.
     target_link_libraries(${EXECUTABLE_NAME} PRIVATE 
-        "--preload-file \"${CMAKE_CURRENT_LIST_DIR}/src/Inter-VariableFont.ttf@/\""
-        "--preload-file \"${CMAKE_CURRENT_LIST_DIR}/src/the_entertainer.ogg@/\""
-        "--preload-file \"${CMAKE_CURRENT_LIST_DIR}/src/gs_tiger.svg@/\""
+        "--preload-file \"${CMAKE_CURRENT_LIST_DIR}/assets/Inter-VariableFont.ttf@/\""
+        "--preload-file \"${CMAKE_CURRENT_LIST_DIR}/assets/the_entertainer.ogg@/\""
+        "--preload-file \"${CMAKE_CURRENT_LIST_DIR}/assets/gs_tiger.svg@/\""
     )
 else()
     if (ANDROID)
@@ -153,7 +260,7 @@ else()
         endif()
         add_custom_command(POST_BUILD
             TARGET "${EXECUTABLE_NAME}"
-		    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_LIST_DIR}/src/${filename}" "${outname}"
+		    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_LIST_DIR}/assets/${filename}" "${outname}"
 	    )
     endmacro()
     copy_helper("Inter-VariableFont.ttf")
@@ -162,9 +269,9 @@ else()
 endif()
 
 # set some extra configs for each platform
-set(RESOURCE_FILES "src/logo.png")
+set(RESOURCE_FILES "assets/logo.png")
 if(IOS)
-    set(RESOURCE_FILES "src/iosLaunchScreen.storyboard;src/logo.png") # make the splash screen show up on iOS
+    set(RESOURCE_FILES "assets/iosLaunchScreen.storyboard;assets/logo.png") # make the splash screen show up on iOS
 endif()
 
 set_target_properties(${EXECUTABLE_NAME} PROPERTIES 
@@ -172,7 +279,7 @@ set_target_properties(${EXECUTABLE_NAME} PROPERTIES
     MACOSX_BUNDLE TRUE
     # Set the Info.plist file for Apple Mobile platforms. Without this file, your app
     # will not launch. 
-    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/Info.plist.in"
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/assets/Info.plist.in"
 
     # in Xcode, create a Scheme in the schemes dropdown for the app.
     XCODE_GENERATE_SCHEME TRUE

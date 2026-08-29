@@ -1,0 +1,35 @@
+
+todo:
+
+1. render a triangle with metal according to the tutorial https://metaltutorial.com/.
+2. throw away the rest of the metal tutorial and port to SDL3
+3. write a GPU allocator, make MTL engine use MTL heap 
+4. get textures from the MTL heap
+5. get buffers, vertex buffers, index buffers, UBOs, etc from the MTL heap.
+6. add fences, split the heap into three so buffers can be safely updated at run time
+7. add glbs and gltf loading.
+8. re-do all of that in Vulkan on android.
+9. merge Metal with Vulkan, follow https://www.sebastianaaltonen.com/blog/no-graphics-api
+10. multiple threads can record command buffers, implement this
+11. replace std::shared_ptr with handles
+12. swap to a CPU allocator
+13. integrate quickjs
+14. integrate flECS
+15. make quickjs async, double buffer flECS
+16. render 30k materials per 16.6 ms frame on a phone
+
+pedagogical warning:
+- C++20
+- CPU/GPU/Mixed asynchronous programming
+- Vulkan
+- Metal
+- Rendering Hardware Interface design
+- Hardware feature tables
+- CPU/GPU Allocators
+- Tiled Rendering Architectural details
+- Bindless Rendering
+- Cache aware design
+- Javascript Engines
+- Entity Component Systems
+
+(the very next slide is the CPU database and GPU virtual machine analogy)
