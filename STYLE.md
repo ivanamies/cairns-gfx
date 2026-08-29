@@ -31,3 +31,16 @@ is the point -- it's the same ugliness that lets the hot path be one
 struct field deref instead of a vtable + indirect call.
 
 > "I'm ugly and I'm proud." -- SpongeBob
+
+## Anti-singleton (scene layer)
+
+- **No "the world."** No global/static/singleton world, registry,
+  camera, or selection.
+- **No implicit "current scene."** Every public op takes an explicit
+  `WorldId` or `EntityRef`.
+- **Never pass a bare `entt::entity` across a boundary.** The
+  cross-boundary reference is `EntityRef = { WorldId, entt::entity }`.
+  A bare `entt::entity` lives only inside a scope that has already
+  resolved its world. Code-review rule: a bare `entt::entity` in a
+  signature, member, or container is a defect.
+- **`active_world` is UI focus ONLY** -- never read by core logic.
