@@ -351,7 +351,7 @@ void CommandRecorder::EndRenderPass() {
     plat.enc_->endEncoding();
 }
 
-void CommandRecorder::PassTimerBegin(const char* name) {
+void CommandRecorder::PassTimerBegin(const char* name, bool /*is_compute*/) {
     pending_name_ = name;
     pending_slot_ = TimerStorage::SlotForPass(name);
 }

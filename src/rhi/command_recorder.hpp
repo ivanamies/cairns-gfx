@@ -138,7 +138,7 @@ public:
     void DrawImGui(Resources& res, Allocator& alloc, Handle<Shader> pipeline,
                    Handle<Texture> font, Handle<Sampler> sampler,
                    const ImDrawData* draw_data);
-    void PassTimerBegin(const char* name);
+    void PassTimerBegin(const char* name, bool is_compute = false);
     void PassTimerEnd();
     void EndRenderPass();
 

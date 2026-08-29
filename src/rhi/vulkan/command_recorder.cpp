@@ -715,18 +715,32 @@ void CommandRecorder::EndRenderPass() {
     vkCmdEndRenderPass(plat.gfx_);
 }
 
-void CommandRecorder::PassTimerBegin(const char* name) {
+void CommandRecorder::PassTimerBegin(const char* name, bool is_compute) {
     pending_name_ = name;
     pending_slot_ = TimerStorage::SlotForPass(name);
     if (plat.pass_count_ == nullptr || plat.pass_names_ == nullptr) {
         return;
     }
-    if (*plat.pass_count_ >= kMaxPasses) {
-        plat.pending_pass_idx_ = UINT32_MAX;
-        return;
+    uint32_t idx;
+    if (is_compute) {
+        if (*plat.compute_pass_count_ >= kMaxComputePasses) {
+            plat.pending_pass_idx_ = UINT32_MAX;
+            return;
+        }
+        idx = (*plat.compute_pass_count_)++;
+    } else {
+        if (*plat.pass_count_ >= kMaxPasses) {
+            plat.pending_pass_idx_ = UINT32_MAX;
+            return;
+        }
+        idx = kMaxComputePasses + ((*plat.pass_count_)++);
+        if (idx >= kMaxPasses) {
+            plat.pending_pass_idx_ = UINT32_MAX;
+            return;
+        }
     }
-    plat.pending_pass_idx_ = (*plat.pass_count_)++;
-    (*plat.pass_names_)[plat.pending_pass_idx_] = name;
+    plat.pending_pass_idx_ = idx;
+    (*plat.pass_names_)[idx] = name;
     plat.pass_cb_ = VK_NULL_HANDLE;
 }
 

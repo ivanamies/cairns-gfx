@@ -176,6 +176,7 @@ bool Frames::Init(Device& device) {
         }
         plat.pass_names_.assign(kFramesInFlight, {});
         plat.pass_count_.assign(kFramesInFlight, 0);
+        plat.compute_pass_count_.assign(kFramesInFlight, 0);
     }
 
     {  // per-frame command buffers + sync
@@ -618,30 +619,42 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     const uint32_t cf = plat.recorder_frame_;
     VkDevice dev = plat.device_;
 
-    vkWaitForFences(dev, 1, &plat.compute_in_flight_[cf], VK_TRUE, UINT64_MAX);
-    vkWaitForFences(dev, 1, &plat.in_flight_[cf], VK_TRUE, UINT64_MAX);
+    {
+        cairns::Timer t_fw("fence_wait", 11);
+        vkWaitForFences(dev, 1, &plat.compute_in_flight_[cf], VK_TRUE, UINT64_MAX);
+        vkWaitForFences(dev, 1, &plat.in_flight_[cf], VK_TRUE, UINT64_MAX);
+    }
 
     // Both queues' slot-`cf` timestamps are now resolved -- read them BEFORE
     // resetting fences / cmd buffers / the query pool itself.
     {
-        const uint32_t np = plat.pass_count_[cf];
-        if (np > 0) {
+        const uint32_t ncomp = plat.compute_pass_count_[cf];
+        const uint32_t ngfx = plat.pass_count_[cf];
+        if (ncomp > 0 || ngfx > 0) {
             std::array<uint64_t, 2 * kMaxPasses> ticks{};
-            vkGetQueryPoolResults(dev, plat.ts_pool_, 2 * kMaxPasses * cf, 2 * np,
+            vkGetQueryPoolResults(dev, plat.ts_pool_, 2 * kMaxPasses * cf,
+                                  2 * kMaxPasses,
                                   ticks.size() * sizeof(uint64_t), ticks.data(),
                                   sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
-            for (uint32_t p = 0; p < np; ++p) {
+            auto report = [&](uint32_t pass_idx) {
                 const double ns =
-                    (static_cast<double>(ticks[2 * p + 1] - ticks[2 * p])) *
+                    (static_cast<double>(ticks[2 * pass_idx + 1] - ticks[2 * pass_idx])) *
                     static_cast<double>(plat.ts_period_ns_);
-                const char* nm = plat.pass_names_[cf][p];
+                const char* nm = plat.pass_names_[cf][pass_idx];
                 if (nm) {
                     TimerStorage::Span(TimerStorage::SlotForPass(nm), nm,
                                        static_cast<uint64_t>(ns / 1000.0));
                 }
+            };
+            for (uint32_t p = 0; p < ncomp; ++p) {
+                report(p);
+            }
+            for (uint32_t p = 0; p < ngfx; ++p) {
+                report(kMaxComputePasses + p);
             }
         }
         plat.pass_count_[cf] = 0;
+        plat.compute_pass_count_[cf] = 0;
     }
     if (plat.host_query_reset_) {
         plat.vk_reset_query_pool_(dev, plat.ts_pool_, 2 * kMaxPasses * cf,
@@ -654,6 +667,7 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
 
     uint32_t image_index = 0;
     if (sc) {
+        cairns::Timer t_acq("acquire_wait", 10);
         std::lock_guard<std::mutex> lk(plat.swapchain_mutex_);
         VkResult acquire = vkAcquireNextImageKHR(dev, sc->plat.swapChain, UINT64_MAX,
                                                  plat.image_available_[cf], VK_NULL_HANDLE,
@@ -678,10 +692,12 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     // so the compute subrange's reset is ordered against this frame's compute
     // writes, and likewise for graphics.
     if (!plat.host_query_reset_) {
-        vkCmdResetQueryPool(plat.compute_cmds_[cf], plat.ts_pool_, 2 * kMaxPasses * cf,
-                            2 * kMaxPasses);
-        vkCmdResetQueryPool(plat.graphics_cmds_[cf], plat.ts_pool_, 2 * kMaxPasses * cf,
-                            2 * kMaxPasses);
+        vkCmdResetQueryPool(plat.compute_cmds_[cf], plat.ts_pool_,
+                            2 * kMaxPasses * cf,
+                            2 * kMaxComputePasses);
+        vkCmdResetQueryPool(plat.graphics_cmds_[cf], plat.ts_pool_,
+                            2 * kMaxPasses * cf + 2 * kMaxComputePasses,
+                            2 * (kMaxPasses - kMaxComputePasses));
     }
 
     FrameContext fc;
@@ -703,6 +719,7 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     fc.cmd.plat.ts_pool_ = plat.ts_pool_;
     fc.cmd.plat.pass_names_ = &plat.pass_names_[cf];
     fc.cmd.plat.pass_count_ = &plat.pass_count_[cf];
+    fc.cmd.plat.compute_pass_count_ = &plat.compute_pass_count_[cf];
     fc.cmd.plat.pass_cb_ = VK_NULL_HANDLE;
     fc.cmd.plat.pending_pass_idx_ = UINT32_MAX;
     fc.cmd.pending_name_ = nullptr;

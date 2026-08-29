@@ -65,6 +65,7 @@ struct FramesPlat {
     PFN_vkResetQueryPool vk_reset_query_pool_ = nullptr;
     std::vector<std::array<const char*, kMaxPasses>> pass_names_;
     std::vector<uint32_t> pass_count_;
+    std::vector<uint32_t> compute_pass_count_;
 };
 
 }  // namespace cairns::rhi

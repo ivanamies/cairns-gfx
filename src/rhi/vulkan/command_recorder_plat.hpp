@@ -13,6 +13,7 @@
 namespace cairns::rhi {
 
 inline constexpr uint32_t kMaxPasses = 16;
+inline constexpr uint32_t kMaxComputePasses = 4;
 // Per-frame ring of composite descriptor sets. Lets a single pass issue
 // multiple DrawFullscreen calls with different texture bindings without
 // last-bound-wins aliasing (the 997af20 fix).
@@ -92,6 +93,7 @@ struct CommandRecorderPlat {
     VkQueryPool ts_pool_ = VK_NULL_HANDLE;
     std::array<const char*, kMaxPasses>* pass_names_ = nullptr;
     uint32_t* pass_count_ = nullptr;
+    uint32_t* compute_pass_count_ = nullptr;
     VkCommandBuffer pass_cb_ = VK_NULL_HANDLE;
     uint32_t pending_pass_idx_ = UINT32_MAX;
 };

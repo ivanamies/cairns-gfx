@@ -1620,7 +1620,10 @@ public:
         // stays bit-for-bit; the call site is wired so a future content
         // commit (load CesiumMan + attach SkinRef) flips the switch
         // without touching draw().
-        BuildSkinFrame(slot);
+        {
+            cairns::Timer t_skin("skin_eval", 8);
+            BuildSkinFrame(slot);
+        }
 
         // Fill packet header (the view into per-slot storage).
         s.pkt.frame_idx = frame_;
@@ -1728,6 +1731,7 @@ public:
         render_thread_->Submit(slot, &s.pkt);
 
         if (prev_present_slot_ >= 0) {
+            cairns::Timer t_pw("present_wait", 9);
             PerSlot& ps = slots_[prev_present_slot_];
             std::unique_lock<std::mutex> lk(present_m_);
             present_cv_.wait(lk, [&] { return ps.present_ready; });

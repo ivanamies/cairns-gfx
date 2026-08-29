@@ -22,7 +22,9 @@ import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC_ROOT = os.path.join(REPO_ROOT, "src")
+ASSETS_ROOT = os.path.join(REPO_ROOT, "assets")
 EXTS = {".hpp", ".h", ".cpp", ".cc", ".mm", ".c"}
+SHADER_EXTS = {".glsl", ".comp", ".vert", ".frag", ".tesc", ".tese", ".geom", ".metal"}
 
 INC_QUOTE = re.compile(r'^\s*#\s*include\s*"([^"]+)"')
 INC_ANGLE = re.compile(r'^\s*#\s*include\s*<')
@@ -98,8 +100,26 @@ def main():
                 if m and resolve(m.group(1), os.path.dirname(f)) in fileset:
                     continue  # this header is inlined elsewhere in the TU
                 out.write(line)  # keep external <...>, generated/unresolved "...", and code
+
+    shader_files = []
+    if os.path.isdir(ASSETS_ROOT):
+        for fn in sorted(os.listdir(ASSETS_ROOT)):
+            ext = os.path.splitext(fn)[1].lower()
+            if ext in SHADER_EXTS:
+                shader_files.append(os.path.join(ASSETS_ROOT, fn))
+    if shader_files:
+        out.write("\n// ==================== SHADERS ====================\n")
+        for sf in shader_files:
+            rel = os.path.relpath(sf, REPO_ROOT)
+            out.write("\n// -------------------- {} --------------------\n".format(rel))
+            out.write("#if 0  // shader source, not compiled as C++\n")
+            with open(sf, errors="replace") as fh:
+                out.write(fh.read())
+            if not out.tell() or True:
+                out.write("\n#endif\n")
     out.close()
-    sys.stderr.write("amalgamated {} files -> {}\n".format(len(order), out_path))
+    sys.stderr.write("amalgamated {} files + {} shaders -> {}\n".format(
+        len(order), len(shader_files), out_path))
 
 
 if __name__ == "__main__":

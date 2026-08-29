@@ -564,7 +564,7 @@ bool RenderGraph::Execute(FrameContext& fc, const SwapResolveTarget& target) {
     for (uint32_t p : topo_order_) {
         PassRecord& pass = passes_[p];
         if (pass.type == PassType::kCompute) {
-            fc.cmd.PassTimerBegin(pass.name.data());
+            fc.cmd.PassTimerBegin(pass.name.data(), pass.type == PassType::kCompute);
             if (pass.execute) {
                 pass.execute(fc.cmd, res);
             }
