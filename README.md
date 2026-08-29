@@ -199,13 +199,8 @@ golden.
 
 ### Deferred refactors
 
-- **Move render-graph build to the game thread, per-slot.** Today the
-  graph is built + baked + executed on the render thread inside
-  `RecordFrame` (`src/engine.hpp`), with a single shared `RenderGraph`
-  instance reused per slot via `BindSlotArena(slot, ...)`. The threading
-  diagram above describes the intended end state; getting there means
-  splitting graph build/bake (game thread, per-slot graphs) from
-  Execute (render thread). Not blocking any active perf push.
+Lives in `TODO.md` ("Deferred refactors" section). Render-graph
+build-on-game-thread is the headliner; see there.
 
 ---
 
@@ -458,20 +453,7 @@ before touching adjacent code so they don't get re-introduced.
 
 ## Known deferrals (acknowledged, not bugs)
 
-- **EnTT internals still on `std::allocator`.** `entt::registry`'s
-  component pages go through `std::allocator<T>`, not `cairns::Allocator`.
-  Routing through `cairns::basic_registry<entt::entity, cairns::Allocator<entt::entity>>`
-  is mechanical surgery (every `view<T>` / `storage<T>` call site has to
-  carry the allocator type), but right now `cairns::Arena::kEnabled = false`
-  means the Arena just `malloc`s anyway — so the surgery would route
-  through a wrapper that calls `malloc` instead of routing through
-  `malloc` directly. Revisit when `kEnabled` flips to true and the
-  ChunkAllocator path is live.
-- **`World::Cold::registry` is held by value.** Dropping the prior
-  `std::unique_ptr<entt::registry>` saves one heap alloc per world open
-  (~8 across the program). Safe because `worlds_.Reserve(kMaxWorlds)`
-  guarantees the cold_ vector never reallocates, so `World::Cold*` stays
-  stable for the engine's lifetime.
+Moved to `TODO.md`. README carries architecture, not work items.
 
 ---
 
