@@ -864,6 +864,15 @@ public:
                     scenes_, meshes_, rhi_.resources, rhi_.alloc)) {
                 return false;
             }
+            // #222 Phase H.4 partial: snag the shared skin-attrs handle off
+            // any skinned mesh; same value for all of them.
+            meshes_.ForEachLive(
+                [&](cairns::Mesh::Hot& mhot, cairns::Mesh::Cold&) {
+                    if (shared_skin_attrs_buf_.IsNull() &&
+                        !mhot.skin_attrs_buffer.IsNull()) {
+                        shared_skin_attrs_buf_ = mhot.skin_attrs_buffer;
+                    }
+                });
 
             // #221 Phase 9 (vk): per-skinned-mesh Group A descriptor set.
             // Allocates one set + writes 2 SSBO descriptors per skinned
@@ -872,7 +881,7 @@ public:
             meshes_.ForEachLive(
                 [&](cairns::Mesh::Hot& mhot, cairns::Mesh::Cold&) {
                     if (mhot.attr_skinned_alias.IsNull() ||
-                        mhot.skin_attrs_buffer.IsNull() ||
+                        shared_skin_attrs_buf_.IsNull() ||
                         mhot.vert_count == 0) {
                         return;
                     }
@@ -885,7 +894,7 @@ public:
                         static_cast<uint32_t>(sizeof(glm::vec4));
                     bb[0].kind = cairns::rhi::BufferKind::kStorage;
                     bb[1].slot = 1;
-                    bb[1].buffer = mhot.skin_attrs_buffer;
+                    bb[1].buffer = shared_skin_attrs_buf_;
                     bb[1].offset = mhot.skin_attr_base_vertex *
                         static_cast<uint32_t>(sizeof(cairns::SkinVertex));
                     bb[1].range = mhot.vert_count *
@@ -906,7 +915,7 @@ public:
                 meshes_.ForEachLive(
                     [&](cairns::Mesh::Hot& mhot, cairns::Mesh::Cold&) {
                         if (mhot.attr_skinned_alias.IsNull() ||
-                            mhot.skin_attrs_buffer.IsNull() ||
+                            shared_skin_attrs_buf_.IsNull() ||
                             mhot.vert_count == 0) {
                             return;
                         }
@@ -2146,7 +2155,7 @@ public:
                         db = rhi::SkinDispatchBatch{};
                         if (!mhot ||
                             mhot->posHandle.IsNull() ||
-                            mhot->skin_attrs_buffer.IsNull()) {
+                            shared_skin_attrs_buf_.IsNull()) {
                             continue;
                         }
                         struct SkinParamsCpu {
@@ -2197,7 +2206,7 @@ public:
                         db.pos_byte_offset =
                             mhot->global_base_vertex *
                             static_cast<uint32_t>(sizeof(glm::vec4));
-                        db.skin_attr_buffer = mhot->skin_attrs_buffer;
+                        db.skin_attr_buffer = shared_skin_attrs_buf_;
                         db.skin_attr_byte_offset =
                             mhot->skin_attr_base_vertex *
                             static_cast<uint32_t>(
@@ -3309,6 +3318,11 @@ private:
     // every frame's resident_textures span points at this vector
     // instead of being arena-allocated + filled per frame.
     std::vector<rhi::Handle<rhi::Texture>> resident_textures_;
+    // #222 Phase H.4 partial: the skin-attr SSBO is the SAME handle on every
+    // skinned mesh from one LoadScenesGpu call -- it does not belong on
+    // Mesh::Hot. Engine reads from here; per-mesh field stays as a stop-gap
+    // until the gltf_loader API takes a buffer-handle out-param.
+    rhi::Handle<rhi::Buffer> shared_skin_attrs_buf_ = rhi::Handle<rhi::Buffer>::Null;
     std::vector<int32_t> root_nodes_stack_cache_;
 
     std::vector<glm::mat4> debugSceneXforms_;
