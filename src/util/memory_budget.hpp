@@ -49,9 +49,13 @@ struct MemoryBudget {
     static MemoryBudget Default() {
         MemoryBudget b;
 #if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
-        b.cpu_persistent_bytes = 256ull * 1024 * 1024;   // 256 MB
+        // #229: the CPU arena is NOT bound by the SSBO limit -- 256 MB was a
+        // conflation with gpu_skin_pool (the Adreno-730 max_storage_buffer_range
+        // floor). The S22 has 8 GB; give the CPU block 512 MB so the 100-GLB load
+        // (incl. the transient mesh cpu* peak) fits in-block with headroom.
+        b.cpu_persistent_bytes = 512ull * 1024 * 1024;   // 512 MB
         b.gpu_resident_bytes = 128ull * 1024 * 1024;
-        b.gpu_skin_pool_bytes = 128ull * 1024 * 1024;    // Adreno 730 floor
+        b.gpu_skin_pool_bytes = 128ull * 1024 * 1024;    // Adreno 730 floor (SSBO)
 #else
         b.cpu_persistent_bytes = 1024ull * 1024 * 1024;  // 1 GB
         b.gpu_resident_bytes = 1024ull * 1024 * 1024;    // 1 GB

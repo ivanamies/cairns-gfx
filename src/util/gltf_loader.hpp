@@ -232,13 +232,12 @@ struct Mesh {
     struct Cold {
         NameRef name;  // #229 P3: slice into prefab_arena_ (was std::string)
         // CPU load-time temporaries. Cleared post-upload by Engine's mesh-pool
-        // sweep (was scene.CleanupTmps's job). #229: these stay on malloc, NOT
-        // cpu_block_ -- they are TRANSIENT (peak at hundreds of MB across a
-        // 100-GLB batch before the post-upload clear) and would exhaust the
-        // 256 MB mobile block (the S22 load-time abort). They are also empty
-        // before any frame renders, so they are not in the determinism hash.
-        // A kRegionLoadScratch BumpArena (Reset per batch) is the proper
-        // in-block home; malloc is the transient stand-in until then.
+        // sweep. #229: these stay on malloc, NOT cpu_block_. Measured ~600 MB
+        // across the 100-GLB batch (~6.5M verts x ~92 B), peaking before the
+        // per-batch clear -- too big for even a 512 MB block. They are transient
+        // (empty before any frame, not in the determinism hash). Proper in-block
+        // home = a kRegionLoadScratch arena freed PER MESH (peak = 1 mesh, not
+        // the whole batch); until then, malloc.
         std::vector<glm::vec4> cpuPositions;
         std::vector<VertexAttribute> cpuAttrs;
         std::vector<uint32_t> cpuIndices;
@@ -434,8 +433,8 @@ inline bool LoadMeshFromGltf(const fastgltf::Asset& asset,
                              cairns::BumpArena& arena) {
     outCold.name = InternName(arena, std::string_view(gltfMesh.name.data(),
                                                        gltfMesh.name.size()));
-    // #229: cpu* stay on malloc (transient load buffers; see Mesh::Cold). Just
-    // clear them -- they are reused per mesh and dropped post-upload.
+    // #229: cpu* stay on malloc (transient ~600 MB load buffers; see Mesh::Cold).
+    // Clear them -- reused per mesh, dropped post-upload.
     outCold.cpuPositions.clear();
     outCold.cpuAttrs.clear();
     outCold.cpuIndices.clear();
