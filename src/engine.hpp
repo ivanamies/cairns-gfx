@@ -29,6 +29,9 @@
 #include "util/scene_gpu.hpp"
 #include "util/timer.hpp"
 #include "util/log.hpp"
+#include "scene/scene_world.hpp"
+#include "render/render_extract.hpp"
+#include "render/render_scene.hpp"
 #include "rhi/rhi.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/command_recorder.hpp"
@@ -206,11 +209,15 @@ public:
                     return false;
                 }
                 cairns::PrepareSceneResources(scene, rhi_.resources, rhi_.alloc, materials_);
+            }
 
-                if (!cairns::rhi::LoadSceneGpu(scene, rhi_.resources, rhi_.alloc)) {
-                    return false;
-                }
+            if (!cairns::rhi::LoadScenesGpu(
+                    std::span<cairns::Scene>(scenes_.data(), scenes_.size()),
+                    rhi_.resources, rhi_.alloc)) {
+                return false;
+            }
 
+            for (cairns::Scene& scene : scenes_) {
                 scene.CleanupTmps();
             }
         }
