@@ -26,6 +26,7 @@
 #include <initializer_list>
 #include <vector>
 
+#include "core/handle.hpp"
 #include "util/define.hpp"
 #include "util/offset_allocator.hpp"
 
@@ -81,92 +82,12 @@ struct Kernel;
 struct SwapChain;
 struct FrameContext;
 
-template <typename T>
-struct Handle {
-    uint16_t index = 0xFFFF;
-    uint16_t generation = 0xFFFF;
-
-    constexpr bool IsNull() const { return index == 0xFFFF; }
-    constexpr auto operator<=>(const Handle&) const = default;
-
-    static const Handle Null;
-};
-
-template <typename T>
-const Handle<T> Handle<T>::Null = Handle<T>{};
-
-// Generational typed pool with SoA hot/cold storage (Aaltonen "arrays you walk").
-// Obtained from Sebastian Aaltonen's "Modern Mobile Rendering Architecture", slide 19.
-// T must define T::Hot and T::Cold nested types.
-template <typename T>
-class ResourceManager {
-public:
-    Handle<T> Acquire() {
-        uint16_t idx;
-        if (!freelist_.empty()) {
-            idx = freelist_.back();
-            freelist_.pop_back();
-        } else {
-            idx = static_cast<uint16_t>(hot_.size());
-            hot_.emplace_back();
-            cold_.emplace_back();
-            generation_.push_back(1);
-        }
-        return Handle<T>{idx, generation_[idx]};
-    }
-
-    void Release(Handle<T> h) {
-        if (h.index >= generation_.size()) {
-            return;
-        }
-        if (generation_[h.index] != h.generation) {
-            return;
-        }
-        generation_[h.index]++;
-        freelist_.push_back(h.index);
-    }
-
-    typename T::Hot* GetHot(Handle<T> h) {
-        if (h.index >= generation_.size()) {
-            return nullptr;
-        }
-        if (generation_[h.index] != h.generation) {
-            return nullptr;
-        }
-        return &hot_[h.index];
-    }
-
-    typename T::Cold* GetCold(Handle<T> h) {
-        if (h.index >= generation_.size()) {
-            return nullptr;
-        }
-        if (generation_[h.index] != h.generation) {
-            return nullptr;
-        }
-        return &cold_[h.index];
-    }
-
-    size_t Size() const { return hot_.size(); }
-
-    template <typename Fn>
-    void ForEachLive(Fn fn) {
-        std::vector<bool> is_free(hot_.size(), false);
-        for (uint16_t fi : freelist_) {
-            is_free[fi] = true;
-        }
-        for (size_t i = 0; i < hot_.size(); ++i) {
-            if (!is_free[i]) {
-                fn(hot_[i], cold_[i]);
-            }
-        }
-    }
-
-private:
-    std::vector<typename T::Hot> hot_;
-    std::vector<typename T::Cold> cold_;
-    std::vector<uint16_t> generation_;
-    std::vector<uint16_t> freelist_;
-};
+// Lifted to cairns::core (src/core/handle.hpp). Re-exported here so all
+// existing cairns::rhi callers see Handle<T> / ResourceManager<T>
+// unchanged. Worlds, assets, and any non-GPU persistent pool now share
+// the exact same template instantiation pattern.
+template <typename T> using Handle = ::cairns::Handle<T>;
+template <typename T> using ResourceManager = ::cairns::ResourceManager<T>;
 
 enum class Memory : uint8_t {
     kDefault,    // device-local, GPU-only
