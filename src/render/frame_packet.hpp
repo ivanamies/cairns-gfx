@@ -32,7 +32,6 @@ struct FramePacket {
     glm::vec3 camera_dir{0.0f, 0.0f, -1.0f};
     float near_z = 0.1f;
     float far_z = 100.0f;
-    float delta_time = 0.0f;
 
     std::span<const Draw> draws;
     std::span<const std::pair<DrawKey, uint32_t>> sorted;

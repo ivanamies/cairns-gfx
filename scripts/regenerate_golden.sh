@@ -5,8 +5,8 @@
 # gate, at a known-good commit, then use scripts/verify_<backend>.sh to confirm
 # later changes are byte-identical. Default backend is Metal (the reference).
 #
-# Determinism: CAIRNS_FREEZE_ROT=45 fixes the scene rotation AND freezes
-# delta_time; CAIRNS_DUMP=<path> makes the app dump frame 5 there and exit.
+# Determinism: CAIRNS_DUMP=<path> selects FixedClock (sim_frame*kFixedDt
+# rotation, no wall-clock) and triggers a dump at sim_frame == kGoldenDumpFrame.
 #
 # Usage: scripts/regenerate_golden.sh [metal|vk]
 set -e
@@ -20,7 +20,7 @@ case "$backend" in
   metal)
     [ -d build/metal/sdl-min.xcodeproj ] || cmake -G Xcode -B build/metal -DCAIRNS_GFX_BACKEND=metal -S . >/dev/null
     xcodebuild -project build/metal/sdl-min.xcodeproj -configuration Debug -scheme sdl-min build >/dev/null
-    CAIRNS_N=9 CAIRNS_FREEZE_ROT=45 CAIRNS_DUMP="$out" \
+    CAIRNS_N=9 CAIRNS_DUMP="$out" \
       build/metal/Debug/sdl-min.app/Contents/MacOS/sdl-min || true ;;
   vk)
     [ -d build/vk/sdl-min.xcodeproj ] || cmake -G Xcode -B build/vk -DCAIRNS_GFX_BACKEND=vulkan -S . >/dev/null
@@ -30,7 +30,7 @@ case "$backend" in
       [ -f "$c" ] && icd="$c" && break
     done
     [ -z "$icd" ] && { echo "MoltenVK_icd.json not found; install molten-vk" >&2; exit 1; }
-    VK_ICD_FILENAMES="$icd" CAIRNS_N=9 CAIRNS_FREEZE_ROT=45 CAIRNS_DUMP="$out" \
+    VK_ICD_FILENAMES="$icd" CAIRNS_N=9 CAIRNS_DUMP="$out" \
       build/vk/Debug/sdl-min.app/Contents/MacOS/sdl-min || true ;;
   *) echo "usage: $0 [metal|vk]" >&2; exit 2 ;;
 esac

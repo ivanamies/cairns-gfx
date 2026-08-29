@@ -7,6 +7,7 @@
 #include <string_view>
 #include <filesystem>
 #include <thread>
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <numbers>
@@ -405,15 +406,12 @@ public:
         return true;
     }
 
-    // Render-side bump of all per-frame UBOs. Order MUST match the original
-    // BuildMeshOpaqueDraws+draw() bump sequence -- globals first, per-draw
-    // (material, draw_tmp) in stable_idx order, delta_time last -- so UBO
-    // byte layout in the kDynamic ring is byte-equivalent to pre-refactor.
+    // Render-side bump of all per-frame UBOs. Order matters: globals first,
+    // per-draw (material, draw_tmp) in stable_idx order, fixed_dt last.
     // Writes s.globals_offset, s.drawList[*].dynamic_buffer_offsets[0..1],
-    // s.dt_off. delta_time pulled in by parameter (carried in pkt).
+    // s.dt_off. Compute kernel sees pkt.fixed_dt (constant sim dt), not wall.
     void EncodeDraws(const FramePacket& pkt) {
         PerSlot& s = slots_[pkt.slot];
-        const float delta_time = pkt.delta_time;
         // 1. globals UBO.
         void* gptr = rhi_.alloc.BumpAllocate(
             sizeof(cairns::rhi::RenderPassGlobals), rhi_.alloc.UboAlign(),
@@ -461,7 +459,6 @@ public:
         // Compute kernel sees the fixed sim dt, NOT wall dt -- particles step
         // at a constant rate regardless of frame timing.
         *dt_ptr = pkt.fixed_dt;
-        (void)delta_time;
     }
 
     bool draw() {
@@ -481,16 +478,17 @@ public:
             cpu_ms_head_ = (cpu_ms_head_ + 1) % kCpuMsHistory;
         }
         cpu_last_frame_ns_ = cpu_now_ns;
-        if (frame_ == 5) {
+        s.pkt.request_dump = false;
+        s.pkt.dump_path.clear();
+        if (golden_ && !dump_emitted_ && sim_frame_ >= cairns::kGoldenDumpFrame) {
             const char* dump = std::getenv("CAIRNS_DUMP");
             s.pkt.request_dump = true;
             s.pkt.dump_path = dump ? dump : "/tmp/cairns_dump.png";
-        } else {
-            s.pkt.request_dump = false;
-            s.pkt.dump_path.clear();
+            dump_emitted_ = true;
+            dump_emit_frame_ = frame_;
         }
-        if (frame_ >= 7 && std::getenv("CAIRNS_DUMP")) {
-            std::exit(0);  // headless byte-gate: frame 5 dumped, now quit
+        if (dump_emitted_ && frame_ >= dump_emit_frame_ + 2) {
+            std::exit(0);  // headless byte-gate: dump frame flushed, now quit
         }
 
         cairns::Timer t_frame("frame", 0);
@@ -522,7 +520,6 @@ public:
                     sim_angle_deg_);
         }
 
-        const float delta_time = static_cast<float>(wall_dt);
 
         cairns::Timer t_build("build_draws", 1);
         if (!BuildMeshOpaqueDraws(slot)) {
@@ -544,7 +541,6 @@ public:
         s.pkt.proj = glm::mat4(1.0f);  // not used downstream; view_proj baked into pending_globals
         s.pkt.near_z = s.pending_near_z;
         s.pkt.far_z = s.pending_far_z;
-        s.pkt.delta_time = delta_time;
         s.pkt.sim_steps_this_frame = sim_steps_this_frame_;
         s.pkt.fixed_dt = static_cast<float>(cairns::kFixedDt);
         // Wait for the previous frame's render-thread-published parity. In
@@ -563,7 +559,7 @@ public:
         s.pkt.resident_textures = std::span<const rhi::Handle<rhi::Texture>>(
             s.resident_textures.data(), s.resident_textures.size());
 
-        const bool draw_imgui = std::getenv("CAIRNS_FREEZE_ROT") == nullptr;
+        const bool draw_imgui = !golden_;
         if (draw_imgui) {
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
@@ -1044,7 +1040,8 @@ private:
     std::condition_variable parity_cv_;
     uint32_t latest_parity_out_ = 0;
     uint64_t latest_parity_frame_ = 0;
-    [[maybe_unused]] uint64_t last_ticks_ = 0;  // removed in cleanup commit
+    bool dump_emitted_ = false;
+    uint32_t dump_emit_frame_ = 0;
     // Fiedler fixed-timestep accumulator state. Game-thread only -- never
     // touched by the render thread. clock_ is WallClock in live mode,
     // FixedClock under CAIRNS_DUMP.

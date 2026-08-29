@@ -12,7 +12,7 @@ rm -f "$cur"
 xcodebuild -project build/metal/sdl-min.xcodeproj -configuration Debug -scheme sdl-min build >/dev/null
 # Gate on 9 large heroes (CAIRNS_N=9), not the 3300-hero benchmark: minified
 # 3px sprites produce sub-pixel filtering noise that defeats a byte gate.
-CAIRNS_N=9 CAIRNS_FREEZE_ROT=45 CAIRNS_DUMP="$cur" \
+CAIRNS_N=9 CAIRNS_DUMP="$cur" \
   build/metal/Debug/sdl-min.app/Contents/MacOS/sdl-min || true
 
 [ -f "$cur" ] || { echo "METAL: no frame dumped" >&2; exit 1; }
