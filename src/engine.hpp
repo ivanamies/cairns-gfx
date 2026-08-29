@@ -485,7 +485,11 @@ public:
         particle_parity_ ^= 1;
         t_frame.End();
         if (frame_ % 120 == 0) {
-            printf("draws: %zu\n", drawList_.size());
+            const size_t loaded = scenes_.size();
+            const size_t entities = world_.entities.size();
+            const size_t slices = loaded > 0 ? entities / loaded : 0;
+            printf("draws: %zu | %zu GLBs x %zu slices = %zu entities\n",
+                   drawList_.size(), loaded, slices, entities);
             cairns::Timer::PrintReport();
             cairns::Timer::Reset();
         }

@@ -5,6 +5,45 @@ Newest first.
 
 ---
 
+## `b0febf1` (2026-05-30) — `ia/26-05-30/performance_debug` (re-baseline)
+
+9d90f90 source + cherry-picked batched upload (`b0febf1`). No layout, window,
+or orientation changes vs 9d90f90 baseline. Engine now also prints
+`N GLBs x M slices = E entities` next to draws so the workload shape is
+explicit in every report.
+
+### iPhone 15 (Metal, Release, v-synced)
+
+**50 GLBs × 66 slices = 3300 entities (default):**
+```
+draws: 15114 | 50 GLBs x 66 slices = 3300 entities
+slot 0 (frame):                          accum 4784328 us, avg 39869 us over 120 frames
+slot 1 (build_draws):                    accum 1091730 us, avg  9097 us over 120 frames
+slot 2 (record):                         accum  450375 us, avg  3753 us over 120 frames
+slot 3 (set up render pass globals):     accum     504 us, avg     4 us over 120 frames
+slot 4 (build opaque draw list):         accum 1091043 us, avg  9092 us over 120 frames
+```
+
+**100 GLBs × 33 slices = 3300 entities:**
+```
+draws: 11517 | 100 GLBs x 33 slices = 3300 entities
+slot 0 (frame):                          accum 3886046 us, avg 32383 us over 120 frames
+slot 1 (build_draws):                    accum  902155 us, avg  7517 us over 120 frames
+slot 2 (record):                         accum  335452 us, avg  2795 us over 120 frames
+slot 3 (set up render pass globals):     accum     797 us, avg     6 us over 120 frames
+slot 4 (build opaque draw list):         accum  901153 us, avg  7509 us over 120 frames
+```
+
+Observations:
+- Both miss v-sync (~25 fps and ~31 fps respectively); CPU-bound on phone.
+- 100×33 is ~20% faster than 50×66 because the second half of `kDebugGlbs`
+  has fewer primitives per GLB — fewer total draws (11.5k vs 15.1k).
+- build_draws 9.1 ms at 15k draws is in line with the 5/28 baseline's 8.3 ms
+  at 11.5k draws (per-draw cost is similar). The 17 ms iPhone 15 number from
+  earlier was on a different branch state; this re-baseline is healthy.
+
+---
+
 ## `e2d0c26` (2026-05-30) — `ia/26-05-30/performance_debug`
 
 Layout: 20×5 grid × 33 slices = **3300 entities**, ~11.5k draws.
