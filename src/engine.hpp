@@ -4,6 +4,7 @@
 #include "util/alloc_count.hpp"  // #229 per-phase allocation receipts
 #include "util/memory_budget.hpp"  // #229 single source of reservation sizes
 #include "engine/engine_config.hpp"  // EngineConfig (split out; shell includes it directly)
+#include "engine/particle_system.hpp"  // ParticleSystem state (C2 S3)
 
 #include <array>
 #include <cmath>
@@ -1356,10 +1357,10 @@ public:
                                  "last-good\n");
                 return false;
             }
-            if (!particle_kernel_.IsNull()) {
-                rhi_.resources.DeferFree(particle_kernel_);
+            if (!particles_.kernel.IsNull()) {
+                rhi_.resources.DeferFree(particles_.kernel);
             }
-            particle_kernel_ = next;
+            particles_.kernel = next;
             return true;
         }
         return false;
@@ -1511,13 +1512,13 @@ public:
     // = false). G1 particles scenario + G3 right-viewport flip on; everything
     // else stays off so the captured frames are "pipeline + clear + meshes",
     // no std::rand-shaped contamination.
-    void EnableParticles(bool on) { particles_enabled_ = on; }
+    void EnableParticles(bool on) { particles_.enabled = on; }
     // A.3 single red NDC triangle (no scene): pipeline + clear + one draw.
     void SetTinyTriangle(bool on) { tiny_quad_test_ = on; }
     // G4: compose color + resolved-depth + extra-camera passes (the viewports
     // supplying the extra cameras are opened/aimed by the caller in JS).
     void SetNestedGraphMode(bool on) { nested_graph_mode_ = on; }
-    bool ParticlesEnabled() const { return particles_enabled_; }
+    bool ParticlesEnabled() const { return particles_.enabled; }
 
     // #229 imgui panel hook: the app (sdl-min) hands a callback that draws extra
     // imgui windows (the scenario launcher) into the HUD frame. Raw fn ptr + ctx
@@ -1552,14 +1553,14 @@ public:
     // cross-platform buffer SECTION. Gated on A.10 (Resources::ReadBackBuffer)
     // being implemented -- today returns false so G1 buffer SECTION SKIPs
     // honestly. When ReadBackBuffer lands, this resolves
-    // particle_ssbo_[latest_parity_out_] and copies its bytes into `out`.
+    // particles_.ssbo[particles_.latest_parity_out] and copies its bytes into `out`.
     bool ReadParticleBuffer(std::vector<uint8_t>& out) {
-        if (particle_ssbo_[latest_parity_out_].IsNull()) {
+        if (particles_.ssbo[particles_.latest_parity_out].IsNull()) {
             return false;
         }
         return rhi_.resources.ReadBackBuffer(
-            rhi_.alloc, particle_ssbo_[latest_parity_out_],
-            kParticleCount * static_cast<uint32_t>(sizeof(Particle)), out);
+            rhi_.alloc, particles_.ssbo[particles_.latest_parity_out],
+            ParticleSystem::kParticleCount * static_cast<uint32_t>(sizeof(Particle)), out);
     }
 
     // A.5: open viewport 1, place its camera, spawn one glb into the active
@@ -1991,8 +1992,8 @@ public:
     // Override the deterministic-particles seed (default kept at 42 to match
     // the existing CAIRNS_DUMP byte-gate). Must be called before
     // GreaterInit's initParticles for the change to take effect.
-    void SetRandomSeed(uint32_t seed) { random_seed_ = seed; }
-    uint32_t GetRandomSeed() const { return random_seed_; }
+    void SetRandomSeed(uint32_t seed) { particles_.random_seed = seed; }
+    uint32_t GetRandomSeed() const { return particles_.random_seed; }
 
     uint32_t GetFinalTargetWidth() const { return final_target_w_; }
     uint32_t GetFinalTargetHeight() const { return final_target_h_; }
@@ -2272,7 +2273,7 @@ public:
         dump_and_exit_ = !engine_cfg_.dump_path.empty();
         golden_ = engine_cfg_.use_fixed_clock || dump_and_exit_;
         tiny_quad_test_ = engine_cfg_.tiny_quad;
-        particles_enabled_ = engine_cfg_.particles_enabled;
+        particles_.enabled = engine_cfg_.particles_enabled;
 
         if (golden_) {
             clock_ = std::make_unique<cairns::FixedClock>(cairns::kFixedDt);
@@ -3399,11 +3400,11 @@ public:
         // steady state Acquire(slot) already established the happens-after,
         // so this rarely actually blocks.
         {
-            std::unique_lock<std::mutex> lk(parity_m_);
-            parity_cv_.wait(lk, [&] {
-                return latest_parity_frame_ + 1 >= frame_;
+            std::unique_lock<std::mutex> lk(particles_.parity_m);
+            particles_.parity_cv.wait(lk, [&] {
+                return particles_.latest_parity_frame + 1 >= frame_;
             });
-            s.pkt.particle_parity_in = latest_parity_out_;
+            s.pkt.particle_parity_in = particles_.latest_parity_out;
         }
         s.pkt.draws = std::span<const cairns::Draw>(s.drawList.data(), s.drawList.size());
         s.pkt.sorted = std::span<const std::pair<cairns::DrawKey, uint32_t>>(
@@ -3792,11 +3793,11 @@ public:
         pkt.particle_parity_out =
             pkt.particle_parity_in ^ (pkt.sim_steps_this_frame & 1u);
         {
-            std::lock_guard<std::mutex> lk(parity_m_);
-            latest_parity_out_ = pkt.particle_parity_out;
-            latest_parity_frame_ = pkt.frame_idx;
+            std::lock_guard<std::mutex> lk(particles_.parity_m);
+            particles_.latest_parity_out = pkt.particle_parity_out;
+            particles_.latest_parity_frame = pkt.frame_idx;
         }
-        parity_cv_.notify_all();
+        particles_.parity_cv.notify_all();
 
         if (pkt.request_dump) {
             rhi_.frame_capture.SetDumpPath(pkt.dump_path);
@@ -3882,11 +3883,11 @@ public:
         // #222 Phase A.1 fix: particle PSO must match the forward pass's
         // attachment count -- the id_path branch already swapped the
         // forward unlit PSO; mirror it for the points pipeline.
-        pd.pipeline = id_path ? particle_render_offscreen_
-                              : particle_render_offscreen_noid_;
-        pd.vertex_buffer = particle_ssbo_[pkt.particle_parity_out];
+        pd.pipeline = id_path ? particles_.render_offscreen
+                              : particles_.render_offscreen_noid;
+        pd.vertex_buffer = particles_.ssbo[pkt.particle_parity_out];
         pd.vertex_offset = 0;
-        pd.vertex_count = kParticleCount;
+        pd.vertex_count = ParticleSystem::kParticleCount;
 
         const float clear[4] = {41.0f / 255.0f, 42.0f / 255.0f, 48.0f / 255.0f, 1.0f};
         const uint32_t fb_w = swap_target.width;
@@ -4067,23 +4068,23 @@ public:
 
         // pass 1: particle_sim kCompute. import the writer ssbo so prune keeps
         // it (external side effect -- game thread reads particle_parity_out).
-        // A.2 gate: when particles_enabled_=false the pass is omitted entirely;
+        // A.2 gate: when particles_.enabled=false the pass is omitted entirely;
         // sim_out stays default-null, no readers downstream so prune drops it.
         rhi::GraphBuffer sim_out;
-        if (particles_enabled_) {
+        if (particles_.enabled) {
         graph_->AddPass(
             "particle_sim", rhi::PassType::kCompute,
             [&](rhi::PassBuilder& b) {
                 rhi::GraphBufferDesc bd{};
                 bd.usage = rhi::kUsageStorage;
                 sim_out = b.ImportBuffer(
-                    particle_ssbo_[pkt.particle_parity_out], bd);
+                    particles_.ssbo[pkt.particle_parity_out], bd);
                 b.WriteBuffer(sim_out);
             },
             [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
                 rhi::ComputeDispatch cd{};
-                cd.kernel = particle_kernel_;
-                cd.groups_x = kParticleCount / 256;
+                cd.kernel = particles_.kernel;
+                cd.groups_x = ParticleSystem::kParticleCount / 256;
                 cd.local_x = 256;
                 // Metal: sequential ComputeCommandEncoders self-hazard on R/W
                 // ordering (MTLHazardTrackingModeTracked). Vulkan: recorder
@@ -4099,7 +4100,7 @@ public:
                     cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
                 }
             });
-        }  // particles_enabled_
+        }  // particles_.enabled
 
         // pass 2: forward, ONCE PER VIEWPORT. Each pass writes to a private
         // half-width color+depth target. Particles render into both viewports
@@ -4150,7 +4151,7 @@ public:
                 },
                 [&, vp_idx](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
                     cmd.DrawMeshes(rhi_.resources, rhi_.alloc, mls[vp_idx]);
-                    // A.2 + A.5 gate: global particles_enabled_ gates the
+                    // A.2 + A.5 gate: global particles_.enabled gates the
                     // compute sim above; per-viewport
                     // Viewport::Cold::particles_enabled gates each
                     // viewport's particle draw. G3 drives the per-vp split.
@@ -4158,7 +4159,7 @@ public:
                     if (auto* vc = viewports_.GetCold(viewport_ids_[vp_idx])) {
                         vp_particles = vc->particles_enabled;
                     }
-                    if (particles_enabled_ && vp_particles) {
+                    if (particles_.enabled && vp_particles) {
                         cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
                     }
                     // A.3: L1 single red triangle. tiny_quad_test_ flips this
@@ -5452,7 +5453,7 @@ public:
         }
         {  // #222 Phase D.4: 2 parity DynamicBuffers, one per (src,dst) order.
            // Binding 0 = UBO_DYN dt over kDynamic master (per-dispatch dyn off).
-           // Bindings 1+2 = SSBO over particle_ssbo_[A]/[B] no-dyn.
+           // Bindings 1+2 = SSBO over particles_.ssbo[A]/[B] no-dyn.
             for (uint32_t p = 0; p < 2; ++p) {
                 cairns::rhi::DynamicBinding pb[3]{};
                 for (uint32_t i = 0; i < 3; ++i) {
@@ -5466,12 +5467,12 @@ public:
                 pb[1].kind = cairns::rhi::BufferKind::kStorage;
                 pb[1].max_range = 0;  // VK_WHOLE_SIZE
                 pb[1].has_dynamic_offset = false;
-                pb[1].backing = particle_ssbo_[p];          // src
+                pb[1].backing = particles_.ssbo[p];          // src
                 pb[2].slot = 2;
                 pb[2].kind = cairns::rhi::BufferKind::kStorage;
                 pb[2].max_range = 0;
                 pb[2].has_dynamic_offset = false;
-                pb[2].backing = particle_ssbo_[p ^ 1];      // dst
+                pb[2].backing = particles_.ssbo[p ^ 1];      // dst
                 cairns::rhi::DynamicBuffersDesc pd{};
                 pd.debug_name = (p == 0) ? "dyn_particle_parity_0"
                                           : "dyn_particle_parity_1";
@@ -5496,8 +5497,8 @@ public:
             // DynamicBuffers Hot layout (UBO_DYN @0 + 2 SSBO). Both
             // parity sets share the same layout shape.
             desc.dyn_set_0 = dyn_particle_parity_[0];
-            particle_kernel_ = rhi_.pipelines.CreateComputePipeline(rhi_.resources, rhi_.frames, desc);
-            if (particle_kernel_.IsNull()) {
+            particles_.kernel = rhi_.pipelines.CreateComputePipeline(rhi_.resources, rhi_.frames, desc);
+            if (particles_.kernel.IsNull()) {
                 return false;
             }
         }
@@ -5534,8 +5535,8 @@ public:
             desc.push_constant_bytes = 0;
             desc.debug_name = "particle_render";
             desc.swap_chain = &swapchain_;
-            particle_render_shader_ = rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources, rhi_.frames, desc);
-            if (particle_render_shader_.IsNull()) {
+            particles_.render_shader = rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources, rhi_.frames, desc);
+            if (particles_.render_shader.IsNull()) {
                 return false;
             }
             // Offscreen variant for the render-graph forward pass. #206 the
@@ -5553,9 +5554,9 @@ public:
             // colorWriteMask=0 so we don't undef-stomp it.
             opd.frag_color_output_count = 1;
             opd.debug_name = "particle_render_offscreen";
-            particle_render_offscreen_ = rhi_.pipelines.CreateGraphicsPipeline(
+            particles_.render_offscreen = rhi_.pipelines.CreateGraphicsPipeline(
                 rhi_.resources, rhi_.frames, opd);
-            if (particle_render_offscreen_.IsNull()) {
+            if (particles_.render_offscreen.IsNull()) {
                 return false;
             }
             // #222 Phase A.1 fix: id-less variant for the no-id forward
@@ -5564,11 +5565,11 @@ public:
             rhi::GraphicsPipelineDesc npd = opd;
             npd.color_formats[1] = rhi::Format::kBgra8Unorm;  // unused
             npd.color_count = 1;
-            npd.debug_name = "particle_render_offscreen_noid";
-            particle_render_offscreen_noid_ =
+            npd.debug_name = "particles_.render_offscreennoid";
+            particles_.render_offscreen_noid =
                 rhi_.pipelines.CreateGraphicsPipeline(
                     rhi_.resources, rhi_.frames, npd);
-            if (particle_render_offscreen_noid_.IsNull()) {
+            if (particles_.render_offscreen_noid.IsNull()) {
                 return false;
             }
         }
@@ -5654,7 +5655,7 @@ public:
             imgui_sampler_ = rhi_.resources.CreateSampler(sd);
         }
 
-        return !particle_ssbo_[0].IsNull() && !particle_ssbo_[1].IsNull();
+        return !particles_.ssbo[0].IsNull() && !particles_.ssbo[1].IsNull();
     }
 
     // #222 Phase D.4: particle SSBOs split out of initParticles so the
@@ -5670,9 +5671,9 @@ public:
         // across runs and across libc++ flavors.
         // Override via Engine::SetRandomSeed before GreaterInit if you need
         // a different starting state (e.g. the rng.seed NDJSON op).
-        cairns::ParticleRng rng(random_seed_);
-        std::vector<Particle> particles(kParticleCount);
-        for (uint32_t i = 0; i < kParticleCount; ++i) {
+        cairns::ParticleRng rng(particles_.random_seed);
+        std::vector<Particle> particles(ParticleSystem::kParticleCount);
+        for (uint32_t i = 0; i < ParticleSystem::kParticleCount; ++i) {
             const float r = rng.NextUnit();
             const float theta = r * 2.0f * static_cast<float>(std::numbers::pi);
             const float radius = rng.NextUnit();
@@ -5682,7 +5683,7 @@ public:
             const float vy = (rng.NextUnit() - 0.5f) * 0.5f;
             particles[i].velocity[0] = vx;
             particles[i].velocity[1] = vy;
-            const float t = static_cast<float>(i) / static_cast<float>(kParticleCount);
+            const float t = static_cast<float>(i) / static_cast<float>(ParticleSystem::kParticleCount);
             particles[i].color[0] = t;
             particles[i].color[1] = 1.0f - t;
             particles[i].color[2] = 0.5f;
@@ -5697,10 +5698,10 @@ public:
         bd.usage = rhi::kUsageStorage | rhi::kUsageVertex;
         bd.memory = rhi::Memory::kDefault;
         bd.initial_data = init_data;
-        particle_ssbo_[0] = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
+        particles_.ssbo[0] = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
         bd.initial_data = init_data;
-        particle_ssbo_[1] = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
-        return !particle_ssbo_[0].IsNull() && !particle_ssbo_[1].IsNull();
+        particles_.ssbo[1] = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
+        return !particles_.ssbo[0].IsNull() && !particles_.ssbo[1].IsNull();
     }
 
     bool deinit() {
@@ -5977,7 +5978,7 @@ private:
     rhi::Handle<rhi::DynamicBuffers> dyn_skin_group_b_;
     rhi::Handle<rhi::DynamicBuffers> dyn_anim_eval_;
     // #222 Phase D.4: particle parity DynamicBuffers. Index 0 binds
-    // particle_ssbo_[0] -> binding 1 and particle_ssbo_[1] -> binding 2
+    // particles_.ssbo[0] -> binding 1 and particles_.ssbo[1] -> binding 2
     // (step_src=0). Index 1 swaps them (step_src=1). Binding 0 (UBO_DYN
     // dt) backed by kDynamic master; per-dispatch dyn offset = current
     // dt_off. Replaces the per-step vkUpdateDescriptorSets path.
@@ -6000,27 +6001,15 @@ private:
     rhi::Handle<rhi::Shader> imgui_ = rhi::Handle<rhi::Shader>::Null;
     rhi::Handle<rhi::Texture> imgui_font_ = rhi::Handle<rhi::Texture>::Null;
     rhi::Handle<rhi::Sampler> imgui_sampler_ = rhi::Handle<rhi::Sampler>::Null;
-    // particles
-    static constexpr uint32_t kParticleCount = 512;
-    rhi::Handle<rhi::Kernel> particle_kernel_;
+    // particles: state grouped in ParticleSystem (C2 S3) -- kernel/shaders/
+    // SSBOs + the cross-thread parity handshake (mutex/cv/counters) travel as
+    // one unit. Engine's init/draw systems operate on it.
+    cairns::ParticleSystem particles_;
     // #221 Phase 4: skin pre-skin compute kernel. Best-effort load -- if
     // shader assets aren't present (skin.comp.spv / skin.metal) the handle
     // stays Null and Phase 5's BuildSkinFrame / DispatchSkinBatches skip.
     rhi::Handle<rhi::Kernel> skin_kernel_;
-    rhi::Handle<rhi::Shader> particle_render_shader_;
-    rhi::Handle<rhi::Shader> particle_render_offscreen_;
-    // #222 Phase A.1 fix: id-less variant for the no-id forward pass.
-    rhi::Handle<rhi::Shader> particle_render_offscreen_noid_;
-    rhi::Handle<rhi::Buffer> particle_ssbo_[2];
     std::unique_ptr<cairns::RenderThread> render_thread_;
-    // Render thread writes back particle_parity_out under parity_m_ so the
-    // game thread can chain frame N+1's parity_in from frame N's parity_out
-    // without sharing a mutable counter. In steady state Acquire(slot N+1)
-    // already happens-after Release of slot N, so the cv wait is a no-op.
-    std::mutex parity_m_;
-    std::condition_variable parity_cv_;
-    uint32_t latest_parity_out_ = 0;
-    uint64_t latest_parity_frame_ = 0;
 
     // Present handoff. Render thread runs Frames::EndSubmit and stores
     // (fc, target) on the slot under present_m_; main thread waits on the
@@ -6087,9 +6076,6 @@ private:
     uint32_t last_seen_swap_w_ = 0;
     uint32_t last_seen_swap_h_ = 0;
 
-    // Seed used by initParticles. Default 42 preserves the existing golden;
-    // the rng.seed NDJSON op writes through SetRandomSeed before init.
-    uint32_t random_seed_ = 42;
     // Fiedler fixed-timestep accumulator state. Game-thread only -- never
     // touched by the render thread. clock_ is WallClock in live mode,
     // FixedClock under CAIRNS_DUMP.
@@ -6114,11 +6100,6 @@ private:
     // the HUD draw path reads from this instead of HudFromTimer. Set via
     // SetInjectedHudStats from the golden test harness.
     std::optional<cairns::HudStats> injected_hud_stats_;
-    // A.2: particle_sim + particle_draw gate. Mirrors
-    // EngineConfig::particles_enabled at GreaterInit; runtime-mutable via
-    // Engine::EnableParticles(bool). Tests default false; CLI shells default
-    // true via shell/env_config.cpp.
-    bool particles_enabled_ = false;
     // Set via SetNestedGraphMode (JS render.nestedGraph op). Currently
     // informational only -- the engine's render graph composes the right
     // shape (multiple forward passes, one per active viewport) regardless.
