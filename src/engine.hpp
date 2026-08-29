@@ -1235,8 +1235,7 @@ public:
     // imgui, unlit, outline) reload via initRenderPipeline's
     // sub-call, deferred to R2.1.
     bool ReloadPipelineByName(const std::string& name) {
-        const char* base = SDL_GetBasePath();
-        const std::string shader_dir = base ? base : "";
+        const std::string shader_dir = cairns::GetBasePathSafe();
         if (name == "anim_eval") {
             rhi::ComputePipelineDesc desc{};
             desc.logical_shader = "anim_eval";
@@ -1934,7 +1933,7 @@ public:
 // Mobile + iOS (incl. sim) report a 256 MB MTLDevice maxBufferLength /
 // Adreno 730 reports 256 MB maxStorageBufferRange. Desktop reports >= 2 GB.
 #if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
-            constexpr uint32_t kSkinOutputBytesCheck = 256u * 1024u * 1024u;
+            constexpr uint32_t kSkinOutputBytesCheck = 128u * 1024u * 1024u;
 #else
             constexpr uint32_t kSkinOutputBytesCheck = 1024u * 1024u * 1024u;
 #endif
@@ -1967,8 +1966,13 @@ public:
         // MemoryAllocator::AllocBuffer, so we land in our own VkDeviceMemory.
         {
 #if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
+            // 128 MB: Adreno 730 (Samsung S22) actually reports
+            // maxStorageBufferRange = 128 MB at runtime (the vk spec
+            // floor), not the 256 MB earlier docs implied. iOS sim
+            // MTLDevice maxBufferLength is 256 MB, but 128 fits all of
+            // them.
             static constexpr uint32_t kSkinOutputBytes =
-                256u * 1024u * 1024u;
+                128u * 1024u * 1024u;
 #else
             static constexpr uint32_t kSkinOutputBytes =
                 1024u * 1024u * 1024u;
@@ -3086,6 +3090,7 @@ public:
             // #267: resolve hero name + world AABB from the clicked id so
             // the [PICK] line answers "which hero + where" in one printf.
             const char* hero_name = "<none>";
+            std::string hero_name_storage;
             uint32_t hero_scene_idx = 0xFFFFFFFFu;
             glm::vec3 hero_min(0.0f);
             glm::vec3 hero_max(0.0f);
@@ -3096,8 +3101,9 @@ public:
                 hero_scene_idx =
                     eid % static_cast<uint32_t>(prefab_ids_.size());
                 if (hero_scene_idx < glb_paths_.size()) {
-                    hero_name =
-                        glb_paths_[hero_scene_idx].filename().string().c_str();
+                    hero_name_storage =
+                        glb_paths_[hero_scene_idx].filename().string();
+                    hero_name = hero_name_storage.c_str();
                 }
                 // Resolve world AABB via the entity's WorldTransform + the
                 // scene's first mesh bind-pose AABB (matches the cull path).
@@ -3792,8 +3798,7 @@ public:
         }
 
         {  // unlit graphics pipeline via rhi
-            const char* base = SDL_GetBasePath();
-            const std::string shader_dir = base ? base : "";
+            const std::string shader_dir = cairns::GetBasePathSafe();
             const rhi::VertexInputAttribute vtx_attrs[2] = {
                 {0, cairns::kMeshPosBindSlot, rhi::Format::kRgba32F, 0},
                 // stream 1: uv at offset 48 in the 64-byte VertexAttribute.
@@ -4314,8 +4319,7 @@ public:
     }
 
     void initAnimEvalKernel() {
-        const char* base = SDL_GetBasePath();
-        const std::string shader_dir = base ? base : "";
+        const std::string shader_dir = cairns::GetBasePathSafe();
         rhi::ComputePipelineDesc desc{};
         desc.logical_shader = "anim_eval";
         desc.shader_dir = shader_dir.c_str();
@@ -4762,8 +4766,7 @@ public:
     // Phase 5's dispatch checks IsNull() and degenerates to "no skinning
     // this frame", preserving the static path bit-for-bit.
     void initSkinKernel() {
-        const char* base = SDL_GetBasePath();
-        const std::string shader_dir = base ? base : "";
+        const std::string shader_dir = cairns::GetBasePathSafe();
         rhi::ComputePipelineDesc desc{};
         desc.logical_shader = "skin";
         desc.shader_dir = shader_dir.c_str();
@@ -4777,8 +4780,7 @@ public:
     }
 
     bool initParticles() {
-        const char* base = SDL_GetBasePath();
-        const std::string shader_dir = base ? base : "";
+        const std::string shader_dir = cairns::GetBasePathSafe();
         // #222 Phase D.4: SSBOs created first so the parity DynamicBuffers
         // can write their bindings 1+2 at create time. Particle kernel
         // then references the parity layout (set 0) instead of the
@@ -4911,8 +4913,7 @@ public:
 
         {
             // imgui pipeline (swapchain MSAA, alpha blend, no depth).
-            const char* base = SDL_GetBasePath();
-            const std::string shader_dir = base ? base : "";
+            const std::string shader_dir = cairns::GetBasePathSafe();
             const rhi::VertexInputAttribute ia[3] = {
                 {0, 0, rhi::Format::kRg32F, offsetof(ImDrawVert, pos)},
                 {1, 0, rhi::Format::kRg32F, offsetof(ImDrawVert, uv)},

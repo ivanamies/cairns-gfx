@@ -18,6 +18,7 @@
 #include "engine_headless.hpp"
 #include "rhi/init_config.hpp"
 #include "util/hud_stats.hpp"
+#include "util/misc.hpp"  // cairns::GetStaticResourceFilepath
 
 #include "imgui.h"
 
@@ -214,18 +215,24 @@ bool AssetsPresent(const std::vector<std::string>& glbs) {
         return true;
     }
     namespace fs = std::filesystem;
-    // GLBs may live in the dev assets/ tree, the binary-adjacent copy (the
-    // engine's CMake copies glbs into $<CONFIGURATION>/ via add_resource),
-    // or the build dir itself. The engine's static resource lookup checks
-    // all of these too, so the test mirrors it.
-    std::vector<fs::path> roots = {
-        fs::current_path(),
-        fs::current_path() / "assets",
-        fs::current_path() / "..",
-        fs::current_path() / "../assets",
-        fs::path("tests/assets"),
-    };
+    // Defer to the engine's own resolver -- it knows where assets live on
+    // every platform (SDL_GetBasePath on Apple = .app bundle root /
+    // Resources, APK AssetManager on Android, $<CONFIGURATION>/ on
+    // desktop). Falling back to cwd-based search would keep iOS sim /
+    // Android golden tests SKIPping forever.
     for (const std::string& name : glbs) {
+        fs::path resolved;
+        if (cairns::GetStaticResourceFilepath(name, resolved)) {
+            continue;
+        }
+        // Last-resort fallback for the desktop dev-build layout.
+        const std::vector<fs::path> roots = {
+            fs::current_path(),
+            fs::current_path() / "assets",
+            fs::current_path() / "..",
+            fs::current_path() / "../assets",
+            fs::path("tests/assets"),
+        };
         bool found = false;
         for (const auto& r : roots) {
             if (fs::exists(r / name)) {

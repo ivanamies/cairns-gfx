@@ -2,27 +2,47 @@
 
 #include "util/define.hpp"
 
+#include <cstdlib>
 #include <filesystem>
+#include <string>
 #include <string_view>
 
 #include <SDL3/SDL.h>
 
 namespace cairns {
 
-inline bool GetStaticResourceFilepath(std::string_view file, std::filesystem::path& output) {
-#if CAIRNS_ANDROID
-    // SDL3 looks up relative paths via the APK AssetManager -- same place
-    // CMake's copy_helper installs to. No adb push step, no external storage
-    // detour. Same way shader loading already worked.
-    output = std::filesystem::path(file);
-#elif CAIRNS_APPLE
-    const char* basePathPtr = SDL_GetBasePath();
-    if (not basePathPtr){
-        return false;
+// Single source of the "where do assets live" answer. CAIRNS_BASE_PATH env
+// var wins (used by raw-binary Android tests that have no SDL Activity to
+// resolve nativeLibraryDir from); else SDL_GetBasePath on Apple; else empty
+// (Android APK resolves via AssetManager from cwd).
+inline std::string GetBasePathSafe() {
+    if (const char* env = std::getenv("CAIRNS_BASE_PATH")) {
+        std::string s = env;
+        if (!s.empty() && s.back() != '/') {
+            s.push_back('/');
+        }
+        return s;
     }
-    const std::filesystem::path basePath = basePathPtr;
-    output = basePath / file;
+#if CAIRNS_APPLE
+    const char* p = SDL_GetBasePath();
+    return p ? std::string(p) : std::string();
+#else
+    return {};
 #endif
+}
+
+inline bool GetStaticResourceFilepath(std::string_view file, std::filesystem::path& output) {
+    const std::string base = GetBasePathSafe();
+    output = base.empty() ? std::filesystem::path(file)
+                          : std::filesystem::path(base) / file;
+
+    // Android raw-binary tests (no SDL Activity) segfault inside
+    // SDL_IOFromFile -- bypass via plain stdlib when CAIRNS_BASE_PATH is set
+    // (the test harness opts in explicitly).
+    if (std::getenv("CAIRNS_BASE_PATH")) {
+        std::error_code ec;
+        return std::filesystem::exists(output, ec) && !ec;
+    }
 
     SDL_IOStream* io = SDL_IOFromFile(output.string().c_str(), "rb");
     if (!io) {

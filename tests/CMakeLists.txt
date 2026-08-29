@@ -119,4 +119,64 @@ if(CAIRNS_GFX_BUILD_GOLDEN_TESTS)
     else()
         catch_discover_tests(cairns_golden_tests PROPERTIES LABELS "golden")
     endif()
+
+    # Asset bundling -- mirrors the root CMakeLists.txt EXECUTABLE_NAME path
+    # but scoped to the cairns_golden_tests target. iOS+macOS use
+    # MACOSX_PACKAGE_LOCATION (Resources/); Android uses POST_BUILD copy into
+    # MOBILE_ASSETS_DIR; other Unixy targets land assets next to the binary.
+    set(_cairns_assets_root "${CMAKE_SOURCE_DIR}/assets")
+    set(_cairns_ext_glbs_root
+        "/Users/ivanamies/dev/gfx/assets/riot/lol_champions/staging")
+    file(GLOB _cairns_metal_shaders "${_cairns_assets_root}/*.metal")
+    file(GLOB _cairns_spv_shaders   "${_cairns_assets_root}/*.spv")
+    file(GLOB _cairns_glbs          "${_cairns_assets_root}/*.glb")
+    file(GLOB _cairns_ext_glbs      "${_cairns_ext_glbs_root}/*.glb")
+    set(_cairns_misc_assets
+        "${_cairns_assets_root}/run.js"
+        "${_cairns_assets_root}/Inter-VariableFont.ttf")
+
+    if(APPLE)
+        # iOS .app + macOS bundle: tag every asset MACOSX_PACKAGE_LOCATION
+        # Resources so it lands inside the .app's Contents/Resources (macOS)
+        # or .app/ root (iOS). EXECUTABLE_NAME already does this for sdl-min;
+        # we replicate for cairns_golden_tests so xcrun simctl spawn finds
+        # the shaders + glbs the engine looks up at runtime.
+        macro(_cairns_bundle_one FILE)
+            if(EXISTS "${FILE}")
+                target_sources(cairns_golden_tests PRIVATE "${FILE}")
+                set_property(SOURCE "${FILE}" PROPERTY
+                             MACOSX_PACKAGE_LOCATION "Resources")
+                set_source_files_properties("${FILE}" PROPERTIES
+                    HEADER_FILE_ONLY TRUE)
+            endif()
+        endmacro()
+        foreach(F ${_cairns_misc_assets} ${_cairns_metal_shaders}
+                  ${_cairns_spv_shaders} ${_cairns_glbs} ${_cairns_ext_glbs})
+            _cairns_bundle_one("${F}")
+        endforeach()
+    elseif(ANDROID)
+        # Push assets alongside the binary at MOBILE_ASSETS_DIR (also used by
+        # spec target's MOBILE_ASSETS_DIR config). The actual `adb push` is
+        # done by the test runner; CMake just stages a known directory.
+        foreach(F ${_cairns_misc_assets} ${_cairns_spv_shaders}
+                  ${_cairns_glbs} ${_cairns_ext_glbs})
+            get_filename_component(_name "${F}" NAME)
+            if(EXISTS "${F}")
+                add_custom_command(POST_BUILD TARGET cairns_golden_tests
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${F}" "${MOBILE_ASSETS_DIR}/${_name}")
+            endif()
+        endforeach()
+    else()
+        # Plain Linux / desktop fallback: stage assets alongside the binary.
+        foreach(F ${_cairns_misc_assets} ${_cairns_spv_shaders}
+                  ${_cairns_glbs} ${_cairns_ext_glbs})
+            get_filename_component(_name "${F}" NAME)
+            if(EXISTS "${F}")
+                add_custom_command(POST_BUILD TARGET cairns_golden_tests
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${F}" "$<TARGET_FILE_DIR:cairns_golden_tests>/${_name}")
+            endif()
+        endforeach()
+    endif()
 endif()
