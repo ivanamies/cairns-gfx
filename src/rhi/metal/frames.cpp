@@ -75,8 +75,8 @@ bool Frames::Init(Device& device) {
     if (inited_) {
         return true;
     }
-    device_ = device.device_;
-    queue_ = device.queue_;
+    device_ = device.plat.device_;
+    queue_ = device.plat.queue_;
 
     frame_semaphore_ = dispatch_semaphore_create(kFramesInFlight);
     {

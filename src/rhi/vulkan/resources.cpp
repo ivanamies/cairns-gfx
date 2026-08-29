@@ -275,10 +275,10 @@ bool Resources::Init(Device& device) {
     if (inited_) {
         return true;
     }
-    device_ = device.device_;
-    command_pool_ = device.command_pool_;
-    queue_ = device.graphics_queue_;
-    physical_ = device.physical_;
+    device_ = device.plat.device_;
+    command_pool_ = device.plat.command_pool_;
+    queue_ = device.plat.graphics_queue_;
+    physical_ = device.plat.physical_;
     inited_ = true;
     return true;
 }

@@ -51,7 +51,7 @@ bool Pipelines::Init(Device& device) {
     if (inited_) {
         return true;
     }
-    plat.device_ = device.device_;
+    plat.device_ = device.plat.device_;
     inited_ = true;
     return true;
 }

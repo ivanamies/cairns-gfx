@@ -10,10 +10,10 @@
 
 #include "util/define.hpp"
 
-#if CAIRNS_VULKAN
-#include <vulkan/vulkan.h>
-#elif CAIRNS_METAL
-#include <Metal/Metal.hpp>
+#if CAIRNS_METAL
+#include "rhi/metal/device_plat.hpp"
+#elif CAIRNS_VULKAN
+#include "rhi/vulkan/device_plat.hpp"
 #endif
 
 namespace cairns::rhi {
@@ -35,27 +35,9 @@ public:
     // CALLER: ENGINE.
     [[nodiscard]] bool InitSwapChain(SwapChain& sc, const InitConfig& cfg);
 
-    // Platform handles; the subsystems mirror these during their Init().
-#if CAIRNS_VULKAN
-    bool validation_enabled_ = false;
-    VkInstance instance_ = VK_NULL_HANDLE;
-    VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
-    VkSurfaceKHR surface_ = VK_NULL_HANDLE;
-    VkPhysicalDevice physical_ = VK_NULL_HANDLE;
-    VkDevice device_ = VK_NULL_HANDLE;
-    VkQueue graphics_queue_ = VK_NULL_HANDLE;
-    VkQueue compute_queue_ = VK_NULL_HANDLE;
-    VkQueue present_queue_ = VK_NULL_HANDLE;
-    VkCommandPool command_pool_ = VK_NULL_HANDLE;
-    uint32_t queue_family_index_ = 0;
-    VkSampleCountFlagBits msaa_samples_ = VK_SAMPLE_COUNT_1_BIT;
-    float timestamp_period_ns_ = 0.0f;
-    bool host_query_reset_ = false;
-    PFN_vkResetQueryPool vk_reset_query_pool_ = nullptr;
-#elif CAIRNS_METAL
-    MTL::Device* device_ = nullptr;
-    MTL::CommandQueue* queue_ = nullptr;
-#endif
+    // Platform handles live in plat; the subsystems mirror these into their
+    // own plat during their Init().
+    DevicePlat plat;
 
 private:
     bool inited_ = false;

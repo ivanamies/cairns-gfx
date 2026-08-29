@@ -319,11 +319,11 @@ public:
         }
         VkCommandBufferAllocateInfo cai{};
         cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        cai.commandPool = rhi_.device.command_pool_;
+        cai.commandPool = rhi_.device.plat.command_pool_;
         cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         cai.commandBufferCount = 1;
         VkCommandBuffer cb = VK_NULL_HANDLE;
-        if (vkAllocateCommandBuffers(rhi_.device.device_, &cai, &cb) != VK_SUCCESS) {
+        if (vkAllocateCommandBuffers(rhi_.device.plat.device_, &cai, &cb) != VK_SUCCESS) {
             return false;
         }
         VkCommandBufferBeginInfo bi{};
@@ -364,9 +364,9 @@ public:
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         si.commandBufferCount = 1;
         si.pCommandBuffers = &cb;
-        vkQueueSubmit(rhi_.device.graphics_queue_, 1, &si, VK_NULL_HANDLE);
-        vkQueueWaitIdle(rhi_.device.graphics_queue_);
-        vkFreeCommandBuffers(rhi_.device.device_, rhi_.device.command_pool_,
+        vkQueueSubmit(rhi_.device.plat.graphics_queue_, 1, &si, VK_NULL_HANDLE);
+        vkQueueWaitIdle(rhi_.device.plat.graphics_queue_);
+        vkFreeCommandBuffers(rhi_.device.plat.device_, rhi_.device.plat.command_pool_,
                               1, &cb);
         return true;
 #else
@@ -393,12 +393,12 @@ public:
         const NS::UInteger h = tex->height();
         const NS::UInteger bpr = w * 4;
         const NS::UInteger bufSize = bpr * h;
-        MTL::Buffer* readback = rhi_.device.device_->newBuffer(
+        MTL::Buffer* readback = rhi_.device.plat.device_->newBuffer(
             bufSize, MTL::ResourceStorageModeShared);
         if (!readback) {
             return false;
         }
-        MTL::CommandBuffer* cb = rhi_.device.queue_->commandBuffer();
+        MTL::CommandBuffer* cb = rhi_.device.plat.queue_->commandBuffer();
         MTL::BlitCommandEncoder* blit = cb->blitCommandEncoder();
         blit->copyFromTexture(tex, 0, 0, MTL::Origin{0, 0, 0},
                               MTL::Size{w, h, 1}, readback, 0, bpr, 0);
@@ -437,14 +437,14 @@ public:
         bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         VkBuffer buf = VK_NULL_HANDLE;
-        if (vkCreateBuffer(rhi_.device.device_, &bci, nullptr, &buf) !=
+        if (vkCreateBuffer(rhi_.device.plat.device_, &bci, nullptr, &buf) !=
             VK_SUCCESS) {
             return false;
         }
         VkMemoryRequirements mr{};
-        vkGetBufferMemoryRequirements(rhi_.device.device_, buf, &mr);
+        vkGetBufferMemoryRequirements(rhi_.device.plat.device_, buf, &mr);
         VkPhysicalDeviceMemoryProperties mp{};
-        vkGetPhysicalDeviceMemoryProperties(rhi_.device.physical_, &mp);
+        vkGetPhysicalDeviceMemoryProperties(rhi_.device.plat.physical_, &mp);
         uint32_t type_idx = 0;
         bool found_type = false;
         for (uint32_t i = 0; i < mp.memoryTypeCount; ++i) {
@@ -458,7 +458,7 @@ public:
             }
         }
         if (!found_type) {
-            vkDestroyBuffer(rhi_.device.device_, buf, nullptr);
+            vkDestroyBuffer(rhi_.device.plat.device_, buf, nullptr);
             return false;
         }
         VkMemoryAllocateInfo mai{};
@@ -466,16 +466,16 @@ public:
         mai.allocationSize = mr.size;
         mai.memoryTypeIndex = type_idx;
         VkDeviceMemory mem = VK_NULL_HANDLE;
-        vkAllocateMemory(rhi_.device.device_, &mai, nullptr, &mem);
-        vkBindBufferMemory(rhi_.device.device_, buf, mem, 0);
+        vkAllocateMemory(rhi_.device.plat.device_, &mai, nullptr, &mem);
+        vkBindBufferMemory(rhi_.device.plat.device_, buf, mem, 0);
 
         VkCommandBufferAllocateInfo cai{};
         cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        cai.commandPool = rhi_.device.command_pool_;
+        cai.commandPool = rhi_.device.plat.command_pool_;
         cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         cai.commandBufferCount = 1;
         VkCommandBuffer cb = VK_NULL_HANDLE;
-        vkAllocateCommandBuffers(rhi_.device.device_, &cai, &cb);
+        vkAllocateCommandBuffers(rhi_.device.plat.device_, &cai, &cb);
         VkCommandBufferBeginInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -515,11 +515,11 @@ public:
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         si.commandBufferCount = 1;
         si.pCommandBuffers = &cb;
-        vkQueueSubmit(rhi_.device.graphics_queue_, 1, &si, VK_NULL_HANDLE);
-        vkQueueWaitIdle(rhi_.device.graphics_queue_);
+        vkQueueSubmit(rhi_.device.plat.graphics_queue_, 1, &si, VK_NULL_HANDLE);
+        vkQueueWaitIdle(rhi_.device.plat.graphics_queue_);
 
         void* mapped = nullptr;
-        vkMapMemory(rhi_.device.device_, mem, 0, buf_size, 0, &mapped);
+        vkMapMemory(rhi_.device.plat.device_, mem, 0, buf_size, 0, &mapped);
         std::vector<uint8_t> rgba(static_cast<size_t>(buf_size));
         const uint8_t* src = static_cast<const uint8_t*>(mapped);
         // final_target_ format is BGRA8Unorm (matches the metal path).
@@ -529,17 +529,17 @@ public:
             rgba[i * 4 + 2] = src[i * 4 + 0];
             rgba[i * 4 + 3] = src[i * 4 + 3];
         }
-        vkUnmapMemory(rhi_.device.device_, mem);
+        vkUnmapMemory(rhi_.device.plat.device_, mem);
 
         const bool ok = stbi_write_png(
             path.string().c_str(), static_cast<int>(w),
             static_cast<int>(h), 4, rgba.data(),
             static_cast<int>(w * 4)) != 0;
 
-        vkFreeCommandBuffers(rhi_.device.device_, rhi_.device.command_pool_,
+        vkFreeCommandBuffers(rhi_.device.plat.device_, rhi_.device.plat.command_pool_,
                               1, &cb);
-        vkDestroyBuffer(rhi_.device.device_, buf, nullptr);
-        vkFreeMemory(rhi_.device.device_, mem, nullptr);
+        vkDestroyBuffer(rhi_.device.plat.device_, buf, nullptr);
+        vkFreeMemory(rhi_.device.plat.device_, mem, nullptr);
         return ok;
 #else
         (void)path;
@@ -1067,8 +1067,8 @@ public:
             render_thread_->Drain();
         }
 #if CAIRNS_VULKAN
-        if (rhi_.device.device_) {
-            vkDeviceWaitIdle(rhi_.device.device_);
+        if (rhi_.device.plat.device_) {
+            vkDeviceWaitIdle(rhi_.device.plat.device_);
         }
         // Framebuffers in the offscreen cache are sized at create-time
         // against the prior swap dims; the (w, h) check inside

@@ -21,11 +21,11 @@ bool Allocator::Init(Device& device) {
     if (inited_) {
         return true;
     }
-    if (!memory_.Init(device.device_, device.physical_, false)) {
+    if (!memory_.Init(device.plat.device_, device.plat.physical_, false)) {
         return false;
     }
     VkPhysicalDeviceProperties props;
-    vkGetPhysicalDeviceProperties(device.physical_, &props);
+    vkGetPhysicalDeviceProperties(device.plat.physical_, &props);
     uniform_align_ = std::max(
         1u, static_cast<uint32_t>(props.limits.minUniformBufferOffsetAlignment));
     storage_align_ = std::max(

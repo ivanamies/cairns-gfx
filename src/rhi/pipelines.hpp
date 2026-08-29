@@ -10,7 +10,11 @@
 #include "util/define.hpp"
 
 #include "rhi/resource_manager.hpp"  // Handle<>, Shader, Kernel, *PipelineDesc
-#include "rhi/pipelines_plat.hpp"    // PipelinesPlat (backend-resolved)
+#if CAIRNS_METAL
+#include "rhi/metal/pipelines_plat.hpp"
+#elif CAIRNS_VULKAN
+#include "rhi/vulkan/pipelines_plat.hpp"
+#endif
 
 namespace cairns::rhi {
 

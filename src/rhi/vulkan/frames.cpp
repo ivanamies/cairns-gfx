@@ -155,15 +155,15 @@ bool Frames::Init(Device& device) {
     if (inited_) {
         return true;
     }
-    device_ = device.device_;
-    command_pool_ = device.command_pool_;
-    physical_ = device.physical_;
-    graphics_queue_ = device.graphics_queue_;
-    compute_queue_ = device.compute_queue_;
-    present_queue_ = device.present_queue_;
-    ts_period_ns_ = device.timestamp_period_ns_;
-    host_query_reset_ = device.host_query_reset_;
-    vk_reset_query_pool_ = device.vk_reset_query_pool_;
+    device_ = device.plat.device_;
+    command_pool_ = device.plat.command_pool_;
+    physical_ = device.plat.physical_;
+    graphics_queue_ = device.plat.graphics_queue_;
+    compute_queue_ = device.plat.compute_queue_;
+    present_queue_ = device.plat.present_queue_;
+    ts_period_ns_ = device.plat.timestamp_period_ns_;
+    host_query_reset_ = device.plat.host_query_reset_;
+    vk_reset_query_pool_ = device.plat.vk_reset_query_pool_;
     {
         VkQueryPoolCreateInfo qpi{};
         qpi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;

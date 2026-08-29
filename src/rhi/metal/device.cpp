@@ -24,12 +24,12 @@ bool Device::Init(const InitConfig& cfg) {
     if (inited_) {
         return true;
     }
-    device_ = MTL::CreateSystemDefaultDevice();
-    if (!device_) {
+    plat.device_ = MTL::CreateSystemDefaultDevice();
+    if (!plat.device_) {
         return false;
     }
-    queue_ = device_->newCommandQueue();
-    inited_ = (queue_ != nullptr);
+    plat.queue_ = plat.device_->newCommandQueue();
+    inited_ = (plat.queue_ != nullptr);
     return inited_;
 }
 
@@ -37,17 +37,17 @@ void Device::Deinit() {
     if (!inited_) {
         return;
     }
-    if (queue_) {
-        queue_->release();
+    if (plat.queue_) {
+        plat.queue_->release();
     }
-    if (device_) {
-        device_->release();
+    if (plat.device_) {
+        plat.device_->release();
     }
     inited_ = false;
 }
 
 bool Device::InitSwapChain(SwapChain& sc, const InitConfig& cfg) {
-    return sc.Init(device_, cfg.metal_layer);
+    return sc.Init(plat.device_, cfg.metal_layer);
 }
 
 }  // namespace cairns::rhi

@@ -18,7 +18,7 @@ bool Allocator::Init(Device& device) {
     if (inited_) {
         return true;
     }
-    inited_ = memory_.Init(device.device_);
+    inited_ = memory_.Init(device.plat.device_);
     return inited_;
 }
 

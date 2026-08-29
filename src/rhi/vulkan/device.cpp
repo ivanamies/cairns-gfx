@@ -207,12 +207,12 @@ bool Device::Init(const InitConfig& cfg) {
     }
 
 #ifdef NDEBUG
-    validation_enabled_ = false;
+    plat.validation_enabled_ = false;
 #else
-    validation_enabled_ = true;
+    plat.validation_enabled_ = true;
 #endif
-    if (validation_enabled_ && !check_validation_layer_support()) {
-        validation_enabled_ = false;
+    if (plat.validation_enabled_ && !check_validation_layer_support()) {
+        plat.validation_enabled_ = false;
     }
 
     {  // instance
@@ -227,7 +227,7 @@ bool Device::Init(const InitConfig& cfg) {
         std::vector<const char*> extensions(
             cfg.vk_instance_extensions,
             cfg.vk_instance_extensions + cfg.vk_instance_extension_count);
-        if (validation_enabled_) {
+        if (plat.validation_enabled_) {
             extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         }
 #if CAIRNS_APPLE
@@ -244,56 +244,56 @@ bool Device::Init(const InitConfig& cfg) {
         ci.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         ci.ppEnabledExtensionNames = extensions.data();
         VkDebugUtilsMessengerCreateInfoEXT dbg{};
-        if (validation_enabled_) {
+        if (plat.validation_enabled_) {
             ci.enabledLayerCount = static_cast<uint32_t>(kValidationLayers.size());
             ci.ppEnabledLayerNames = kValidationLayers.data();
             populate_debug_ci(dbg);
             ci.pNext = &dbg;
         }
-        if (vkCreateInstance(&ci, nullptr, &instance_) != VK_SUCCESS) {
+        if (vkCreateInstance(&ci, nullptr, &plat.instance_) != VK_SUCCESS) {
             return false;
         }
     }
 
-    if (validation_enabled_) {  // debug messenger
+    if (plat.validation_enabled_) {  // debug messenger
         VkDebugUtilsMessengerCreateInfoEXT ci{};
         populate_debug_ci(ci);
-        create_debug_messenger(instance_, &ci, &debug_messenger_);
+        create_debug_messenger(plat.instance_, &ci, &plat.debug_messenger_);
     }
 
     if (!cfg.surfaceless) {
-        if (!cfg.vk_create_surface(cfg.vk_create_surface_user, instance_,
-                                    &surface_)) {
+        if (!cfg.vk_create_surface(cfg.vk_create_surface_user, plat.instance_,
+                                    &plat.surface_)) {
             return false;
         }
     }
 
     {  // physical device
         uint32_t count = 0;
-        vkEnumeratePhysicalDevices(instance_, &count, nullptr);
+        vkEnumeratePhysicalDevices(plat.instance_, &count, nullptr);
         if (count == 0) {
             return false;
         }
         std::vector<VkPhysicalDevice> devices(count);
-        vkEnumeratePhysicalDevices(instance_, &count, devices.data());
+        vkEnumeratePhysicalDevices(plat.instance_, &count, devices.data());
         for (VkPhysicalDevice d : devices) {
             const bool suitable = cfg.surfaceless
                 ? is_device_suitable_headless(d)
-                : is_device_suitable(d, surface_);
+                : is_device_suitable(d, plat.surface_);
             if (suitable) {
-                physical_ = d;
-                msaa_samples_ = max_usable_sample_count(d);
+                plat.physical_ = d;
+                plat.msaa_samples_ = max_usable_sample_count(d);
                 break;
             }
         }
-        if (physical_ == VK_NULL_HANDLE) {
+        if (plat.physical_ == VK_NULL_HANDLE) {
             return false;
         }
     }
 
     QueueFamilies indices = cfg.surfaceless
-        ? find_queue_families_headless(physical_)
-        : find_queue_families(physical_, surface_);
+        ? find_queue_families_headless(plat.physical_)
+        : find_queue_families(plat.physical_, plat.surface_);
 
     {  // logical device + queues
         std::set<uint32_t> unique = {indices.graphics_compute.value(),
@@ -327,17 +327,17 @@ bool Device::Init(const InitConfig& cfg) {
             VkPhysicalDeviceFeatures2 f2{};
             f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
             f2.pNext = &probe;
-            vkGetPhysicalDeviceFeatures2(physical_, &f2);
-            host_query_reset_ = (probe.hostQueryReset == VK_TRUE);
+            vkGetPhysicalDeviceFeatures2(plat.physical_, &f2);
+            plat.host_query_reset_ = (probe.hostQueryReset == VK_TRUE);
         }
-        if (host_query_reset_) {
+        if (plat.host_query_reset_) {
             vk12.hostQueryReset = VK_TRUE;
         }
         // Resolved after vkCreateDevice below; see post-device-create block.
         {
             VkPhysicalDeviceProperties pp;
-            vkGetPhysicalDeviceProperties(physical_, &pp);
-            timestamp_period_ns_ = pp.limits.timestampPeriod;
+            vkGetPhysicalDeviceProperties(plat.physical_, &pp);
+            plat.timestamp_period_ns_ = pp.limits.timestampPeriod;
         }
 
         VkPhysicalDeviceFeatures2 features2{};
@@ -363,30 +363,30 @@ bool Device::Init(const InitConfig& cfg) {
         ci.pNext = &features2;
         ci.enabledExtensionCount = static_cast<uint32_t>(device_exts.size());
         ci.ppEnabledExtensionNames = device_exts.data();
-        if (validation_enabled_) {
+        if (plat.validation_enabled_) {
             ci.enabledLayerCount = static_cast<uint32_t>(kValidationLayers.size());
             ci.ppEnabledLayerNames = kValidationLayers.data();
         }
-        if (vkCreateDevice(physical_, &ci, nullptr, &device_) !=
+        if (vkCreateDevice(plat.physical_, &ci, nullptr, &plat.device_) !=
             VK_SUCCESS) {
             return false;
         }
-        vkGetDeviceQueue(device_, indices.graphics_compute.value(), 0,
-                         &graphics_queue_);
-        vkGetDeviceQueue(device_, indices.present.value(), 0,
-                         &present_queue_);
-        vkGetDeviceQueue(device_, indices.graphics_compute.value(), 0,
-                         &compute_queue_);
-        queue_family_index_ = indices.graphics_compute.value();
-        if (host_query_reset_) {
-            vk_reset_query_pool_ = reinterpret_cast<PFN_vkResetQueryPool>(
-                vkGetDeviceProcAddr(device_, "vkResetQueryPool"));
-            if (vk_reset_query_pool_ == nullptr) {
-                vk_reset_query_pool_ = reinterpret_cast<PFN_vkResetQueryPool>(
-                    vkGetDeviceProcAddr(device_, "vkResetQueryPoolEXT"));
+        vkGetDeviceQueue(plat.device_, indices.graphics_compute.value(), 0,
+                         &plat.graphics_queue_);
+        vkGetDeviceQueue(plat.device_, indices.present.value(), 0,
+                         &plat.present_queue_);
+        vkGetDeviceQueue(plat.device_, indices.graphics_compute.value(), 0,
+                         &plat.compute_queue_);
+        plat.queue_family_index_ = indices.graphics_compute.value();
+        if (plat.host_query_reset_) {
+            plat.vk_reset_query_pool_ = reinterpret_cast<PFN_vkResetQueryPool>(
+                vkGetDeviceProcAddr(plat.device_, "vkResetQueryPool"));
+            if (plat.vk_reset_query_pool_ == nullptr) {
+                plat.vk_reset_query_pool_ = reinterpret_cast<PFN_vkResetQueryPool>(
+                    vkGetDeviceProcAddr(plat.device_, "vkResetQueryPoolEXT"));
             }
-            if (vk_reset_query_pool_ == nullptr) {
-                host_query_reset_ = false;
+            if (plat.vk_reset_query_pool_ == nullptr) {
+                plat.host_query_reset_ = false;
             }
         }
     }
@@ -396,8 +396,8 @@ bool Device::Init(const InitConfig& cfg) {
         ci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         ci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
         ci.queueFamilyIndex = indices.graphics_compute.value();
-        if (vkCreateCommandPool(device_, &ci, nullptr,
-                                &command_pool_) != VK_SUCCESS) {
+        if (vkCreateCommandPool(plat.device_, &ci, nullptr,
+                                &plat.command_pool_) != VK_SUCCESS) {
             return false;
         }
     }
@@ -410,31 +410,31 @@ void Device::Deinit() {
     if (!inited_) {
         return;
     }
-    if (device_ != VK_NULL_HANDLE) {
-        vkDeviceWaitIdle(device_);
+    if (plat.device_ != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(plat.device_);
     }
-    if (command_pool_) {
-        vkDestroyCommandPool(device_, command_pool_, nullptr);
+    if (plat.command_pool_) {
+        vkDestroyCommandPool(plat.device_, plat.command_pool_, nullptr);
     }
-    if (device_) {
-        vkDestroyDevice(device_, nullptr);
+    if (plat.device_) {
+        vkDestroyDevice(plat.device_, nullptr);
     }
-    if (validation_enabled_ && debug_messenger_) {
-        destroy_debug_messenger(instance_, debug_messenger_);
+    if (plat.validation_enabled_ && plat.debug_messenger_) {
+        destroy_debug_messenger(plat.instance_, plat.debug_messenger_);
     }
-    if (surface_) {
-        vkDestroySurfaceKHR(instance_, surface_, nullptr);
+    if (plat.surface_) {
+        vkDestroySurfaceKHR(plat.instance_, plat.surface_, nullptr);
     }
-    if (instance_) {
-        vkDestroyInstance(instance_, nullptr);
+    if (plat.instance_) {
+        vkDestroyInstance(plat.instance_, nullptr);
     }
     inited_ = false;
 }
 
 bool Device::InitSwapChain(SwapChain& sc, const InitConfig& cfg) {
-    return sc.Init(device_, physical_, surface_,
+    return sc.Init(plat.device_, plat.physical_, plat.surface_,
                    cfg.vk_window_size, cfg.vk_window_size_user,
-                   command_pool_, graphics_queue_, msaa_samples_,
+                   plat.command_pool_, plat.graphics_queue_, plat.msaa_samples_,
                    true);
 }
 
