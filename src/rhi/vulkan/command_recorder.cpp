@@ -168,12 +168,12 @@ static void transition(VkCommandBuffer cb, Resources& res, Handle<Texture> h,
     if (!hot || !cold) {
         return;
     }
-    if (cold->vk_layout == new_layout) {
+    if (cold->plat.vk_layout == new_layout) {
         return;
     }
     VkImageMemoryBarrier b{};
     b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    b.oldLayout = cold->vk_layout;
+    b.oldLayout = cold->plat.vk_layout;
     b.newLayout = new_layout;
     b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -192,7 +192,7 @@ static void transition(VkCommandBuffer cb, Resources& res, Handle<Texture> h,
     vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0,
                          nullptr, 1, &b);
-    cold->vk_layout = new_layout;
+    cold->plat.vk_layout = new_layout;
 }
 
 void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDispatch& d) {
@@ -243,8 +243,8 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
                                nullptr);
     }
 
-    vkCmdBindPipeline(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE, k->vk_pipeline);
-    vkCmdBindDescriptorSets(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE, k->vk_layout,
+    vkCmdBindPipeline(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE, k->plat.vk_pipeline);
+    vkCmdBindDescriptorSets(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE, k->plat.vk_layout,
                             0, 1, &set, 0, nullptr);
     vkCmdDispatch(plat.comp_, d.groups_x, d.groups_y, d.groups_z);
 }
@@ -384,10 +384,10 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     vkUpdateDescriptorSets(plat.device_, 2, writes.data(), 0, nullptr);
 
     Shader::Hot* unlit = res.GetHot(list.pipeline);
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_pipeline);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->plat.vk_pipeline);
 
     // set 0 globals: bind once for the whole pass.
-    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_layout, 0, 1,
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->plat.vk_layout, 0, 1,
                             &plat.globals_set_, 1, &list.globals_offset);
 
     // Pack-meshes (Aaltonen slide 26): bind each stream at its mesh-region base
@@ -410,7 +410,7 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
             VkDescriptorSet ms = static_cast<VkDescriptorSet>(
                 res.GetHot(draw.bind_groups[1])->api_descriptor_set);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    unlit->vk_layout, 1, 1, &ms, 0, nullptr);
+                                    unlit->plat.vk_layout, 1, 1, &ms, 0, nullptr);
         }
         uint32_t pos_off = 0;
         VkBuffer pos_buf =
@@ -439,7 +439,7 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
         }
         const uint32_t first_index = (draw.index_offset - idx_base) / sizeof(uint32_t);
         // set 2 drawtmp: the only per-draw dynamic offset.
-        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_layout, 2, 1,
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->plat.vk_layout, 2, 1,
                                 &plat.drawtmp_set_, 1, &draw.dynamic_buffer_offsets[1]);
         vkCmdDrawIndexed(cb, draw.triangle_count * 3, draw.instance_count, first_index,
                          static_cast<int32_t>(draw.vertex_offset), draw.instance_offset);
@@ -449,13 +449,13 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
 void CommandRecorder::DrawPoints(Resources& res, Allocator& alloc, const PointDraw& pd) {
     VkCommandBuffer cb = plat.gfx_;
     Shader::Hot* p = res.GetHot(pd.pipeline);
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p->vk_pipeline);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p->plat.vk_pipeline);
     uint32_t ssbo_off = 0;
     VkBuffer ssbo = res.GetVkBuffer(alloc,pd.vertex_buffer, &ssbo_off);
     VkDeviceSize off = ssbo_off;
     vkCmdBindVertexBuffers(cb, 0, 1, &ssbo, &off);
     VkDescriptorSet point_set = plat.point_set_;
-    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p->vk_layout, 0, 1,
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p->plat.vk_layout, 0, 1,
                             &point_set, 0, nullptr);
     vkCmdDraw(cb, pd.vertex_count, 1, 0, 0);
 }
@@ -467,7 +467,7 @@ void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader>
         return;
     }
     Shader::Hot* sh = res.GetHot(pipeline);
-    if (!sh || !sh->vk_imgui_set) {
+    if (!sh || !sh->plat.vk_imgui_set) {
         return;
     }
 
@@ -477,16 +477,16 @@ void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader>
     ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     VkWriteDescriptorSet w{};
     w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    w.dstSet = sh->vk_imgui_set;
+    w.dstSet = sh->plat.vk_imgui_set;
     w.dstBinding = 0;
     w.descriptorCount = 1;
     w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     w.pImageInfo = &ii;
     vkUpdateDescriptorSets(plat.device_, 1, &w, 0, nullptr);
 
-    vkCmdBindPipeline(plat.gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->vk_pipeline);
-    vkCmdBindDescriptorSets(plat.gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->vk_layout, 0, 1,
-                            &sh->vk_imgui_set, 0, nullptr);
+    vkCmdBindPipeline(plat.gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->plat.vk_pipeline);
+    vkCmdBindDescriptorSets(plat.gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->plat.vk_layout, 0, 1,
+                            &sh->plat.vk_imgui_set, 0, nullptr);
 
     const float fsx = dd->FramebufferScale.x;
     const float fsy = dd->FramebufferScale.y;
@@ -499,7 +499,7 @@ void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader>
     pc[1] = 2.0f / disp_h;
     pc[2] = -1.0f - dd->DisplayPos.x * pc[0];
     pc[3] = -1.0f - dd->DisplayPos.y * pc[1];
-    vkCmdPushConstants(plat.gfx_, sh->vk_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, 16, pc);
+    vkCmdPushConstants(plat.gfx_, sh->plat.vk_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, 16, pc);
 
     VkViewport vp{};
     vp.x = 0.0f;
@@ -577,8 +577,8 @@ void CommandRecorder::DrawFullscreen(Resources& res, Handle<Shader> pipeline,
         writes[i].pImageInfo = &infos[i];
     }
     vkUpdateDescriptorSets(plat.device_, n, writes.data(), 0, nullptr);
-    vkCmdBindPipeline(plat.gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->vk_pipeline);
-    vkCmdBindDescriptorSets(plat.gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->vk_layout,
+    vkCmdBindPipeline(plat.gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->plat.vk_pipeline);
+    vkCmdBindDescriptorSets(plat.gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->plat.vk_layout,
                             0, 1, &set, 0, nullptr);
     vkCmdDraw(plat.gfx_, 3, 1, 0, 0);
 }

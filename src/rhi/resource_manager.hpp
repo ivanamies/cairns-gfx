@@ -30,42 +30,15 @@
 #include "util/define.hpp"
 #include "util/offset_allocator.hpp"
 
-#if CAIRNS_VULKAN
-#include <vulkan/vulkan.h>
-#endif  // CAIRNS_VULKAN
-
 #if CAIRNS_METAL
-namespace MTL {
-class Device;
-class CommandQueue;
-class Buffer;
-class Heap;
-class Texture;
-class SamplerState;
-class RenderPipelineState;
-class ComputePipelineState;
-class RenderPassDescriptor;
-class DepthStencilState;
-}  // namespace MTL
-#endif  // CAIRNS_METAL
+#include "rhi/metal/resource_manager_plat.hpp"
+#elif CAIRNS_VULKAN
+#include "rhi/vulkan/resource_manager_plat.hpp"
+#endif
 
 struct SDL_Window;
 
 namespace cairns::rhi {
-
-#if CAIRNS_METAL
-using ApiTextureHandle = MTL::Texture*;
-using ApiSamplerHandle = MTL::SamplerState*;
-using ApiPsoHandle = MTL::RenderPipelineState*;
-using ApiArgBufferHandle = MTL::Buffer*;
-using ApiKernelHandle = MTL::ComputePipelineState*;
-#else
-using ApiTextureHandle = void*;
-using ApiSamplerHandle = void*;
-using ApiPsoHandle = void*;
-using ApiArgBufferHandle = void*;
-using ApiKernelHandle = void*;
-#endif
 
 class Device;
 class Allocator;
@@ -288,11 +261,7 @@ struct Texture {
         Memory mem_type = Memory::kDefault;
         uint32_t heap_buffer_index = 0xFFFFFFFFu;  // 0xFFFFFFFF if dedicated
         const char* debug_name = nullptr;
-#if CAIRNS_VULKAN
-        // Current image layout, updated by CommandRecorder::BeginRenderPass when
-        // attachments + input_textures transition between passes.
-        VkImageLayout vk_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-#endif
+        TextureColdPlat plat;
     };
 };
 
@@ -332,13 +301,7 @@ struct DynamicBuffers {
 struct Shader {
     struct Hot {
         ApiPsoHandle api_pso = nullptr;  // VkPipeline / MTLRenderPipelineState
-#if CAIRNS_VULKAN
-        VkPipeline vk_pipeline = VK_NULL_HANDLE;
-        VkPipelineLayout vk_layout = VK_NULL_HANDLE;
-        VkDescriptorSetLayout vk_imgui_set_layout = VK_NULL_HANDLE;
-        VkDescriptorPool vk_imgui_pool = VK_NULL_HANDLE;
-        VkDescriptorSet vk_imgui_set = VK_NULL_HANDLE;
-#endif
+        ShaderHotPlat plat;
     };
     struct Cold {
         const char* debug_name = nullptr;
@@ -348,10 +311,7 @@ struct Shader {
 struct Kernel {
     struct Hot {
         ApiKernelHandle api_pso = nullptr;  // MTLComputePipelineState
-#if CAIRNS_VULKAN
-        VkPipeline vk_pipeline = VK_NULL_HANDLE;
-        VkPipelineLayout vk_layout = VK_NULL_HANDLE;
-#endif
+        KernelHotPlat plat;
     };
     struct Cold {
         const char* debug_name = nullptr;
@@ -439,24 +399,7 @@ struct BindlessRegistryDesc {
     const char* debug_name = nullptr;
 };
 
-#if CAIRNS_VULKAN
-struct BackendInitParams {
-    VkInstance instance = VK_NULL_HANDLE;
-    VkPhysicalDevice physical = VK_NULL_HANDLE;
-    VkDevice device = VK_NULL_HANDLE;
-    VkQueue queue = VK_NULL_HANDLE;
-    uint32_t queue_family_index = 0;
-    VkCommandPool command_pool = VK_NULL_HANDLE;
-    bool enable_bda = false;
-};
-#elif CAIRNS_METAL
-struct BackendInitParams {
-    MTL::Device* device = nullptr;
-    MTL::CommandQueue* queue = nullptr;
-};
-#else
-struct BackendInitParams;
-#endif  // CAIRNS_VULKAN
+// BackendInitParams lives in the per-backend resource_manager_plat header.
 
 // rhi-wide config constants (formerly ResourceManager statics).
 inline constexpr uint32_t kFramesInFlight = 2;

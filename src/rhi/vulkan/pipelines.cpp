@@ -65,32 +65,32 @@ void Pipelines::Deinit(Resources& resources) {
     }
     VkDevice dev = plat.device_;
     resources.shaders.ForEachLive([dev](Shader::Hot& hot, Shader::Cold&) {
-        if (hot.vk_pipeline) {
-            vkDestroyPipeline(dev, hot.vk_pipeline, nullptr);
-            hot.vk_pipeline = VK_NULL_HANDLE;
+        if (hot.plat.vk_pipeline) {
+            vkDestroyPipeline(dev, hot.plat.vk_pipeline, nullptr);
+            hot.plat.vk_pipeline = VK_NULL_HANDLE;
         }
-        if (hot.vk_layout) {
-            vkDestroyPipelineLayout(dev, hot.vk_layout, nullptr);
-            hot.vk_layout = VK_NULL_HANDLE;
+        if (hot.plat.vk_layout) {
+            vkDestroyPipelineLayout(dev, hot.plat.vk_layout, nullptr);
+            hot.plat.vk_layout = VK_NULL_HANDLE;
         }
-        if (hot.vk_imgui_pool) {
-            vkDestroyDescriptorPool(dev, hot.vk_imgui_pool, nullptr);
-            hot.vk_imgui_pool = VK_NULL_HANDLE;
-            hot.vk_imgui_set = VK_NULL_HANDLE;
+        if (hot.plat.vk_imgui_pool) {
+            vkDestroyDescriptorPool(dev, hot.plat.vk_imgui_pool, nullptr);
+            hot.plat.vk_imgui_pool = VK_NULL_HANDLE;
+            hot.plat.vk_imgui_set = VK_NULL_HANDLE;
         }
-        if (hot.vk_imgui_set_layout) {
-            vkDestroyDescriptorSetLayout(dev, hot.vk_imgui_set_layout, nullptr);
-            hot.vk_imgui_set_layout = VK_NULL_HANDLE;
+        if (hot.plat.vk_imgui_set_layout) {
+            vkDestroyDescriptorSetLayout(dev, hot.plat.vk_imgui_set_layout, nullptr);
+            hot.plat.vk_imgui_set_layout = VK_NULL_HANDLE;
         }
     });
     resources.kernels.ForEachLive([dev](Kernel::Hot& hot, Kernel::Cold&) {
-        if (hot.vk_pipeline) {
-            vkDestroyPipeline(dev, hot.vk_pipeline, nullptr);
-            hot.vk_pipeline = VK_NULL_HANDLE;
+        if (hot.plat.vk_pipeline) {
+            vkDestroyPipeline(dev, hot.plat.vk_pipeline, nullptr);
+            hot.plat.vk_pipeline = VK_NULL_HANDLE;
         }
-        if (hot.vk_layout) {
-            vkDestroyPipelineLayout(dev, hot.vk_layout, nullptr);
-            hot.vk_layout = VK_NULL_HANDLE;
+        if (hot.plat.vk_layout) {
+            vkDestroyPipelineLayout(dev, hot.plat.vk_layout, nullptr);
+            hot.plat.vk_layout = VK_NULL_HANDLE;
         }
     });
     inited_ = false;
@@ -466,10 +466,10 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
 
     Handle<Shader> h = resources.shaders.Acquire();
     Shader::Hot* hot = resources.shaders.GetHot(h);
-    hot->vk_pipeline = pipeline;
-    hot->vk_layout = layout;
+    hot->plat.vk_pipeline = pipeline;
+    hot->plat.vk_layout = layout;
     if (imgui_set_layout) {
-        hot->vk_imgui_set_layout = imgui_set_layout;
+        hot->plat.vk_imgui_set_layout = imgui_set_layout;
         VkDescriptorPoolSize ps{};
         ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         ps.descriptorCount = 1;
@@ -478,13 +478,13 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
         pci.maxSets = 1;
         pci.poolSizeCount = 1;
         pci.pPoolSizes = &ps;
-        vkCreateDescriptorPool(device, &pci, nullptr, &hot->vk_imgui_pool);
+        vkCreateDescriptorPool(device, &pci, nullptr, &hot->plat.vk_imgui_pool);
         VkDescriptorSetAllocateInfo ai{};
         ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        ai.descriptorPool = hot->vk_imgui_pool;
+        ai.descriptorPool = hot->plat.vk_imgui_pool;
         ai.descriptorSetCount = 1;
         ai.pSetLayouts = &imgui_set_layout;
-        vkAllocateDescriptorSets(device, &ai, &hot->vk_imgui_set);
+        vkAllocateDescriptorSets(device, &ai, &hot->plat.vk_imgui_set);
     }
     resources.shaders.GetCold(h)->debug_name = desc.debug_name;
     return h;
@@ -539,8 +539,8 @@ Handle<Kernel> Pipelines::CreateComputePipeline(
 
     Handle<Kernel> h = resources.kernels.Acquire();
     Kernel::Hot* hot = resources.kernels.GetHot(h);
-    hot->vk_pipeline = pipeline;
-    hot->vk_layout = layout;
+    hot->plat.vk_pipeline = pipeline;
+    hot->plat.vk_layout = layout;
     resources.kernels.GetCold(h)->debug_name = desc.debug_name;
     return h;
 }
