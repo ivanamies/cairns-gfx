@@ -54,7 +54,7 @@ bool Pipelines::Init(Device& device) {
     if (inited_) {
         return true;
     }
-    device_ = device.device_;
+    plat.device_ = device.device_;
     inited_ = true;
     return true;
 }
@@ -63,7 +63,7 @@ void Pipelines::Deinit(Resources& resources) {
     if (!inited_) {
         return;
     }
-    VkDevice dev = device_;
+    VkDevice dev = plat.device_;
     resources.shaders.ForEachLive([dev](Shader::Hot& hot, Shader::Cold&) {
         if (hot.vk_pipeline) {
             vkDestroyPipeline(dev, hot.vk_pipeline, nullptr);
@@ -266,7 +266,7 @@ VkRenderPass build_offscreen_compat_rp(VkDevice dev, VkFormat color, bool has_co
 Handle<Shader> Pipelines::CreateGraphicsPipeline(
     Resources& resources, Frames& frames,
     const GraphicsPipelineDesc& desc) {
-    VkDevice device = device_;
+    VkDevice device = plat.device_;
     const VkShaderFiles files = resolve_vk_shader(desc.logical_shader);
     const std::filesystem::path dir = desc.shader_dir ? desc.shader_dir : "";
 
@@ -492,7 +492,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
 
 Handle<Kernel> Pipelines::CreateComputePipeline(
     Resources& resources, Frames& frames, const ComputePipelineDesc& desc) {
-    VkDevice device = device_;
+    VkDevice device = plat.device_;
     const VkShaderFiles files = resolve_vk_shader(desc.logical_shader);
     const std::filesystem::path dir = desc.shader_dir ? desc.shader_dir : "";
 

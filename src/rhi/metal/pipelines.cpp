@@ -51,7 +51,7 @@ bool Pipelines::Init(Device& device) {
     if (inited_) {
         return true;
     }
-    device_ = device.device_;
+    plat.device_ = device.device_;
     inited_ = true;
     return true;
 }
@@ -146,7 +146,7 @@ MetalShaderInfo resolve_metal_shader(const char* logical) {
 
 Handle<Shader> Pipelines::CreateGraphicsPipeline(
     Resources& resources, Frames&, const GraphicsPipelineDesc& desc) {
-    MTL::Device* device = device_;
+    MTL::Device* device = plat.device_;
     const MetalShaderInfo info = resolve_metal_shader(desc.logical_shader);
     const std::filesystem::path dir = desc.shader_dir ? desc.shader_dir : "";
     MTL::Library* lib = compile_metal_library(device, (dir / info.file).string());
@@ -223,7 +223,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
 
 Handle<Kernel> Pipelines::CreateComputePipeline(
     Resources& resources, Frames&, const ComputePipelineDesc& desc) {
-    MTL::Device* device = device_;
+    MTL::Device* device = plat.device_;
     const MetalShaderInfo info = resolve_metal_shader(desc.logical_shader);
     const std::filesystem::path dir = desc.shader_dir ? desc.shader_dir : "";
     MTL::Library* lib = compile_metal_library(device, (dir / info.file).string());

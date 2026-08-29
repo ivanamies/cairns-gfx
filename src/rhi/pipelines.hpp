@@ -10,6 +10,7 @@
 #include "util/define.hpp"
 
 #include "rhi/resource_manager.hpp"  // Handle<>, Shader, Kernel, *PipelineDesc
+#include "rhi/pipelines_plat.hpp"    // PipelinesPlat (backend-resolved)
 
 namespace cairns::rhi {
 
@@ -32,13 +33,8 @@ public:
     Handle<Kernel> CreateComputePipeline(Resources& resources, Frames& frames,
                                          const ComputePipelineDesc& desc);
 
+    PipelinesPlat plat;
 private:
-    // Internal state — self-only (nothing reaches into Pipelines).
-#if CAIRNS_VULKAN
-    VkDevice device_ = VK_NULL_HANDLE;  // mirrored from Device
-#elif CAIRNS_METAL
-    MTL::Device* device_ = nullptr;     // mirrored from Device
-#endif
     bool inited_ = false;
 };
 
