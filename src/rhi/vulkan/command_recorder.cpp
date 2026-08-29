@@ -15,6 +15,7 @@
 #include "rhi/command_recorder.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/resources.hpp"
+#include "rhi/allocator.hpp"
 #include "rhi/swap_chain.hpp"
 #include "util/draw.hpp"
 #include "util/material_gpu.hpp"
