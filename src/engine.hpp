@@ -2722,8 +2722,13 @@ public:
             glm::mat4* world_out =
                 s.arena.AllocateArray<glm::mat4>(n_nodes);
 
-            for (uint32_t i = 0; i < n_nodes; ++i) {
-                trs[i] = cairns::DecomposeNodeLocal(scold->nodes[i]);
+            if (scold->bind_pose.size() == n_nodes) {
+                std::memcpy(trs, scold->bind_pose.data(),
+                            sizeof(cairns::AnimatedTRS) * n_nodes);
+            } else {
+                for (uint32_t i = 0; i < n_nodes; ++i) {
+                    trs[i] = cairns::DecomposeNodeLocal(scold->nodes[i]);
+                }
             }
             if (sh->clip_index >= 0 &&
                 sh->clip_index <

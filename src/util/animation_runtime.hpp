@@ -30,14 +30,6 @@
 
 namespace cairns {
 
-// glTF TRS for one node. Decomposed from Node::localTransform on demand;
-// channels override one field at a time.
-struct AnimatedTRS {
-    glm::vec3 T{0.0f};
-    glm::quat R{1.0f, 0.0f, 0.0f, 0.0f};
-    glm::vec3 S{1.0f};
-};
-
 inline AnimatedTRS DecomposeNodeLocal(const Node& n) {
     AnimatedTRS out;
     glm::vec3 skew;

@@ -25,6 +25,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/string_cast.hpp>
+#include <glm/gtx/matrix_decompose.hpp>
 
 #include <memory>
 
@@ -40,6 +41,12 @@ struct VertexAttribute {
     glm::vec4 normal = glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
     glm::vec2 uv = glm::vec2(0.0f);
     glm::vec2 pad1 = glm::vec2(0.0f);
+};
+
+struct AnimatedTRS {
+    glm::vec3 T{0.0f};
+    glm::quat R{1.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec3 S{1.0f};
 };
 
 // #221 Skinning Phase 1: per-vertex joint + weight payload for skinned
@@ -229,6 +236,7 @@ struct Scene {
     };
     struct Cold {
         std::vector<Node> nodes;
+        std::vector<AnimatedTRS> bind_pose;
         // #221 Skinning Phase 1: glTF skins + clips for this scene. Per
         // decision 2 of plan v7 these ride std::vector on Cold to match
         // the existing shape (proper Tier-1 bump migration is a separate
@@ -637,6 +645,16 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path,
 
     if (!asset.scenes.empty()) {
         for (auto ni : asset.scenes[0].nodeIndices) hot.rootNodes.push_back(static_cast<int32_t>(ni));
+    }
+
+    cold.bind_pose.resize(cold.nodes.size());
+    for (size_t i = 0; i < cold.nodes.size(); ++i) {
+        const Node& nd = cold.nodes[i];
+        AnimatedTRS trs;
+        glm::vec3 skew;
+        glm::vec4 persp;
+        glm::decompose(nd.localTransform, trs.S, trs.R, trs.T, skew, persp);
+        cold.bind_pose[i] = trs;
     }
     return true;
 }
