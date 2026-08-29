@@ -132,7 +132,14 @@ void Frames::AcquireSwapchain(Resources& resources, Allocator& alloc, SwapChain&
     if (swapchain_acquired_) {
         return;
     }
+    // Splits the cost of `nextDrawable` out of the cmd-buffer-complete window
+    // (slot 8 "gpu frame"). On iOS this is often where the display-pacing
+    // wait lives -- not actual GPU work.
+    const uint64_t draw_start_ns = cairns::timestamp_ns();
     sc.NextDrawable();
+    const uint64_t draw_end_ns = cairns::timestamp_ns();
+    cairns::Timer::Accum(cairns::Timer::kDrawableAcquireSlot, "drawable acquire",
+                         (draw_end_ns - draw_start_ns) / 1000);
     MTL::Texture* drawable_tex = sc.GetDrawable()->texture();
     Texture::Hot* msaa_hot = resources.GetHot(msaa_handle_);
     if (drawable_tex &&

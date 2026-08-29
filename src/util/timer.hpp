@@ -41,8 +41,12 @@ class Timer {
 
     static constexpr uint32_t kMaxSlots = 16;
     // Reserved slot for GPU frame time written by Metal/Vk command-buffer
-    // completion callbacks (different thread than Timer::End).
+    // completion callbacks (different thread than Timer::End). Note this
+    // measures cmd-buffer-create -> cmd-buffer-complete, which on late-acquire
+    // backends includes the nextDrawable / vkAcquireNextImageKHR wait
+    // inside the encoding window. Use kDrawableAcquireSlot to split that out.
     static constexpr uint32_t kGpuSlot = 8;
+    static constexpr uint32_t kDrawableAcquireSlot = 9;
     static std::array<uint64_t, kMaxSlots> accum_times_;
     static std::array<uint64_t, kMaxSlots> accum_itrs_;
     static std::array<const char*, kMaxSlots> slot_names_;
