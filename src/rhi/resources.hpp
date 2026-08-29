@@ -18,8 +18,6 @@
 
 #include "rhi/resource_manager.hpp"  // ResourceManager<T>, Handle<>, resource types, Descs
 #include "rhi/swap_resolve_target.hpp"
-#include "util/alloc_tags.hpp"
-#include "util/print_allocator.hpp"
 #if CAIRNS_METAL
 #include "rhi/metal/resources_plat.hpp"
 #elif CAIRNS_VULKAN
@@ -192,10 +190,7 @@ private:
         uint8_t kind = 0;
         uint32_t retire_frame = 0;
     };
-    std::vector<DeferEntry,
-                cairns::print_allocator<DeferEntry,
-                                          cairns::tags::ResourcesDeferred>>
-        deferred_;
+    std::vector<DeferEntry> deferred_;
 
     void DeferPushRaw(uint16_t index, uint16_t generation, uint8_t kind);
 };

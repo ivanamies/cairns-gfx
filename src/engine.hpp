@@ -45,7 +45,6 @@
 #include "util/scene_gpu.hpp"
 #include "util/timer.hpp"
 #include "util/frame_clock.hpp"
-#include "util/alloc_tags.hpp"
 #include "util/log.hpp"
 #include "util/print_allocator.hpp"
 #include "util/signpost.hpp"
@@ -173,10 +172,7 @@ public:
         // sees this slot's arena exclusively during RecordFrame; main
         // thread resets at slot Acquire (already blocked on render
         // exclusivity). No mutex, no shared ptr.
-        std::vector<uint8_t,
-                    cairns::print_allocator<uint8_t,
-                                              cairns::tags::EnginePerSlotArena>>
-            arena_storage;
+        std::vector<uint8_t> arena_storage;
         cairns::BumpArena arena{};
         // Per-slot mutex. std::lock_guard / std::unique_lock are the RAII
         // discipline; blocks the second acquirer instead of asserting.
@@ -348,7 +344,7 @@ public:
         // steady-state frames.
         const char* first_path =
             glbs.empty() ? "<empty>" : glbs.front().filename().c_str();
-        CAIRNS_PRINT_ERR("[FENCE LOAD_BEGIN] batch n=%zu first=%s\n",
+        CAIRNS_PRINT_ERR("[LOAD] begin batch n=%zu first=%s\n",
                           glbs.size(), first_path);
         CAIRNS_SIGNPOST_INTERVAL_SCOPED("load_prefab_batch", first_path);
 
@@ -474,7 +470,7 @@ public:
         // Phase D close: end-of-batch marker. Pair with [LOAD] begin
         // so log scanning can compute per-batch wall time without
         // hunting for the LoadTrace summary.
-        CAIRNS_PRINT_ERR("[FENCE LOAD_END] ms=%.3f count=%u\n",
+        CAIRNS_PRINT_ERR("[LOAD] end batch ms=%.3f count=%u\n",
                           trace.total_ms, r.count);
         return r;
     }
@@ -972,8 +968,7 @@ public:
 
     // #224 L6: snapshot/assert helpers exposed to the NDJSON debug ops.
     uint32_t DebugSnapshotPrefabHandles() {
-        auto snap = SnapshotPrefabHandles();
-        last_handle_snapshot_.assign(snap.begin(), snap.end());
+        last_handle_snapshot_ = SnapshotPrefabHandles();
         return static_cast<uint32_t>(last_handle_snapshot_.size());
     }
     uint32_t DebugAssertAppendOnly() {
@@ -1103,7 +1098,7 @@ public:
         // Phase D / R1 instrumentation. Pair with the Instruments
         // signpost so the time profiler bands reload work distinctly
         // from steady-state frames.
-        CAIRNS_PRINT_ERR("[FENCE RELOAD_BEGIN] idx=%u path=%s\n", idx,
+        CAIRNS_PRINT_ERR("[RELOAD] begin idx=%u path=%s\n", idx,
                           path.filename().c_str());
         CAIRNS_SIGNPOST_INTERVAL_SCOPED("reload_prefab",
                                          path.filename().c_str());
@@ -1121,13 +1116,10 @@ public:
             if (!oldH || !oldC) {
                 return false;
             }
-            old_meshes.assign(oldH->meshes.begin(), oldH->meshes.end());
-            old_materials.assign(oldH->materials.begin(),
-                                 oldH->materials.end());
-            old_textures.assign(oldC->textureHandles.begin(),
-                                oldC->textureHandles.end());
-            old_samplers.assign(oldC->samplerHandles.begin(),
-                                oldC->samplerHandles.end());
+            old_meshes = oldH->meshes;
+            old_materials = oldH->materials;
+            old_textures = oldC->textureHandles;
+            old_samplers = oldC->samplerHandles;
         }
         std::array<std::filesystem::path, 1> single_path{path};
         LoadPrefabBatchResult r = RuntimeLoadBatch(single_path);
@@ -1196,7 +1188,7 @@ public:
                 resident_textures_.push_back(th);
             }
         }
-        CAIRNS_PRINT_ERR("[FENCE RELOAD_END] idx=%u path=%s\n", idx,
+        CAIRNS_PRINT_ERR("[RELOAD] end idx=%u path=%s ok\n", idx,
                           path.filename().c_str());
         return true;
     }
@@ -2671,25 +2663,20 @@ public:
     }
 
     bool draw() {
-        // Phase D + E (wide): bracket every frame with FRAME_BEGIN /
-        // FRAME_END fences so [ALLOC] lines between them bucket as
-        // steady-state per-frame allocations. The CAIRNS_ALLOC_TRACE
-        // gate keeps the per-frame fences out of production runs; in
-        // CAIRNS_ALLOC_TRACE=0 builds we still emit a heartbeat every
-        // 60 frames so [LOAD]/[RELOAD] don't drift in the log.
+        // Phase D: steady-frame marker. Throttled to once per 60 frames
+        // so the log scanner can see "engine is in steady state" without
+        // drowning out the [LOAD]/[RELOAD] markers. Pair with the
+        // Instruments signpost on this scope; the time profiler shows
+        // each frame as a 16ms band under "Points of Interest".
         CAIRNS_SIGNPOST_INTERVAL_SCOPED("frame", "draw");
-#if CAIRNS_ALLOC_TRACE
-        CAIRNS_PRINT_ERR("[FENCE FRAME_BEGIN] frame=%u\n", frame_);
-#else
         if ((frame_ % 60) == 0) {
             size_t ec = 0;
             if (auto* wc = scenes_.GetCold(active_scene_)) {
                 ec = wc->registry.storage<entt::entity>().size();
             }
-            CAIRNS_PRINT_ERR("[FENCE STEADY] frame=%u entities=%zu prefabs=%zu\n",
+            CAIRNS_PRINT_ERR("[STEADY] frame=%u entities=%zu prefabs=%zu\n",
                               frame_, ec, prefab_ids_.size());
         }
-#endif
 #if CAIRNS_VULKAN
         if (rhi_.frames.plat.recreate_pending_.load(std::memory_order_acquire)) {
             if (render_thread_) {
@@ -4930,23 +4917,23 @@ public:
 private:
     uint32_t frame_ = 0;
 
+    // #220 Step 3: prefabs_ is now a generational pool. prefab_ids_ is the
+    // order-stable parallel list of SceneIds; consumers that want
+    // index-by-position semantics (LoadPrefabsGpu's span, entity
+    // assignment's `i % prefab_ids_.size()`) iterate this. The Prefab::Hot
+    // / Prefab::Cold records live in the pool, not the vector.
     cairns::ResourceManager<cairns::Prefab> prefabs_;
-    std::vector<cairns::PrefabId,
-                cairns::print_allocator<cairns::PrefabId,
-                                          cairns::tags::EnginePrefabIds>>
-        prefab_ids_;
-    std::vector<std::filesystem::path,
-                cairns::print_allocator<std::filesystem::path,
-                                          cairns::tags::EngineGlbPaths>>
-        glb_paths_;
-    std::vector<cairns::AssetId,
-                cairns::print_allocator<cairns::AssetId,
-                                          cairns::tags::EnginePerPrefabAsset>>
-        per_prefab_asset_;
-    std::vector<rhi::Handle<rhi::Texture>,
-                cairns::print_allocator<rhi::Handle<rhi::Texture>,
-                                          cairns::tags::EngineResidentTextures>>
-        resident_textures_;
+    std::vector<cairns::PrefabId> prefab_ids_;
+    // #222 Phase #267: parallel to prefab_ids_; index N maps to the GLB
+    // path that produced prefab_ids_[N]. Read by the [PICK] log line.
+    std::vector<std::filesystem::path> glb_paths_;
+    // #269: parallel to prefab_ids_; AssetId registered for each scene.
+    // InstantiatePrefab consumes this to stamp AssetRef on the new entity.
+    std::vector<cairns::AssetId> per_prefab_asset_;
+    // #222 Phase H.6: built once at scene-load + uploadAnimTablesGpu;
+    // every frame's resident_textures span points at this vector
+    // instead of being arena-allocated + filled per frame.
+    std::vector<rhi::Handle<rhi::Texture>> resident_textures_;
     // #222 Phase H.4 partial: the skin-attr SSBO is the SAME handle on every
     // skinned mesh from one LoadPrefabsGpu call -- it does not belong on
     // Mesh::Hot.
@@ -4957,9 +4944,18 @@ private:
     // skinned mesh in the batch reads the same handle) -- only across
     // batches do they differ. Per-mesh resolution:
     //   ResolvedSharedSkin(mhot) == per_batch_shared_skin_[mhot.batch_id]
+    // E (allocator-survey demo): per_batch_shared_skin_ wears the
+    // print_allocator so CAIRNS_ALLOC_TRACE=1 builds emit a tagged
+    // [ALLOC] line on every grow. Lifecycle: per-batch (push on every
+    // LoadPrefabBatch with a skinned mesh; cleared on UnloadAllPrefabs).
+    struct kTagPerBatchSharedSkin {
+        static constexpr const char* name() {
+            return "Engine::per_batch_shared_skin_";
+        }
+    };
     std::vector<rhi::Handle<rhi::Buffer>,
                 cairns::print_allocator<rhi::Handle<rhi::Buffer>,
-                                          cairns::tags::EnginePerBatchSharedSkin>>
+                                          kTagPerBatchSharedSkin>>
         per_batch_shared_skin_;
     // #224 L3: the instrument. Populated each LoadPrefabBatch call.
     // #224 L8: editor-chrome toggle (selection outline pass gate).
@@ -4972,14 +4968,8 @@ private:
     // #224 L6: APPEND-only debug snapshot stashed between two NDJSON
     // op calls (cairns.debug.snapshotPrefabHandles ->
     // cairns.debug.assertAppendOnly). Empty until first snapshot call.
-    std::vector<PrefabHandleSnapshot,
-                cairns::print_allocator<PrefabHandleSnapshot,
-                                          cairns::tags::EngineLastHandleSnapshot>>
-        last_handle_snapshot_;
-    std::vector<int32_t,
-                cairns::print_allocator<int32_t,
-                                          cairns::tags::EngineRootNodesStackCache>>
-        root_nodes_stack_cache_;
+    std::vector<PrefabHandleSnapshot> last_handle_snapshot_;
+    std::vector<int32_t> root_nodes_stack_cache_;
 
     // #220 Step 1: handle-pilled pool. Bind group lives on Hot;
     // texture+sampler on Cold. Stale-slot reads fail at GetHot/GetCold
@@ -5077,10 +5067,7 @@ private:
     static constexpr uint32_t kMaxScenes = 8;
     cairns::AssetRegistry assets_;
     cairns::ResourceManager<cairns::Scene> scenes_;
-    std::vector<cairns::RenderProxyArrays,
-                cairns::print_allocator<cairns::RenderProxyArrays,
-                                          cairns::tags::EngineSceneProxies>>
-        scene_proxies_;
+    std::vector<cairns::RenderProxyArrays> scene_proxies_;
     cairns::SceneId active_scene_;
     cairns::SceneId secondary_scene_;  // P6 multi-scene coexistence test
 

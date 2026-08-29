@@ -204,12 +204,11 @@ inline void ComputeNodeWorldMatrices(const std::vector<Node>& nodes,
 // substring match against common animation names; falls back to clip 0
 // when no match. Returns -1 only when clips is empty. The user-curated
 // rule: prefer "walk", then "run", then first.
-template <typename ClipVec>
-inline int SelectWalkingClip(const ClipVec& clips) {
+inline int SelectWalkingClip(const std::vector<Clip>& clips) {
     if (clips.empty()) {
         return -1;
     }
-    auto contains_ci = [](std::string_view s, const char* needle) {
+    auto contains_ci = [](const std::string& s, const char* needle) {
         auto lower = [](char c) { return static_cast<char>(std::tolower(c)); };
         const size_t n = std::strlen(needle);
         if (s.size() < n) {
