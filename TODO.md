@@ -9,17 +9,35 @@ here.
 
 ## Active
 
-### #225 Unity-shaped rename pass
+### #225 Unity-shaped rename pass — COMPLETE (2026-06-13)
 Plan: `/Users/ivanamies/dev/plans/2026-06-13_gfx_unity-rename-225.md`.
-Phased, byte-gate green every commit.
-- [ ] **R-1** TODO.md extraction + WebGPU ladder (this file, this commit)
-- [ ] **R0** C++ `Scene` (GLB) → `Prefab` (~150 sites, ~10 symbol families)
-- [ ] **R1** C++ `World` → `Scene` (~100 sites, ~9 symbol families)
-- [ ] **R2** `LoadedMaterial`→`Material`, `SpawnHero`→`InstantiatePrefab`
-- [ ] **R3** NDJSON ops `cairns.world.*`→`cairns.scene.*` + deprecated `RegisterAlias`es
-- [ ] **R4** `studio_js.hpp` rewrite — `Prefab` / `Scene.instantiate` / `Prefabs.load` / `Editor.*`
-- [ ] **R5** `docs/studio_notes.md` ledger rewrite + smoke harness extension
-- [ ] **R6** `#226` stubs (`Editor.thumbnails` / `Editor.compose` / multi-camera `split`) throw "not wired yet"
+Byte-gate green every commit; studio_js smoke harness covers the new
+surface (9/9 on both backends).
+- [x] **R-1** TODO.md extraction + WebGPU ladder
+- [x] **R0** C++ `Scene` (GLB) → `Prefab` (~150 sites, 10 files)
+- [x] **R1** C++ `World` → `Scene` (~100 sites, 12 files)
+- [x] **R2** `LoadedMaterial`→`Material`, `SpawnHero`→`InstantiatePrefab`,
+              `NumScenes`→`NumPrefabs`
+- [x] **R3** NDJSON ops `cairns.world.*`→`cairns.scene.*` +
+              `cairns.asset.load`→`cairns.prefab.load` +
+              `cairns.viewport.setWorld`→`setScene`,
+              all legacy names register as RegisterAlias (one release)
+- [x] **R4** `studio_js.hpp` rewrite — `Prefab` / `Scene.instantiate` /
+              `Prefabs.{load,loadOne,list}` / `Editor.{scenes,newScene,
+              show,thumbnails,compose}`; `GameObject.scene` (new) +
+              `.world` deprecated alias
+- [x] **R5** `docs/studio_notes.md` rewritten: clone / new noun / refuse
+              bins (no "divergence ledger"); `scripts/_studio_js_smoke.js`
+              + `scripts/verify_studio_js.sh` (9 assertions)
+- [x] **R6** `#226` stubs throw "not wired yet (#226 CAP-N)"; comment
+              audit (multi-world → multi-scene, etc.)
+
+Below the wall: **#226** (the three engine capabilities behind the
+worked example) lives in its own plan — multi-camera per viewport,
+virtualized RT pool for `Editor.thumbnails`, multi-target composition
+pass for `Editor.compose`. Each is real rendering plumbing that moves
+pixels, needs its own goldens, and must NOT share commits with the
+rename.
 
 ### #270 Fix broken animations on Samsung S22 (vk release)
 Driven by `scripts/dev_drive.sh` post-#269 spawn flow. Spawn one prefab
