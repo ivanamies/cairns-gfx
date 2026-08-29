@@ -14,8 +14,10 @@
 #pragma once
 
 #include <functional>
+#include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "util/json.hpp"
 
@@ -35,15 +37,15 @@ class CommandRegistry {
 public:
     static CommandRegistry& Instance();
 
-    void Register(std::string name, json schema, std::string doc,
-                  std::function<json(const json&)> fn);
+    void Register(std::string&& name, json&& schema, std::string&& doc,
+                  std::function<json(const json&)>&& fn);
 
     // Register `alias` as a deprecated forwarder to `canonical`. Dispatching
     // the alias runs the canonical handler and decorates the response with
     // `_deprecated_alias_for: canonical`. ToolsList shows the alias with
     // deprecated:true + aliased_for:canonical. One-release alias policy --
     // legacy top-level op names redirect to their cairns.* canonical homes.
-    void RegisterAlias(std::string alias, std::string canonical);
+    void RegisterAlias(std::string&& alias, std::string&& canonical);
 
     // Returns a fully-formed response JSON ({"id":..., "ok":true/false, ...}).
     // Never throws; handler exceptions are caught and converted to error
@@ -64,9 +66,20 @@ public:
     // For tests / reset between sessions. Not threadsafe.
     void Clear();
 
+    // Event channel: any handler may publish a structured event. The
+    // transport drains the queue after each dispatch and writes one NDJSON
+    // line per event ({"event": <topic>, "data": {...}}). Today events are
+    // unconditional broadcasts -- subscribe semantics (per-topic filter,
+    // subscription ids) are a follow-up; clients can already drop frames by
+    // topic. Thread-safe so a render-thread handler can publish too.
+    void PublishEvent(std::string&& topic, json&& data);
+    std::vector<json> DrainEvents();
+
 private:
     CommandRegistry() = default;
     std::unordered_map<std::string, Command> commands_;
+    std::mutex events_m_;
+    std::vector<json> events_;
 };
 
 }  // namespace cairns::control

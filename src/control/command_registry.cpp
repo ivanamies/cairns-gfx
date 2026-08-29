@@ -12,13 +12,13 @@ CommandRegistry& CommandRegistry::Instance() {
     return registry;
 }
 
-void CommandRegistry::Register(std::string name, json schema, std::string doc,
-                               std::function<json(const json&)> fn) {
+void CommandRegistry::Register(std::string&& name, json&& schema, std::string&& doc,
+                               std::function<json(const json&)>&& fn) {
     commands_[std::move(name)] =
         Command{std::move(schema), std::move(doc), std::move(fn), {}};
 }
 
-void CommandRegistry::RegisterAlias(std::string alias, std::string canonical) {
+void CommandRegistry::RegisterAlias(std::string&& alias, std::string&& canonical) {
     auto canonical_copy = canonical;
     // Alias handler dispatches to the canonical op via the registry singleton.
     // Singleton lookup at call time (not capture) so a later registry rewire
@@ -209,6 +209,27 @@ json CommandRegistry::ToolsSearch(const std::string& query,
     return out;
 }
 
-void CommandRegistry::Clear() { commands_.clear(); }
+void CommandRegistry::Clear() {
+    commands_.clear();
+    {
+        std::lock_guard<std::mutex> lk(events_m_);
+        events_.clear();
+    }
+}
+
+void CommandRegistry::PublishEvent(std::string&& topic, json&& data) {
+    json env;
+    env["event"] = std::move(topic);
+    env["data"] = std::move(data);
+    std::lock_guard<std::mutex> lk(events_m_);
+    events_.push_back(std::move(env));
+}
+
+std::vector<json> CommandRegistry::DrainEvents() {
+    std::vector<json> out;
+    std::lock_guard<std::mutex> lk(events_m_);
+    out.swap(events_);
+    return out;
+}
 
 }  // namespace cairns::control

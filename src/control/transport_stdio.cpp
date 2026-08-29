@@ -28,6 +28,9 @@ void StdioTransport::Run(CommandRegistry& registry, std::istream& in,
         }
         const json resp = registry.Dispatch(req);
         out << resp.dump() << "\n";
+        for (const json& ev : registry.DrainEvents()) {
+            out << ev.dump() << "\n";
+        }
         out.flush();
         if (quit_flag && *quit_flag) {
             return;
