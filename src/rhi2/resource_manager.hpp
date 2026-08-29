@@ -33,6 +33,7 @@ namespace cairns::rhi2 {
 class ResourceManager;
 struct Buffer;
 struct Texture;
+struct Sampler;
 struct BindGroup;
 struct DynamicBuffers;
 
@@ -200,6 +201,15 @@ inline constexpr ShaderStage operator|(ShaderStage a, ShaderStage b) {
 
 enum class BufferKind : uint8_t { kUniform, kStorage };
 
+enum class Filter : uint8_t { kNearest, kLinear };
+
+enum class AddressMode : uint8_t {
+    kRepeat,
+    kMirroredRepeat,
+    kClampToEdge,
+    kClampToBorder,
+};
+
 struct Vector3I {
     int32_t x = 0;
     int32_t y = 0;
@@ -223,6 +233,16 @@ struct TextureDesc {
     TextureUsage usage = kTexUsageSampled;
     Memory memory = Memory::kDefault;
     Span<const uint8_t> initial_data;
+};
+
+struct SamplerDesc {
+    const char* debug_name = nullptr;
+    Filter mag_filter = Filter::kLinear;
+    Filter min_filter = Filter::kLinear;
+    Filter mip_filter = Filter::kLinear;
+    AddressMode address_mode = AddressMode::kRepeat;
+    float max_anisotropy = 0.0f;  // 0 => anisotropy disabled
+    float max_lod = 0.0f;
 };
 
 struct TextureBinding {
@@ -304,6 +324,15 @@ struct Texture {
     };
 };
 
+struct Sampler {
+    struct Hot {
+        void* api_sampler = nullptr;  // VkSampler / MTLSamplerState / WGPUSampler
+    };
+    struct Cold {
+        const char* debug_name = nullptr;
+    };
+};
+
 struct BindGroup {
     struct Hot {
         void* api_descriptor_set = nullptr;  // VkDescriptorSet / MTLArgumentBuffer / WGPUBindGroup
@@ -358,16 +387,19 @@ public:
 
     Handle<Buffer> CreateBuffer(const BufferDesc& desc);
     Handle<Texture> CreateTexture(const TextureDesc& desc);
+    Handle<Sampler> CreateSampler(const SamplerDesc& desc);
     Handle<BindGroup> CreateBindGroup(const BindGroupDesc& desc);
     Handle<DynamicBuffers> CreateDynamicBuffers(const DynamicBuffersDesc& desc);
 
     void Destroy(Handle<Buffer> h);
     void Destroy(Handle<Texture> h);
+    void Destroy(Handle<Sampler> h);
     void Destroy(Handle<BindGroup> h);
     void Destroy(Handle<DynamicBuffers> h);
 
     Buffer::Hot* GetHot(Handle<Buffer> h);
     Texture::Hot* GetHot(Handle<Texture> h);
+    Sampler::Hot* GetHot(Handle<Sampler> h);
     BindGroup::Hot* GetHot(Handle<BindGroup> h);
     DynamicBuffers::Hot* GetHot(Handle<DynamicBuffers> h);
 

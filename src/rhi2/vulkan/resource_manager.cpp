@@ -21,6 +21,7 @@ struct ResourceManager::Impl {
 
     Pool<Buffer> buffers;
     Pool<Texture> textures;
+    Pool<Sampler> samplers;
     Pool<BindGroup> bind_groups;
     Pool<DynamicBuffers> dynamic_buffers;
 
@@ -112,6 +113,23 @@ VkImageUsageFlags to_vk_image_usage(TextureUsage u) {
         f |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     }
     return f;
+}
+
+VkFilter to_vk_filter(Filter f) {
+    return f == Filter::kNearest ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+}
+
+VkSamplerAddressMode to_vk_address_mode(AddressMode m) {
+    switch (m) {
+        case AddressMode::kRepeat: return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        case AddressMode::kMirroredRepeat:
+            return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+        case AddressMode::kClampToEdge:
+            return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        case AddressMode::kClampToBorder:
+            return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+        default: return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    }
 }
 
 VkCommandBuffer begin_single_time(VkDevice device, VkCommandPool pool) {
@@ -453,6 +471,39 @@ Handle<Texture> ResourceManager::CreateTexture(const TextureDesc& d) {
     return h;
 }
 
+Handle<Sampler> ResourceManager::CreateSampler(const SamplerDesc& d) {
+    VkSamplerCreateInfo sci{};
+    sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sci.magFilter = to_vk_filter(d.mag_filter);
+    sci.minFilter = to_vk_filter(d.min_filter);
+    sci.mipmapMode = d.mip_filter == Filter::kNearest
+                         ? VK_SAMPLER_MIPMAP_MODE_NEAREST
+                         : VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    sci.addressModeU = to_vk_address_mode(d.address_mode);
+    sci.addressModeV = to_vk_address_mode(d.address_mode);
+    sci.addressModeW = to_vk_address_mode(d.address_mode);
+    sci.anisotropyEnable = d.max_anisotropy > 0.0f ? VK_TRUE : VK_FALSE;
+    sci.maxAnisotropy = d.max_anisotropy;
+    sci.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    sci.unnormalizedCoordinates = VK_FALSE;
+    sci.compareEnable = VK_FALSE;
+    sci.compareOp = VK_COMPARE_OP_ALWAYS;
+    sci.mipLodBias = 0.0f;
+    sci.minLod = 0.0f;
+    sci.maxLod = d.max_lod;
+
+    VkSampler sampler = VK_NULL_HANDLE;
+    if (vkCreateSampler(impl_->params.device, &sci, nullptr, &sampler) !=
+        VK_SUCCESS) {
+        return Handle<Sampler>::Null;
+    }
+
+    Handle<Sampler> h = impl_->samplers.Acquire();
+    impl_->samplers.GetHot(h)->api_sampler = sampler;
+    impl_->samplers.GetCold(h)->debug_name = d.debug_name;
+    return h;
+}
+
 Handle<BindGroup> ResourceManager::CreateBindGroup(const BindGroupDesc&) {
     return Handle<BindGroup>::Null;
 }
@@ -486,6 +537,18 @@ void ResourceManager::Destroy(Handle<Texture> h) {
     impl_->textures.Release(h);
 }
 
+void ResourceManager::Destroy(Handle<Sampler> h) {
+    Sampler::Hot* hot = impl_->samplers.GetHot(h);
+    if (!hot) {
+        return;
+    }
+    if (hot->api_sampler) {
+        vkDestroySampler(impl_->params.device,
+                         static_cast<VkSampler>(hot->api_sampler), nullptr);
+    }
+    impl_->samplers.Release(h);
+}
+
 void ResourceManager::Destroy(Handle<BindGroup> h) {
     impl_->bind_groups.Release(h);
 }
@@ -500,6 +563,10 @@ Buffer::Hot* ResourceManager::GetHot(Handle<Buffer> h) {
 
 Texture::Hot* ResourceManager::GetHot(Handle<Texture> h) {
     return impl_->textures.GetHot(h);
+}
+
+Sampler::Hot* ResourceManager::GetHot(Handle<Sampler> h) {
+    return impl_->samplers.GetHot(h);
 }
 
 BindGroup::Hot* ResourceManager::GetHot(Handle<BindGroup> h) {
