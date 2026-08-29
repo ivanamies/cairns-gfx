@@ -11,7 +11,7 @@
 #include <cstring>
 #include <string_view>
 
-#include <SDL3/SDL.h>
+#include "platform/platform.hpp"
 
 #include <fastgltf/glm_element_traits.hpp>
 #include <fastgltf/core.hpp>
@@ -618,13 +618,12 @@ inline bool LoadPrefabFromGltf(const std::filesystem::path& path,
     reseat(cold.materialToTextureIndex);
     reseat(cold.materialToSamplerIndex);
 
-    size_t byte_count = 0;
-    void* file_data = SDL_LoadFile(path.string().c_str(), &byte_count);
-    if (!file_data) return false;
+    std::string file_bytes;
+    if (!cairns::platform::ReadAsset(path, file_bytes)) return false;
     fastgltf::Parser parser;
     auto data = fastgltf::GltfDataBuffer::FromBytes(
-        static_cast<const std::byte*>(file_data), byte_count);
-    SDL_free(file_data);
+        reinterpret_cast<const std::byte*>(file_bytes.data()),
+        file_bytes.size());
     if (data.error() != fastgltf::Error::None) return false;
     auto assetRes = parser.loadGltfBinary(data.get(), path.parent_path(), fastgltf::Options::None);
     if (assetRes.error() != fastgltf::Error::None) return false;

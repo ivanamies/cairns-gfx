@@ -9,9 +9,8 @@
 #include <cstdio>
 
 #include <webgpu/webgpu.h>
-#ifndef __EMSCRIPTEN__
-#include <webgpu/wgpu.h>  // wgpu-native extensions (wgpuDevicePoll); not in the browser
-#endif
+
+#include "rhi/webgpu/native_compat.hpp"  // DrainGpu (wgpuDevicePoll wrapper)
 
 namespace cairns::rhi {
 
@@ -125,10 +124,7 @@ bool Device::InitSwapChain(SwapChain& sc, const InitConfig& cfg) {
 }
 
 void Device::WaitIdle() {
-#ifndef __EMSCRIPTEN__
-    if (plat.device) { wgpuDevicePoll(plat.device, true, nullptr); }
-#endif
-    // Browser: no blocking poll; the rAF loop + async callbacks drain work.
+    if (plat.device) { webgpu::DrainGpu(plat.device); }
 }
 
 }  // namespace cairns::rhi

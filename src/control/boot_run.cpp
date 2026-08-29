@@ -4,9 +4,8 @@
 #include <filesystem>
 #include <string>
 
-#include <SDL3/SDL.h>
-
 #include "control/command_registry.hpp"
+#include "platform/platform.hpp"
 #include "util/json.hpp"
 #include "util/log.hpp"
 #include "util/misc.hpp"
@@ -21,21 +20,12 @@ void RunBootScript(CommandRegistry& registry) {
             "the build's asset pipeline.\n");
         std::abort();
     }
-    SDL_IOStream* io = SDL_IOFromFile(path.string().c_str(), "rb");
-    if (!io) {
+    std::string code;
+    if (!cairns::platform::ReadAsset(path, code)) {
         CAIRNS_PRINT_ERR("[run.js] failed to open %s\n",
                           path.string().c_str());
         std::abort();
     }
-    const Sint64 size = SDL_GetIOSize(io);
-    std::string code;
-    if (size > 0) {
-        code.resize(static_cast<size_t>(size));
-        const size_t n =
-            SDL_ReadIO(io, code.data(), static_cast<size_t>(size));
-        code.resize(n);
-    }
-    SDL_CloseIO(io);
     if (code.empty()) {
         CAIRNS_PRINT_ERR("[run.js] %s is empty.\n", path.string().c_str());
         std::abort();

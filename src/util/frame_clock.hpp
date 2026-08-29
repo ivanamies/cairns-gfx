@@ -27,7 +27,7 @@
 
 #pragma once
 
-#include <SDL3/SDL.h>
+#include "platform/platform.hpp"
 
 #include <cstdint>
 
@@ -53,7 +53,7 @@ public:
 class WallClock final : public FrameClock {
 public:
     double Tick() override {
-        const uint64_t now = SDL_GetTicks();
+        const uint64_t now = cairns::platform::TicksMs();
         if (last_ms_ == 0) {
             last_ms_ = now;
             return 0.0;

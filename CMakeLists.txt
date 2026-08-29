@@ -176,6 +176,16 @@ if(APPLE)
       "-framework Security" "-framework CoreGraphics")
 endif()
 
+# ── emdawnwebgpu (browser WebGPU) ───────────────────────────────────────────
+# The Emscripten port = Dawn's webgpu.h header + a JS shim forwarding C calls to
+# navigator.gpu. Nothing of Dawn's implementation links into us (the impl is
+# Chrome's). Replaces wgpu_native for the WASM target; same v29 header dialect.
+if(EMSCRIPTEN)
+  add_library(wgpu_web INTERFACE)
+  target_compile_options(wgpu_web INTERFACE "--use-port=emdawnwebgpu")
+  target_link_options(wgpu_web INTERFACE "--use-port=emdawnwebgpu")
+endif()
+
 # W0 link smoke (off by default): proves the vendored lib + headers + frameworks
 # resolve and a GPU adapter is reachable.
 option(CAIRNS_BUILD_WGPU_SMOKE "Build the wgpu-native link smoke" OFF)
@@ -245,7 +255,11 @@ if (CAIRNS_GFX_BACKEND_VULKAN AND APPLE)
     target_link_libraries(cairns_render_thread PRIVATE Vulkan::Vulkan)
 endif()
 if (CAIRNS_GFX_BACKEND_WEBGPU)
-    target_link_libraries(cairns_render_thread PRIVATE wgpu_native)
+    if(EMSCRIPTEN)
+        target_link_libraries(cairns_render_thread PRIVATE wgpu_web)
+    else()
+        target_link_libraries(cairns_render_thread PRIVATE wgpu_native)
+    endif()
 endif()
 
 # =============================================================================
@@ -272,6 +286,7 @@ list(FILTER CAIRNS_CORE_SOURCES EXCLUDE REGEX "/src/control/")
 list(REMOVE_ITEM CAIRNS_CORE_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/serve_main.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/web/web_main.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/render/render_thread.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/util/worker_pool.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/control/command_registry.cpp"
@@ -336,7 +351,11 @@ endif()
 # framework deps via the wgpu_native INTERFACE target (which also adds the
 # webgpu.h include dir).
 if(CAIRNS_GFX_BACKEND_WEBGPU)
-    target_link_libraries(cairns_core PUBLIC wgpu_native)
+    if(EMSCRIPTEN)
+        target_link_libraries(cairns_core PUBLIC wgpu_web)
+    else()
+        target_link_libraries(cairns_core PUBLIC wgpu_native)
+    endif()
 endif()
 
 # Third-party link surface. SDL is PUBLIC for now (P0a) -- swap_chain.hpp and
@@ -392,6 +411,27 @@ endif()
 # on Web targets, we need CMake to generate a HTML webpage.
 if(EMSCRIPTEN)
     set(CMAKE_EXECUTABLE_SUFFIX ".html" CACHE INTERNAL "")
+endif()
+
+# =============================================================================
+# cairns_web -- the browser entry (WebGPU via emdawnwebgpu, no SDL). Renders the
+# scenarios into the offscreen final_target_ and copies it to the <canvas>; the
+# scene is driven from JS via window.cairns.dispatch -> the CommandRegistry.
+# =============================================================================
+if(EMSCRIPTEN AND CAIRNS_GFX_BACKEND_WEBGPU)
+    add_executable(cairns_web "${CMAKE_CURRENT_SOURCE_DIR}/src/web/web_main.cpp")
+    target_link_libraries(cairns_web PRIVATE cairns_core cairns_control wgpu_web)
+    target_compile_definitions(cairns_web PRIVATE CAIRNS_WEBGPU=1)
+    set_target_properties(cairns_web PROPERTIES SUFFIX ".html")
+    target_link_options(cairns_web PRIVATE
+        "-sENVIRONMENT=web"
+        "-sALLOW_MEMORY_GROWTH=1"
+        "-sINITIAL_MEMORY=268435456"            # 256 MB; engine reserves CPU blocks
+        "-sSTACK_SIZE=4MB"
+        "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString"
+        "-sASSERTIONS=1"
+        "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/src/web/shell.html"
+        "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/assets@/")
 endif()
 
 # =============================================================================

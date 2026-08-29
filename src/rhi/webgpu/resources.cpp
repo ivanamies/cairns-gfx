@@ -16,9 +16,7 @@
 #include <webgpu/webgpu.h>
 #include <cstdio>
 
-#ifndef __EMSCRIPTEN__
-#include <webgpu/wgpu.h>  // wgpuDevicePoll: wgpu-native only (headless readback)
-#endif
+#include "rhi/webgpu/native_compat.hpp"  // DrainGpu (wgpuDevicePoll wrapper)
 
 namespace cairns::rhi {
 
@@ -353,13 +351,11 @@ bool Resources::ReadBackTextureRgba(Handle<Texture> h, std::vector<uint8_t>& out
     mcb.callback = [](WGPUMapAsyncStatus, WGPUStringView, void* u1, void*) { *static_cast<bool*>(u1) = true; };
     mcb.userdata1 = &done;
     wgpuBufferMapAsync(buf, WGPUMapMode_Read, 0, bd.size, mcb);
-#ifndef __EMSCRIPTEN__
-    for (int i = 0; i < 4000 && !done; ++i) { wgpuDevicePoll(plat.device_, true, nullptr); }
-#else
-    // Browser: no blocking poll. In-process readback is unsupported here (the
-    // windowed path presents to the canvas; capture is via CDP screenshot).
-    (void)done;
-#endif
+    // Desktop: DrainGpu blocks until the map resolves. Browser: DrainGpu is a
+    // no-op (in-process readback is unsupported there -- the windowed path
+    // presents to the canvas; capture is via CDP screenshot), so `done` stays
+    // false and this returns false.
+    for (int i = 0; i < 4000 && !done; ++i) { webgpu::DrainGpu(plat.device_); }
     const uint8_t* data = static_cast<const uint8_t*>(wgpuBufferGetConstMappedRange(buf, 0, bd.size));
     if (!data) { wgpuBufferRelease(buf); return false; }
     out.resize(static_cast<size_t>(unpadded) * ht);
