@@ -367,8 +367,38 @@ Handle<Sampler> Resources::CreateSampler(const SamplerDesc& d) {
     return h;
 }
 
-Handle<BindGroup> Resources::CreateBindGroup(const BindGroupDesc&) {
-    return Handle<BindGroup>::Null;
+Handle<BindGroup> Resources::CreateBindGroup(const BindGroupDesc& desc) {
+    // set 2 = a small per-material argument buffer: texture @ id 0, sampler @ id 1.
+    auto* texArg = MTL::ArgumentDescriptor::alloc()->init();
+    texArg->setDataType(MTL::DataTypeTexture);
+    texArg->setIndex(0);
+    texArg->setAccess(MTL::ArgumentAccessReadOnly);
+    auto* sampArg = MTL::ArgumentDescriptor::alloc()->init();
+    sampArg->setDataType(MTL::DataTypeSampler);
+    sampArg->setIndex(1);
+    sampArg->setAccess(MTL::ArgumentAccessReadOnly);
+    NS::Array* args = NS::Array::array((NS::Object*[]){texArg, sampArg}, 2);
+    MTL::ArgumentEncoder* enc = device_->newArgumentEncoder(args);
+
+    MTL::Buffer* buf = device_->newBuffer(enc->encodedLength(),
+                                          MTL::ResourceStorageModeShared);
+    enc->setArgumentBuffer(buf, 0);
+    if (!desc.textures.empty()) {
+        enc->setTexture(textures.GetHot(desc.textures[0].texture)->api_view, 0);
+    }
+    if (!desc.samplers.empty()) {
+        enc->setSamplerState(samplers.GetHot(desc.samplers[0].sampler)->api_sampler, 1);
+    }
+    enc->release();
+    texArg->release();
+    sampArg->release();
+
+    Handle<BindGroup> h = bind_groups.Acquire();
+    BindGroup::Hot* hot = bind_groups.GetHot(h);
+    hot->api_descriptor_set = buf;
+    hot->arg_buf_offset = 0;
+    bind_groups.GetCold(h)->debug_name = desc.debug_name;
+    return h;
 }
 
 Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
