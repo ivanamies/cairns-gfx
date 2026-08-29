@@ -60,6 +60,8 @@ add_executable(cairns_spec_tests
     test_scene_ecs.cpp
     # G.2 render proxies
     test_render_proxies.cpp
+    # #195 multi-scene per-viewport draw fan-out (CarveSceneDrawRanges)
+    test_scene_draw_ranges.cpp
     # G.3 rhi cross-platform interfaces
     test_rhi_interfaces.cpp
     # G.4 rhi backend boot-cap / offset×16
@@ -115,8 +117,8 @@ option(CAIRNS_GFX_BUILD_GOLDEN_TESTS
     "Build cairns_golden_tests (links cairns_core; backend-selected)" OFF)
 if(CAIRNS_GFX_BUILD_GOLDEN_TESTS)
     add_executable(cairns_golden_tests
-        test_golden_ladder.cpp
         test_golden_scenarios.cpp
+        test_golden_stress.cpp
         test_seams.cpp
         test_refs.cpp
         test_md5.cpp)

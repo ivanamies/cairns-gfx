@@ -590,21 +590,27 @@ was the other half).
 
 ## Testing
 
-Two tiers:
+Everything builds and runs in **Release** by default (the root CMakeLists
+defaults `CMAKE_BUILD_TYPE=Release`; the spec target keeps asserts on via its
+own `-UNDEBUG`, so optimization + asserts coexist). Two tiers:
 
 - **Tier S — spec tests.** Pure CPU, no engine, no GPU. Build first, run in
-  milliseconds, identical on every platform via `ctest -L spec`. ~102
+  milliseconds, identical on every platform via `ctest -L spec`. ~105
   SCENARIOs covering the data-oriented core (allocators, frustum math,
   particle determinism, draw-key bit layout, render-graph scheduling,
-  scene ECS PODs, RHI descriptor PODs, threading SPSC invariants).
-- **Tier G — golden / divergence tests.** Hardware, four platforms.
-  Per-platform image refs + a small set of shared cross-platform
-  buffer/counter refs. The ladder (`test_golden_ladder.cpp`) is the
-  escalating baseline (7 rungs L1–L7); scenarios (`test_golden_scenarios.cpp`)
-  isolate specific subsystems (G1 particles, G2 hot reload, G3 two
-  viewports, G4 nested graph, G5 frustum cull, G6 imgui stability) on
-  top of a prerequisite rung. Image refs live under `tests/refs/` as
-  `{name}.f09.{platform}.imghash` (frame 9) and `.f55.imghash` (frame 55).
+  multi-scene per-viewport draw fan-out, scene ECS PODs, RHI descriptor PODs,
+  threading SPSC invariants).
+- **Tier G — golden / divergence tests.** Two categories, both per-platform
+  image refs + a few per-platform buffer/state refs:
+  - **`[scenarios]`** (`test_golden_scenarios.cpp`) — correctness. The rendered
+    subjects formerly called "the ladder" (triangle, one/two die, viking_room,
+    three static/animated champions) are now flat `[subject]` SCENARIOs, plus
+    the targeted subsystem scenarios (particles state-hash, hot reload, two
+    scenes/two heroes, nested graph, frustum cull, imgui stability).
+  - **`[stress]`** (`test_golden_stress.cpp`) — scale (100 distinct animated
+    champions). Heavy; kept out of `[scenarios]` so the fast pass stays fast.
+  Image refs live under `tests/refs/` as `{name}.f09.{platform}.imghash`
+  (frame 9) and `.f55.imghash` (frame 55).
 
 Plan and notes:
 - `dev/plans/2026-06-18_gfx_test-tech-tree-redo-phase-a-to-g.md` — the plan
@@ -670,13 +676,14 @@ alongside.
 cmake --build build/spec-mac-metal --target cairns_golden_tests -j
 ./build/spec-mac-metal/cairns_golden_tests --reporter compact
 
-# Filtered subsets:
-./build/spec-mac-metal/cairns_golden_tests "[ladder]"      # 7 rungs x 2 frames
-./build/spec-mac-metal/cairns_golden_tests "[scenarios]"   # 6 scenarios
-./build/spec-mac-metal/cairns_golden_tests "[particles]"   # G1 alone (avoids the [scenarios] G1/G6 flake)
+# Filtered subsets (binary lands under Release/ in a Release build dir):
+./build/spec-mac-metal/Release/cairns_golden_tests "[scenarios]"  # correctness
+./build/spec-mac-metal/Release/cairns_golden_tests "[stress]"     # 100 champs
+./build/spec-mac-metal/Release/cairns_golden_tests "[subject]"    # former ladder rungs only
+./build/spec-mac-metal/Release/cairns_golden_tests "[particles]"  # G1 state-hash alone
 
 # Same shape for vk:
-./build/spec-mac-vk/cairns_golden_tests --reporter compact
+./build/spec-mac-vk/Release/cairns_golden_tests --reporter compact
 ```
 
 ### Tier G — iOS simulator

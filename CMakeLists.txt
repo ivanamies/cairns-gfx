@@ -11,6 +11,14 @@ set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}" CACHE INTERNAL "")
 # Declare the project
 project(sdl-min)
 
+# Tests (and everything) build + run in Release by default. Single-config
+# generators (Ninja, Make) honor CMAKE_BUILD_TYPE; multi-config (Xcode, VS)
+# pick the config at build time via --config Release. The spec target keeps
+# asserts on via its own -UNDEBUG, so Release optimization + asserts coexist.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 if ((APPLE AND NOT CMAKE_SYSTEM_NAME MATCHES "Darwin") OR EMSCRIPTEN)
     set(BUILD_SHARED_LIBS OFF CACHE INTERNAL "")    # Disable shared builds on platforms where it does not make sense to use them
     set(SDL_SHARED OFF)

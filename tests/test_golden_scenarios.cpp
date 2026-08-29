@@ -16,10 +16,46 @@
 #include "engine_headless.hpp"
 #include "test_seams.hpp"
 #include "test_refs.hpp"
+#include "golden_subject.hpp"
 #include "util/hud_stats.hpp"
 
 namespace seam = cairns::test_seams;
 namespace refs = cairns::test_refs;
+
+// ---- Rendered-subject goldens (formerly the escalating "ladder"): each is one
+// scene captured to a per-platform image ref at frame 9 + frame 55. Now flat
+// SCENARIOs; the 100-actor scale workload lives in test_golden_stress.cpp. ----
+SCENARIO("subject: red triangle (pipeline + clear + one draw)",
+         "[scenarios][golden][subject]") {
+    cairns::golden::RunSubject("triangle", {}, 1, false, {0, 0, 3, 0, 0});
+}
+SCENARIO("subject: one die (single static textured mesh)",
+         "[scenarios][golden][subject]") {
+    cairns::golden::RunSubject("one_die", {"die.glb"}, 1, false,
+                               {0, 0, 4, 0, 0});
+}
+SCENARIO("subject: two dice (instancing / multiple draws)",
+         "[scenarios][golden][subject]") {
+    cairns::golden::RunSubject("two_die", {"die.glb"}, 2, false,
+                               {0, 0, 0, 0, 0});
+}
+SCENARIO("subject: viking room (UVs + depth)",
+         "[scenarios][golden][subject]") {
+    cairns::golden::RunSubject("viking_room", {"viking_room.glb"}, 1, false,
+                               {0, 0, 5, 0, 0});
+}
+SCENARIO("subject: three static champions (production-shape assets)",
+         "[scenarios][golden][subject]") {
+    cairns::golden::RunSubject("three_champ_static",
+                               {"ahri.glb", "akali.glb", "alistar.glb"}, 3,
+                               false, {0, 0, 0, 0, 0});
+}
+SCENARIO("subject: three animated champions (skinning path)",
+         "[scenarios][golden][subject]") {
+    cairns::golden::RunSubject("three_champ_anim",
+                               {"ahri.glb", "akali.glb", "alistar.glb"}, 3,
+                               true, {0, 0, 0, 0, 0});
+}
 
 // 1) PARTICLES -- VK-tutorial style compute particles. NO render output: the
 //    sim runs headless and we hash the particle STATE buffer (CPU-side
@@ -40,9 +76,15 @@ SCENARIO("particles simulate deterministically (no render, state hash)",
     }
     REQUIRE(!buf.empty());
     const std::string observed = seam::Md5Hex(buf);
-    const std::string ref = refs::LoadSkinRef("particles.state", observed);
+    // PER-PLATFORM, not shared: the seed positions use std::cos/std::sin
+    // (engine initParticles), whose last bits differ across build optimization
+    // (-O0 vs -O2) AND across GPU vendors in the sim -- so the state is not a
+    // bit-portable cross-platform invariant. It gets a per-platform ref like
+    // the rendered images.
+    const std::string ref =
+        refs::LoadImageRef("particles.state", seam::PlatformKey(), observed);
     if (ref.empty()) {
-        SKIP("bake shared particle state ref");
+        SKIP("bake particle state ref");
     }
     REQUIRE(observed == ref);
 }

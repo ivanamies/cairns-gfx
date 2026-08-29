@@ -116,7 +116,7 @@ bool AdvanceFrames(cairns::Engine& engine, uint32_t n) {
     return true;
 }
 
-bool BuildLadderScene(cairns::Engine& engine,
+bool BuildScene(cairns::Engine& engine,
                       const std::vector<std::string>& glbs,
                       uint32_t instances, bool animated) {
     EnsureImguiContextImpl();
@@ -171,7 +171,7 @@ bool BuildLadderScene(cairns::Engine& engine,
 
 bool SpawnGlbs(cairns::Engine& engine,
                const std::vector<std::string>& glbs, bool animated) {
-    return BuildLadderScene(engine, glbs,
+    return BuildScene(engine, glbs,
                             static_cast<uint32_t>(glbs.size()), animated);
 }
 

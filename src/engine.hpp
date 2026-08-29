@@ -58,6 +58,7 @@
 #include "scene/selection.hpp"
 #include "render/frame_packet.hpp"
 #include "render/render_extract.hpp"
+#include "render/scene_draw_ranges.hpp"  // #195 CarveSceneDrawRanges (spec-tested)
 #include "render/render_graph.hpp"
 #include "render/render_scene.hpp"
 #include "render/render_thread.hpp"
@@ -2812,13 +2813,24 @@ public:
             }
         }
         // #195: convert each scene's [mesh) range into its [draw) range via the
-        // prefix sum, so each viewport's sorted sub-span covers only its scene.
-        for (uint32_t k = 0; k < s.scene_ranges_count; ++k) {
-            PerSlot::SceneDrawRange& r = s.scene_ranges[k];
-            r.draw_lo = (r.mesh_lo < n_proxies) ? proxy_first_draw[r.mesh_lo]
-                                                : total_draws;
-            r.draw_hi = (r.mesh_hi < n_proxies) ? proxy_first_draw[r.mesh_hi]
-                                                : total_draws;
+        // shared, spec-tested CarveSceneDrawRanges, so each viewport's sorted
+        // sub-span covers only its own scene.
+        {
+            std::array<cairns::SceneDrawSpan, PerSlot::kMaxScenesPerSlot>
+                spans{};
+            for (uint32_t k = 0; k < s.scene_ranges_count; ++k) {
+                spans[k].mesh_lo = s.scene_ranges[k].mesh_lo;
+                spans[k].mesh_hi = s.scene_ranges[k].mesh_hi;
+            }
+            cairns::CarveSceneDrawRanges(
+                std::span<const uint32_t>(proxy_first_draw, n_proxies),
+                total_draws,
+                std::span<cairns::SceneDrawSpan>(spans.data(),
+                                                 s.scene_ranges_count));
+            for (uint32_t k = 0; k < s.scene_ranges_count; ++k) {
+                s.scene_ranges[k].draw_lo = spans[k].draw_lo;
+                s.scene_ranges[k].draw_hi = spans[k].draw_hi;
+            }
         }
 
         // #221 multithreaded fill. Each worker takes a disjoint proxy range

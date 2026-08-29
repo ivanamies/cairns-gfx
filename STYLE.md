@@ -10,6 +10,16 @@ All cairns namespaces are lower case. `cairns`, `cairns::rhi`,
 namespaces (e.g. `MTL`, `NS`, `CA`, `VK_*`, `ImGui`) keep their upstream
 casing.
 
+## Naming
+
+- **No ordinals in names.** Never `verbTwo`, `OpenSecondViewport`,
+  `secondary_scene_`, `SetupTwoSceneViewports`, `secondaryNoun`, `ThirdFoo`. A
+  name is ALWAYS the singular `verb`/`verbOne` or the general,
+  count/index-parameterized `verbN`. Adding an ordinal-named specialization
+  requires EXPLICIT permission. "Get it done" / "let's ship" is never a reason —
+  it always *costs* ship time, every single time. The composition belongs in JS
+  + a general function, not in bespoke C++.
+
 ## Banned constructs
 
 - **Default arguments.** Every parameter is explicit at every call site.

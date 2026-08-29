@@ -48,7 +48,7 @@ bool AdvanceFrames(cairns::Engine& engine, uint32_t n);
 // Compose a ladder scene from glb file names + instance count. Returns true
 // iff the requested entities are live. When `glbs` is empty, configures the
 // tiny_quad path (L1 triangle rung).
-bool BuildLadderScene(cairns::Engine& engine,
+bool BuildScene(cairns::Engine& engine,
                       const std::vector<std::string>& glbs,
                       uint32_t instances, bool animated);
 
