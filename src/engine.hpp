@@ -2800,7 +2800,74 @@ public:
         if (!wc) {
             return;
         }
-        auto view = wc->registry.view<const cairns::SkinRef>();
+        // #222 Phase S.3 step 2: cull skinned actors against the active
+        // viewport frustum. Extract 6 planes from view_proj (clip-space
+        // boundary planes mapped back: row3 ± rowK). Per-actor: transform
+        // bind-pose AABB corners by WorldTransform.world, pad by 1.5x for
+        // animation motion, test each plane. Skip the actor's anim_eval
+        // record AND skinning_compute batch when fully outside.
+        const glm::mat4& vp_for_cull =
+            s.pending_globals[active_viewport_index_].view_proj;
+        glm::vec4 cull_planes[6];
+        {
+            const glm::mat4 m = glm::transpose(vp_for_cull);
+            cull_planes[0] = m[3] + m[0];  // left
+            cull_planes[1] = m[3] - m[0];  // right
+            cull_planes[2] = m[3] + m[1];  // bottom
+            cull_planes[3] = m[3] - m[1];  // top
+            cull_planes[4] = m[3] + m[2];  // near (ZO)
+            cull_planes[5] = m[3] - m[2];  // far
+            for (int i = 0; i < 6; ++i) {
+                const float L = glm::length(glm::vec3(cull_planes[i]));
+                if (L > 0.0f) {
+                    cull_planes[i] /= L;
+                }
+            }
+        }
+        auto aabb_outside =
+            [&](const glm::vec3& mn, const glm::vec3& mx) -> bool {
+                for (int i = 0; i < 6; ++i) {
+                    const glm::vec3 n(cull_planes[i]);
+                    const float d = cull_planes[i].w;
+                    const glm::vec3 p(
+                        n.x >= 0.0f ? mx.x : mn.x,
+                        n.y >= 0.0f ? mx.y : mn.y,
+                        n.z >= 0.0f ? mx.z : mn.z);
+                    if (glm::dot(n, p) + d < 0.0f) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+        auto actor_world_aabb =
+            [&](const cairns::Mesh::Hot* mhot, const glm::mat4& world,
+                glm::vec3* out_min, glm::vec3* out_max) {
+                if (mhot->bind_aabb_min.x > mhot->bind_aabb_max.x) {
+                    *out_min = glm::vec3(-1.0e30f);
+                    *out_max = glm::vec3( 1.0e30f);
+                    return;
+                }
+                const glm::vec3 c =
+                    0.5f * (mhot->bind_aabb_min + mhot->bind_aabb_max);
+                const glm::vec3 h =
+                    1.5f * 0.5f * (mhot->bind_aabb_max - mhot->bind_aabb_min);
+                glm::vec3 wmin( 1.0e30f);
+                glm::vec3 wmax(-1.0e30f);
+                for (int i = 0; i < 8; ++i) {
+                    const glm::vec3 corner(
+                        c.x + ((i & 1) ? h.x : -h.x),
+                        c.y + ((i & 2) ? h.y : -h.y),
+                        c.z + ((i & 4) ? h.z : -h.z));
+                    const glm::vec4 wc4 = world * glm::vec4(corner, 1.0f);
+                    const glm::vec3 wc(wc4 / wc4.w);
+                    wmin = glm::min(wmin, wc);
+                    wmax = glm::max(wmax, wc);
+                }
+                *out_min = wmin;
+                *out_max = wmax;
+            };
+        auto view = wc->registry.view<const cairns::SkinRef,
+                                       const cairns::WorldTransform>();
 
         constexpr uint32_t kBucketCap = cairns::kMaxSkinnedMeshes;
         uint32_t* mesh_actor_count =
@@ -2818,6 +2885,17 @@ public:
             }
             if (sh->mesh.index >= kBucketCap) {
                 continue;
+            }
+            // #222 Phase S.3: frustum cull. Skip when fully outside.
+            const cairns::Mesh::Hot* mhot_c = meshes_.GetHot(sh->mesh);
+            if (mhot_c) {
+                const cairns::WorldTransform& wt =
+                    view.get<const cairns::WorldTransform>(e);
+                glm::vec3 wmn, wmx;
+                actor_world_aabb(mhot_c, wt.world, &wmn, &wmx);
+                if (aabb_outside(wmn, wmx)) {
+                    continue;
+                }
             }
             if (total_actors >= kAnimActorsCap) {
                 capped_this_frame = true;
@@ -2915,6 +2993,20 @@ public:
             }
             if (sh->gpu_scene_header_idx == UINT32_MAX) {
                 continue;
+            }
+            // #222 Phase S.3: frustum cull (must match count-pass test).
+            {
+                const cairns::Mesh::Hot* mhot_c =
+                    meshes_.GetHot(sh->mesh);
+                if (mhot_c) {
+                    const cairns::WorldTransform& wt =
+                        view.get<const cairns::WorldTransform>(e);
+                    glm::vec3 wmn, wmx;
+                    actor_world_aabb(mhot_c, wt.world, &wmn, &wmx);
+                    if (aabb_outside(wmn, wmx)) {
+                        continue;
+                    }
+                }
             }
             const uint32_t bi = bucket_remap[sh->mesh.index];
             if (bi == UINT32_MAX) {
