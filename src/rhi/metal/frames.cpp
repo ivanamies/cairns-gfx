@@ -18,7 +18,6 @@
 #include "rhi/command_recorder.hpp"
 #include "rhi/metal/command_recorder_impl.hpp"
 #include "rhi/metal/internal/frames_impl.hpp"
-#include "rhi/metal/internal/device_impl.hpp"
 
 namespace cairns::rhi {
 
@@ -29,8 +28,8 @@ bool Frames::Init(Device& device, Resources& resources) {
         return true;
     }
     impl_ = new Impl();
-    impl_->device = device.impl_->device;
-    impl_->queue = device.impl_->queue;
+    impl_->device = device.device_;
+    impl_->queue = device.queue_;
     impl_->res = &resources;
 
     impl_->frame_semaphore = dispatch_semaphore_create(kFramesInFlight);

@@ -13,7 +13,6 @@
 #include "rhi/allocator.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/metal/internal/resources_impl.hpp"
-#include "rhi/metal/internal/device_impl.hpp"
 #include "rhi/metal/internal/allocator_impl.hpp"
 
 namespace cairns::rhi {
@@ -92,8 +91,8 @@ bool Resources::Init(Device& device, Allocator& alloc) {
         return true;
     }
     impl_ = new Impl();
-    impl_->device = device.impl_->device;
-    impl_->queue = device.impl_->queue;
+    impl_->device = device.device_;
+    impl_->queue = device.queue_;
     impl_->alloc = &alloc;
     return true;
 }

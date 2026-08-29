@@ -10,7 +10,6 @@
 #include "rhi/device.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/metal/internal/allocator_impl.hpp"
-#include "rhi/metal/internal/device_impl.hpp"
 
 namespace cairns::rhi {
 
@@ -21,7 +20,7 @@ bool Allocator::Init(Device& device) {
         return true;
     }
     impl_ = new Impl();
-    return impl_->memory.Init(device.impl_->device);
+    return impl_->memory.Init(device.device_);
 }
 
 void Allocator::Deinit() {

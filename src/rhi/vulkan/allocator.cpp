@@ -13,7 +13,6 @@
 #include "rhi/device.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/vulkan/internal/allocator_impl.hpp"
-#include "rhi/vulkan/internal/device_impl.hpp"
 
 namespace cairns::rhi {
 
@@ -24,11 +23,11 @@ bool Allocator::Init(Device& device) {
         return true;
     }
     impl_ = new Impl();
-    if (!impl_->memory.Init(device.impl_->device, device.impl_->physical, false)) {
+    if (!impl_->memory.Init(device.device_, device.physical_, false)) {
         return false;
     }
     VkPhysicalDeviceProperties props;
-    vkGetPhysicalDeviceProperties(device.impl_->physical, &props);
+    vkGetPhysicalDeviceProperties(device.physical_, &props);
     impl_->uniform_align = std::max(
         1u, static_cast<uint32_t>(props.limits.minUniformBufferOffsetAlignment));
     impl_->storage_align = std::max(

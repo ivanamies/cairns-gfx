@@ -19,7 +19,6 @@
 
 #include "rhi/resource_manager.hpp"
 #include "rhi/device.hpp"
-#include "rhi/vulkan/internal/device_impl.hpp"
 #include "rhi/resources.hpp"
 #include "rhi/bindless.hpp"
 #include "rhi/vulkan/internal/bindless_impl.hpp"
@@ -67,7 +66,7 @@ bool Pipelines::Init(Device& device, Resources& resources, Bindless& bindless,
         return true;
     }
     impl_ = new Impl();
-    impl_->device = device.impl_->device;
+    impl_->device = device.device_;
     impl_->res = &resources;
     impl_->bindless = &bindless;
     impl_->frames = &frames;

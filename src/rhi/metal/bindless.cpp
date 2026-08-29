@@ -10,7 +10,6 @@
 #include "rhi/device.hpp"
 #include "rhi/resources.hpp"
 #include "rhi/metal/internal/bindless_impl.hpp"
-#include "rhi/metal/internal/device_impl.hpp"
 
 namespace cairns::rhi {
 
@@ -21,7 +20,7 @@ bool Bindless::Init(Device& device, Resources& resources) {
         return true;
     }
     impl_ = new Impl();
-    impl_->device = device.impl_->device;
+    impl_->device = device.device_;
     impl_->res = &resources;
     return true;
 }

@@ -20,7 +20,6 @@
 
 #include "rhi/resource_manager.hpp"
 #include "rhi/device.hpp"
-#include "rhi/metal/internal/device_impl.hpp"
 #include "rhi/resources.hpp"
 
 namespace cairns::rhi {
@@ -62,7 +61,7 @@ bool Pipelines::Init(Device& device, Resources& resources, Bindless& bindless,
         return true;
     }
     impl_ = new Impl();
-    impl_->device = device.impl_->device;
+    impl_->device = device.device_;
     impl_->res = &resources;
     return true;
 }

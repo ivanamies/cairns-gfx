@@ -2,13 +2,19 @@
 //
 // Platform device lifetime — the leaf of the rhi DAG. Owns the instance /
 // surface / physical+logical device / queues / command pool (Vulkan) or the
-// MTL::Device + command queue (Metal). No public platform-handle accessors:
-// cooperating rhi classes reach the handles via friendship + the per-backend
-// internal Impl header (rhi/{metal,vulkan}/internal/device_impl.hpp).
+// MTL::Device + command queue (Metal). Backend handles are PUBLIC members
+// (SwapChain-style, no pimpl); the GIANT-CAPS banner below is the access
+// contract that replaces the old friend list.
 
 #pragma once
 
 #include "util/define.hpp"
+
+#if CAIRNS_VULKAN
+#include <vulkan/vulkan.h>
+#elif CAIRNS_METAL
+#include <Metal/Metal.hpp>
+#endif
 
 struct SDL_Window;
 
@@ -23,23 +29,38 @@ public:
     Device(const Device&) = delete;
     Device& operator=(const Device&) = delete;
 
+    // CALLER: ENGINE.
     [[nodiscard]] bool Init(SDL_Window* window);
+    // CALLER: ENGINE.
     void Deinit();
-
-    // Neutral swapchain bring-up using the owned device objects.
+    // CALLER: ENGINE.
     [[nodiscard]] bool InitSwapChain(SwapChain& sc, SDL_Window* window);
 
-private:
-    friend class Allocator;
-    friend class Resources;
-    friend class Bindless;
-    friend struct SwapChain;
-    friend class Frames;
-    friend class Pipelines;
-    friend class CommandRecorder;
+    // ================= BACKEND HANDLES — INTERNAL RHI STATE ==================
+    // ACCESS: ALLOCATOR, RESOURCES, BINDLESS, FRAMES, PIPELINES (they mirror
+    // these during their Init). SWAPCHAIN gets them via InitSwapChain above.
+    // ENGINE MUST NOT TOUCH.
+    // =========================================================================
+#if CAIRNS_VULKAN
+    bool validation_enabled_ = false;
+    VkInstance instance_ = VK_NULL_HANDLE;
+    VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
+    VkSurfaceKHR surface_ = VK_NULL_HANDLE;
+    VkPhysicalDevice physical_ = VK_NULL_HANDLE;
+    VkDevice device_ = VK_NULL_HANDLE;
+    VkQueue graphics_queue_ = VK_NULL_HANDLE;
+    VkQueue compute_queue_ = VK_NULL_HANDLE;
+    VkQueue present_queue_ = VK_NULL_HANDLE;
+    VkCommandPool command_pool_ = VK_NULL_HANDLE;
+    uint32_t queue_family_index_ = 0;
+    VkSampleCountFlagBits msaa_samples_ = VK_SAMPLE_COUNT_1_BIT;
+#elif CAIRNS_METAL
+    MTL::Device* device_ = nullptr;
+    MTL::CommandQueue* queue_ = nullptr;
+#endif
 
-    struct Impl;
-    Impl* impl_ = nullptr;
+private:
+    bool inited_ = false;
 };
 
 }  // namespace cairns::rhi

@@ -22,7 +22,6 @@
 #include <vulkan/vulkan_beta.h>
 
 #include "rhi/device.hpp"
-#include "rhi/vulkan/internal/device_impl.hpp"
 #include "rhi/swap_chain.hpp"
 
 namespace cairns::rhi {
@@ -170,18 +169,17 @@ bool is_device_suitable(VkPhysicalDevice device, VkSurfaceKHR surface) {
 Device::~Device() { Deinit(); }
 
 bool Device::Init(SDL_Window* window) {
-    if (impl_) {
+    if (inited_) {
         return true;
     }
-    impl_ = new Impl();
 
 #ifdef NDEBUG
-    impl_->validation_enabled = false;
+    validation_enabled_ = false;
 #else
-    impl_->validation_enabled = true;
+    validation_enabled_ = true;
 #endif
-    if (impl_->validation_enabled && !check_validation_layer_support()) {
-        impl_->validation_enabled = false;
+    if (validation_enabled_ && !check_validation_layer_support()) {
+        validation_enabled_ = false;
     }
 
     {  // instance
@@ -196,7 +194,7 @@ bool Device::Init(SDL_Window* window) {
         uint32_t sdl_count = 0;
         const char* const* sdl_exts = SDL_Vulkan_GetInstanceExtensions(&sdl_count);
         std::vector<const char*> extensions(sdl_exts, sdl_exts + sdl_count);
-        if (impl_->validation_enabled) {
+        if (validation_enabled_) {
             extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         }
         extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
@@ -209,49 +207,49 @@ bool Device::Init(SDL_Window* window) {
         ci.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         ci.ppEnabledExtensionNames = extensions.data();
         VkDebugUtilsMessengerCreateInfoEXT dbg{};
-        if (impl_->validation_enabled) {
+        if (validation_enabled_) {
             ci.enabledLayerCount = static_cast<uint32_t>(kValidationLayers.size());
             ci.ppEnabledLayerNames = kValidationLayers.data();
             populate_debug_ci(dbg);
             ci.pNext = &dbg;
         }
-        if (vkCreateInstance(&ci, nullptr, &impl_->instance) != VK_SUCCESS) {
+        if (vkCreateInstance(&ci, nullptr, &instance_) != VK_SUCCESS) {
             return false;
         }
     }
 
-    if (impl_->validation_enabled) {  // debug messenger
+    if (validation_enabled_) {  // debug messenger
         VkDebugUtilsMessengerCreateInfoEXT ci{};
         populate_debug_ci(ci);
-        create_debug_messenger(impl_->instance, &ci, &impl_->debug_messenger);
+        create_debug_messenger(instance_, &ci, &debug_messenger_);
     }
 
-    if (!SDL_Vulkan_CreateSurface(window, impl_->instance, nullptr,
-                                  &impl_->surface)) {
+    if (!SDL_Vulkan_CreateSurface(window, instance_, nullptr,
+                                  &surface_)) {
         return false;
     }
 
     {  // physical device
         uint32_t count = 0;
-        vkEnumeratePhysicalDevices(impl_->instance, &count, nullptr);
+        vkEnumeratePhysicalDevices(instance_, &count, nullptr);
         if (count == 0) {
             return false;
         }
         std::vector<VkPhysicalDevice> devices(count);
-        vkEnumeratePhysicalDevices(impl_->instance, &count, devices.data());
+        vkEnumeratePhysicalDevices(instance_, &count, devices.data());
         for (VkPhysicalDevice d : devices) {
-            if (is_device_suitable(d, impl_->surface)) {
-                impl_->physical = d;
-                impl_->msaa_samples = max_usable_sample_count(d);
+            if (is_device_suitable(d, surface_)) {
+                physical_ = d;
+                msaa_samples_ = max_usable_sample_count(d);
                 break;
             }
         }
-        if (impl_->physical == VK_NULL_HANDLE) {
+        if (physical_ == VK_NULL_HANDLE) {
             return false;
         }
     }
 
-    QueueFamilies indices = find_queue_families(impl_->physical, impl_->surface);
+    QueueFamilies indices = find_queue_families(physical_, surface_);
 
     {  // logical device + queues
         std::set<uint32_t> unique = {indices.graphics_compute.value(),
@@ -290,21 +288,21 @@ bool Device::Init(SDL_Window* window) {
         ci.pNext = &features2;
         ci.enabledExtensionCount = static_cast<uint32_t>(kDeviceExtensions.size());
         ci.ppEnabledExtensionNames = kDeviceExtensions.data();
-        if (impl_->validation_enabled) {
+        if (validation_enabled_) {
             ci.enabledLayerCount = static_cast<uint32_t>(kValidationLayers.size());
             ci.ppEnabledLayerNames = kValidationLayers.data();
         }
-        if (vkCreateDevice(impl_->physical, &ci, nullptr, &impl_->device) !=
+        if (vkCreateDevice(physical_, &ci, nullptr, &device_) !=
             VK_SUCCESS) {
             return false;
         }
-        vkGetDeviceQueue(impl_->device, indices.graphics_compute.value(), 0,
-                         &impl_->graphics_queue);
-        vkGetDeviceQueue(impl_->device, indices.present.value(), 0,
-                         &impl_->present_queue);
-        vkGetDeviceQueue(impl_->device, indices.graphics_compute.value(), 0,
-                         &impl_->compute_queue);
-        impl_->queue_family_index = indices.graphics_compute.value();
+        vkGetDeviceQueue(device_, indices.graphics_compute.value(), 0,
+                         &graphics_queue_);
+        vkGetDeviceQueue(device_, indices.present.value(), 0,
+                         &present_queue_);
+        vkGetDeviceQueue(device_, indices.graphics_compute.value(), 0,
+                         &compute_queue_);
+        queue_family_index_ = indices.graphics_compute.value();
     }
 
     {  // command pool
@@ -312,44 +310,44 @@ bool Device::Init(SDL_Window* window) {
         ci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         ci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
         ci.queueFamilyIndex = indices.graphics_compute.value();
-        if (vkCreateCommandPool(impl_->device, &ci, nullptr,
-                                &impl_->command_pool) != VK_SUCCESS) {
+        if (vkCreateCommandPool(device_, &ci, nullptr,
+                                &command_pool_) != VK_SUCCESS) {
             return false;
         }
     }
 
+    inited_ = true;
     return true;
 }
 
 void Device::Deinit() {
-    if (!impl_) {
+    if (!inited_) {
         return;
     }
-    if (impl_->device != VK_NULL_HANDLE) {
-        vkDeviceWaitIdle(impl_->device);
+    if (device_ != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(device_);
     }
-    if (impl_->command_pool) {
-        vkDestroyCommandPool(impl_->device, impl_->command_pool, nullptr);
+    if (command_pool_) {
+        vkDestroyCommandPool(device_, command_pool_, nullptr);
     }
-    if (impl_->device) {
-        vkDestroyDevice(impl_->device, nullptr);
+    if (device_) {
+        vkDestroyDevice(device_, nullptr);
     }
-    if (impl_->validation_enabled && impl_->debug_messenger) {
-        destroy_debug_messenger(impl_->instance, impl_->debug_messenger);
+    if (validation_enabled_ && debug_messenger_) {
+        destroy_debug_messenger(instance_, debug_messenger_);
     }
-    if (impl_->surface) {
-        vkDestroySurfaceKHR(impl_->instance, impl_->surface, nullptr);
+    if (surface_) {
+        vkDestroySurfaceKHR(instance_, surface_, nullptr);
     }
-    if (impl_->instance) {
-        vkDestroyInstance(impl_->instance, nullptr);
+    if (instance_) {
+        vkDestroyInstance(instance_, nullptr);
     }
-    delete impl_;
-    impl_ = nullptr;
+    inited_ = false;
 }
 
 bool Device::InitSwapChain(SwapChain& sc, SDL_Window* window) {
-    return sc.Init(impl_->device, impl_->physical, impl_->surface, window,
-                   impl_->command_pool, impl_->graphics_queue, impl_->msaa_samples,
+    return sc.Init(device_, physical_, surface_, window,
+                   command_pool_, graphics_queue_, msaa_samples_,
                    true);
 }
 

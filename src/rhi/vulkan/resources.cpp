@@ -14,7 +14,6 @@
 #include "rhi/allocator.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/vulkan/internal/resources_impl.hpp"
-#include "rhi/vulkan/internal/device_impl.hpp"
 #include "rhi/vulkan/internal/allocator_impl.hpp"
 
 namespace cairns::rhi {
@@ -278,10 +277,10 @@ bool Resources::Init(Device& device, Allocator& alloc) {
         return true;
     }
     impl_ = new Impl();
-    impl_->device = device.impl_->device;
-    impl_->command_pool = device.impl_->command_pool;
-    impl_->queue = device.impl_->graphics_queue;
-    impl_->physical = device.impl_->physical;
+    impl_->device = device.device_;
+    impl_->command_pool = device.command_pool_;
+    impl_->queue = device.graphics_queue_;
+    impl_->physical = device.physical_;
     impl_->alloc = &alloc;
     return true;
 }

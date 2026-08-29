@@ -18,7 +18,6 @@
 #include "rhi/command_recorder.hpp"
 #include "rhi/vulkan/command_recorder_impl.hpp"
 #include "rhi/vulkan/internal/frames_impl.hpp"
-#include "rhi/vulkan/internal/device_impl.hpp"
 
 namespace cairns::rhi {
 
@@ -157,12 +156,12 @@ bool Frames::Init(Device& device, Resources& resources) {
         return true;
     }
     impl_ = new Impl();
-    impl_->device = device.impl_->device;
-    impl_->command_pool = device.impl_->command_pool;
-    impl_->physical = device.impl_->physical;
-    impl_->graphics_queue = device.impl_->graphics_queue;
-    impl_->compute_queue = device.impl_->compute_queue;
-    impl_->present_queue = device.impl_->present_queue;
+    impl_->device = device.device_;
+    impl_->command_pool = device.command_pool_;
+    impl_->physical = device.physical_;
+    impl_->graphics_queue = device.graphics_queue_;
+    impl_->compute_queue = device.compute_queue_;
+    impl_->present_queue = device.present_queue_;
     impl_->res = &resources;
 
     {  // per-frame command buffers + sync

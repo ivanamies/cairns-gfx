@@ -12,7 +12,6 @@
 #include <Metal/Metal.hpp>
 
 #include "rhi/device.hpp"
-#include "rhi/metal/internal/device_impl.hpp"
 #include "rhi/swap_chain.hpp"
 
 namespace cairns::rhi {
@@ -21,34 +20,33 @@ Device::~Device() { Deinit(); }
 
 bool Device::Init(SDL_Window* window) {
     (void)window;
-    if (impl_) {
+    if (inited_) {
         return true;
     }
-    impl_ = new Impl();
-    impl_->device = MTL::CreateSystemDefaultDevice();
-    if (!impl_->device) {
+    device_ = MTL::CreateSystemDefaultDevice();
+    if (!device_) {
         return false;
     }
-    impl_->queue = impl_->device->newCommandQueue();
-    return impl_->queue != nullptr;
+    queue_ = device_->newCommandQueue();
+    inited_ = (queue_ != nullptr);
+    return inited_;
 }
 
 void Device::Deinit() {
-    if (!impl_) {
+    if (!inited_) {
         return;
     }
-    if (impl_->queue) {
-        impl_->queue->release();
+    if (queue_) {
+        queue_->release();
     }
-    if (impl_->device) {
-        impl_->device->release();
+    if (device_) {
+        device_->release();
     }
-    delete impl_;
-    impl_ = nullptr;
+    inited_ = false;
 }
 
 bool Device::InitSwapChain(SwapChain& sc, SDL_Window* window) {
-    return sc.Init(impl_->device, window);
+    return sc.Init(device_, window);
 }
 
 }  // namespace cairns::rhi
