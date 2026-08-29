@@ -4,7 +4,7 @@
 
 #include "rhi/allocator.hpp"
 #include "rhi/resources.hpp"
-#include "rhi/swap_chain.hpp"
+#include "rhi/swap_resolve_target.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -415,7 +415,7 @@ bool RenderGraph::Bake() {
     return true;
 }
 
-bool RenderGraph::Execute(FrameContext& fc, SwapChain& sc) {
+bool RenderGraph::Execute(FrameContext& fc, const SwapResolveTarget& target) {
     PassResources res(&resolved_tex_, &resolved_buf_);
     for (uint32_t p : topo_order_) {
         PassRecord& pass = passes_[p];
@@ -433,12 +433,12 @@ bool RenderGraph::Execute(FrameContext& fc, SwapChain& sc) {
         if (pass.has_depth) {
             rp.depth = pass.baked_depth;
         }
-        rp.width = sc.Width();
-        rp.height = sc.Height();
+        rp.width = target.width;
+        rp.height = target.height;
         rp.input_textures = std::span<const Handle<Texture>>(
             pass.baked_inputs.data(), pass.baked_inputs.size());
         fc.cmd.PassTimerBegin(pass.name.c_str());
-        fc.cmd.BeginRenderPass(resources_, sc, rp);
+        fc.cmd.BeginRenderPass(resources_, target, rp);
         if (pass.execute) {
             pass.execute(fc.cmd, res);
         }

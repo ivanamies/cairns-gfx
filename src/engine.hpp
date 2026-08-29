@@ -148,6 +148,17 @@ public:
     uint32_t GetFinalTargetWidth() const { return final_target_w_; }
     uint32_t GetFinalTargetHeight() const { return final_target_h_; }
 
+    // Current logical frame dims. Windowed: tracks the swapchain. Surfaceless:
+    // tracks final_target_. Single source of truth for aspect / screen_params /
+    // ImGui DPI scaling -- all of which used to read swapchain_ directly and
+    // were wrong by construction in surfaceless mode.
+    uint32_t FrameWidth() const {
+        return final_target_.IsNull() ? swapchain_.Width() : final_target_w_;
+    }
+    uint32_t FrameHeight() const {
+        return final_target_.IsNull() ? swapchain_.Height() : final_target_h_;
+    }
+
     // Reallocate final_target_ at the new dimensions. Surfaceless mode only.
     bool ResizeFinalTarget(uint32_t w, uint32_t h) {
         if (final_target_.IsNull()) {
@@ -168,12 +179,12 @@ public:
         return !final_target_.IsNull();
     }
 
-    // Headless (cairns_serve) one-frame render: drives the windowed draw()
-    // path once. Swap pass writes into final_target_ instead of swapchain
-    // drawable (Frames + SwapChain headless mode set up in GreaterInit).
-    // Synchronous: render thread (if used) drained before return; the
-    // metal/vulkan Frames::End waitUntilCompleted's the dump path. Returns
-    // false if not surfaceless.
+    // Surfaceless (cairns_serve) one-frame render: drives the windowed draw()
+    // path once. Swap pass writes into final_target_; the engine builds a
+    // SwapResolveTarget with no drawable so Frames neither acquires a
+    // drawable nor presents one. Synchronous: render thread (if used)
+    // drained before return; the metal/vulkan Frames::End waitUntilCompleted's
+    // the render-to-texture path. Returns false if not surfaceless.
     bool RenderHeadlessFrame() {
         if (final_target_.IsNull()) {
             return false;
@@ -661,14 +672,12 @@ public:
             }
             world_proxies_.resize(2);  // secondary_world_ uses slot 1
         }
-        // P0.5: in surfaceless mode, allocate the offscreen final_target_,
-        // tell the SwapChain its (headless) size, tell Frames to route the
-        // swap-pass resolve into final_target_, and CONTINUE through the
-        // normal init flow. The engine's draw path is shared with the
-        // windowed app -- the only behavioral split is the swap pass writes
-        // into final_target_ instead of the swapchain drawable, and there's
-        // no NextDrawable / presentDrawable in headless. Replaces the
-        // earlier P1C clear-only short-circuit.
+        // Surfaceless mode: allocate the offscreen final_target_ and CONTINUE
+        // through normal init. The engine -- not the RHI -- is the one that
+        // decides which texture the swap pass writes into each frame: in
+        // surfaceless mode it builds a SwapResolveTarget pointing at
+        // final_target_; in windowed mode it pulls one out of swapchain_.
+        // SwapChain and Frames have no notion of "headless" mode.
         if (cfg.surfaceless) {
             final_target_w_ = cfg.width;
             final_target_h_ = cfg.height;
@@ -685,17 +694,10 @@ public:
                 CAIRNS_PRINT("GreaterInit: final_target_ create failed\n");
                 return false;
             }
-            swapchain_.SetHeadlessSize(cfg.width, cfg.height);
-#if CAIRNS_METAL
-            MTL::Texture* tex =
-                rhi_.resources.GetHot(final_target_)->api_view;
-            rhi_.frames.SetHeadlessSwapTarget(tex);
-#else
-            // vk headless full-scene render not yet wired -- Frames::Begin
-            // would call vkAcquireNextImageKHR with VK_NULL_HANDLE. Fall
-            // back to the earlier P1C clear-only short-circuit until the
-            // vk side of P0.5 lands (the render_pass + framebuffer +
-            // VkImageView surrogate for the swapchain image).
+#if !CAIRNS_METAL
+            // vk render-to-texture not yet wired (needs a render_pass +
+            // framebuffer over final_target_'s VkImageView, replacing the
+            // SwapChain ones). RenderHeadlessFrame falls back to a clear.
             return true;
 #endif
         }
@@ -703,7 +705,9 @@ public:
             CAIRNS_PRINT("GreaterInit: initRenderPipeline failed\n");
             return false;
         }
-        if ( !rhi_.frames.InitTargets(rhi_.resources, rhi_.alloc, swapchain_) ) {
+        const uint32_t init_w = cfg.surfaceless ? cfg.width : swapchain_.Width();
+        const uint32_t init_h = cfg.surfaceless ? cfg.height : swapchain_.Height();
+        if ( !rhi_.frames.InitTargets(rhi_.resources, rhi_.alloc, init_w, init_h) ) {
             CAIRNS_PRINT("GreaterInit: frames.InitTargets failed\n");
             return false;
         }
@@ -735,7 +739,7 @@ public:
 
         const glm::mat4 view_matrix = glm::lookAtRH(camera_pos, camera_pos + camera_dir, world_up);
 
-        const float aspect_ratio = (1.0f * swapchain_.Width()) / swapchain_.Height();
+        const float aspect_ratio = (1.0f * FrameWidth()) / FrameHeight();
         const float fov = 90 * (std::numbers::pi / 180.0f);
         const float near_z = 0.1f;
         const float far_z = 100.0f;
@@ -743,8 +747,8 @@ public:
         const glm::mat4 proj_matrix = glm::perspectiveRH_ZO(fov, aspect_ratio, near_z, far_z);
         const glm::mat4 view_proj = proj_matrix * view_matrix;
 
-        const float screen_width = swapchain_.Width();
-        const float screen_height = swapchain_.Height();
+        const float screen_width = FrameWidth();
+        const float screen_height = FrameHeight();
         s.pending_globals = cairns::rhi::RenderPassGlobals {
             .view_proj = view_proj,
             .inv_view_proj = glm::inverse(view_proj),
@@ -845,7 +849,7 @@ public:
         memcpy(gptr, &s.pending_globals, sizeof(s.pending_globals));
         if (frame_ <= 6) {
             const glm::mat4& vp = s.pending_globals.view_proj;
-            const float aspect_ratio = (1.0f * swapchain_.Width()) / swapchain_.Height();
+            const float aspect_ratio = (1.0f * FrameWidth()) / FrameHeight();
             size_t entity_count = 0;
             if (auto* wc = worlds_.GetCold(active_world_)) {
                 entity_count = wc->registry.storage<entt::entity>().size();
@@ -854,7 +858,7 @@ public:
                     "[FLAKE] frame=%u w=%u h=%u aspect=%.9f vp00=%.9f vp11=%.9f "
                     "vp22=%.9f vp32=%.9f goff=%u par_in=%u par_out=%u "
                     "entities=%zu meshes=%zu prims=%zu\n",
-                    frame_, swapchain_.Width(), swapchain_.Height(), aspect_ratio,
+                    frame_, FrameWidth(), FrameHeight(), aspect_ratio,
                     vp[0][0], vp[1][1], vp[2][2], vp[3][2],
                     s.globals_offset, pkt.particle_parity_in, pkt.particle_parity_out,
                     entity_count, s.proxies.meshes.size(),
@@ -1088,11 +1092,29 @@ public:
             CAIRNS_PRINT("============\n");
             CAIRNS_PRINT("draws %zu | %zu GLBs x %zu slices = %zu entities | resolution %u x %u\n",
                          s.drawList.size(), loaded, slices, entities,
-                         swapchain_.Width(), swapchain_.Height());
+                         FrameWidth(), FrameHeight());
             cairns::Timer::PrintReport();
             cairns::Timer::Reset();
         }
         return true;
+    }
+
+    // Pick the per-frame swap target. SwapChain and Frames are
+    // app-mode-agnostic -- the engine is the one place that knows which
+    // texture the swap pass writes into this frame.
+    rhi::SwapResolveTarget AcquireFrameSwapTarget() {
+        if (final_target_.IsNull()) {
+            return swapchain_.AcquireForFrame();
+        }
+#if CAIRNS_METAL
+        MTL::Texture* tex = rhi_.resources.GetHot(final_target_)->api_view;
+        return rhi::MakeSwapResolveTargetFromTexture(tex, final_target_w_,
+                                                       final_target_h_);
+#else
+        // vk render-to-texture not yet wired (#199); surfaceless mode bails
+        // before render_thread_ is created so this path isn't reached.
+        return rhi::SwapResolveTarget{};
+#endif
     }
 
     // Render-thread entry point (post commit 6). Today called synchronously
@@ -1119,7 +1141,11 @@ public:
             rhi_.frames.SetDumpPath(pkt.dump_path);
         }
 
-        rhi::FrameContext fc = rhi_.frames.Begin(rhi_.resources, rhi_.alloc, swapchain_);
+        // Engine -- not the RHI -- picks the per-frame swap target. Windowed:
+        // pull the next drawable from the SwapChain. Surfaceless: hand Frames
+        // the engine-owned offscreen, with no drawable so it doesn't present.
+        rhi::SwapResolveTarget swap_target = AcquireFrameSwapTarget();
+        rhi::FrameContext fc = rhi_.frames.Begin(rhi_.resources, rhi_.alloc, swap_target);
 
         cairns::Timer t_record("record", 2);
         EncodeDraws(pkt);
@@ -1145,8 +1171,8 @@ public:
         pd.vertex_count = kParticleCount;
 
         const float clear[4] = {41.0f / 255.0f, 42.0f / 255.0f, 48.0f / 255.0f, 1.0f};
-        const uint32_t fb_w = swapchain_.Width();
-        const uint32_t fb_h = swapchain_.Height();
+        const uint32_t fb_w = swap_target.width;
+        const uint32_t fb_h = swap_target.height;
 
         // pass 1: particle_sim kCompute. import the writer ssbo so prune keeps
         // it (external side effect -- game thread reads particle_parity_out).
@@ -1262,9 +1288,9 @@ public:
             });
 
         graph_->SetOutput(swap_tex);
-        if (!graph_->Bake() || !graph_->Execute(fc, swapchain_)) {
+        if (!graph_->Bake() || !graph_->Execute(fc, swap_target)) {
             t_record.End();
-            rhi_.frames.End(swapchain_, fc);
+            rhi_.frames.End(swap_target, fc);
             return;
         }
         if (frame_ <= 6) {
@@ -1278,7 +1304,7 @@ public:
                     pkt.sim_steps_this_frame);
         }
         t_record.End();
-        rhi_.frames.End(swapchain_, fc);
+        rhi_.frames.End(swap_target, fc);
     }
     
     bool initRenderPipeline() {
@@ -1496,7 +1522,7 @@ public:
             ImGuiIO& io = ImGui::GetIO();
             const float kRefWidth = 900.0f;
             const float raw_scale =
-                static_cast<float>(swapchain_.Width()) / kRefWidth;
+                static_cast<float>(FrameWidth()) / kRefWidth;
 #if CAIRNS_ANDROID
             const float kScaleMax = 2.5f;
 #elif CAIRNS_APPLE && TARGET_OS_IPHONE

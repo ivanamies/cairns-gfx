@@ -17,6 +17,7 @@
 #include "rhi/resources.hpp"
 #include "rhi/allocator.hpp"
 #include "rhi/swap_chain.hpp"
+#include "rhi/swap_resolve_target.hpp"
 #include "util/draw.hpp"
 #include "util/material_gpu.hpp"
 #include "util/render_pass_globals.hpp"
@@ -238,8 +239,9 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
     vkCmdDispatch(comp_, d.groups_x, d.groups_y, d.groups_z);
 }
 
-void CommandRecorder::BeginRenderPass(Resources& res, SwapChain& sc,
+void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& target,
                                       const RenderPassDesc& desc) {
+    SwapChain& sc = *target.swap_chain;
     if (pending_pass_idx_ != UINT32_MAX && pass_cb_ == VK_NULL_HANDLE) {
         pass_cb_ = gfx_;
         vkCmdWriteTimestamp(pass_cb_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,

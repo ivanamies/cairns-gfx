@@ -2,6 +2,7 @@
 
 #include "rhi/command_recorder.hpp"
 #include "rhi/resource_manager.hpp"
+#include "rhi/swap_resolve_target.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -12,7 +13,6 @@ namespace cairns::rhi {
 
 class Resources;
 class Allocator;
-struct SwapChain;
 class RenderGraph;
 
 struct GraphTexture {
@@ -97,7 +97,7 @@ public:
     void AddPass(const char* name, PassType type, SetupFn setup, ExecuteFn execute);
     void SetOutput(GraphTexture t);
     bool Bake();
-    bool Execute(FrameContext& fc, SwapChain& sc);
+    bool Execute(FrameContext& fc, const SwapResolveTarget& target);
 
     Handle<Texture> ResolveTexture(GraphTexture t) const;
     Handle<Buffer> ResolveBuffer(GraphBuffer b) const;

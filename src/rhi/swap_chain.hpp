@@ -8,6 +8,7 @@
 
 #include "util/define.hpp"
 #include "util/log.hpp"
+#include "rhi/swap_resolve_target.hpp"
 
 #if CAIRNS_VULKAN
 
@@ -25,8 +26,8 @@ namespace cairns::rhi {
 
 // Shell-provided getter for current window pixel dims; used during resize
 // (RecreateSwapChain / chooseSwapExtent). cairns_app fills this with a
-// SDL_GetWindowSizeInPixels wrapper. Headless mode never invokes it (no
-// surface, no SwapChain).
+// SDL_GetWindowSizeInPixels wrapper. A SwapChain is windowed by definition;
+// render-to-texture (cairns_serve) never constructs one.
 using WindowSizeFn = void (*)(void* user, int* w, int* h);
 
 struct SwapChain {
@@ -81,17 +82,18 @@ struct SwapChain {
     uint32_t Width() const { return swapChainExtent.width; }
     uint32_t Height() const { return swapChainExtent.height; }
 
-    // Headless mode entry: SwapChain::Init is skipped (no surface). Engine
-    // sets the dims directly so downstream Width()/Height() return valid
-    // values for MSAA target sizing. The vk render-pass path that needs a
-    // VkFramebuffer is not yet wired here -- vk cairns_serve full scene
-    // render is the next item; today only metal cairns_serve renders. This
-    // method exists so the build is symmetric across backends.
-    void SetHeadlessSize(uint32_t w, uint32_t h) {
-        swapChainExtent.width = w;
-        swapChainExtent.height = h;
+    // Per-frame swap-target acquire. Caller passes the returned value to
+    // Frames::Begin/End and RenderGraph::Execute. The actual
+    // vkAcquireNextImageKHR still happens inside Frames::Begin (needs the
+    // per-frame image-available semaphore); this just publishes the SwapChain
+    // pointer the rest of the pipeline binds against.
+    SwapResolveTarget AcquireForFrame() {
+        SwapResolveTarget t;
+        t.width = swapChainExtent.width;
+        t.height = swapChainExtent.height;
+        t.swap_chain = this;
+        return t;
     }
-    bool IsHeadless() const { return surface == VK_NULL_HANDLE; }
 
     void RecreateSwapChain() {
         int width = 0;
@@ -695,19 +697,8 @@ struct SwapChain {
 
     void Deinit() {}
 
-    // Headless mode entry: SwapChain::Init is skipped (no layer); engine
-    // sets the dims directly so downstream Width()/Height() return valid
-    // values for MSAA target sizing. metalLayer_ stays null; NextDrawable
-    // / GetDrawable still work in windowed mode.
-    void SetHeadlessSize(uint32_t width, uint32_t height) {
-        size_ = cairns::Size(width, height);
-    }
-    bool IsHeadless() const { return metalLayer_ == nullptr; }
-
     bool NextDrawable() {
         if (!metalLayer_) {
-            // Headless: no drawable; per-frame the swap-target override
-            // is what the render pass binds.
             return false;
         }
         metalDrawable_ = metalLayer_->nextDrawable();
@@ -715,6 +706,22 @@ struct SwapChain {
     }
 
     CA::MetalDrawable* GetDrawable() const { return metalDrawable_; }
+
+    // Per-frame swap-target acquire. Pulls the next drawable and returns a
+    // SwapResolveTarget describing the resolve texture + the drawable to
+    // present at Frames::End. The render-to-texture (cairns_serve) path does
+    // not construct a SwapChain at all -- it builds its SwapResolveTarget
+    // directly via MakeSwapResolveTargetFromTexture in
+    // rhi/swap_resolve_target.hpp.
+    SwapResolveTarget AcquireForFrame() {
+        NextDrawable();
+        SwapResolveTarget t;
+        t.width = size_.width;
+        t.height = size_.height;
+        t.drawable = metalDrawable_;
+        t.texture = metalDrawable_ ? metalDrawable_->texture() : nullptr;
+        return t;
+    }
 
     void SetDrawableSize(uint32_t width, uint32_t height) {
         size_ = cairns::Size(width, height);

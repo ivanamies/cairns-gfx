@@ -15,6 +15,7 @@
 #include "rhi/resources.hpp"
 #include "rhi/resource_manager.hpp"  // kFramesInFlight
 #include "rhi/swap_chain.hpp"
+#include "rhi/swap_resolve_target.hpp"
 #include "rhi/command_recorder.hpp"
 
 namespace cairns::rhi {
@@ -38,6 +39,32 @@ void make_render_targets(Resources& res, Allocator& alloc, uint32_t w, uint32_t 
     dd.usage = kTexUsageDepthTarget;
     dd.memory = Memory::kDefault;
     depth_out = res.CreateTexture(alloc, dd);
+}
+
+void init_render_pass_desc(MTL::RenderPassDescriptor*& rpd,
+                            MTL::Texture* msaa, MTL::Texture* depth,
+                            MTL::Texture* resolve) {
+    rpd = MTL::RenderPassDescriptor::alloc()->init();
+    MTL::RenderPassColorAttachmentDescriptor* color = rpd->colorAttachments()->object(0);
+    MTL::RenderPassDepthAttachmentDescriptor* d = rpd->depthAttachment();
+    color->setTexture(msaa);
+    color->setResolveTexture(resolve);
+    color->setLoadAction(MTL::LoadActionClear);
+    color->setClearColor(MTL::ClearColor(41.0f / 255.0f, 42.0f / 255.0f,
+                                          48.0f / 255.0f, 1.0));
+    color->setStoreAction(MTL::StoreActionMultisampleResolve);
+    d->setTexture(depth);
+    d->setLoadAction(MTL::LoadActionClear);
+    d->setStoreAction(MTL::StoreActionDontCare);
+    d->setClearDepth(1.0);
+}
+
+void update_render_pass_desc(MTL::RenderPassDescriptor* rpd,
+                              MTL::Texture* msaa, MTL::Texture* depth,
+                              MTL::Texture* resolve) {
+    rpd->colorAttachments()->object(0)->setTexture(msaa);
+    rpd->colorAttachments()->object(0)->setResolveTexture(resolve);
+    rpd->depthAttachment()->setTexture(depth);
 }
 
 }  // namespace
@@ -65,16 +92,19 @@ bool Frames::Init(Device& device) {
 
 // Metal MSAA/depth targets share the texture Pool index space with scene
 // textures; created after scene textures load (call post scene load).
-bool Frames::InitTargets(Resources& resources, Allocator& alloc, SwapChain& sc) {
-    make_render_targets(resources, alloc, sc.Width(), sc.Height(), msaa_handle_,
+bool Frames::InitTargets(Resources& resources, Allocator& alloc,
+                          uint32_t width, uint32_t height) {
+    make_render_targets(resources, alloc, width, height, msaa_handle_,
                         depth_handle_);
     if (msaa_handle_.IsNull() || depth_handle_.IsNull()) {
         return false;
     }
     MTL::Texture* msaa = resources.GetHot(msaa_handle_)->api_view;
     MTL::Texture* depth = resources.GetHot(depth_handle_)->api_view;
-    return InitRenderPassDescriptor(render_pass_desc_, msaa, depth, sc,
-                                     headless_swap_target_);
+    // Resolve target is bound per-frame in Begin() from the SwapResolveTarget;
+    // here we just allocate the descriptor with a null resolve attachment.
+    init_render_pass_desc(render_pass_desc_, msaa, depth, nullptr);
+    return true;
 }
 
 void Frames::Deinit() {
@@ -94,22 +124,13 @@ void Frames::SetDumpPath(const std::filesystem::path& path) {
     dump_path_ = path;
 }
 
-FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc) {
+FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
+                            const SwapResolveTarget& target) {
     dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(frame_semaphore_),
                             DISPATCH_TIME_FOREVER);
     resources.AdvanceFrame(alloc);  // bump ring reset
 
-    // Acquire the swap target -- drawable in windowed mode, final_target_
-    // in headless. The MSAA/depth resize check uses this target's dims.
-    MTL::Texture* swap_tex = nullptr;
-    if (headless_swap_target_) {
-        swap_tex = headless_swap_target_;
-    } else {
-        sc.NextDrawable();
-        if (sc.GetDrawable()) {
-            swap_tex = sc.GetDrawable()->texture();
-        }
-    }
+    MTL::Texture* swap_tex = target.texture;
     Texture::Hot* msaa_hot = resources.GetHot(msaa_handle_);
     if (swap_tex &&
         (!msaa_hot || msaa_hot->api_view->width() != swap_tex->width() ||
@@ -127,8 +148,7 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
     }
     MTL::Texture* msaa = resources.GetHot(msaa_handle_)->api_view;
     MTL::Texture* depth = resources.GetHot(depth_handle_)->api_view;
-    UpdateRenderPassDescriptor(render_pass_desc_, msaa, depth, sc,
-                                headless_swap_target_);
+    update_render_pass_desc(render_pass_desc_, msaa, depth, swap_tex);
 
     FrameContext fc;
     fc.frame_index = 0;
@@ -143,7 +163,7 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
     return fc;
 }
 
-void Frames::End(SwapChain& sc, FrameContext& fc) {
+void Frames::End(const SwapResolveTarget& target, FrameContext& fc) {
     CommandRecorder& ri = fc.cmd;
     if (ri.cmd_ != nullptr) {
         // Encoded work without a PassTimerEnd -- commit the orphan so the GPU
@@ -153,25 +173,21 @@ void Frames::End(SwapChain& sc, FrameContext& fc) {
     }
 
     MTL::CommandBuffer* term = queue_->commandBuffer();
+    MTL::Texture* swap_tex = target.texture;
+    CA::MetalDrawable* drawable = target.drawable;
 
-    // Pick the texture the swap pass wrote into: headless override or the
-    // swapchain drawable.
-    MTL::Texture* swapTex = headless_swap_target_
-        ? headless_swap_target_
-        : (sc.GetDrawable() ? sc.GetDrawable()->texture() : nullptr);
-
-    if (!dump_path_.empty() && swapTex) {
-        const NS::UInteger w = swapTex->width();
-        const NS::UInteger h = swapTex->height();
+    if (!dump_path_.empty() && swap_tex) {
+        const NS::UInteger w = swap_tex->width();
+        const NS::UInteger h = swap_tex->height();
         const NS::UInteger bytesPerRow = w * 4;
         const NS::UInteger bufSize = bytesPerRow * h;
         MTL::Buffer* readback = device_->newBuffer(bufSize, MTL::ResourceStorageModeShared);
         MTL::BlitCommandEncoder* blitEnc = term->blitCommandEncoder();
-        blitEnc->copyFromTexture(swapTex, 0, 0, MTL::Origin{0, 0, 0}, MTL::Size{w, h, 1},
+        blitEnc->copyFromTexture(swap_tex, 0, 0, MTL::Origin{0, 0, 0}, MTL::Size{w, h, 1},
                                  readback, 0, bytesPerRow, 0);
         blitEnc->endEncoding();
-        if (!headless_swap_target_) {
-            term->presentDrawable(sc.GetDrawable());
+        if (drawable) {
+            term->presentDrawable(drawable);
         }
         dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(frame_semaphore_);
         term->addCompletedHandler([sem](MTL::CommandBuffer*) { dispatch_semaphore_signal(sem); });
@@ -190,15 +206,15 @@ void Frames::End(SwapChain& sc, FrameContext& fc) {
         readback->release();
         dump_path_.clear();
     } else {
-        if (!headless_swap_target_ && sc.GetDrawable()) {
-            term->presentDrawable(sc.GetDrawable());
+        if (drawable) {
+            term->presentDrawable(drawable);
         }
         dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(frame_semaphore_);
         term->addCompletedHandler([sem](MTL::CommandBuffer*) { dispatch_semaphore_signal(sem); });
         term->commit();
-        if (headless_swap_target_) {
-            // Headless: synchronous so RenderHeadlessFrame returns after the
-            // dump's pixels are visible to a subsequent io.dumpTexture.
+        if (!drawable) {
+            // Render-to-texture: synchronous so a subsequent texture readback
+            // (e.g. io.dumpTexture) sees the dump's pixels.
             term->waitUntilCompleted();
         }
     }

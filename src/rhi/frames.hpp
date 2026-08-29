@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "rhi/command_recorder.hpp"  // FrameContext
+#include "rhi/swap_resolve_target.hpp"
 #if CAIRNS_VULKAN
 #include <vulkan/vulkan.h>
 #elif CAIRNS_METAL
@@ -43,36 +44,13 @@ public:
     // Metal: create MSAA/depth render targets + render-pass descriptor (called
     // after scene textures load). Vulkan: no-op (targets created in SwapChain).
     // CALLER: ENGINE.
-    [[nodiscard]] bool InitTargets(Resources& resources, Allocator& alloc, SwapChain& sc);
-
-    // Headless mode: the swap-pass resolve target is final_target_ rather
-    // than the swapchain drawable. Engine calls this once after final_target_
-    // is allocated. Subsequent Begin/End skip drawable acquisition + present.
-#if CAIRNS_METAL
-    void SetHeadlessSwapTarget(MTL::Texture* tex) { headless_swap_target_ = tex; }
-#elif CAIRNS_VULKAN
-    void SetHeadlessSwapTarget(VkImage img, VkImageView view, VkFormat fmt,
-                                uint32_t w, uint32_t h) {
-        headless_swap_image_ = img;
-        headless_swap_view_ = view;
-        headless_swap_format_ = fmt;
-        headless_swap_w_ = w;
-        headless_swap_h_ = h;
-    }
-#endif
-    bool IsHeadless() const {
-#if CAIRNS_METAL
-        return headless_swap_target_ != nullptr;
-#elif CAIRNS_VULKAN
-        return headless_swap_image_ != VK_NULL_HANDLE;
-#else
-        return false;
-#endif
-    }
+    [[nodiscard]] bool InitTargets(Resources& resources, Allocator& alloc,
+                                    uint32_t width, uint32_t height);
 
     // CALLER: ENGINE (per-frame draw loop).
-    FrameContext Begin(Resources& resources, Allocator& alloc, SwapChain& sc);
-    void End(SwapChain& sc, FrameContext& fc);
+    FrameContext Begin(Resources& resources, Allocator& alloc,
+                       const SwapResolveTarget& target);
+    void End(const SwapResolveTarget& target, FrameContext& fc);
 
     // Request a one-shot swapchain dump on the next End(). CALLER: ENGINE.
     void SetDumpPath(const std::filesystem::path& path);
@@ -126,14 +104,6 @@ public:
     MTL::DepthStencilState* depth_stencil_ = nullptr;
     Handle<Texture> msaa_handle_ = Handle<Texture>::Null;
     Handle<Texture> depth_handle_ = Handle<Texture>::Null;
-    MTL::Texture* headless_swap_target_ = nullptr;  // null in windowed mode
-#endif
-#if CAIRNS_VULKAN
-    VkImage headless_swap_image_ = VK_NULL_HANDLE;
-    VkImageView headless_swap_view_ = VK_NULL_HANDLE;
-    VkFormat headless_swap_format_ = VK_FORMAT_UNDEFINED;
-    uint32_t headless_swap_w_ = 0;
-    uint32_t headless_swap_h_ = 0;
 #endif
     std::filesystem::path dump_path_;
 

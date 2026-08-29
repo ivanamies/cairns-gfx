@@ -16,6 +16,7 @@
 #include "rhi/resources.hpp"
 #include "rhi/allocator.hpp"
 #include "rhi/swap_chain.hpp"
+#include "rhi/swap_resolve_target.hpp"
 #include "gpu_scene_registry.hpp"
 #include "util/draw.hpp"
 #include "util/timer.hpp"
@@ -50,7 +51,7 @@ static MTL::LoadAction to_mtl_load(LoadOp op) {
     return MTL::LoadActionClear;
 }
 
-void CommandRecorder::BeginRenderPass(Resources& res, SwapChain&,
+void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
                                       const RenderPassDesc& desc) {
     if (cmd_ == nullptr) {
         cmd_ = queue_->commandBuffer();

@@ -15,6 +15,7 @@
 #include "rhi/resources.hpp"
 #include "rhi/resource_manager.hpp"  // kFramesInFlight
 #include "rhi/swap_chain.hpp"
+#include "rhi/swap_resolve_target.hpp"
 #include "rhi/command_recorder.hpp"
 #include "util/timer.hpp"
 
@@ -379,7 +380,7 @@ bool Frames::Init(Device& device) {
     return true;
 }
 
-bool Frames::InitTargets(Resources&, Allocator&, SwapChain&) {
+bool Frames::InitTargets(Resources&, Allocator&, uint32_t, uint32_t) {
     // depth/MSAA/render-pass already created in sc.Init on Vulkan.
     return true;
 }
@@ -426,7 +427,12 @@ void Frames::SetDumpPath(const std::filesystem::path& path) {
     dump_path_ = path;
 }
 
-FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc) {
+FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
+                            const SwapResolveTarget& target) {
+    // vk path is window-bound today; target.swap_chain must be set. The
+    // render-to-texture vk path (future) will land alongside the metal
+    // shape and drop this assert.
+    SwapChain& sc = *target.swap_chain;
     const uint32_t cf = recorder_frame_;
     VkDevice dev = device_;
 
@@ -516,7 +522,8 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
     return fc;
 }
 
-void Frames::End(SwapChain& sc, FrameContext& fc) {
+void Frames::End(const SwapResolveTarget& target, FrameContext& fc) {
+    SwapChain& sc = *target.swap_chain;
     CommandRecorder& ri = fc.cmd;
     const uint32_t cf = fc.frame_index;
 

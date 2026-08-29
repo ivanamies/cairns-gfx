@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "rhi/resource_manager.hpp"
+#include "rhi/swap_resolve_target.hpp"
 #include "util/draw.hpp"
 #include "util/draw_key.hpp"
 #include "util/frame_clock.hpp"
@@ -134,7 +135,8 @@ struct OffscreenTargetCache {
 class CommandRecorder {
 public:
     void Dispatch(Resources& res, Allocator& alloc, const ComputeDispatch& d);
-    void BeginRenderPass(Resources& res, SwapChain& sc, const RenderPassDesc& desc);
+    void BeginRenderPass(Resources& res, const SwapResolveTarget& target,
+                          const RenderPassDesc& desc);
     void DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list);
     void DrawPoints(Resources& res, Allocator& alloc, const PointDraw& draw);
     void DrawFullscreen(Resources& res, Handle<Shader> pipeline,
