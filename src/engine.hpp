@@ -752,14 +752,52 @@ public:
         // current scene-load emplaces WorldTransform directly), then
         // extract. Extract composes node.globalTransform * (world *
         // root_transform).
-        {
-            cairns::World::Hot* wh = worlds_.GetHot(active_world_);
-            cairns::World::Cold* wc = worlds_.GetCold(active_world_);
-            if (wh && wc) {
-                wh->root_transform = rot_matrix;
-                cairns::PropagateTransforms(*wc, glm::mat4(1.0f));
+        // Fan-out: extract from EVERY world that any viewport binds to (set
+        // built from viewports_[].world; deduped via the worlds_ pool's
+        // contiguous slot indices). The active_world_'s extract result lives
+        // in s.proxies (the per-slot single draw list); secondary worlds'
+        // proxies land in world_proxies_[wh->proxy_slot] for downstream
+        // per-viewport draw consumers (#194 / #190's two-viewport path uses
+        // these). Today s.proxies still drives BuildMeshOpaqueDraws's draw
+        // list -- per-viewport draw fan-out lands when the multi-pass split
+        // does (depends on #206's per-pass globals being per-viewport too).
+        s.proxies.Clear();
+        for (int v = 0; v < kNumViewports; ++v) {
+            const cairns::WorldId wid = viewports_[v].world;
+            cairns::World::Hot* wh = worlds_.GetHot(wid);
+            cairns::World::Cold* wc = worlds_.GetCold(wid);
+            if (!wh || !wc) {
+                continue;
+            }
+            wh->root_transform = rot_matrix;
+            cairns::PropagateTransforms(*wc, glm::mat4(1.0f));
+            if (wid.index == active_world_.index) {
                 cairns::ExtractFromWorld(*wc, wh->root_transform, assets_,
                                          s.proxies);
+            } else {
+                if (wh->proxy_slot < world_proxies_.size()) {
+                    cairns::ExtractFromWorld(*wc, wh->root_transform, assets_,
+                                             world_proxies_[wh->proxy_slot]);
+                }
+            }
+        }
+        // Always extract active_world_ even if no viewport currently binds to
+        // it (legacy contract: BuildMeshOpaqueDraws consumes s.proxies).
+        if (cairns::World::Hot* wh_a = worlds_.GetHot(active_world_)) {
+            if (cairns::World::Cold* wc_a = worlds_.GetCold(active_world_)) {
+                bool already_extracted = false;
+                for (int v = 0; v < kNumViewports; ++v) {
+                    if (viewports_[v].world.index == active_world_.index) {
+                        already_extracted = true;
+                        break;
+                    }
+                }
+                if (!already_extracted) {
+                    wh_a->root_transform = rot_matrix;
+                    cairns::PropagateTransforms(*wc_a, glm::mat4(1.0f));
+                    cairns::ExtractFromWorld(*wc_a, wh_a->root_transform,
+                                             assets_, s.proxies);
+                }
             }
         }
 
