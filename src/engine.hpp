@@ -185,7 +185,7 @@ public:
                 }
             }
 
-            const int kHeroSlices = 66;
+            const int kHeroSlices = 33;
             const int loaded_heroes = static_cast<int>(glb_paths.size());
             const int instance_count =
                 std::getenv("CAIRNS_N") ? std::atoi(std::getenv("CAIRNS_N"))
