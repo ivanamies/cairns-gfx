@@ -1,4 +1,4 @@
-// rhi/webgpu/memory_allocator.cpp -- WebGPU backend (W3).
+// rhi/webgpu/memory_allocator.cpp -- WebGPU backend.
 // Persistent buffers are individual WGPUBuffers (wgpu owns the memory; no manual
 // heaps). The per-frame bump ring is a CPU staging block (WebGPU has no
 // persistent host-visible mapping); EndSubmit uploads it via queueWriteBuffer.

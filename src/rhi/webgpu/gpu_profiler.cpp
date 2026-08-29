@@ -1,4 +1,5 @@
-// rhi/webgpu/gpu_profiler.cpp -- WebGPU backend (no query pool; timing in W3+).
+// rhi/webgpu/gpu_profiler.cpp -- WebGPU backend: no query pool; GPU pass
+// timing is unwired here (CPU timer slots only -- see PERFORMANCE.md).
 #include "util/define.hpp"
 #if CAIRNS_WEBGPU
 

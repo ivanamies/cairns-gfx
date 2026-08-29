@@ -508,14 +508,14 @@ if (NOT ANDROID AND NOT IOS AND NOT EMSCRIPTEN)
     set(_cairns_serve_assets
         "run.js"                                 # mandatory boot script
         "unlit.vert.spv" "unlit.frag.spv"
-        "unlit_noid.frag.spv"                    # #222 Phase A.1
+        "unlit_noid.frag.spv"
         "particle.vert.spv" "particle.frag.spv" "particle.comp.spv"
         "imgui.vert.spv" "imgui.frag.spv"
         "composite_pip.vert.spv" "composite_pip.frag.spv"
         "depthviz.frag.spv"
-        "outline.vert.spv" "outline.frag.spv"  # #207
-        "skin.comp.spv"                          # #221 Phase 9
-        "anim_eval.comp.spv"                     # #221 Phase 5b
+        "outline.vert.spv" "outline.frag.spv"
+        "skin.comp.spv"
+        "anim_eval.comp.spv"
     )
     if (APPLE)
         # Metal needs the .metal source files (compile_metal_library reads
@@ -668,7 +668,7 @@ else()
     copy_helper("run.js")  # mandatory boot script
     copy_helper("unlit.vert.spv")
     copy_helper("unlit.frag.spv")
-    copy_helper("unlit_noid.frag.spv") # #222 Phase A.1
+    copy_helper("unlit_noid.frag.spv")
     copy_helper("particle.vert.spv")
     copy_helper("particle.frag.spv")
     copy_helper("particle.comp.spv")
@@ -677,10 +677,10 @@ else()
     copy_helper("composite_pip.vert.spv")
     copy_helper("composite_pip.frag.spv")
     copy_helper("depthviz.frag.spv")
-    copy_helper("outline.vert.spv")  # #207
+    copy_helper("outline.vert.spv")
     copy_helper("outline.frag.spv")
-    copy_helper("skin.comp.spv")     # #221 Phase 9
-    copy_helper("anim_eval.comp.spv") # #221 Phase 5b
+    copy_helper("skin.comp.spv")
+    copy_helper("anim_eval.comp.spv")
     # Scenario picker scripts -> assets/scripts. SDL_EnumerateDirectory finds
     # them via the AssetManager on Android (posix SDL_sysfsops -> AAssetDir).
     file(GLOB CAIRNS_SCENARIO_SCRIPTS CONFIGURE_DEPENDS

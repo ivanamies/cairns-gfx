@@ -1,5 +1,4 @@
-// rhi/webgpu/command_recorder.cpp -- WebGPU backend (W2 stubs; real recording
-// in W4: BeginRenderPass/DrawMeshes/EndRenderPass + DrawImGui).
+// rhi/webgpu/command_recorder.cpp -- WebGPU backend.
 #include "util/define.hpp"
 #if CAIRNS_WEBGPU
 

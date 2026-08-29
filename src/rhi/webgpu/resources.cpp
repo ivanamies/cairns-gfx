@@ -1,5 +1,5 @@
-// rhi/webgpu/resources.cpp -- WebGPU backend (W3: real buffer/texture create +
-// upload + readback; the rest stubbed pending W4/W5).
+// rhi/webgpu/resources.cpp -- WebGPU backend: buffer/texture create + upload +
+// readback.
 #include "util/define.hpp"
 #if CAIRNS_WEBGPU
 

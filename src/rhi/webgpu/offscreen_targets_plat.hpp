@@ -1,6 +1,6 @@
 // rhi/webgpu/offscreen_targets_plat.hpp
-// W2 STUB: empty OffscreenTargetsPlat so the cross-backend header resolves the webgpu arm.
-// Real members come with the rhi/webgpu/*.cpp implementations (W2/W3+).
+// Empty OffscreenTargetsPlat so the cross-backend header resolves; webgpu
+// keeps no extra per-target platform state.
 #pragma once
 
 #include <webgpu/webgpu.h>

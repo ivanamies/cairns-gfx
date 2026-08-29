@@ -1,4 +1,4 @@
-// rhi/webgpu/allocator.cpp -- WebGPU backend (W2 stubs; real bump ring in W3).
+// rhi/webgpu/allocator.cpp -- WebGPU backend.
 #include "util/define.hpp"
 #if CAIRNS_WEBGPU
 

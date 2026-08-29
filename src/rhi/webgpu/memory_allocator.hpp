@@ -3,8 +3,6 @@
 // PRIVATE to the WebGPU backend. Mirrors the metal allocator's contract: ONE
 // master WGPUBuffer for the bump path (kUpload/kDynamic/kReadback share regions,
 // kFramesInFlight slots inside each), blocks_[1+] hold per-resource heaps.
-// W2: declarations + stub bodies (in memory_allocator.cpp); real allocation
-// lands in W3.
 #pragma once
 
 #include "util/define.hpp"

@@ -83,17 +83,17 @@ run("global Instantiate refused", () => {
 });
 
 // ── Reserved stubs: unwired capabilities throw loud. ──
-run("Editor.thumbnails throws #226 CAP-2", () => {
+run("Editor.thumbnails throws (reserved stub)", () => {
     _assertThrows("Editor.thumbnails", () => Editor.thumbnails(),
-                   "#226 CAP-2");
+                   "virtualized RT pool not wired yet");
 });
-run("Editor.compose throws #226 CAP-3", () => {
+run("Editor.compose throws (reserved stub)", () => {
     _assertThrows("Editor.compose", () => Editor.compose(),
-                   "#226 CAP-3");
+                   "multi-target composition pass not wired yet");
 });
-run("Scene.addCamera throws #226 CAP-1", () => {
+run("Scene.addCamera throws (reserved stub)", () => {
     _assertThrows("Scene.addCamera", () => (new Scene(0)).addCamera(),
-                   "#226 CAP-1");
+                   "per-scene camera entities not wired yet");
 });
 
 JSON.stringify(results);

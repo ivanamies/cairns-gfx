@@ -1,10 +1,8 @@
-// rhi/webgpu/pipelines.cpp -- WebGPU backend.
-//
-// W4: WGSL render pipelines for the fullscreen passes (composite_pip).
-// W5: the unlit forward pass (unlit_offscreen_noid) -- vertex
-// streams + 3 bind groups (globals dyn-UBO @0, material tex+sampler @1, drawtmp
-// dyn-UBO @2). Other pipelines (the id MRT variant, particle, imgui) are still
-// stubbed; their consumers no-op. NEVER return Handle::Null (hangs GreaterInit).
+// rhi/webgpu/pipelines.cpp -- WebGPU backend. WGSL pipelines resolved by
+// Classify; a logical shader without a port gets a REAL handle with a null
+// PSO (its consumers no-op) -- NEVER return Handle::Null (hangs GreaterInit).
+// Forward pass: vertex streams + 3 bind groups (globals dyn-UBO @0, material
+// tex+sampler @1, drawtmp dyn-UBO @2).
 #include "util/define.hpp"
 #if CAIRNS_WEBGPU
 
@@ -299,7 +297,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(Resources& resources, Frames& f
     rpd.primitive.cullMode = ToWgpuCull(desc.cull);
     rpd.depthStencil = has_depth ? &ds : nullptr;
     // Headless graph targets are 1-sample (GraphTextureDesc.samples=1); MSAA
-    // sample_count only applies to the windowed swapchain (W6).
+    // sample_count only applies to a windowed swapchain pass.
     rpd.multisample.count = desc.swap_chain ? desc.sample_count : 1u;
     rpd.multisample.mask = 0xFFFFFFFFu;
     rpd.fragment = &frag;
