@@ -22,3 +22,6 @@
 [submodule "third_party/taskflow"]
 	path = third_party/taskflow
 	url = https://github.com/taskflow/taskflow.git
+[submodule "third_party/entt"]
+	path = third_party/entt
+	url = https://github.com/skypjack/entt

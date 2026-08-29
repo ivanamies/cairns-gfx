@@ -122,6 +122,7 @@ target_include_directories(cairns_render_thread PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_BINARY_DIR}/generated"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/taskflow"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/entt/single_include"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/glm")
 target_compile_features(cairns_render_thread PUBLIC cxx_std_20)
 target_compile_options(cairns_render_thread PRIVATE -Wall -Wextra)
@@ -142,6 +143,7 @@ target_include_directories(${EXECUTABLE_NAME} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/glm"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/taskflow"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/entt/single_include"
 )
 
 # on Web targets, we need CMake to generate a HTML webpage. 
