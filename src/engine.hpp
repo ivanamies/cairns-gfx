@@ -27,6 +27,7 @@
 #include "render/worker_context.hpp"
 #include "util/cpu_arena.hpp"
 #include "util/cpu_pool.hpp"  // #221 Phase 3: RangePool for skin_output_pool_.
+#include "util/chunk_allocator.hpp"  // #229 M0b: the one owning CPU block.
 #include "util/device_caps.hpp"  // boot-invariant + HUD/skin fit predicates
 #include "util/hud_stats.hpp"
 #include "util/animation_runtime.hpp"  // #221 Phase 9: SelectWalkingClip + sampler.
@@ -2070,6 +2071,10 @@ public:
     }
     
     bool initCpuAllocators() {
+        // #229 M0b: reserve the one CPU block up front (fail-loud, no silent
+        // malloc past budget). Sub-regions are carved from it in later phases.
+        const cairns::MemoryBudget mb = cairns::MemoryBudget::Default();
+        cpu_block_.InitReserved(mb.cpu_persistent_bytes);
         for (PerSlot& s : slots_) {
             s.arena_storage.assign(kArenaBytesPerSlot, 0);
             s.arena.Init(s.arena_storage.data(), kArenaBytesPerSlot);
@@ -5672,6 +5677,10 @@ private:
     // resize from data). Stored on PerSlot (the slot IS the lock).
     // Initialized in initCpuAllocators, Reset()'d at slot Acquire (render
     // thread already drained).
+    // #229 M0b: the single owning CPU memory block. All persistent + per-frame
+    // CPU state is carved from here (1 GB desktop / 256 MB mobile, fail-loud).
+    cairns::ChunkAllocator cpu_block_;
+
     static constexpr size_t kArenaBytesPerSlot = 16u * 1024u * 1024u;
 
     rhi::Rhi rhi_;

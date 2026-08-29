@@ -28,6 +28,12 @@
 namespace cairns {
 
 inline constexpr uint16_t kNoRegion = 0;
+// #229 M0b region tags: every block allocation carries one so the determinism
+// hash + diagnostics can attribute live bytes to a sub-region.
+inline constexpr uint16_t kRegionPersistent = 1;
+inline constexpr uint16_t kRegionFrame = 2;
+inline constexpr uint16_t kRegionLoadScratch = 3;
+inline constexpr uint16_t kRegionEcs = 4;
 
 class ChunkAllocator {
 public:
