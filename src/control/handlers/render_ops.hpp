@@ -13,6 +13,6 @@ namespace cairns::control {
 
 class CommandRegistry;
 
-void RegisterRenderOps(CommandRegistry& registry, cairns::Engine* engine);
+void RegisterRenderOps(CommandRegistry& registry, cairns::Engine& engine);
 
 }  // namespace cairns::control

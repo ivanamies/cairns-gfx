@@ -33,7 +33,7 @@
 int main() {
     auto& registry = cairns::control::CommandRegistry::Instance();
     bool quit = false;
-    cairns::control::RegisterLifecycleOps(registry, &quit);
+    cairns::control::RegisterLifecycleOps(registry, quit);
 
     // ImGui context is required by Engine::initRenderPipeline (font atlas
     // sizing reads ImGui::GetIO()). No SDL platform backend in headless mode
@@ -56,15 +56,20 @@ int main() {
     } else {
         std::fprintf(stderr, "[Engine] surfaceless GreaterInit ok.\n");
     }
-    cairns::control::RegisterRenderOps(registry, engine_ok ? engine : nullptr);
-    cairns::control::RegisterSceneOps(registry, engine_ok ? engine : nullptr);
-    cairns::control::RegisterPerfOps(registry, engine_ok ? engine : nullptr);
-    cairns::control::RegisterSelectionOps(registry, engine_ok ? engine : nullptr);
+    // Engine-bound op groups are only registered when init succeeded; on
+    // failure tools.list / tools.search omit them, callers get unknown_op
+    // (more informative than registering stubs that throw at call time).
+    if (engine_ok) {
+        cairns::control::RegisterRenderOps(registry, *engine);
+        cairns::control::RegisterSceneOps(registry, *engine);
+        cairns::control::RegisterPerfOps(registry, *engine);
+        cairns::control::RegisterSelectionOps(registry, *engine);
+    }
     // Script ops must come LAST so tools.list inside script.eval reflects
     // every other op already registered.
     cairns::control::RegisterScriptOps(registry);
 
-    cairns::control::StdioTransport::Run(registry, std::cin, std::cout, &quit);
+    cairns::control::StdioTransport::Run(registry, std::cin, std::cout, quit);
 
     if (engine_ok) {
         engine->deinit();

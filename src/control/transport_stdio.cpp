@@ -9,7 +9,7 @@
 namespace cairns::control {
 
 void StdioTransport::Run(CommandRegistry& registry, std::istream& in,
-                         std::ostream& out, bool* quit_flag) {
+                         std::ostream& out, bool& quit_flag) {
     std::string line;
     while (std::getline(in, line)) {
         if (line.empty()) {
@@ -32,7 +32,7 @@ void StdioTransport::Run(CommandRegistry& registry, std::istream& in,
             out << ev.dump() << "\n";
         }
         out.flush();
-        if (quit_flag && *quit_flag) {
+        if (quit_flag) {
             return;
         }
     }

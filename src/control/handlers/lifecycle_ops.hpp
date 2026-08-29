@@ -13,6 +13,6 @@ namespace cairns::control {
 
 class CommandRegistry;
 
-void RegisterLifecycleOps(CommandRegistry& registry, bool* quit_flag);
+void RegisterLifecycleOps(CommandRegistry& registry, bool& quit_flag);
 
 }  // namespace cairns::control

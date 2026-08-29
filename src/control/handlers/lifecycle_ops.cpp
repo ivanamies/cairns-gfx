@@ -12,7 +12,7 @@ constexpr const char* kProtocolVersion = "1";
 
 }  // namespace
 
-void RegisterLifecycleOps(CommandRegistry& registry, bool* quit_flag) {
+void RegisterLifecycleOps(CommandRegistry& registry, bool& quit_flag) {
     registry.Register(
         "cairns.app.ping",
         /*schema=*/json::object(),
@@ -35,10 +35,8 @@ void RegisterLifecycleOps(CommandRegistry& registry, bool* quit_flag) {
         /*schema=*/json::object(),
         /*doc=*/"Signals the transport loop to exit cleanly after the next "
                 "response is flushed.",
-        [quit_flag](const json&) -> json {
-            if (quit_flag) {
-                *quit_flag = true;
-            }
+        [quit = &quit_flag](const json&) -> json {
+            *quit = true;
             return {{"quitting", true}};
         });
     registry.RegisterAlias("app.quit", "cairns.app.quit");

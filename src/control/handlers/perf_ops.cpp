@@ -9,7 +9,7 @@
 
 namespace cairns::control {
 
-void RegisterPerfOps(CommandRegistry& registry, cairns::Engine* engine) {
+void RegisterPerfOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.perf.last",
         /*schema=*/json::object(),
@@ -47,11 +47,11 @@ void RegisterPerfOps(CommandRegistry& registry, cairns::Engine* engine) {
         /*schema=*/json::object(),
         /*doc=*/"Seed the engine RNG. Takes effect at next initParticles; "
                 "today not yet retroactive on the live particle SSBO.",
-        [engine](const json& args) -> json {
+        [engine = &engine](const json& args) -> json {
             const uint64_t n = args.value("n", uint64_t{42});
             const uint32_t n32 = static_cast<uint32_t>(n);
             cairns::headless::SetRandomSeed(engine, n32);
-            return {{"seed", n32}, {"engine_bound", engine != nullptr}};
+            return {{"seed", n32}, {"engine_bound", true}};
         });
 
     // time.set still a stub: FixedClock advancement isn't directly

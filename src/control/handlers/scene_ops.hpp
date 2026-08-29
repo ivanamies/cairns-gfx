@@ -17,6 +17,6 @@ namespace cairns::control {
 
 class CommandRegistry;
 
-void RegisterSceneOps(CommandRegistry& registry, cairns::Engine* engine);
+void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine);
 
 }  // namespace cairns::control

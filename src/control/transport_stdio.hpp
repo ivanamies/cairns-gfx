@@ -19,7 +19,7 @@ public:
     // Synchronous Run loop. Returns when stdin reaches EOF or quit_flag flips.
     // The handler for `app.quit` should flip a quit flag the caller passes in.
     static void Run(CommandRegistry& registry, std::istream& in,
-                    std::ostream& out, bool* quit_flag = nullptr);
+                    std::ostream& out, bool& quit_flag);
 };
 
 }  // namespace cairns::control

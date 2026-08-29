@@ -83,7 +83,7 @@ void EmitHighlightChanged(CommandRegistry& registry, cairns::Engine* engine) {
 
 }  // namespace
 
-void RegisterSelectionOps(CommandRegistry& registry, cairns::Engine* engine) {
+void RegisterSelectionOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.selection.set",
         /*schema=*/json::object(),
@@ -91,10 +91,7 @@ void RegisterSelectionOps(CommandRegistry& registry, cairns::Engine* engine) {
                 "or a single {type, id, world}. Type in {entity, material, draw}. "
                 "Bumps the selection revision; subscribers to cairns.selection.changed "
                 "see a new tick on the next emit.",
-        [engine, &registry](const json& args) -> json {
-            if (!engine) {
-                throw std::runtime_error("engine not initialized");
-            }
+        [engine = &engine, &registry](const json& args) -> json {
             cairns::headless::SetSelection(engine, ParseTargets(args));
             EmitSelectionChanged(registry, engine);
             return {{"revision", cairns::headless::GetSelectionRevision(engine)}};
@@ -105,10 +102,7 @@ void RegisterSelectionOps(CommandRegistry& registry, cairns::Engine* engine) {
         /*schema=*/json::object(),
         /*doc=*/"Add one target to the selection set (idempotent). args = "
                 "{type, id, world}.",
-        [engine, &registry](const json& args) -> json {
-            if (!engine) {
-                throw std::runtime_error("engine not initialized");
-            }
+        [engine = &engine, &registry](const json& args) -> json {
             const uint32_t prev = cairns::headless::GetSelectionRevision(engine);
             cairns::headless::AddSelection(engine, ParseTarget(args));
             const uint32_t now = cairns::headless::GetSelectionRevision(engine);
@@ -122,10 +116,7 @@ void RegisterSelectionOps(CommandRegistry& registry, cairns::Engine* engine) {
         "cairns.selection.remove",
         /*schema=*/json::object(),
         /*doc=*/"Remove one target from the selection set.",
-        [engine, &registry](const json& args) -> json {
-            if (!engine) {
-                throw std::runtime_error("engine not initialized");
-            }
+        [engine = &engine, &registry](const json& args) -> json {
             const uint32_t prev = cairns::headless::GetSelectionRevision(engine);
             cairns::headless::RemoveSelection(engine, ParseTarget(args));
             const uint32_t now = cairns::headless::GetSelectionRevision(engine);
@@ -139,10 +130,7 @@ void RegisterSelectionOps(CommandRegistry& registry, cairns::Engine* engine) {
         "cairns.selection.clear",
         /*schema=*/json::object(),
         /*doc=*/"Empty the selection set.",
-        [engine, &registry](const json&) -> json {
-            if (!engine) {
-                throw std::runtime_error("engine not initialized");
-            }
+        [engine = &engine, &registry](const json&) -> json {
             const uint32_t prev = cairns::headless::GetSelectionRevision(engine);
             cairns::headless::ClearSelection(engine);
             const uint32_t now = cairns::headless::GetSelectionRevision(engine);
@@ -156,10 +144,7 @@ void RegisterSelectionOps(CommandRegistry& registry, cairns::Engine* engine) {
         "cairns.selection.get",
         /*schema=*/json::object(),
         /*doc=*/"Read the current selection set + its revision counter.",
-        [engine](const json&) -> json {
-            if (!engine) {
-                throw std::runtime_error("engine not initialized");
-            }
+        [engine = &engine](const json&) -> json {
             return {{"targets", EncodeTargets(cairns::headless::GetSelection(engine))},
                     {"revision", cairns::headless::GetSelectionRevision(engine)}};
         });
@@ -171,10 +156,7 @@ void RegisterSelectionOps(CommandRegistry& registry, cairns::Engine* engine) {
                 "in the next render. Independent from the selection set; "
                 "the VLM agent may highlight everything matching a material "
                 "without selecting any of them.",
-        [engine, &registry](const json& args) -> json {
-            if (!engine) {
-                throw std::runtime_error("engine not initialized");
-            }
+        [engine = &engine, &registry](const json& args) -> json {
             cairns::headless::SetHighlights(engine, ParseTargets(args));
             EmitHighlightChanged(registry, engine);
             return json::object();
@@ -184,10 +166,7 @@ void RegisterSelectionOps(CommandRegistry& registry, cairns::Engine* engine) {
         "cairns.highlight.clear",
         /*schema=*/json::object(),
         /*doc=*/"Empty the highlight set.",
-        [engine, &registry](const json&) -> json {
-            if (!engine) {
-                throw std::runtime_error("engine not initialized");
-            }
+        [engine = &engine, &registry](const json&) -> json {
             cairns::headless::ClearHighlights(engine);
             EmitHighlightChanged(registry, engine);
             return json::object();
@@ -201,10 +180,7 @@ void RegisterSelectionOps(CommandRegistry& registry, cairns::Engine* engine) {
                 "a follow-up. Today returns {pending:true}; once the GPU side "
                 "lands, returns the resolved {type, id, world} of whatever was "
                 "rendered at that texel.",
-        [engine](const json& args) -> json {
-            if (!engine) {
-                throw std::runtime_error("engine not initialized");
-            }
+        [engine = &engine](const json& args) -> json {
             const int vp = static_cast<int>(args.value("viewport", int64_t{0}));
             const uint32_t x = static_cast<uint32_t>(args.value("x", uint64_t{0}));
             const uint32_t y = static_cast<uint32_t>(args.value("y", uint64_t{0}));

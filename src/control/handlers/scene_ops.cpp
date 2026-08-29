@@ -24,7 +24,7 @@ std::atomic<uint64_t> g_viewport_counter{0};
 
 }  // namespace
 
-void RegisterSceneOps(CommandRegistry& registry, cairns::Engine* engine) {
+void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.world.create",
         /*schema=*/json::object(),
@@ -86,7 +86,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine* engine) {
                 "binds the existing final_target_; future viewports get "
                 "their own offscreen targets when P2 wires per-viewport "
                 "extract.",
-        [engine](const json& args) -> json {
+        [engine = &engine](const json& args) -> json {
             const uint64_t vp = g_viewport_counter.fetch_add(1);
             const uint32_t w = args.value("w", cairns::headless::GetFinalTargetWidth(engine));
             const uint32_t h = args.value("h", cairns::headless::GetFinalTargetHeight(engine));
@@ -118,10 +118,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine* engine) {
         /*doc=*/"Reallocate final_target_ at the new dimensions. Real work "
                 "in headless mode; future windowed-mode wiring routes "
                 "through Engine::requestResizeFrameBuffer.",
-        [engine](const json& args) -> json {
-            if (!engine) {
-                throw std::runtime_error("engine not initialized");
-            }
+        [engine = &engine](const json& args) -> json {
             const uint64_t w64 = args.value("w", uint64_t{1280});
             const uint64_t h64 = args.value("h", uint64_t{720});
             const uint32_t w = static_cast<uint32_t>(w64);

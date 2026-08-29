@@ -132,14 +132,14 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     // Live agent transport setup (no-op unless CAIRNS_AGENT_STDIN is set).
     AppContext* app_ctx = static_cast<AppContext*>(*appstate);
     auto& registry = cairns::control::CommandRegistry::Instance();
-    cairns::control::RegisterLifecycleOps(registry, &app_ctx->agent_quit);
-    cairns::control::RegisterPerfOps(registry, engine);
+    cairns::control::RegisterLifecycleOps(registry, app_ctx->agent_quit);
+    cairns::control::RegisterPerfOps(registry, *engine);
     // Live agent surface (target="window" path on io.dumpTexture). render.frame
     // returns an error in windowed mode (windowed has its own draw loop;
     // there's nothing to "render once" through the registry).
-    cairns::control::RegisterRenderOps(registry, engine);
-    cairns::control::RegisterSceneOps(registry, engine);
-    cairns::control::RegisterSelectionOps(registry, engine);
+    cairns::control::RegisterRenderOps(registry, *engine);
+    cairns::control::RegisterSceneOps(registry, *engine);
+    cairns::control::RegisterSelectionOps(registry, *engine);
     app_ctx->agent_drain.Start(cairns::shell::AgentStdinEnabledFromEnv());
     if (app_ctx->agent_drain.Enabled()) {
         std::fprintf(stderr,

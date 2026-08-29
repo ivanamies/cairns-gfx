@@ -10,16 +10,13 @@
 
 namespace cairns::control {
 
-void RegisterRenderOps(CommandRegistry& registry, cairns::Engine* engine) {
+void RegisterRenderOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.render.frame",
         /*schema=*/json::object(),
         /*doc=*/"Render one frame to final_target_ (clear-only in P1C; scene "
                 "render once P2 wires it).",
-        [engine](const json&) -> json {
-            if (!engine) {
-                throw std::runtime_error("engine not initialized");
-            }
+        [engine = &engine](const json&) -> json {
             if (!cairns::headless::RenderFrame(engine)) {
                 throw std::runtime_error("RenderHeadlessFrame failed");
             }
@@ -31,10 +28,7 @@ void RegisterRenderOps(CommandRegistry& registry, cairns::Engine* engine) {
         /*schema=*/json::object(),
         /*doc=*/"Read back the named target to PNG. target='final' for now; "
                 "viewport:N / shadow:N / depth:N to follow.",
-        [engine](const json& args) -> json {
-            if (!engine) {
-                throw std::runtime_error("engine not initialized");
-            }
+        [engine = &engine](const json& args) -> json {
             const std::string target = args.value("target", std::string{"final"});
             const std::string path = args.value("path", std::string{});
             if (path.empty()) {
