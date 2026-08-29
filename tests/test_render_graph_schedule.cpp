@@ -170,3 +170,46 @@ SCENARIO("a second same-layout read after the flush is consumed is free",
                                      /*is_write=*/false, &e);
     REQUIRE_FALSE(need);
 }
+
+SCENARIO("WAR: a same-layout write after reads is execution-only",
+         "[spec][graph_barrier]") {
+    // Storage-image shape: write kGeneral, read kGeneral, write kGeneral.
+    PipelineEvent pe{};
+    BarrierEmit e{};
+    AccessResource(pe, cairns::rhi::kAccessShaderWrite,
+                   cairns::rhi::kPipeCompute, BarrierLayout::kGeneral,
+                   /*is_write=*/true, &e);
+    AccessResource(pe, cairns::rhi::kAccessShaderRead,
+                   cairns::rhi::kPipeFragment, BarrierLayout::kGeneral,
+                   /*is_write=*/false, &e);
+    const bool need = AccessResource(pe, cairns::rhi::kAccessShaderWrite,
+                                     cairns::rhi::kPipeCompute,
+                                     BarrierLayout::kGeneral,
+                                     /*is_write=*/true, &e);
+    REQUIRE(need);
+    // Readers flushed nothing: execution dependency only.
+    REQUIRE(e.src_access == cairns::rhi::kAccessNone);
+    REQUIRE((e.src_stage & cairns::rhi::kPipeFragment) != 0);
+}
+
+SCENARIO("WAR: readers accumulate and the write resets them",
+         "[spec][graph_barrier]") {
+    PipelineEvent pe{};
+    BarrierEmit e{};
+    AccessResource(pe, cairns::rhi::kAccessShaderWrite,
+                   cairns::rhi::kPipeCompute, BarrierLayout::kGeneral,
+                   /*is_write=*/true, &e);
+    AccessResource(pe, cairns::rhi::kAccessShaderRead,
+                   cairns::rhi::kPipeFragment, BarrierLayout::kGeneral,
+                   /*is_write=*/false, &e);
+    AccessResource(pe, cairns::rhi::kAccessShaderRead,
+                   cairns::rhi::kPipeVertex, BarrierLayout::kGeneral,
+                   /*is_write=*/false, &e);
+    AccessResource(pe, cairns::rhi::kAccessShaderWrite,
+                   cairns::rhi::kPipeCompute, BarrierLayout::kGeneral,
+                   /*is_write=*/true, &e);
+    REQUIRE((e.src_stage & cairns::rhi::kPipeFragment) != 0);
+    REQUIRE((e.src_stage & cairns::rhi::kPipeVertex) != 0);
+    // The write replaced the accumulation with its own stage.
+    REQUIRE(pe.src_stages == cairns::rhi::kPipeCompute);
+}

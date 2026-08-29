@@ -82,12 +82,16 @@ struct BarrierEmit {
 
 // One Granite invalidate/flush step over a resource's persistent event.
 // Returns true when an invalidate barrier must run before this access -- a
-// pending flush (RAW/WAW) or a layout change -- and fills *out. A read
-// consumes the pending flush; a write becomes the new pending flush.
+// pending flush (RAW/WAW), a layout change, or prior readers before a write
+// (WAR: Granite's read-as-a-flush-of-access-0, so the barrier is
+// execution-only, src_access == 0) -- and fills *out. A read consumes the
+// pending flush and joins src_stages; a write becomes the new pending flush
+// and resets the accumulation to its own stage.
 inline bool AccessResource(PipelineEvent& pe, uint32_t dst_access,
                            uint32_t dst_stage, BarrierLayout new_layout,
                            bool is_write, BarrierEmit* out) {
-    const bool need = (pe.to_flush_access != 0) || (pe.layout != new_layout);
+    const bool need = (pe.to_flush_access != 0) || (pe.layout != new_layout) ||
+                      (is_write && pe.src_stages != 0);
     if (need) {
         out->src_access = pe.to_flush_access;
         out->src_stage = pe.src_stages != 0
@@ -103,7 +107,8 @@ inline bool AccessResource(PipelineEvent& pe, uint32_t dst_access,
         pe.to_flush_access = dst_access;
         pe.src_stages = dst_stage;
     } else {
-        pe.to_flush_access = 0;  // the read consumed the pending flush
+        pe.to_flush_access = 0;         // the read consumed the pending flush
+        pe.src_stages |= dst_stage;     // fake flush: a later writer waits here
     }
     return need;
 }
