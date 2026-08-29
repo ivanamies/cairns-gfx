@@ -529,3 +529,14 @@ if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
     set(CPACK_GENERATOR "DragNDrop")
     include(CPack)
 endif()
+
+# ---- Tests -----------------------------------------------------------------
+# Off by default so device + Release-app builds aren't burdened with Catch2.
+# `cairns_spec_tests` is pure CPU (no engine link, no GPU); `cairns_golden_tests`
+# (under tests/CMakeLists.txt) links cairns_core and is opt-in via
+# -DCAIRNS_GFX_BUILD_GOLDEN_TESTS=ON.
+option(CAIRNS_GFX_BUILD_TESTS "Build the cairns-gfx test suite" OFF)
+if(CAIRNS_GFX_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
