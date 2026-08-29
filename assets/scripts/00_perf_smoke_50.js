@@ -5,4 +5,3 @@
 cairns.dispatch("cairns.prefab.loadBatch", { cursor: 0, count: 50 });
 cairns.dispatch("cairns.scene.instantiateGrid",
                 { first_prefab_idx: 0, prefab_count: 50 });
-cairns.dispatch("cairns.particles.enable", { on: true });

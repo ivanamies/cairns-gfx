@@ -3491,12 +3491,11 @@ cairns::SkinId Engine::TryCreateSkinForScene(cairns::PrefabId scene_id,
         }
         cairns::PoolSlice slice = skinning_.output_pool.Alloc(vert_count);
         if (!slice.IsValid()) {
-            CAIRNS_PRINT_ERR(
-                "[FATAL] skinning_.output_pool exhausted at 256 MB cap "
-                "(Adreno maxStorageBufferRange floor). vert_count=%u. "
-                "Reduce hero count or bake skin output offline.\n",
-                vert_count);
-            std::abort();
+            // #229: graceful, not fatal -- over-cap actors render in bind pose
+            // (the caller skips SkinRef on a Null skin) instead of aborting the
+            // whole app. 256 MB = Adreno maxStorageBufferRange floor.
+            return fail("skinning output pool exhausted (256 MB cap) -- "
+                        "actor falls back to bind pose");
         }
         cairns::SkinId sid = skinning_.skins.Acquire();
         cairns::Prefab::Hot* scene_hot = prefab_store_.prefabs.GetHot(scene_id);
@@ -3935,6 +3934,16 @@ uint32_t Engine::UnloadAllPrefabs() {
             render_thread_->Drain();
         }
         rhi_.device.WaitIdle();
+        // #229: free the per-actor skin slices + skin pool. TryCreateSkinForScene
+        // Alloc's an output_pool slice per actor and never Free's it (the Hot
+        // keeps only slice_offset, not the alloc metadata), and the skins
+        // ResourceManager grows one entry per actor -- so without this BOTH leak
+        // across scenario switches (perf_smoke_300 after a prior scene overflowed
+        // the 256 MB pool -> abort). Safe here: render thread drained + WaitIdle
+        // above, and the caller clears the scene before UnloadAllPrefabs so no
+        // live SkinRef remains (a stale one resolves to a null skin -> bind pose).
+        skinning_.skins.Clear();
+        skinning_.output_pool.Reset();
         for (cairns::PrefabId pid : prefab_store_.prefab_ids) {
             cairns::Prefab::Hot* phot = prefab_store_.prefabs.GetHot(pid);
             cairns::Prefab::Cold* pcold = prefab_store_.prefabs.GetCold(pid);

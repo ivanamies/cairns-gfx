@@ -93,6 +93,21 @@ public:
         freelist_[freelist_count_++] = h.index;
     }
 
+    // #229: recycle every live slot back to empty, reusing the backing (no
+    // realloc). Bumps generations so any outstanding handle goes dead, and
+    // re-default-constructs each slot so a later size_++ Acquire (which assumes
+    // Reserve-fresh slots) sees clean state. Teardown-only: no live Handle may
+    // be dereferenced afterward.
+    void Clear() {
+        for (uint32_t i = 0; i < size_; ++i) {
+            hot_[i] = typename T::Hot{};
+            cold_[i] = typename T::Cold{};
+            ++generation_[i];
+        }
+        size_ = 0;
+        freelist_count_ = 0;
+    }
+
     typename T::Hot* GetHot(Handle<T> h) {
         if (h.index >= size_ || generation_[h.index] != h.generation) {
             return nullptr;

@@ -53,7 +53,11 @@ struct ScenarioLauncher {
 
     // Drawn inside the engine's HUD imgui frame (panel hook).
     void Draw() {
-        ImGui::SetNextWindowPos(ImVec2(20.0f, 200.0f), ImGuiCond_FirstUseEver);
+        // #229: top-right, clear of the HUD (top-left). Pivot (1,0) anchors the
+        // window's top-right corner so it never clips regardless of window size.
+        const ImVec2 disp = ImGui::GetIO().DisplaySize;
+        ImGui::SetNextWindowPos(ImVec2(disp.x - 16.0f, 16.0f),
+                                ImGuiCond_FirstUseEver, ImVec2(1.0f, 0.0f));
         ImGui::Begin("Scenarios");
         if (scripts.empty()) {
             ImGui::TextUnformatted("(no scripts/*.js found next to the app)");

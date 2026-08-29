@@ -6,4 +6,3 @@ for (let k = 0; k < 3; ++k) {
     cairns.dispatch("cairns.scene.instantiateGrid",
                     { first_prefab_idx: 0, prefab_count: 100 });
 }
-cairns.dispatch("cairns.particles.enable", { on: true });

@@ -863,9 +863,10 @@ SCENARIO("scenario picker renders clean: picker only, no HUD/particles/depth",
         const size_t i = (static_cast<size_t>(y) * w + x) * 4;
         return static_cast<int>(rgba[i]) + rgba[i + 1] + rgba[i + 2];
     };
-    // The "Scenarios" window sits at ~(20,200), ~260x105 px; box it with margin.
+    // The "Scenarios" window anchors top-RIGHT (pivot 1,0 at display.x-16, 16),
+    // ~256x105 px in this 512 frame -> ~x[240,496], y[16,122]. Box with margin.
     auto in_picker = [](uint32_t x, uint32_t y) -> bool {
-        return x >= 15 && x <= 292 && y >= 195 && y <= 312;
+        return x >= 230 && x <= 500 && y >= 8 && y <= 132;
     };
     int picker_bright = 0;   // (1) picker drew: bright text/buttons in its box
     int stray_bright = 0;    // (2) HUD / (3) particle / (4) depth-PIP pixels land

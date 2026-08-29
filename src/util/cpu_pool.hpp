@@ -47,6 +47,15 @@ struct RangePool {
     void Init(uint32_t capacity_units, uint32_t max_allocs = 64 * 1024) {
         alloc_ = OffsetAllocator::Allocator(capacity_units, max_allocs);
         capacity_units_ = capacity_units;
+        max_allocs_ = max_allocs;
+    }
+
+    // #229: free every outstanding slice at once, reusing the same capacity.
+    // Safe only at a teardown point where no live PoolSlice is subsequently
+    // Free'd or dereferenced (e.g. after the render thread is drained and all
+    // owning actors are gone).
+    void Reset() {
+        alloc_ = OffsetAllocator::Allocator(capacity_units_, max_allocs_);
     }
 
     // Returns an invalid slice (check IsValid()) when the pool is full; the
@@ -70,6 +79,7 @@ struct RangePool {
 private:
     OffsetAllocator::Allocator alloc_;
     uint32_t capacity_units_ = 0;
+    uint32_t max_allocs_ = 64 * 1024;
 };
 
 // CPU-backed persistent pool: owns a typed slab and hands out pointers whose
