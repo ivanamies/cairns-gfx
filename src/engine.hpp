@@ -36,8 +36,11 @@
 #include "rhi/rhi.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/command_recorder.hpp"
+#include <memory>
+
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
+#include "util/frame_clock.hpp"
 
 namespace cairns {
 
@@ -105,6 +108,17 @@ public:
     }
     
     bool GreaterInit(SDL_Window* window) {
+        // Golden capture (headless byte-gate) auto-engages a FixedClock so the sim
+        // is deterministic; live runs use a real WallClock. srand pinned for
+        // reproducible particle spawn.
+        golden_ = std::getenv("CAIRNS_DUMP") != nullptr;
+        if (golden_) {
+            clock_.reset(new cairns::FixedClock(kFixedDt));
+        } else {
+            clock_.reset(new cairns::WallClock());
+        }
+        srand(42);
+
         // these initializations are wrong.
         // there is a dependency graph
         // alloc gpu mem -> upload cpu to gpu mem -> draw on gpu
@@ -263,12 +277,8 @@ public:
         drawList_.clear();
         drawListSorted_.clear();
         
-        const char* freeze_rot = std::getenv("CAIRNS_FREEZE_ROT");
-        const float angle_degs = freeze_rot
-                                     ? static_cast<float>(std::atof(freeze_rot))
-                                     : (SDL_GetTicks() / 1000.0 / 2.0 * 45);
-        const float angle_rads = angle_degs * std::numbers::pi / 180.0f;
-        const glm::mat4 rot_matrix = glm::rotate(glm::mat4(1.0f), angle_rads, glm::vec3(0, 1.0, 0));
+        const glm::mat4 rot_matrix = glm::rotate(
+            glm::mat4(1.0f), glm::radians(render_angle_deg_), glm::vec3(0, 1.0, 0));
         
         // CAMERA MUST ALWAYS REMAIN AT (0, 0, 0)
         const glm::vec3 camera_pos(0, 0, 0);
@@ -479,11 +489,8 @@ public:
         const glm::vec3 eye(0, 0, 0);
         const glm::vec3 up(0, 1, 0);
 
-        const char* freeze = std::getenv("CAIRNS_FREEZE_ROT");
-        const float deg = freeze ? static_cast<float>(std::atof(freeze))
-                                 : static_cast<float>(SDL_GetTicks() / 1000.0 / 2.0 * 45);
         const glm::mat4 root =
-            glm::rotate(glm::mat4(1.0f), glm::radians(deg), glm::vec3(0, 1, 0));
+            glm::rotate(glm::mat4(1.0f), glm::radians(render_angle_deg_), glm::vec3(0, 1, 0));
 
         // Models are placed as (entity.transform * root) -> they spin in place at
         // the fixed grid position, so the camera target is the entity translation.
@@ -657,27 +664,35 @@ public:
             cpu_ms_head_ = (cpu_ms_head_ + 1) % kCpuMsHistory;
         }
         cpu_last_frame_ns_ = cpu_now_ns;
-        if (frame_ == 5) {
-            const char* dump = std::getenv("CAIRNS_DUMP");
-            rhi_.frames.SetDumpPath(dump ? dump : "/tmp/cairns_dump.png");
+
+        // Fixed-timestep accumulator (Fiedler). The sim advances in kFixedDt steps;
+        // wall time only decides how many steps run this frame. alpha drives cheap
+        // render-side interpolation of the rotation (no GPU interp for particles).
+        accumulator_ += clock_->Tick();
+        sim_steps_this_frame_ = 0;
+        while (accumulator_ >= kFixedDt && sim_steps_this_frame_ < kMaxStepsPerFrame) {
+            sim_angle_deg_ += kRotDegPerSec * kFixedDt;
+            ++sim_frame_;
+            ++sim_steps_this_frame_;
+            accumulator_ -= kFixedDt;
         }
-        if (frame_ >= 7 && std::getenv("CAIRNS_DUMP")) {
-            std::exit(0);  // headless byte-gate: frame 5 dumped, now quit
+        if (sim_steps_this_frame_ == kMaxStepsPerFrame && accumulator_ >= kFixedDt) {
+            accumulator_ = 0.0f;
+        }
+        const float alpha = accumulator_ / kFixedDt;
+        render_angle_deg_ = sim_angle_deg_ + alpha * kRotDegPerSec * kFixedDt;
+
+        if (golden_ && sim_frame_ == kGoldenDumpFrame) {
+            rhi_.frames.SetDumpPath(std::getenv("CAIRNS_DUMP"));
+            fprintf(stderr, "[GOLDEN] dump at sim_frame=%u\n", sim_frame_);
+        }
+        if (golden_ && sim_frame_ > kGoldenDumpFrame) {
+            std::exit(0);
         }
 
         cairns::Timer t_frame("frame", 0);
 
         rhi::FrameContext fc = rhi_.frames.Begin(rhi_.resources, rhi_.alloc, swapchain_);
-
-        const uint64_t now_ticks = SDL_GetTicks();
-        float delta_time = 0.016f;
-        if (!std::getenv("CAIRNS_FREEZE_ROT")) {
-            if (last_ticks_ > 0) {
-                delta_time = static_cast<float>(now_ticks - last_ticks_) / 1000.0f;
-            }
-        }
-        last_ticks_ = now_ticks;
-        (void)delta_time;
 
         cairns::Timer t_build("build_draws", 1);
         if ( !BuildMeshOpaqueDraws()) {
@@ -711,10 +726,10 @@ public:
         const uint32_t fb_w = swapchain_.Width();
         const uint32_t fb_h = swapchain_.Height();
 
-        // Overlay is non-deterministic (fps text changes per frame) -> skip it
-        // under CAIRNS_FREEZE_ROT so the byte-gate dump stays reproducible.
+        // Overlay is non-deterministic (fps text changes per frame) -> skip it in
+        // golden capture so the byte-gate dump stays reproducible.
         const bool parallel = std::getenv("CAIRNS_RG_PARALLEL") != nullptr;
-        const bool draw_imgui = std::getenv("CAIRNS_FREEZE_ROT") == nullptr;
+        const bool draw_imgui = !golden_;
         if (draw_imgui) {
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
@@ -759,6 +774,43 @@ public:
         rhi::GraphTexture color_tex;
         rhi::GraphTexture fwd_depth;
         rhi::GraphTexture swap_tex;
+        rhi::GraphBuffer sim_ssbo;
+        // Particle sim: advance sim_steps_this_frame_ fixed-dt steps (0 at high
+        // refresh, 1 in golden). Ping-pong the SSBOs; leave particle_parity_ on the
+        // freshest. ReadBuffer in composite orders this before the point draw.
+        graph_.AddPass(
+            "particle_sim", rhi::PassType::kCompute,
+            [&](rhi::PassBuilder& b) {
+                rhi::GraphBufferDesc bd{};
+                bd.usage = rhi::kUsageStorage;
+                sim_ssbo = b.ImportBuffer(particle_ssbo_[0], bd);
+                b.WriteBuffer(sim_ssbo);
+            },
+            [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
+                uint32_t dt_off = 0;
+                float* dt_ptr = static_cast<float*>(rhi_.alloc.BumpAllocate(
+                    sizeof(float), rhi_.alloc.UboAlign(), rhi::Memory::kDynamic, &dt_off));
+                assert(dt_ptr && "bump alloc failed: particle dt");
+                *dt_ptr = kFixedDt;
+                const rhi::Handle<rhi::Buffer> dt_master =
+                    rhi_.alloc.BumpMasterBuffer(rhi::Memory::kDynamic);
+                uint32_t cur = particle_parity_;
+                for (uint32_t s = 0; s < sim_steps_this_frame_; ++s) {
+                    const rhi::BoundBuffer cbufs[3] = {
+                        {0, dt_master, dt_off},
+                        {1, particle_ssbo_[cur], 0},
+                        {2, particle_ssbo_[1 - cur], 0},
+                    };
+                    rhi::ComputeDispatch cd{};
+                    cd.kernel = particle_kernel_;
+                    cd.buffers = std::span<const rhi::BoundBuffer>(cbufs, 3);
+                    cd.groups_x = kParticleCount / 256;
+                    cd.local_x = 256;
+                    cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
+                    cur ^= 1;
+                }
+                particle_parity_ = cur;
+            });
         graph_.AddPass(
             "depth_prepass", rhi::PassType::kGraphics,
             [&](rhi::PassBuilder& b) {
@@ -808,12 +860,19 @@ public:
                 b.AddColorOutput("swapchain", swap_tex, rhi::LoadOp::kClear, clear);
                 b.AddAttachmentInput(color_tex);
                 b.AddAttachmentInput(depth_tex);
+                b.ReadBuffer(sim_ssbo);  // order particle_sim before the point draw
             },
             [&](rhi::CommandRecorder& cmd, const rhi::PassResources& res) {
                 const rhi::Handle<rhi::Texture> texs[2] = {res.Resolve(color_tex),
                                                            res.Resolve(depth_tex)};
                 cmd.DrawFullscreen(rhi_.resources, composite_, texs, 2,
                                    composite_sampler_);
+                rhi::PointDraw pd{};
+                pd.pipeline = particle_render_shader_;
+                pd.vertex_buffer = particle_ssbo_[particle_parity_];
+                pd.vertex_offset = 0;
+                pd.vertex_count = kParticleCount;
+                cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
                 if (draw_imgui) {
                     cmd.DrawImGui(rhi_.resources, rhi_.alloc, imgui_, imgui_font_,
                                   composite_sampler_, ImGui::GetDrawData());
@@ -825,7 +884,6 @@ public:
         }
         t_record.End();
         rhi_.frames.End(swapchain_, fc);
-        particle_parity_ ^= 1;
         t_frame.End();
         if (frame_ % 120 == 0) {
             printf("draws: %zu\n", drawList_.size());
@@ -1189,13 +1247,24 @@ private:
     rhi::Handle<rhi::Buffer> particle_ssbo_[2];
     uint32_t particle_parity_ = 0;
     uint32_t globals_offset_ = 0;
-    uint64_t last_ticks_ = 0;
     // cpu frame-time history (wall-clock between draw() calls) for the imgui graph
     static constexpr int kCpuMsHistory = 128;
     float cpu_ms_history_[kCpuMsHistory] = {};
     int cpu_ms_head_ = 0;
     float cpu_ms_last_ = 0.0f;
     uint64_t cpu_last_frame_ns_ = 0;
+    // Fixed-timestep sim clock (FixedClock under CAIRNS_DUMP, else WallClock).
+    static constexpr float kFixedDt = 1.0f / 60.0f;
+    static constexpr int kMaxStepsPerFrame = 5;
+    static constexpr float kRotDegPerSec = 22.5f;  // old 45deg/2s
+    static constexpr uint32_t kGoldenDumpFrame = 60;
+    std::unique_ptr<cairns::FrameClock> clock_;
+    bool golden_ = false;
+    float accumulator_ = 0.0f;
+    uint32_t sim_frame_ = 0;
+    uint32_t sim_steps_this_frame_ = 0;
+    float sim_angle_deg_ = 0.0f;
+    float render_angle_deg_ = 0.0f;
     // render pass
     static constexpr size_t sampleCount = 4;
 };
