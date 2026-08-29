@@ -999,6 +999,11 @@ bool ResourceManager::InitSwapChain(SwapChain& sc, SDL_Window* window) {
                    impl_->msaa_samples, true);
 }
 
+bool ResourceManager::InitFrameTargets(SwapChain& sc) {
+    (void)sc;  // depth/MSAA/render-pass already created in sc.Init.
+    return true;
+}
+
 uint32_t ResourceManager::UboAlign() const { return impl_->uniform_align; }
 
 Handle<Buffer> ResourceManager::CreateBuffer(const BufferDesc& d) {

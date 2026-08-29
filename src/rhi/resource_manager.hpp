@@ -548,19 +548,6 @@ struct BackendInitParams {
     MTL::Device* device = nullptr;
     MTL::CommandQueue* queue = nullptr;
 };
-// App-owned per-frame Metal resources, registered once so BeginFrame/EndFrame +
-// CommandRecorder can drive them.
-struct MtlFrameResources {
-    MTL::CommandQueue* queue = nullptr;
-    void* semaphore = nullptr;  // dispatch_semaphore_t
-    MTL::RenderPassDescriptor* render_pass_desc = nullptr;
-    MTL::DepthStencilState* depth_stencil = nullptr;
-    MTL::Buffer* mesh_master = nullptr;
-    MTL::Device* device = nullptr;
-    SwapChain* sc = nullptr;
-    const Handle<Texture>* msaa = nullptr;
-    const Handle<Texture>* depth = nullptr;
-};
 #else
 struct BackendInitParams;
 #endif  // CAIRNS_VULKAN
@@ -585,6 +572,11 @@ public:
     // Neutral swapchain bring-up: fills `sc` using the device objects InitDevice
     // owns (Vulkan: device/surface/queues/pool/samples; Metal: device).
     bool InitSwapChain(SwapChain& sc, SDL_Window* window);
+    // Creates the frame's color/depth render targets + render-pass state. Neutral;
+    // call after scene resources are loaded. On Vulkan these targets already exist
+    // (built in sc.Init), so this is a no-op; on Metal they share the texture pool
+    // with scene textures and must be created here, after them.
+    bool InitFrameTargets(SwapChain& sc);
     void Deinit();
     // Request a one-shot swapchain dump on the next EndFrame (neutral; both
     // backends honor it). Cleared after the dump is written.
@@ -677,8 +669,6 @@ public:
     MTL::Heap* GetMtlHeap(Handle<Buffer> h);
     MTL::Buffer* GetBumpMasterBuffer(Memory mem) const;
     Handle<BindGroup> CreateBindGroupFromMtlBuffer(MTL::Buffer* buf, uint32_t offset);
-    // Register app-owned per-frame resources for BeginFrame/EndFrame to drive.
-    void MtlRegisterFrame(const MtlFrameResources& res);
     // Transitional accessors for the device/queue InitDevice now owns.
     MTL::Device* GetMtlDevice() const;
     MTL::CommandQueue* GetMtlQueue() const;

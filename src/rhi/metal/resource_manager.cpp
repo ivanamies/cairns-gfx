@@ -30,8 +30,14 @@ namespace cairns::rhi {
 struct ResourceManager::Impl {
     BackendInitParams params;
     metal::MemoryAllocator memory;
-    MtlFrameResources frame_res;
     std::filesystem::path dump_path;
+
+    // rhi-owned per-frame render state (was app-registered via MtlRegisterFrame).
+    void* frame_semaphore = nullptr;  // dispatch_semaphore_t
+    MTL::RenderPassDescriptor* render_pass_desc = nullptr;
+    MTL::DepthStencilState* depth_stencil = nullptr;
+    Handle<Texture> msaa_handle = Handle<Texture>::Null;
+    Handle<Texture> depth_handle = Handle<Texture>::Null;
 
     Pool<Buffer> buffers;
     Pool<Texture> textures;
@@ -146,6 +152,14 @@ bool ResourceManager::InitDevice(SDL_Window* window) {
     if (!impl_->memory.Init(impl_->params.device)) {
         return false;
     }
+    impl_->frame_semaphore = dispatch_semaphore_create(kFramesInFlight);
+    {
+        MTL::DepthStencilDescriptor* dsd = MTL::DepthStencilDescriptor::alloc()->init();
+        dsd->setDepthCompareFunction(MTL::CompareFunctionLessEqual);
+        dsd->setDepthWriteEnabled(true);
+        impl_->depth_stencil = impl_->params.device->newDepthStencilState(dsd);
+        dsd->release();
+    }
     return true;
 }
 
@@ -159,6 +173,43 @@ MTL::CommandQueue* ResourceManager::GetMtlQueue() const {
 
 bool ResourceManager::InitSwapChain(SwapChain& sc, SDL_Window* window) {
     return sc.Init(impl_->params.device, window);
+}
+
+// Metal MSAA/depth targets share the texture Pool index space with scene
+// textures, and the bindless registry asserts scene-texture handle.index ==
+// bindless slot. So these MUST be created AFTER scene textures (unlike Vulkan,
+// whose depth/MSAA are raw images created in sc.Init). Call post scene load.
+bool ResourceManager::InitFrameTargets(SwapChain& sc) {
+    constexpr uint32_t kSampleCount = 4;
+    const int32_t w = static_cast<int32_t>(sc.Width());
+    const int32_t h = static_cast<int32_t>(sc.Height());
+    {
+        TextureDesc d;
+        d.dimensions = {w, h, 1};
+        d.format = Format::kBgra8Unorm;
+        d.sample_count = kSampleCount;
+        d.usage = kTexUsageColorTarget;
+        d.memory = Memory::kDefault;
+        impl_->msaa_handle = CreateTexture(d);
+        if (impl_->msaa_handle.IsNull()) {
+            return false;
+        }
+    }
+    {
+        TextureDesc d;
+        d.dimensions = {w, h, 1};
+        d.format = Format::kD32F;
+        d.sample_count = kSampleCount;
+        d.usage = kTexUsageDepthTarget;
+        d.memory = Memory::kDefault;
+        impl_->depth_handle = CreateTexture(d);
+        if (impl_->depth_handle.IsNull()) {
+            return false;
+        }
+    }
+    MTL::Texture* msaa = GetHot(impl_->msaa_handle)->api_view;
+    MTL::Texture* depth = GetHot(impl_->depth_handle)->api_view;
+    return InitRenderPassDescriptor(impl_->render_pass_desc, msaa, depth, sc);
 }
 
 uint32_t ResourceManager::UboAlign() const { return 32; }
@@ -811,19 +862,17 @@ void ResourceManager::BindlessFinalize(Handle<BindGroup>) {
     }
 }
 
-void ResourceManager::MtlRegisterFrame(const MtlFrameResources& res) {
-    impl_->frame_res = res;
-}
-
 void ResourceManager::SetDumpPath(const std::filesystem::path& path) {
     impl_->dump_path = path;
 }
 
 struct CommandRecorder::Impl {
     ResourceManager* rm = nullptr;
-    MtlFrameResources fr;
+    SwapChain* sc = nullptr;
     MTL::CommandBuffer* cmd = nullptr;
     MTL::RenderCommandEncoder* enc = nullptr;
+    MTL::RenderPassDescriptor* render_pass_desc = nullptr;
+    MTL::DepthStencilState* depth_stencil = nullptr;
 };
 
 void CommandRecorder::Dispatch(const ComputeDispatch& d) {
@@ -843,16 +892,16 @@ void CommandRecorder::Dispatch(const ComputeDispatch& d) {
 void CommandRecorder::BeginRenderPass(const RenderPassDesc& desc) {
     if (!desc.color.empty()) {
         const float* c = desc.color[0].clear;
-        impl_->fr.render_pass_desc->colorAttachments()->object(0)->setClearColor(
+        impl_->render_pass_desc->colorAttachments()->object(0)->setClearColor(
             MTL::ClearColor(c[0], c[1], c[2], c[3]));
     }
-    impl_->enc = impl_->cmd->renderCommandEncoder(impl_->fr.render_pass_desc);
+    impl_->enc = impl_->cmd->renderCommandEncoder(impl_->render_pass_desc);
 }
 
 void CommandRecorder::DrawMeshes(const MeshDrawList& list) {
     MTL::RenderCommandEncoder* enc = impl_->enc;
     enc->setRenderPipelineState(impl_->rm->GetHot(list.pipeline)->api_pso);
-    enc->setDepthStencilState(impl_->fr.depth_stencil);
+    enc->setDepthStencilState(impl_->depth_stencil);
     enc->setFrontFacingWinding(MTL::WindingCounterClockwise);
     enc->setCullMode(MTL::CullModeBack);
     {
@@ -868,8 +917,11 @@ void CommandRecorder::DrawMeshes(const MeshDrawList& list) {
             enc->useResource(tex, MTL::ResourceUsageRead, MTL::RenderStageFragment);
         }
     }
-    enc->useResource(impl_->fr.mesh_master, MTL::ResourceUsageRead, MTL::RenderStageVertex);
-    enc->setVertexBuffer(impl_->fr.mesh_master, 0, 0);
+    uint32_t mesh_master_off = 0;
+    MTL::Buffer* mesh_master =
+        impl_->rm->GetMtlBuffer(list.resident_buffers[0], &mesh_master_off);
+    enc->useResource(mesh_master, MTL::ResourceUsageRead, MTL::RenderStageVertex);
+    enc->setVertexBuffer(mesh_master, 0, 0);
     MTL::Buffer* dyn_master = impl_->rm->GetBumpMasterBuffer(Memory::kDynamic);
     enc->setVertexBuffer(dyn_master, list.globals_offset, cairns::kRenderPassGlobalBindSlot);
     enc->setVertexBuffer(dyn_master, 0, cairns::kMaterialBindSlot);
@@ -916,44 +968,44 @@ void CommandRecorder::EndRenderPass() {
 }
 
 FrameContext ResourceManager::BeginFrame(SwapChain& sc) {
-    MtlFrameResources& fr = impl_->frame_res;
-    dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(fr.semaphore),
+    dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(impl_->frame_semaphore),
                             DISPATCH_TIME_FOREVER);
     BeginFrame();  // bump ring reset
 
     sc.NextDrawable();
-    MTL::Texture* msaa = GetHot(*fr.msaa)->api_view;
-    MTL::Texture* depth = GetHot(*fr.depth)->api_view;
-    UpdateRenderPassDescriptor(fr.render_pass_desc, msaa, depth, sc);
+    MTL::Texture* msaa = GetHot(impl_->msaa_handle)->api_view;
+    MTL::Texture* depth = GetHot(impl_->depth_handle)->api_view;
+    UpdateRenderPassDescriptor(impl_->render_pass_desc, msaa, depth, sc);
 
-    MTL::CommandBuffer* cmd = fr.queue->commandBuffer();
-    dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(fr.semaphore);
+    MTL::CommandBuffer* cmd = impl_->params.queue->commandBuffer();
+    dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(impl_->frame_semaphore);
     cmd->addCompletedHandler([sem](MTL::CommandBuffer*) { dispatch_semaphore_signal(sem); });
 
     FrameContext fc;
     fc.frame_index = 0;
     fc.swapchain_image_index = 0;
-    fc.cmd.impl_ = new CommandRecorder::Impl{this, fr, cmd, nullptr};
+    fc.cmd.impl_ = new CommandRecorder::Impl{this,           &sc,  cmd, nullptr,
+                                             impl_->render_pass_desc,
+                                             impl_->depth_stencil};
     return fc;
 }
 
 void ResourceManager::EndFrame(FrameContext& fc) {
     CommandRecorder::Impl* ri = fc.cmd.impl_;
-    MtlFrameResources& fr = impl_->frame_res;
     MTL::CommandBuffer* cmd = ri->cmd;
 
     if (!impl_->dump_path.empty()) {
-        MTL::Texture* drawableTex = fr.sc->GetDrawable()->texture();
+        MTL::Texture* drawableTex = ri->sc->GetDrawable()->texture();
         const NS::UInteger w = drawableTex->width();
         const NS::UInteger h = drawableTex->height();
         const NS::UInteger bytesPerRow = w * 4;
         const NS::UInteger bufSize = bytesPerRow * h;
-        MTL::Buffer* readback = fr.device->newBuffer(bufSize, MTL::ResourceStorageModeShared);
+        MTL::Buffer* readback = impl_->params.device->newBuffer(bufSize, MTL::ResourceStorageModeShared);
         MTL::BlitCommandEncoder* blitEnc = cmd->blitCommandEncoder();
         blitEnc->copyFromTexture(drawableTex, 0, 0, MTL::Origin{0, 0, 0}, MTL::Size{w, h, 1},
                                  readback, 0, bytesPerRow, 0);
         blitEnc->endEncoding();
-        cmd->presentDrawable(fr.sc->GetDrawable());
+        cmd->presentDrawable(ri->sc->GetDrawable());
         cmd->commit();
         cmd->waitUntilCompleted();
         std::vector<uint8_t> rgba(bufSize);
@@ -969,7 +1021,7 @@ void ResourceManager::EndFrame(FrameContext& fc) {
         readback->release();
         impl_->dump_path.clear();
     } else {
-        cmd->presentDrawable(fr.sc->GetDrawable());
+        cmd->presentDrawable(ri->sc->GetDrawable());
         cmd->commit();
     }
 

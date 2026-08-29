@@ -85,29 +85,13 @@ public:
     }
     
     bool requestResizeFrameBuffer(uint32_t width, uint32_t height) {
-        resizeFrameBufferRequest_ = ResizeFrameBufferRequest{.width = width, .height = height};
+        (void)width;
+        (void)height;
         return true;
     }
 
     bool RequestViewportDump(const std::filesystem::path& path) {
         rm_.SetDumpPath(path);
-        return true;
-    }
-    
-    bool resizeFrameBuffer(int width, int height) {
-        swapChain_->SetDrawableSize(width, height);
-        // Deallocate the textures if they have been created
-        if ( !msaaHandle_.IsNull() ) {
-            rm_.Destroy(msaaHandle_);
-            msaaHandle_ = TexHandle::Null;
-        }
-        if ( !depthHandle_.IsNull() ) {
-            rm_.Destroy(depthHandle_);
-            depthHandle_ = TexHandle::Null;
-        }
-        initDepthAndMSAATextures();
-        swapChain_->NextDrawable();
-        updateRenderPassDescriptor();
         return true;
     }
     
@@ -213,37 +197,16 @@ public:
             }
         }
         if (!scenes_.empty() && !scenes_[0].meshes.empty()) {
-            uint32_t off = 0;
-            mesh_master_buf_ =
-                rm_.GetMtlBuffer(scenes_[0].meshes[0].posHandle, &off);
-        }
-        if ( !initDepthAndMSAATextures() ) {
-            return false;
-        }
-        if ( !initRenderPassDescriptor() ) {
-            return false;
-        }
-        if ( !initFrameSemaphore() ) {
-            return false;
+            mesh_master_handle_ = scenes_[0].meshes[0].posHandle;
         }
         if ( !initRenderPipeline() ) {
             return false;
         }
-        if ( !initParticles() ) {
+        if ( !rm_.InitFrameTargets(*swapChain_) ) {
             return false;
         }
-        {
-            rhi::MtlFrameResources fr{};
-            fr.queue = metalCommandQueue;
-            fr.semaphore = frameSemaphore;
-            fr.render_pass_desc = render_pass_descriptor_;
-            fr.depth_stencil = depthStencilState;
-            fr.mesh_master = mesh_master_buf_;
-            fr.device = device_;
-            fr.sc = swapChain_.get();
-            fr.msaa = &msaaHandle_;
-            fr.depth = &depthHandle_;
-            rm_.MtlRegisterFrame(fr);
+        if ( !initParticles() ) {
+            return false;
         }
 
         return true;
@@ -261,59 +224,6 @@ public:
     bool initCommandQueue() {
         metalCommandQueue = device_->newCommandQueue();
         return metalCommandQueue != nullptr;
-    }
-    
-    bool initDepthAndMSAATextures() {
-        const int32_t w = static_cast<int32_t>(swapChain_->GetDrawableSize().width);
-        const int32_t h = static_cast<int32_t>(swapChain_->GetDrawableSize().height);
-        {
-            rhi::TextureDesc d;
-            d.dimensions = {w, h, 1};
-            d.format = rhi::Format::kBgra8Unorm;
-            d.sample_count = static_cast<uint32_t>(sampleCount);
-            d.usage = rhi::kTexUsageColorTarget;
-            d.memory = rhi::Memory::kDefault;
-            msaaHandle_ = rm_.CreateTexture(d);
-            if (msaaHandle_.IsNull()) {
-                return false;
-            }
-        }
-        {
-            rhi::TextureDesc d;
-            d.dimensions = {w, h, 1};
-            d.format = rhi::Format::kD32F;
-            d.sample_count = static_cast<uint32_t>(sampleCount);
-            d.usage = rhi::kTexUsageDepthTarget;
-            d.memory = rhi::Memory::kDefault;
-            depthHandle_ = rm_.CreateTexture(d);
-            if (depthHandle_.IsNull()) {
-                return false;
-            }
-        }
-        return true;
-    }
-    
-    bool initRenderPassDescriptor() {
-        MTL::Texture* msaa = rm_.GetHot(msaaHandle_)->api_view;
-        MTL::Texture* depth = rm_.GetHot(depthHandle_)->api_view;
-        if ( !cairns::rhi::InitRenderPassDescriptor(render_pass_descriptor_, msaa, depth, *swapChain_)) {
-            return false;
-        }
-        return true;
-    }
-    
-    bool initFrameSemaphore() {
-        frameSemaphore = dispatch_semaphore_create(kBufferedFrames);
-        return true;
-    }
-    
-    bool updateRenderPassDescriptor() {
-        MTL::Texture* msaa = rm_.GetHot(msaaHandle_)->api_view;
-        MTL::Texture* depth = rm_.GetHot(depthHandle_)->api_view;
-        if ( cairns::rhi::UpdateRenderPassDescriptor(render_pass_descriptor_, msaa, depth, *swapChain_)) {
-            return false;
-        }
-        return true;
     }
     
     bool BuildMeshOpaqueDraws() {
@@ -549,6 +459,8 @@ public:
         ml.globals_offset = globals_offset_;
         ml.resident_textures = rhi::Span<const rhi::Handle<rhi::Texture>>(
             resident_textures_.data(), resident_textures_.size());
+        ml.resident_buffers =
+            rhi::Span<const rhi::Handle<rhi::Buffer>>(&mesh_master_handle_, 1);
         fc.cmd.DrawMeshes(ml);
 
         rhi::PointDraw pd{};
@@ -632,13 +544,7 @@ public:
 
             rm_.BindlessFinalize(bindless_bg_handle_);
         }
-        
-        MTL::DepthStencilDescriptor* depthStencilDescriptor = MTL::DepthStencilDescriptor::alloc()->init();
-        depthStencilDescriptor->setDepthCompareFunction(MTL::CompareFunctionLessEqual);
-        depthStencilDescriptor->setDepthWriteEnabled(true);
-        depthStencilState = device_->newDepthStencilState(depthStencilDescriptor);
-        
-        
+
         return true;
     }
     
@@ -732,7 +638,6 @@ private:
     
     ////////// DO NOT MOVE ARENA BELOW THIS LINE. because c++.
     
-    static constexpr uint32_t kBufferedFrames = 2;
     uint32_t frame_ = 0;
     
     MTL::Device* device_ = nullptr;
@@ -752,26 +657,16 @@ private:
     std::vector<rhi::Handle<rhi::Texture>> resident_textures_;
     
     rhi::ResourceManager rm_;
-    MTL::Buffer* mesh_master_buf_ = nullptr;
+    rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
     rhi::Handle<rhi::BindGroup> bindless_bg_handle_;
     std::unordered_map<uint32_t, uint32_t> mesh_attr_id_map_;
     std::unordered_map<uint32_t, uint32_t> sampler_id_map_;
-
-    //    std::vector<std::vector<std::function<void(void)>>> deletionRequests_;
-    //    std::vector<std::function<void(void)>> deletions_;
-    
-    struct ResizeFrameBufferRequest {
-        uint32_t width = std::numeric_limits<uint32_t>::max();
-        uint32_t height = std::numeric_limits<uint32_t>::max();
-    };
-    std::optional<ResizeFrameBufferRequest> resizeFrameBufferRequest_ = std::nullopt;
 
     std::unique_ptr<cairns::rhi::SwapChain> swapChain_ = nullptr;
     // command queue
     MTL::CommandQueue* metalCommandQueue = nullptr;
     // shaders
     ShaderHandle unlit_ = ShaderHandle::Null;
-    MTL::DepthStencilState* depthStencilState = nullptr;
     // particles
     static constexpr uint32_t kParticleCount = 512;
     rhi::Handle<rhi::Kernel> particle_kernel_;
@@ -782,11 +677,6 @@ private:
     uint64_t last_ticks_ = 0;
     // render pass
     static constexpr size_t sampleCount = 4;
-    TexHandle msaaHandle_ = TexHandle::Null;
-    TexHandle depthHandle_ = TexHandle::Null;
-    MTL::RenderPassDescriptor* render_pass_descriptor_ = nullptr;
-    // fences and semaphores
-    dispatch_semaphore_t frameSemaphore;
 };
 
 } // namespace cairns
