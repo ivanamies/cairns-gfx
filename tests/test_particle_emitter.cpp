@@ -11,8 +11,11 @@
 // and maps to [0,1) by hand.
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
+#include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 #include "render/particle_emitter.hpp"
@@ -68,6 +71,59 @@ SCENARIO("unit draws stay in the half-open zero-to-one range",
         REQUIRE(u >= 0.0f);
         REQUIRE(u < 1.0f);
     }
+}
+
+// Phase B.14: pin the NextUnit() FLOAT mapping formula, not just the
+// underlying NextU32 sequence. The audit named the gap: alternate
+// mappings (e.g. (NextU32() & 0xFFFFFF) * (1/16777216), or
+// (float)NextU32() / 4294967296.0f) all satisfy the [0,1) range test
+// and the same-seed determinism test -- but produce different particle
+// bytes than the spec-mandated `(NextU32() >> 8) * (1.0f/16777216.0f)`.
+SCENARIO("NextUnit() emits the exact mt19937(42) mapping",
+         "[spec][particles][determinism][regression]") {
+    ParticleRng rng(42);
+    REQUIRE(rng.NextUnit() == Catch::Approx(0.3745400906f).epsilon(1e-7));
+    REQUIRE(rng.NextUnit() == Catch::Approx(0.7965429425f).epsilon(1e-7));
+    REQUIRE(rng.NextUnit() == Catch::Approx(0.9507142901f).epsilon(1e-7));
+    REQUIRE(rng.NextUnit() == Catch::Approx(0.1834347844f).epsilon(1e-7));
+    // Bit-exact check on the first draw: pins the literal IEEE 754 bits,
+    // catches any platform that drops to soft-float or fast-math reassoc.
+    rng = ParticleRng(42);
+    const float u0 = rng.NextUnit();
+    uint32_t u0_bits = 0;
+    std::memcpy(&u0_bits, &u0, sizeof(u0_bits));
+    REQUIRE(u0_bits == 0x3EBFC3B8u);
+}
+
+// Phase B.14: pin that SeedParticles draws exactly 2 NextUnit() per
+// particle (radius + theta). A wrong impl that drew 3 or used a different
+// stride would produce different bytes despite matching `count`.
+SCENARIO("SeedParticles consumes exactly two NextUnit per particle",
+         "[spec][particles][determinism][regression]") {
+    EmitterParams e{};
+    e.seed = 42;
+    e.disk_radius = 1.0f;
+    std::vector<Particle> p;
+    SeedParticles(2, e, p);
+    REQUIRE(p.size() == 2);
+    // The first particle should match what we get by hand using NextUnit
+    // twice (radius, then theta).
+    ParticleRng oracle(42);
+    const float r0 = e.disk_radius * std::sqrt(oracle.NextUnit());
+    const float theta0 = oracle.NextUnit() * 6.2831853071795864769f;
+    const float x0 = r0 * std::cos(theta0);
+    const float y0 = r0 * std::sin(theta0);
+    REQUIRE(p[0].pos.x == Catch::Approx(x0).epsilon(1e-6));
+    REQUIRE(p[0].pos.y == Catch::Approx(y0).epsilon(1e-6));
+    // Second particle picks up the engine state at draw 3+4. If
+    // SeedParticles drew a different count per particle (e.g. 3), this
+    // would diverge.
+    const float r1 = e.disk_radius * std::sqrt(oracle.NextUnit());
+    const float theta1 = oracle.NextUnit() * 6.2831853071795864769f;
+    const float x1 = r1 * std::cos(theta1);
+    const float y1 = r1 * std::sin(theta1);
+    REQUIRE(p[1].pos.x == Catch::Approx(x1).epsilon(1e-6));
+    REQUIRE(p[1].pos.y == Catch::Approx(y1).epsilon(1e-6));
 }
 
 SCENARIO("particles seed onto the emitter disk", "[spec][particles]") {

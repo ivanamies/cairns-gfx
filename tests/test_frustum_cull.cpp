@@ -8,6 +8,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <cmath>
+
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -66,6 +68,91 @@ SCENARIO("WorldAabb pads about the center and follows the world transform",
             REQUIRE(a.min.x == Catch::Approx(10.0f - 1.5f));
             REQUIRE(a.max.x == Catch::Approx(10.0f + 1.5f));
         }
+    }
+}
+
+// Phase B.15: pin the Gribb-Hartmann plane math directly. The previous
+// tests only asserted in/out decisions on hand-picked points, which a
+// distance-from-eye sphere cull (entirely wrong math) also satisfies.
+// With the identity view_proj the frustum should be the unit cube
+// (planes at +/-1 on each axis with outward-pointing normals).
+SCENARIO("ExtractFrustumPlanes on identity view_proj = unit cube",
+         "[spec][frustum][layout][regression]") {
+    const auto pl = cairns::ExtractFrustumPlanes(glm::mat4(1.0f));
+    // Order: L, R, B, T, N, F (per FrustumPlanes typedef).
+    // For identity view_proj after Gribb-Hartmann + normalize:
+    //  left  : (1, 0, 0,  1)
+    //  right : (-1,0, 0,  1)
+    //  bottom: (0, 1, 0,  1)
+    //  top   : (0,-1, 0,  1)
+    //  near  : (0, 0, 1,  1)
+    //  far   : (0, 0,-1,  1)
+    auto eq = [](const glm::vec4& got, const glm::vec4& want) {
+        const float tol = 1e-5f;
+        return std::fabs(got.x - want.x) < tol &&
+               std::fabs(got.y - want.y) < tol &&
+               std::fabs(got.z - want.z) < tol &&
+               std::fabs(got.w - want.w) < tol;
+    };
+    REQUIRE(eq(pl[0], glm::vec4( 1,  0,  0, 1)));   // left
+    REQUIRE(eq(pl[1], glm::vec4(-1,  0,  0, 1)));   // right
+    REQUIRE(eq(pl[2], glm::vec4( 0,  1,  0, 1)));   // bottom
+    REQUIRE(eq(pl[3], glm::vec4( 0, -1,  0, 1)));   // top
+    REQUIRE(eq(pl[4], glm::vec4( 0,  0,  1, 1)));   // near
+    REQUIRE(eq(pl[5], glm::vec4( 0,  0, -1, 1)));   // far
+}
+
+SCENARIO("positive-vertex selection picks the correct AABB corner",
+         "[spec][frustum][regression]") {
+    // Audit-named gap: a center-only or sphere cull would pass the
+    // existing in/out scenarios. This test exercises the positive-
+    // vertex rule directly: a box straddling a frustum plane with the
+    // "positive vertex" outside the plane SHOULD be culled; the same
+    // box with positive vertex inside should NOT.
+    //
+    // Use identity view_proj. Left plane is (1,0,0,1) -- normal (+x),
+    // d=1. A point p is inside iff dot(n,p)+d >= 0, i.e. x >= -1.
+    const auto pl = cairns::ExtractFrustumPlanes(glm::mat4(1.0f));
+
+    // AABB whose maxx = -2 -- entirely past the left plane.
+    // positive vertex for left plane (n = +x) picks max.x. With max.x = -2,
+    // dot(n,p)+d = -2+1 = -1 < 0 ⇒ outside. Culled.
+    REQUIRE(cairns::AabbOutsideFrustum(pl, glm::vec3(-3, 0, 0),
+                                            glm::vec3(-2, 1, 1)));
+
+    // AABB whose maxx = 0, minx = -2 -- straddles the left plane. The
+    // positive vertex for n=+x is max.x=0 ⇒ dot(n,p)+d = 0+1 = 1 >= 0.
+    // Inside that plane. (Sphere-from-eye cull would still mark it
+    // outside if it tested center against radius, so this discriminates.)
+    REQUIRE_FALSE(cairns::AabbOutsideFrustum(pl, glm::vec3(-2, 0, 0),
+                                                  glm::vec3(0, 1, 1)));
+
+    // Same straddling box, BUT mirrored: minx=0, maxx=2. positive vertex
+    // for the right plane (n = -x) is min.x = 0 ⇒ dot(n,p)+d =
+    // -(0)+1 = 1 >= 0 inside. Confirms positive-vertex flip works on
+    // both axes.
+    REQUIRE_FALSE(cairns::AabbOutsideFrustum(pl, glm::vec3(0, 0, 0),
+                                                  glm::vec3(2, 1, 1)));
+
+    // The same box translated past the right plane: minx=2, maxx=3.
+    // positive vertex for right (n=-x) = min.x=2 ⇒ -2+1 = -1 < 0 outside.
+    REQUIRE(cairns::AabbOutsideFrustum(pl, glm::vec3(2, 0, 0),
+                                            glm::vec3(3, 1, 1)));
+}
+
+SCENARIO("plane normalization: a scaled view_proj does not change cull",
+         "[spec][frustum][regression]") {
+    // If ExtractFrustumPlanes skipped normalization, scaling the matrix
+    // would change cull decisions for boundary points. The spec says
+    // normalize -- this test pins it.
+    const glm::mat4 scaled = glm::mat4(7.5f);
+    const auto pl_scaled = cairns::ExtractFrustumPlanes(scaled);
+    const auto pl_id = cairns::ExtractFrustumPlanes(glm::mat4(1.0f));
+    for (int i = 0; i < 6; ++i) {
+        // Plane direction unchanged; d (w) likewise.
+        REQUIRE(std::fabs(pl_scaled[i].x - pl_id[i].x) < 1e-5f);
+        REQUIRE(std::fabs(pl_scaled[i].y - pl_id[i].y) < 1e-5f);
+        REQUIRE(std::fabs(pl_scaled[i].z - pl_id[i].z) < 1e-5f);
     }
 }
 
