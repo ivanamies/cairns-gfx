@@ -1,0 +1,5 @@
+# Fetched prebuilt artifacts (run ./fetch.sh). Not committed — keeps git lean.
+/include/
+/lib/
+/wgpu-native-meta/
+*.zip

@@ -154,6 +154,31 @@ target_compile_definitions(quickjs PRIVATE
 # quickjs's own warnings would trip a -Werror build; relax for its TUs only.
 target_compile_options(quickjs PRIVATE -Wno-everything)
 
+# ── wgpu-native (vendored prebuilt C bindings) ──────────────────────────────
+# third_party/wgpu-native/ holds the v29.0.0.0 macOS static lib + webgpu.h (see
+# its VENDORED.md). INTERFACE target so any consumer pulls the static lib + the
+# macOS framework deps + the include dir. Consumed by the WebGPU backend (W2+).
+add_library(wgpu_native INTERFACE)
+target_include_directories(wgpu_native INTERFACE
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/wgpu-native/include")
+target_link_libraries(wgpu_native INTERFACE
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/wgpu-native/lib/libwgpu_native.a")
+if(APPLE)
+  target_link_libraries(wgpu_native INTERFACE
+      "-framework Metal" "-framework QuartzCore" "-framework Foundation"
+      "-framework IOKit" "-framework IOSurface" "-framework CoreFoundation"
+      "-framework Security" "-framework CoreGraphics")
+endif()
+
+# W0 link smoke (off by default): proves the vendored lib + headers + frameworks
+# resolve and a GPU adapter is reachable.
+option(CAIRNS_BUILD_WGPU_SMOKE "Build the wgpu-native link smoke" OFF)
+if(CAIRNS_BUILD_WGPU_SMOKE)
+  add_executable(wgpu_link_smoke
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/wgpu_link_smoke.cpp")
+  target_link_libraries(wgpu_link_smoke PRIVATE wgpu_native)
+endif()
+
 # nlohmann/json uses exceptions internally + has compile-time warnings that
 # trip the app's -Werror. Wrap the control-plane TUs (registry + transport +
 # handlers) in their own static lib with relaxed flags. Mirrors the
