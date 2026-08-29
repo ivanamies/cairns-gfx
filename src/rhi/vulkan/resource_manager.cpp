@@ -986,33 +986,6 @@ bool ResourceManager::InitDevice(SDL_Window* window) {
     return true;
 }
 
-VkDescriptorSetLayout ResourceManager::GetDynUboLayout() const {
-    return impl_->dyn_ubo_layout;
-}
-VkDescriptorSetLayout ResourceManager::GetComputeLayout() const {
-    return impl_->compute_layout;
-}
-VkDescriptorSetLayout ResourceManager::GetPointLayout() const {
-    return impl_->point_layout;
-}
-
-VkInstance ResourceManager::GetVkInstance() const { return impl_->instance; }
-VkSurfaceKHR ResourceManager::GetVkSurface() const { return impl_->surface; }
-VkPhysicalDevice ResourceManager::GetVkPhysicalDevice() const {
-    return impl_->params.physical;
-}
-VkDevice ResourceManager::GetVkDevice() const { return impl_->params.device; }
-VkQueue ResourceManager::GetVkGraphicsQueue() const {
-    return impl_->graphics_queue;
-}
-VkQueue ResourceManager::GetVkComputeQueue() const { return impl_->compute_queue; }
-VkQueue ResourceManager::GetVkPresentQueue() const { return impl_->present_queue; }
-VkCommandPool ResourceManager::GetVkCommandPool() const {
-    return impl_->params.command_pool;
-}
-VkSampleCountFlagBits ResourceManager::GetVkMsaaSamples() const {
-    return impl_->msaa_samples;
-}
 
 bool ResourceManager::InitSwapChain(SwapChain& sc, SDL_Window* window) {
     return sc.Init(impl_->params.device, impl_->params.physical, impl_->surface,
@@ -1226,13 +1199,6 @@ Handle<Sampler> ResourceManager::CreateSampler(const SamplerDesc& d) {
 
 Handle<BindGroup> ResourceManager::CreateBindGroup(const BindGroupDesc&) {
     return Handle<BindGroup>::Null;
-}
-
-Handle<BindGroup> ResourceManager::CreateBindGroupFromVkDescriptorSet(
-    VkDescriptorSet set) {
-    Handle<BindGroup> h = impl_->bind_groups.Acquire();
-    impl_->bind_groups.GetHot(h)->api_descriptor_set = set;
-    return h;
 }
 
 Handle<Shader> ResourceManager::CreateShader(const ShaderDesc& desc) {
@@ -1795,10 +1761,6 @@ void ResourceManager::BindlessFinalize(Handle<BindGroup>) {
                                static_cast<uint32_t>(writes.size()), writes.data(),
                                0, nullptr);
     }
-}
-
-VkDescriptorSetLayout ResourceManager::GetBindlessLayout(Handle<BindGroup>) {
-    return impl_->bindless_layout;
 }
 
 Buffer::Hot* ResourceManager::GetHot(Handle<Buffer> h) {

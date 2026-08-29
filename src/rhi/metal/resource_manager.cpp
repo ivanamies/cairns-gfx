@@ -184,14 +184,6 @@ bool ResourceManager::InitDevice(SDL_Window* window) {
     return true;
 }
 
-MTL::Device* ResourceManager::GetMtlDevice() const {
-    return impl_->params.device;
-}
-
-MTL::CommandQueue* ResourceManager::GetMtlQueue() const {
-    return impl_->params.queue;
-}
-
 bool ResourceManager::InitSwapChain(SwapChain& sc, SDL_Window* window) {
     return sc.Init(impl_->params.device, window);
 }
@@ -780,31 +772,12 @@ uint8_t* ResourceManager::MappedPtr(Handle<Buffer> h) {
     return base + hot->offset_in_heap;
 }
 
-MTL::Heap* ResourceManager::GetMtlHeap(Handle<Buffer> h) {
-    Buffer::Hot* hot = impl_->buffers.GetHot(h);
-    if (!hot) {
-        return nullptr;
-    }
-    return impl_->memory.HeapHandle(hot->heap_buffer_index);
-}
-
 MTL::Buffer* ResourceManager::GetBumpMasterBuffer(Memory mem) const {
     uint32_t hi = impl_->memory.BumpMasterHeapIndex(mem);
     if (hi == metal::kInvalidBlock) {
         return nullptr;
     }
     return impl_->memory.HeapMasterBuffer(hi);
-}
-
-Handle<BindGroup> ResourceManager::CreateBindGroupFromMtlBuffer(MTL::Buffer* buf,
-                                                                  uint32_t offset) {
-    Handle<BindGroup> h = impl_->bind_groups.Acquire();
-    BindGroup::Hot* hot = impl_->bind_groups.GetHot(h);
-    hot->api_descriptor_set = buf;
-    hot->arg_buf_offset = offset;
-    BindGroup::Cold* cold = impl_->bind_groups.GetCold(h);
-    cold->debug_name = nullptr;
-    return h;
 }
 
 Handle<BindGroup> ResourceManager::CreateBindlessRegistry(

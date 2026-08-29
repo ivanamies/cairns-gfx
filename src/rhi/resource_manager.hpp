@@ -618,45 +618,19 @@ public:
     uint32_t BufferBaseOffset(Handle<Buffer> h);
 
 #if CAIRNS_VULKAN
-    // Same-backend native-handle access for Engine2's hand-written draw loop.
-    // The neutral surface above stays pointer-free; this is Vulkan-only.
+    // Native-handle access used by the Vulkan CommandRecorder.
     VkBuffer GetVkBuffer(Handle<Buffer> h, uint32_t* out_offset);
     // Returns the current bump-ring slot's master VkBuffer for mem type.
     // Forces ring initialization if the current slot is uninitialized.
     VkBuffer GetVkBumpMasterBuffer(Memory mem);
     uint8_t* MappedPtr(Handle<Buffer> h);
-    // Wrap an app-provided VkDescriptorSet as a BindGroup handle (wrap-only;
-    // rhi does not own the set). Parallel to Metal's CreateBindGroupFromMtlBuffer.
-    Handle<BindGroup> CreateBindGroupFromVkDescriptorSet(VkDescriptorSet set);
-    // The VkDescriptorSetLayout backing a bindless registry, for pipeline layout
-    // creation. Valid after CreateBindlessRegistry.
-    VkDescriptorSetLayout GetBindlessLayout(Handle<BindGroup> reg);
-    // Transitional accessors for the device objects InitDevice now owns, so the
-    // app's still-raw init can borrow them until that init also moves rhi-side.
-    VkInstance GetVkInstance() const;
-    VkSurfaceKHR GetVkSurface() const;
-    VkPhysicalDevice GetVkPhysicalDevice() const;
-    VkDevice GetVkDevice() const;
-    VkQueue GetVkGraphicsQueue() const;
-    VkQueue GetVkComputeQueue() const;
-    VkQueue GetVkPresentQueue() const;
-    VkCommandPool GetVkCommandPool() const;
-    VkSampleCountFlagBits GetVkMsaaSamples() const;
-    // rhi-owned non-bindless set layouts, for app pipeline-layout creation.
-    VkDescriptorSetLayout GetDynUboLayout() const;
-    VkDescriptorSetLayout GetComputeLayout() const;
-    VkDescriptorSetLayout GetPointLayout() const;
 #endif  // CAIRNS_VULKAN
 
 #if CAIRNS_METAL
+    // Native-handle access used by the Metal CommandRecorder.
     MTL::Buffer* GetMtlBuffer(Handle<Buffer> h, uint32_t* out_offset);
     uint8_t* MappedPtr(Handle<Buffer> h);
-    MTL::Heap* GetMtlHeap(Handle<Buffer> h);
     MTL::Buffer* GetBumpMasterBuffer(Memory mem) const;
-    Handle<BindGroup> CreateBindGroupFromMtlBuffer(MTL::Buffer* buf, uint32_t offset);
-    // Transitional accessors for the device/queue InitDevice now owns.
-    MTL::Device* GetMtlDevice() const;
-    MTL::CommandQueue* GetMtlQueue() const;
 #endif  // CAIRNS_METAL
 
 private:
