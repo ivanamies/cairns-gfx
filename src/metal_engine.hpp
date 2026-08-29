@@ -374,8 +374,8 @@ public:
     }
     
     bool initRenderPassDescriptor() {
-        MTL::Texture* msaa = static_cast<MTL::Texture*>(rm_.GetHot(msaaHandle_)->api_view);
-        MTL::Texture* depth = static_cast<MTL::Texture*>(rm_.GetHot(depthHandle_)->api_view);
+        MTL::Texture* msaa = rm_.GetHot(msaaHandle_)->api_view;
+        MTL::Texture* depth = rm_.GetHot(depthHandle_)->api_view;
         if ( !cairns::rhi::InitRenderPassDescriptor(render_pass_descriptor_, msaa, depth, *swapChain_)) {
             return false;
         }
@@ -388,8 +388,8 @@ public:
     }
     
     bool updateRenderPassDescriptor() {
-        MTL::Texture* msaa = static_cast<MTL::Texture*>(rm_.GetHot(msaaHandle_)->api_view);
-        MTL::Texture* depth = static_cast<MTL::Texture*>(rm_.GetHot(depthHandle_)->api_view);
+        MTL::Texture* msaa = rm_.GetHot(msaaHandle_)->api_view;
+        MTL::Texture* depth = rm_.GetHot(depthHandle_)->api_view;
         if ( cairns::rhi::UpdateRenderPassDescriptor(render_pass_descriptor_, msaa, depth, *swapChain_)) {
             return false;
         }
@@ -599,7 +599,7 @@ public:
         
         {
             MTL::RenderPipelineState* pso =
-                static_cast<MTL::RenderPipelineState*>(rm_.GetHot(unlit_)->api_pso);
+                rm_.GetHot(unlit_)->api_pso;
 
             encoder->setRenderPipelineState(pso);
             encoder->setDepthStencilState(depthStencilState);
@@ -608,7 +608,7 @@ public:
 
             {
                 rhi2::BindGroup::Hot* bg_hot = rm_.GetHot(bindless_bg_handle_);
-                MTL::Buffer* bg_buf = static_cast<MTL::Buffer*>(bg_hot->api_descriptor_set);
+                MTL::Buffer* bg_buf = bg_hot->api_descriptor_set;
                 const uint32_t bg_off = bg_hot->arg_buf_offset;
                 encoder->setVertexBuffer(bg_buf, bg_off,
                                          cairns::rhi::GpuSceneRegistry::kBindSlot);
@@ -618,8 +618,7 @@ public:
             // use resource call for all textures in argument table
             for (auto& s : scenes_) {
                 for (const auto th : s.textureHandles) {
-                    MTL::Texture* tex =
-                        static_cast<MTL::Texture*>(rm_.GetHot(th)->api_view);
+                    MTL::Texture* tex = rm_.GetHot(th)->api_view;
                     if (tex) {
                         encoder->useResource(tex, MTL::ResourceUsageRead,
                                              MTL::RenderStageFragment);
@@ -830,8 +829,7 @@ public:
                 cairns::Scene& scene = scenes_[i];
                 for (size_t j = 0; j < scene.textureHandles.size(); ++j) {
                     auto h = scene.textureHandles[j];
-                    MTL::Texture* tex =
-                        static_cast<MTL::Texture*>(rm_.GetHot(h)->api_view);
+                    MTL::Texture* tex = rm_.GetHot(h)->api_view;
                     if (tex) {
                         assert(h.index == num_tex);
                         arg_encoder->setTexture(tex,
@@ -852,8 +850,7 @@ public:
                 }
                 for (size_t j = 0; j < scene.samplerHandles.size(); ++j) {
                     auto h = scene.samplerHandles[j];
-                    MTL::SamplerState* samp =
-                        static_cast<MTL::SamplerState*>(rm_.GetHot(h)->api_sampler);
+                    MTL::SamplerState* samp = rm_.GetHot(h)->api_sampler;
                     arg_encoder->setSamplerState(samp,
                         cairns::rhi::GpuSceneRegistry::kSamplersSlotOffset + num_sampler);
                     sampler_id_map_[h.index] = num_sampler;

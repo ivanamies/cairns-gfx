@@ -310,7 +310,7 @@ void ResourceManager::Destroy(Handle<Texture> h) {
         return;
     }
     impl_->memory.FreeImage(cold->heap_buffer_index, cold->alloc,
-                            static_cast<MTL::Texture*>(hot->api_view),
+                            hot->api_view,
                             impl_->frame_index + kFramesInFlight);
     impl_->textures.Release(h);
 }
@@ -321,7 +321,7 @@ void ResourceManager::Destroy(Handle<Sampler> h) {
         return;
     }
     if (hot->api_sampler) {
-        static_cast<MTL::SamplerState*>(hot->api_sampler)->release();
+        hot->api_sampler->release();
         hot->api_sampler = nullptr;
     }
     impl_->samplers.Release(h);
@@ -341,7 +341,7 @@ void ResourceManager::Destroy(Handle<Shader> h) {
         return;
     }
     if (hot->api_pso) {
-        static_cast<MTL::RenderPipelineState*>(hot->api_pso)->release();
+        hot->api_pso->release();
         hot->api_pso = nullptr;
     }
     impl_->shaders.Release(h);

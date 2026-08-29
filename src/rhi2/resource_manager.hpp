@@ -34,10 +34,25 @@ class Device;
 class CommandQueue;
 class Buffer;
 class Heap;
+class Texture;
+class SamplerState;
+class RenderPipelineState;
 }  // namespace MTL
 #endif  // CAIRNS_METAL
 
 namespace cairns::rhi2 {
+
+#if CAIRNS_METAL
+using ApiTextureHandle = MTL::Texture*;
+using ApiSamplerHandle = MTL::SamplerState*;
+using ApiPsoHandle = MTL::RenderPipelineState*;
+using ApiArgBufferHandle = MTL::Buffer*;
+#else
+using ApiTextureHandle = void*;
+using ApiSamplerHandle = void*;
+using ApiPsoHandle = void*;
+using ApiArgBufferHandle = void*;
+#endif
 
 class ResourceManager;
 struct Buffer;
@@ -316,12 +331,12 @@ struct Buffer {
 
 struct Texture {
     struct Hot {
-        void* api_view = nullptr;         // VkImageView / MTLTexture / WGPUTextureView
+        ApiTextureHandle api_view = nullptr;  // VkImageView / MTLTexture / WGPUTextureView
         uint32_t descriptor_index = 0;    // bindless index if used, else 0
     };
     struct Cold {
         OffsetAllocator::Allocation alloc;
-        void* api_image = nullptr;        // VkImage / MTLTexture root / WGPUTexture
+        ApiTextureHandle api_image = nullptr;  // VkImage / MTLTexture root / WGPUTexture
         uint32_t width = 0;
         uint32_t height = 0;
         uint32_t depth = 0;
@@ -337,7 +352,7 @@ struct Texture {
 
 struct Sampler {
     struct Hot {
-        void* api_sampler = nullptr;  // VkSampler / MTLSamplerState / WGPUSampler
+        ApiSamplerHandle api_sampler = nullptr;  // VkSampler / MTLSamplerState / WGPUSampler
     };
     struct Cold {
         const char* debug_name = nullptr;
@@ -346,7 +361,7 @@ struct Sampler {
 
 struct BindGroup {
     struct Hot {
-        void* api_descriptor_set = nullptr;  // VkDescriptorSet / MTLArgumentBuffer / WGPUBindGroup
+        ApiArgBufferHandle api_descriptor_set = nullptr;  // VkDescriptorSet / MTLArgumentBuffer / WGPUBindGroup
         uint32_t arg_buf_offset = 0;         // byte offset into api_descriptor_set (Metal only)
     };
     struct Cold {
@@ -370,7 +385,7 @@ struct DynamicBuffers {
 
 struct Shader {
     struct Hot {
-        void* api_pso = nullptr;  // VkPipeline / MTLRenderPipelineState
+        ApiPsoHandle api_pso = nullptr;  // VkPipeline / MTLRenderPipelineState
     };
     struct Cold {
         const char* debug_name = nullptr;
@@ -378,7 +393,7 @@ struct Shader {
 };
 
 struct ShaderDesc {
-    void* api_pso = nullptr;  // engine-compiled; rhi2 takes ownership
+    ApiPsoHandle api_pso = nullptr;  // engine-compiled; rhi2 takes ownership
     const char* debug_name = nullptr;
 };
 
