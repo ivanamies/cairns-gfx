@@ -197,40 +197,95 @@ static VkFramebuffer get_offscreen_fb(OffscreenTargetCache* cache, VkRenderPass 
     return fb;
 }
 
-// Image-layout transition. Brute-force ALL_COMMANDS source/dst stages -- the
-// per-pass count is small and we don't have a finer producer/consumer stage map.
-static void transition(VkCommandBuffer cb, Resources& res, Handle<Texture> h,
-                       VkImageLayout new_layout) {
-    Texture::Hot* hot = res.GetHot(h);
-    Texture::Cold* cold = res.textures.GetCold(h);
-    if (!hot || !cold) {
-        return;
+// (Was a brute-force ALL_COMMANDS transition() called per-attachment in
+// BeginRenderPass; replaced by apply_invalidate_barriers below, which executes
+// the render graph's computed barriers -- the same model metal drives off.)
+
+// Translate the graph's abstract barrier vocabulary (rhi/barrier.hpp) to Vulkan.
+static VkImageLayout to_vk_layout(BarrierLayout l) {
+    switch (l) {
+        case BarrierLayout::kColorAttachment:
+            return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        case BarrierLayout::kDepthAttachment:
+            return VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        case BarrierLayout::kShaderRead:
+            return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        case BarrierLayout::kTransferSrc: return VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        case BarrierLayout::kTransferDst: return VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        case BarrierLayout::kPresent: return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        case BarrierLayout::kGeneral: return VK_IMAGE_LAYOUT_GENERAL;
+        default: return VK_IMAGE_LAYOUT_UNDEFINED;
     }
-    if (cold->plat.vk_layout == new_layout) {
-        return;
+}
+static VkAccessFlags to_vk_access(uint32_t a) {
+    VkAccessFlags f = 0;
+    if (a & kAccessColorWrite) { f |= VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT; }
+    if (a & kAccessDepthWrite) { f |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT; }
+    if (a & kAccessShaderRead) { f |= VK_ACCESS_SHADER_READ_BIT; }
+    if (a & kAccessShaderWrite) { f |= VK_ACCESS_SHADER_WRITE_BIT; }
+    if (a & kAccessTransferRead) { f |= VK_ACCESS_TRANSFER_READ_BIT; }
+    if (a & kAccessTransferWrite) { f |= VK_ACCESS_TRANSFER_WRITE_BIT; }
+    return f;
+}
+static VkPipelineStageFlags to_vk_stage(uint32_t s) {
+    VkPipelineStageFlags f = 0;
+    if (s & kPipeVertex) { f |= VK_PIPELINE_STAGE_VERTEX_SHADER_BIT; }
+    if (s & kPipeFragment) { f |= VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT; }
+    if (s & kPipeColorOutput) { f |= VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT; }
+    if (s & kPipeDepth) {
+        f |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+             VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
     }
-    VkImageMemoryBarrier b{};
-    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    b.oldLayout = cold->plat.vk_layout;
-    b.newLayout = new_layout;
-    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.image = reinterpret_cast<VkImage>(cold->api_image);
-    if ((cold->usage & kTexUsageDepthTarget) != 0) {
-        b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-    } else {
-        b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    if (s & kPipeCompute) { f |= VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT; }
+    if (s & kPipeTransfer) { f |= VK_PIPELINE_STAGE_TRANSFER_BIT; }
+    if (s & kPipeAllGraphics) { f |= VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT; }
+    if (s & kPipeAllCommands) { f |= VK_PIPELINE_STAGE_ALL_COMMANDS_BIT; }
+    return f != 0 ? f : VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+}
+
+// Execute the render graph's computed invalidate barriers as ONE
+// vkCmdPipelineBarrier (Granite §3.8). Replaces the old ad-hoc transition() so
+// vk and metal both drive off the same graph-computed barriers (no backend
+// mismatch). Also keeps cold->plat.vk_layout in sync for the render-pass setup.
+static void apply_invalidate_barriers(
+    VkCommandBuffer cb, Resources& res,
+    std::span<const ResourceBarrier> invalidate) {
+    VkImageMemoryBarrier vb[24];
+    uint32_t n = 0;
+    VkPipelineStageFlags src_stage = 0;
+    VkPipelineStageFlags dst_stage = 0;
+    for (const ResourceBarrier& b : invalidate) {
+        if (b.texture.IsNull() || n >= 24) {
+            continue;
+        }
+        Texture::Cold* cold = res.textures.GetCold(b.texture);
+        if (cold == nullptr) {
+            continue;
+        }
+        VkImageMemoryBarrier& m = vb[n++];
+        m = {};
+        m.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        m.oldLayout = to_vk_layout(b.old_layout);
+        m.newLayout = to_vk_layout(b.new_layout);
+        m.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        m.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        m.image = reinterpret_cast<VkImage>(cold->api_image);
+        m.subresourceRange.aspectMask =
+            (cold->usage & kTexUsageDepthTarget) != 0
+                ? VK_IMAGE_ASPECT_DEPTH_BIT
+                : VK_IMAGE_ASPECT_COLOR_BIT;
+        m.subresourceRange.levelCount = 1;
+        m.subresourceRange.layerCount = 1;
+        m.srcAccessMask = to_vk_access(b.src_access);
+        m.dstAccessMask = to_vk_access(b.dst_access);
+        src_stage |= to_vk_stage(b.src_stage);
+        dst_stage |= to_vk_stage(b.dst_stage);
+        cold->plat.vk_layout = m.newLayout;
     }
-    b.subresourceRange.baseMipLevel = 0;
-    b.subresourceRange.levelCount = 1;
-    b.subresourceRange.baseArrayLayer = 0;
-    b.subresourceRange.layerCount = 1;
-    b.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0,
-                         nullptr, 1, &b);
-    cold->plat.vk_layout = new_layout;
+    if (n > 0) {
+        vkCmdPipelineBarrier(cb, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr,
+                             n, vb);
+    }
 }
 
 void CommandRecorder::DispatchSkinBatches(
@@ -389,11 +444,7 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
 
 void CommandRecorder::BeginRenderPass(
     Resources& res, const SwapResolveTarget& target, const RenderPassDesc& desc,
-    std::span<const ResourceBarrier> /*invalidate*/) {
-    // TODO(Granite gap #1): execute the graph's `invalidate` barriers here as
-    // one vkCmdPipelineBarrier and delete transition(). vk is tracked + already
-    // correct via transition(), so it stays for now while the metal leaf proves
-    // out the graph-driven path.
+    std::span<const ResourceBarrier> invalidate) {
     // Surfaceless (vk render-to-texture) path: swap_chain is nullptr, every
     // swap pass desc routes final_target_ as desc.color[0].target so the
     // offscreen path below picks up the right framebuffer.
@@ -404,12 +455,11 @@ void CommandRecorder::BeginRenderPass(
                             2 * kMaxPasses * plat.frame_ + 2 * plat.pending_pass_idx_);
     }
 
-    // Sampled inputs from prior passes -> shader-read, for BOTH swapchain and
-    // offscreen passes (e.g. composite samples offscreen color + depth while
-    // rendering into the swapchain).
-    for (const Handle<Texture>& in : desc.input_textures) {
-        transition(plat.gfx_, res, in, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    }
+    // Execute the graph's computed invalidate barriers (transitions inputs ->
+    // SHADER_READ, color -> COLOR_ATTACHMENT, depth -> DEPTH, plus the RAW/WAW
+    // access sync the old transition() missed). Same graph-computed barriers
+    // metal drives off -- no backend mismatch.
+    apply_invalidate_barriers(plat.gfx_, res, invalidate);
 
     const bool is_swapchain = desc.color.empty() ||
                               desc.color[0].target.IsNull();
@@ -445,8 +495,6 @@ void CommandRecorder::BeginRenderPass(
         key.color_count = color_count;
         key.has_depth = has_depth;
         for (uint32_t i = 0; i < color_count; ++i) {
-            transition(plat.gfx_, res, desc.color[i].target,
-                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             Texture::Cold* c = res.textures.GetCold(desc.color[i].target);
             color_views[i] = reinterpret_cast<VkImageView>(
                 res.GetHot(desc.color[i].target)->api_view);
@@ -457,8 +505,6 @@ void CommandRecorder::BeginRenderPass(
             }
         }
         if (has_depth) {
-            transition(plat.gfx_, res, desc.depth.depth,
-                       VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
             Texture::Cold* c = res.textures.GetCold(desc.depth.depth);
             depth_view = reinterpret_cast<VkImageView>(
                 res.GetHot(desc.depth.depth)->api_view);
@@ -823,9 +869,10 @@ void CommandRecorder::SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) {
 
 void CommandRecorder::EndRenderPass(
     Resources& /*res*/, std::span<const Handle<Texture>> /*flush*/) {
-    // vk tracks barrier state via transition() (the graph's `flush` is a no-op
-    // here); the metal leaf signals per-resource fences. TODO(Granite gap #1):
-    // unify on the graph's computed barriers.
+    // The graph's `flush` is a no-op on vk: the next pass's invalidate barrier
+    // already carries the producer's access from PipelineEvent, so there's no
+    // separate signal (unlike metal's per-resource fence). Both backends now
+    // drive off the same graph-computed barriers.
     vkCmdEndRenderPass(plat.gfx_);
 }
 

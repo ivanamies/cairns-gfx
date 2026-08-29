@@ -214,28 +214,39 @@ the `three_champ_static` golden flake (FLAKY_TESTS #2) is a cross-frame
 `final_target_` write-after-write that nothing barriers. **Rule: copy Granite,
 do not re-invent.** Point-by-point:
 
-**The core stray — barriers live in the wrong place, with no persistent
-per-resource state:**
+**The core stray — barriers belonged in the graph with persistent per-resource
+state. PORTED 2026-06-20 (`08fccb5`); remaining caveats below.**
 
-- **Granite computes barriers in `bake()`; we compute none.** Granite emits, per
-  physical pass, `invalidate` (before) + `flush` (after) `Barrier` lists. We
-  emit nothing: vk does ad-hoc `transition()` on a layout change only; metal a
-  `compute_fence_` for compute→graphics only. No graph-level barrier pass exists.
-- **Granite keeps `PipelineEvent` per physical resource, PERSISTENT across
-  frames; we keep almost nothing.** Granite's `physical_events[]` holds
-  `{layout, to_flush_access, invalidated_in_stage[64], src_stages, wait
-  semaphores}` and survives `bake()` rebuilds, so a resource's first use in
-  frame N+1 invalidates against frame N's flush. We rebuild per frame and
-  persist only vk's `vk_layout` (no flush-access, no invalidate tracking) →
-  cross-frame WAW on `final_target_` is invisible. **This is the flake.**
-- **Invalidate/flush models RAW + WAW + WAR; we model (at most) layout-change
-  RAW.** Granite: inputs → invalidate (RAW vs `to_flush_access`); outputs →
-  flush (record writes); read-only resources get a "fake flush, access=0" to
-  catch WAR. vk's `transition()` skips same-layout transitions, so WAW (two
-  writes, same layout — exactly `final_target_` frame-to-frame) and WAR are
-  never barriered.
-- **Buffers go through the same invalidate/flush in Granite; ours don't.** We
-  track `buf_reads`/`buf_writers` for *scheduling* but emit no buffer barriers.
+- **Granite computes barriers in `bake()`; now we do too.** `render_graph::
+  Execute` computes per-pass `invalidate` (before) + `flush` (after) barriers
+  from each resource's persistent `PipelineEvent` (`Texture::Cold.sync`) and
+  hands them to the backend via `BeginRenderPass(invalidate)` /
+  `EndRenderPass(flush)`. Was: nothing (vk ad-hoc `transition()`; metal ad-hoc
+  `compute_fence_`).
+- **`PipelineEvent` is now persistent across frames** (`Texture::Cold` /
+  `Buffer::Cold`), so it survives the per-frame graph rebuild and the cross-frame
+  `final_target_` WAW is tracked. We collapse Granite's `invalidated_in_stage[64]`
+  to a coarse `invalidated_access`/`_stages` pair (gap 1 below).
+- **RAW + WAW + layout are modeled; WAR is not yet.** Inputs → invalidate (RAW),
+  outputs → flush (WAW + layout). Granite's "fake flush, access=0" for read-only
+  resources (WAR) is unported — fine for today's graph (no in-graph
+  read-then-write of a persistent resource) but a real gap.
+- **Both backends now execute the SAME graph-computed barriers** (no mismatch —
+  see the no-metal-vulkan-mismatch standard): metal via a per-resource
+  `MTLFence` (`sync_fence_` on `TextureColdPlat`, replacing the ad-hoc
+  `gfx_fence_`); vk via one `vkCmdPipelineBarrier` (`apply_invalidate_barriers`,
+  replacing the ad-hoc `transition()`, now deleted). The graph carries the
+  abstract `BarrierLayout/Access/Stage`; each backend translates the leaf.
+- **Metal untracked-heap caveat — a Metal semantics gap, NOT a Granite gap.**
+  Granite is Vulkan: its images are tracked, so a barrier both ORDERS and
+  COHERES. Metal placement-heap resources are `HazardTrackingModeUntracked`, so
+  an `MTLFence` orders but does NOT cohere — the host read of `final_target_`
+  saw stale memory even after a correct WAW fence. Fix: `final_target_` (and any
+  host-read target) is allocated as a DEDICATED TRACKED `MTLTexture` (outside the
+  untracked placement heap) so Metal auto-coheres it. Granite never needs this;
+  it's a consequence of our untracked-by-default heaps.
+- **Buffers** still go un-barriered (compute→graphics leans on `compute_fence_`);
+  Granite routes buffers through the same invalidate/flush.
 
 **Granite features we lack entirely (rough value order):**
 
@@ -256,13 +267,37 @@ per-resource state:**
 7. **History / feedback resources** (`history_inputs`,
    `physical_history_events` — read the previous frame's version). Absent.
 
-**Parity plan (in order):** port `PipelineEvent` (persistent `physical_events[]`)
-+ the `Barrier`/invalidate/flush model into `bake()`; have both backends
-*execute* the computed barriers (vk: `vkCmdPipelineBarrier`; metal: the same
-edges as `MTLFence`/`memoryBarrier`) instead of ad-hoc ones. That kills the flake
-and makes the backends behave identically. Then layer the perf items (per-stage
-scoping, events, reorder, subpass merge, async compute). See TODO "Render-graph
+**Done (2026-06-20):** persistent `PipelineEvent` + graph-computed invalidate/
+flush, executed by both backends off the same barriers. **In progress:**
+`final_target_` as a dedicated tracked target so Metal *coheres* (not just
+orders) the host read-back — the untracked-heap caveat above. **Remaining
+parity:** WAR (read-only fake-flush), buffer barriers, then the perf items
+(per-stage scoping, split-barrier events, pass reorder, subpass merge, transient
+aliasing barriers, async compute, history resources). See TODO "Render-graph
 gaps vs Granite".
+
+---
+
+## Frame pacing: where we differ from Unity
+
+Unity's frame pacing (and its Android Frame Pacing / Swappy library) targets a
+*stable presentation cadence* — it picks a swap interval, schedules present
+times against the display's refresh, and is free to drive the swapchain from a
+dedicated present/render thread on most platforms.
+
+We're **macOS/Metal-first**, and the platform constraint dominates: the
+`CAMetalLayer` drawable + window live on the **main thread**, so acquire/present
+must ultimately route there. So instead of Unity's "present from wherever, pace
+to refresh," we do **main-thread gymnastics**: the game thread builds the frame
+packet and hands it to the render thread (`RenderThread::Submit`), the render
+thread records, and the present is handed *back* to the main thread via the
+`present_queue_` + `Frames::Present` (a no-op body on Metal — the actual
+`presentDrawable` is enqueued on the command buffer, which Apple allows
+off-thread, but the drawable acquire + window ownership keep us main-thread
+bound). The result is correct but it is *plumbing to satisfy the main-thread
+present*, not a frame-pacing controller: we do not yet target a stable cadence or
+pace against the display link the way Unity/Swappy do. A real pacing controller
+(VSync-locked target frame time, present-time scheduling) is future work.
 
 ---
 
