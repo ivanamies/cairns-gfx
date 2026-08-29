@@ -190,7 +190,38 @@ Handle<Texture> RenderGraph::AcquireTransientTex(const GraphTextureDesc& desc,
     return h;
 }
 
-bool RenderGraph::Bake() {
+// #210 flat-array variant. tex_pool_ grow via push_back is rare (only on
+// new-shape transients); when it fires, claimed_n grows alongside the
+// arena-backed flat array -- but the arena allocation is fixed size, so
+// new entries past claimed_n stay implicitly unclaimed for THIS Bake.
+Handle<Texture> RenderGraph::AcquireTransientTexFlat(const GraphTextureDesc& desc,
+                                                     uint8_t* claimed,
+                                                     size_t claimed_n) {
+    for (size_t i = 0; i < tex_pool_.size() && i < claimed_n; ++i) {
+        if (!claimed[i] && DescEq(tex_pool_[i].desc, desc)) {
+            claimed[i] = 1;
+            return tex_pool_[i].handle;
+        }
+    }
+    TextureDesc td;
+    td.dimensions = {static_cast<int32_t>(desc.width),
+                     static_cast<int32_t>(desc.height), 1};
+    td.format = desc.format;
+    td.sample_count = desc.samples;
+    td.usage = desc.usage;
+    td.memory = Memory::kDefault;
+    const Handle<Texture> h = resources_.CreateTexture(alloc_, td);
+    tex_pool_.push_back({desc, h});
+    return h;
+}
+
+void RenderGraph::BindSlotArena(uint32_t slot, cairns::BumpArena& arena) {
+    if (slot < kMaxBoundSlots) {
+        slot_arenas_[slot] = &arena;
+    }
+}
+
+bool RenderGraph::Bake(uint32_t slot) {
     topo_order_.clear();
     resolved_tex_.assign(textures_.size(), Handle<Texture>::Null);
     resolved_buf_.assign(buffers_.size(), Handle<Buffer>::Null);
@@ -201,114 +232,156 @@ bool RenderGraph::Bake() {
     }
     const bool log = std::getenv("CAIRNS_RG_LOG") != nullptr;
 
-    std::vector<std::vector<uint32_t>> tex_writers(textures_.size());
-    std::vector<std::vector<uint32_t>> buf_writers(buffers_.size());
+    // #210 all Bake() scratch on this slot's arena. Slot is the lock.
+    assert(slot < kMaxBoundSlots && slot_arenas_[slot] != nullptr &&
+           "RenderGraph::Bake: slot arena not bound -- call BindSlotArena");
+    cairns::BumpArena& arena = *slot_arenas_[slot];
+    const auto mark0 = arena.Mark();
+    auto rewind_on_exit = [&arena, mark0]() { arena.Rewind(mark0); };
+
+    // tex_writers / buf_writers as flat arena arrays + per-resource
+    // {offset, count}. Two passes: count -> prefix-sum offsets -> fill.
+    const size_t n_tex = textures_.size();
+    const size_t n_buf = buffers_.size();
+    uint32_t* tex_w_off = arena.AllocateArray<uint32_t>(n_tex ? n_tex : 1);
+    uint32_t* tex_w_cnt = arena.AllocateArray<uint32_t>(n_tex ? n_tex : 1);
+    uint32_t* buf_w_off = arena.AllocateArray<uint32_t>(n_buf ? n_buf : 1);
+    uint32_t* buf_w_cnt = arena.AllocateArray<uint32_t>(n_buf ? n_buf : 1);
+    for (size_t i = 0; i < n_tex; ++i) tex_w_cnt[i] = 0;
+    for (size_t i = 0; i < n_buf; ++i) buf_w_cnt[i] = 0;
+    for (uint32_t p = 0; p < n_pass; ++p) {
+        for (uint16_t w : passes_[p].writes) ++tex_w_cnt[w];
+        for (uint16_t w : passes_[p].buf_writes) ++buf_w_cnt[w];
+    }
+    uint32_t tex_total = 0;
+    for (size_t i = 0; i < n_tex; ++i) { tex_w_off[i] = tex_total; tex_total += tex_w_cnt[i]; }
+    uint32_t buf_total = 0;
+    for (size_t i = 0; i < n_buf; ++i) { buf_w_off[i] = buf_total; buf_total += buf_w_cnt[i]; }
+    uint32_t* tex_w_data = arena.AllocateArray<uint32_t>(tex_total ? tex_total : 1);
+    uint32_t* buf_w_data = arena.AllocateArray<uint32_t>(buf_total ? buf_total : 1);
+    uint32_t* tex_head = arena.AllocateArray<uint32_t>(n_tex ? n_tex : 1);
+    uint32_t* buf_head = arena.AllocateArray<uint32_t>(n_buf ? n_buf : 1);
+    for (size_t i = 0; i < n_tex; ++i) tex_head[i] = 0;
+    for (size_t i = 0; i < n_buf; ++i) buf_head[i] = 0;
     for (uint32_t p = 0; p < n_pass; ++p) {
         for (uint16_t w : passes_[p].writes) {
-            tex_writers[w].push_back(p);
+            tex_w_data[tex_w_off[w] + tex_head[w]++] = p;
         }
         for (uint16_t w : passes_[p].buf_writes) {
-            buf_writers[w].push_back(p);
+            buf_w_data[buf_w_off[w] + buf_head[w]++] = p;
         }
     }
+    auto tex_writers_span = [&](uint16_t t) {
+        return std::span<const uint32_t>(tex_w_data + tex_w_off[t], tex_w_cnt[t]);
+    };
+    auto buf_writers_span = [&](uint16_t b) {
+        return std::span<const uint32_t>(buf_w_data + buf_w_off[b], buf_w_cnt[b]);
+    };
 
-    // Step 1: reachability prune. Roots = passes that write the output OR write any
-    // imported resource (external side effect, e.g. the persistent particle SSBO).
-    std::vector<uint8_t> alive(n_pass, 0);
-    std::vector<uint32_t> work;
+    // Step 1: reachability prune.
+    uint8_t* alive = arena.AllocateArray<uint8_t>(n_pass);
+    uint32_t* work_buf = arena.AllocateArray<uint32_t>(n_pass);
+    for (uint32_t i = 0; i < n_pass; ++i) alive[i] = 0;
+    uint32_t work_top = 0;
     auto mark = [&](uint32_t p) {
         if (!alive[p]) {
             alive[p] = 1;
-            work.push_back(p);
+            work_buf[work_top++] = p;
         }
     };
     if (!output_.IsNull() && output_.id < textures_.size()) {
-        for (uint32_t p : tex_writers[output_.id]) {
-            mark(p);
-        }
+        for (uint32_t p : tex_writers_span(output_.id)) mark(p);
     }
     for (uint32_t p = 0; p < n_pass; ++p) {
         for (uint16_t w : passes_[p].writes) {
-            if (textures_[w].kind == ResKind::kImported) {
-                mark(p);
-            }
+            if (textures_[w].kind == ResKind::kImported) mark(p);
         }
         for (uint16_t w : passes_[p].buf_writes) {
-            if (buffers_[w].kind == ResKind::kImported) {
-                mark(p);
-            }
+            if (buffers_[w].kind == ResKind::kImported) mark(p);
         }
     }
     if (output_.IsNull()) {
-        for (uint32_t p = 0; p < n_pass; ++p) {
-            mark(p);
-        }
+        for (uint32_t p = 0; p < n_pass; ++p) mark(p);
     }
-    while (!work.empty()) {
-        const uint32_t p = work.back();
-        work.pop_back();
+    while (work_top > 0) {
+        const uint32_t p = work_buf[--work_top];
         for (uint16_t r : passes_[p].reads) {
-            for (uint32_t producer : tex_writers[r]) {
-                mark(producer);
-            }
+            for (uint32_t producer : tex_writers_span(r)) mark(producer);
         }
         for (uint16_t r : passes_[p].buf_reads) {
-            for (uint32_t producer : buf_writers[r]) {
-                mark(producer);
-            }
+            for (uint32_t producer : buf_writers_span(r)) mark(producer);
         }
     }
 
-    // Step 2: topological sort (write -> read deps), stable in registration order.
-    std::vector<uint32_t> indeg(n_pass, 0);
-    std::vector<std::vector<uint32_t>> edges(n_pass);
+    // Step 2: topological sort. edges as flat arena array with {off,cnt}.
+    uint32_t* indeg = arena.AllocateArray<uint32_t>(n_pass);
+    uint32_t* edge_cnt = arena.AllocateArray<uint32_t>(n_pass);
+    for (uint32_t i = 0; i < n_pass; ++i) { indeg[i] = 0; edge_cnt[i] = 0; }
+    // Pass 1: count edges per source.
     for (uint32_t q = 0; q < n_pass; ++q) {
-        if (!alive[q]) {
-            continue;
-        }
+        if (!alive[q]) continue;
         for (uint16_t r : passes_[q].reads) {
-            for (uint32_t p : tex_writers[r]) {
-                if (p == q || !alive[p]) {
-                    continue;
-                }
-                edges[p].push_back(q);
-                indeg[q]++;
+            for (uint32_t p : tex_writers_span(r)) {
+                if (p == q || !alive[p]) continue;
+                ++edge_cnt[p];
+                ++indeg[q];
             }
         }
         for (uint16_t r : passes_[q].buf_reads) {
-            for (uint32_t p : buf_writers[r]) {
-                if (p == q || !alive[p]) {
-                    continue;
-                }
-                edges[p].push_back(q);
-                indeg[q]++;
+            for (uint32_t p : buf_writers_span(r)) {
+                if (p == q || !alive[p]) continue;
+                ++edge_cnt[p];
+                ++indeg[q];
             }
         }
     }
-    std::vector<uint8_t> done(n_pass, 0);
+    uint32_t* edge_off = arena.AllocateArray<uint32_t>(n_pass);
+    uint32_t edge_total = 0;
+    for (uint32_t i = 0; i < n_pass; ++i) { edge_off[i] = edge_total; edge_total += edge_cnt[i]; }
+    uint32_t* edge_data = arena.AllocateArray<uint32_t>(edge_total ? edge_total : 1);
+    uint32_t* edge_head = arena.AllocateArray<uint32_t>(n_pass);
+    for (uint32_t i = 0; i < n_pass; ++i) edge_head[i] = 0;
+    // indeg recomputed during fill; reset.
+    for (uint32_t i = 0; i < n_pass; ++i) indeg[i] = 0;
+    for (uint32_t q = 0; q < n_pass; ++q) {
+        if (!alive[q]) continue;
+        for (uint16_t r : passes_[q].reads) {
+            for (uint32_t p : tex_writers_span(r)) {
+                if (p == q || !alive[p]) continue;
+                edge_data[edge_off[p] + edge_head[p]++] = q;
+                ++indeg[q];
+            }
+        }
+        for (uint16_t r : passes_[q].buf_reads) {
+            for (uint32_t p : buf_writers_span(r)) {
+                if (p == q || !alive[p]) continue;
+                edge_data[edge_off[p] + edge_head[p]++] = q;
+                ++indeg[q];
+            }
+        }
+    }
+    uint8_t* done = arena.AllocateArray<uint8_t>(n_pass);
+    for (uint32_t i = 0; i < n_pass; ++i) done[i] = 0;
     for (uint32_t iter = 0; iter < n_pass; ++iter) {
         int picked = -1;
         for (uint32_t p = 0; p < n_pass; ++p) {
-            if (alive[p] && !done[p] && indeg[p] == 0) {
-                picked = static_cast<int>(p);
-                break;
-            }
+            if (alive[p] && !done[p] && indeg[p] == 0) { picked = static_cast<int>(p); break; }
         }
-        if (picked < 0) {
-            break;
-        }
+        if (picked < 0) break;
         done[picked] = 1;
         topo_order_.push_back(static_cast<uint32_t>(picked));
-        for (uint32_t q : edges[picked]) {
-            if (indeg[q] > 0) {
-                indeg[q]--;
-            }
+        const uint32_t e_off = edge_off[picked];
+        const uint32_t e_n = edge_cnt[picked];
+        for (uint32_t k = 0; k < e_n; ++k) {
+            const uint32_t q = edge_data[e_off + k];
+            if (indeg[q] > 0) --indeg[q];
         }
     }
 
     // Step 3: per-texture lifetimes in topo positions.
-    std::vector<int> tex_first(textures_.size(), 0x7FFFFFFF);
-    std::vector<int> tex_last(textures_.size(), -1);
+    int* tex_first = arena.AllocateArray<int>(n_tex ? n_tex : 1);
+    int* tex_last = arena.AllocateArray<int>(n_tex ? n_tex : 1);
+    for (size_t i = 0; i < n_tex; ++i) { tex_first[i] = 0x7FFFFFFF; tex_last[i] = -1; }
     for (uint32_t idx = 0; idx < topo_order_.size(); ++idx) {
         const PassRecord& pass = passes_[topo_order_[idx]];
         const int pos = static_cast<int>(idx);
@@ -335,13 +408,14 @@ bool RenderGraph::Bake() {
     }
 
     // Steps 4+5: conservative aliasing + physical alloc for created transients.
-    std::vector<uint16_t> order;
-    for (uint16_t t = 0; t < textures_.size(); ++t) {
+    uint16_t* order = arena.AllocateArray<uint16_t>(n_tex ? n_tex : 1);
+    uint32_t order_n = 0;
+    for (uint16_t t = 0; t < n_tex; ++t) {
         if (textures_[t].kind == ResKind::kCreated && tex_last[t] >= 0) {
-            order.push_back(t);
+            order[order_n++] = t;
         }
     }
-    std::sort(order.begin(), order.end(),
+    std::sort(order, order + order_n,
               [&](uint16_t a, uint16_t b) { return tex_first[a] < tex_first[b]; });
 
     struct Slot {
@@ -349,11 +423,16 @@ bool RenderGraph::Bake() {
         int last;
         Handle<Texture> handle;
     };
-    std::vector<Slot> slots;
-    std::vector<uint8_t> pool_claimed(tex_pool_.size(), 0);
-    for (uint16_t t : order) {
+    Slot* slots = arena.AllocateArray<Slot>(order_n ? order_n : 1);
+    uint32_t slots_n = 0;
+    const size_t n_pool = tex_pool_.size();
+    uint8_t* pool_claimed = arena.AllocateArray<uint8_t>(n_pool ? n_pool : 1);
+    for (size_t i = 0; i < n_pool; ++i) pool_claimed[i] = 0;
+    for (uint32_t oi = 0; oi < order_n; ++oi) {
+        const uint16_t t = order[oi];
         Handle<Texture> chosen = Handle<Texture>::Null;
-        for (Slot& s : slots) {
+        for (uint32_t si = 0; si < slots_n; ++si) {
+            Slot& s = slots[si];
             if (s.last < tex_first[t] &&
                 DescEq(textures_[s.desc_tex].desc, textures_[t].desc)) {
                 chosen = s.handle;
@@ -367,8 +446,8 @@ bool RenderGraph::Bake() {
             }
         }
         if (chosen.IsNull()) {
-            chosen = AcquireTransientTex(textures_[t].desc, pool_claimed);
-            slots.push_back({t, tex_last[t], chosen});
+            chosen = AcquireTransientTexFlat(textures_[t].desc, pool_claimed, n_pool);
+            slots[slots_n++] = Slot{t, tex_last[t], chosen};
         }
         resolved_tex_[t] = chosen;
     }
@@ -412,6 +491,7 @@ bool RenderGraph::Bake() {
                     tex_first[t] == 0x7FFFFFFF ? -1 : tex_first[t], tex_last[t]);
         }
     }
+    rewind_on_exit();
     return true;
 }
 

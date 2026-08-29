@@ -1,5 +1,6 @@
 #pragma once
 
+#include "render/worker_context.hpp"
 #include "rhi/command_recorder.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/swap_resolve_target.hpp"
@@ -96,7 +97,12 @@ public:
     void Reset();
     void AddPass(const char* name, PassType type, SetupFn setup, ExecuteFn execute);
     void SetOutput(GraphTexture t);
-    bool Bake();
+    // #210: caller passes ITS SLOT INDEX. RenderGraph looks up that slot's
+    // arena from its pre-registered slot table (BindSlotArena). Slot index
+    // is the lock -- no two callers can ever hand the same slot to Bake
+    // concurrently because the slot was Acquire'd exclusively.
+    void BindSlotArena(uint32_t slot, BumpArena& arena);
+    bool Bake(uint32_t slot);
     bool Execute(FrameContext& fc, const SwapResolveTarget& target);
 
     Handle<Texture> ResolveTexture(GraphTexture t) const;
@@ -161,6 +167,8 @@ private:
 
     GraphTexture AddTexture(const TexRecord& rec);
     GraphBuffer AddBuffer(const BufRecord& rec);
+    Handle<Texture> AcquireTransientTexFlat(const GraphTextureDesc& desc,
+                                             uint8_t* claimed, size_t claimed_n);
     Handle<Texture> AcquireTransientTex(const GraphTextureDesc& desc,
                                         std::vector<uint8_t>& claimed);
 
@@ -177,6 +185,12 @@ private:
     std::vector<Handle<Buffer>> resolved_buf_;
     std::vector<PooledTex> tex_pool_;
     std::vector<PooledBuf> buf_pool_;
+
+    // #210 per-slot arena table. Engine binds once at init; Bake(slot)
+    // resolves slot_arenas_[slot] -> the BumpArena that owns Bake's
+    // scratch. nullptr until BindSlotArena fires for that slot.
+    static constexpr uint32_t kMaxBoundSlots = 4;
+    BumpArena* slot_arenas_[kMaxBoundSlots] = {nullptr, nullptr, nullptr, nullptr};
 };
 
 }  // namespace cairns::rhi

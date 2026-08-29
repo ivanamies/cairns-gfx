@@ -45,6 +45,11 @@ struct Viewport {
     // entt::null means "use FlyController" (Camera role #1). Resolution
     // happens once per frame in BuildMeshOpaqueDraws.
     entt::entity camera_entity = entt::null;
+    // #194: where this viewport tiles on the swap pane, in NDC (0..1).
+    // (x, y) = bottom-left corner; (z, w) = size. {0,0,1,1} = full pane.
+    // Default for viewport 0 = full pane; other viewports = zero-size so
+    // they're inert until the agent calls cairns.viewport.setLayout.
+    glm::vec4 layout_rect{0.0f, 0.0f, 0.0f, 0.0f};
 };
 
 // Per-viewport navigation state. yaw rotates around world up (Y); pitch around

@@ -15,11 +15,15 @@
 #include <numbers>
 #include <variant>
 
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
 
 #include <stb_image_write.h>
+
+#include "render/worker_context.hpp"
+#include "util/cpu_arena.hpp"
 
 #include "gfx_api.hpp"
 #include "rhi/init_config.hpp"
@@ -143,6 +147,18 @@ public:
         rhi::FrameContext present_fc{};
         rhi::SwapResolveTarget present_target{};
         bool present_ready = false;
+        // #210 per-slot CPU bump arena. SLOT IS THE LOCK -- render thread
+        // sees this slot's arena exclusively during RecordFrame; main
+        // thread resets at slot Acquire (already blocked on render
+        // exclusivity). No mutex, no shared ptr.
+        std::vector<uint8_t> arena_storage;
+        cairns::BumpArena arena{};
+        // Per-slot atomic in-use flag. RAII via SlotLock below: CAS to
+        // true on acquire, store false on scope exit (success OR
+        // exception). Detects double-acquire (SLOT_LOCK_BROKEN assert) so
+        // misuse of the slot discipline shows up at the failure point,
+        // not as silent corruption.
+        std::atomic<bool> in_use{false};
 
         PerSlot() {
             pending_view_matrix.fill(glm::mat4(1.0f));
@@ -151,8 +167,46 @@ public:
         }
     };
 
+    // RAII slot lock. Constructor CAS-acquires PerSlot::in_use; destructor
+    // releases. Move-only -- the lock travels with the worker context that
+    // owns the slot. Don't share across threads; pass by value.
+    struct SlotLock {
+        PerSlot* slot_ = nullptr;
+        SlotLock() = default;
+        explicit SlotLock(PerSlot& s) : slot_(&s) {
+            bool expected = false;
+            const bool ok = s.in_use.compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel);
+            (void)ok;
+            assert(ok && "SLOT_LOCK_BROKEN: slot acquired while another "
+                          "owner still holds it -- two workers / two threads "
+                          "raced into the same PerSlot");
+        }
+        SlotLock(const SlotLock&) = delete;
+        SlotLock& operator=(const SlotLock&) = delete;
+        SlotLock(SlotLock&& other) noexcept : slot_(other.slot_) {
+            other.slot_ = nullptr;
+        }
+        SlotLock& operator=(SlotLock&& other) noexcept {
+            if (this != &other) {
+                Release();
+                slot_ = other.slot_;
+                other.slot_ = nullptr;
+            }
+            return *this;
+        }
+        ~SlotLock() { Release(); }
+        void Release() {
+            if (slot_) {
+                slot_->in_use.store(false, std::memory_order_release);
+                slot_ = nullptr;
+            }
+        }
+    };
+
     Engine() {
-        slots_.resize(kFramesInFlight);
+        // slots_ is std::array (atomic<bool> not move-constructible). The
+        // ctor for PerSlot fills pending_view_matrix / near_z / far_z.
     }
     
     bool initSwapChain(const rhi::InitConfig& cfg) {
@@ -316,7 +370,7 @@ public:
     // input is then routed to that viewport on subsequent iterates.
     void SetActiveViewportFromClickX(float window_x) {
         const float half = static_cast<float>(FrameWidth()) /
-                            static_cast<float>(kNumViewports);
+                            static_cast<float>(std::max(1, active_viewport_count_));
         active_viewport_ = (window_x < half) ? 0 : 1;
     }
     int ActiveViewport() const { return active_viewport_; }
@@ -395,6 +449,12 @@ public:
     }
     
     bool initCpuAllocators() {
+        for (PerSlot& s : slots_) {
+            s.arena_storage.assign(kArenaBytesPerSlot, 0);
+            s.arena.Init(s.arena_storage.data(), kArenaBytesPerSlot);
+        }
+        // Default layout: viewport 0 full-frame, others zero-size.
+        viewports_[0].layout_rect = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
         return true;
     }
     
@@ -417,7 +477,7 @@ public:
         // P3 follow-up.
         if (engine_cfg_.cam_pose.has_value()) {
             const EngineConfig::CamPose& p = *engine_cfg_.cam_pose;
-            for (int vi = 0; vi < kNumViewports; ++vi) {
+            for (int vi = 0; vi < active_viewport_count_; ++vi) {
                 fly_[vi].position = glm::vec3(p.x, p.y, p.z);
                 fly_[vi].yaw = p.yaw;
                 fly_[vi].pitch = p.pitch;
@@ -717,7 +777,7 @@ public:
         // the active world's registry. WorldTransform.world is the camera-
         // to-world matrix; the view matrix is its inverse.
         cairns::World::Cold* wc_cam = worlds_.GetCold(active_world_);
-        for (int v = 0; v < kNumViewports; ++v) {
+        for (int v = 0; v < active_viewport_count_; ++v) {
             const cairns::Viewport& vp = viewports_[v];
             const bool entity_cam =
                 vp.camera_entity != entt::null && wc_cam &&
@@ -783,7 +843,7 @@ public:
         // list -- per-viewport draw fan-out lands when the multi-pass split
         // does (depends on #206's per-pass globals being per-viewport too).
         s.proxies.Clear();
-        for (int v = 0; v < kNumViewports; ++v) {
+        for (int v = 0; v < active_viewport_count_; ++v) {
             const cairns::WorldId wid = viewports_[v].world;
             cairns::World::Hot* wh = worlds_.GetHot(wid);
             cairns::World::Cold* wc = worlds_.GetCold(wid);
@@ -807,7 +867,7 @@ public:
         if (cairns::World::Hot* wh_a = worlds_.GetHot(active_world_)) {
             if (cairns::World::Cold* wc_a = worlds_.GetCold(active_world_)) {
                 bool already_extracted = false;
-                for (int v = 0; v < kNumViewports; ++v) {
+                for (int v = 0; v < active_viewport_count_; ++v) {
                     if (viewports_[v].world.index == active_world_.index) {
                         already_extracted = true;
                         break;
@@ -887,7 +947,7 @@ public:
         PerSlot& s = slots_[pkt.slot];
         // 1. globals UBO -- one per viewport, distinct bump offsets. The
         // forward pass for viewport v binds s.globals_offset[v].
-        for (int v = 0; v < kNumViewports; ++v) {
+        for (int v = 0; v < active_viewport_count_; ++v) {
             void* gptr = rhi_.alloc.BumpAllocate(
                 sizeof(cairns::rhi::RenderPassGlobals), rhi_.alloc.UboAlign(),
                 rhi::Memory::kDynamic, &s.globals_offset[v]);
@@ -1000,9 +1060,22 @@ public:
 
         // Acquire BEFORE touching slot storage -- this is the backpressure
         // gate, blocks if the render thread is still holding slot S.
-        render_thread_->Acquire(slot);
-
         PerSlot& s = slots_[slot];
+        // RAII slot lock FIRST -- the atomic CAS is the actual ownership
+        // claim. Then render_thread_->Acquire blocks on the state
+        // machine until the previous slot user (render thread) has
+        // signaled kIdle. Inverting (Acquire then SlotLock) opens a
+        // window where the state machine says "you own it" but the
+        // atomic says "nobody owns it" -- a crash between leaves the
+        // slot in a half-acquired limbo. SlotLock-first means a crash
+        // releases via destructor before anyone could think the slot
+        // was free.
+        SlotLock slot_lock(s);
+        render_thread_->Acquire(slot);
+        // #210 reset this slot's CPU bump arena. Safe here because
+        // Acquire blocked until the render thread finished its prior
+        // use of slot S -- no reader still inside the bytes.
+        s.arena.Reset();
 
         const uint64_t cpu_now_ns = cairns::timestamp_ns();
         if (cpu_last_frame_ns_ != 0) {
@@ -1165,6 +1238,10 @@ public:
             s.pkt.imgui_snapshot = nullptr;
         }
 
+        // Hand the slot to the render thread BEFORE main-thread Submit
+        // returns. Release the SlotLock first so render thread's
+        // RecordFrame can CAS-acquire its own SlotLock without racing.
+        slot_lock.Release();
         render_thread_->Submit(slot, &s.pkt);
 
         // MAIN-THREAD present. Render thread ran Frames::EndSubmit and
@@ -1261,6 +1338,11 @@ public:
         [[maybe_unused]] cairns::TaskGuard task_guard;
 
         PerSlot& s = slots_[pkt.slot];
+        // Render-thread RAII slot lock. Main released its SlotLock before
+        // Submit; this CAS asserts no other worker (render thread or
+        // physics worker) is touching pkt.slot. Released on scope exit
+        // (after EndSubmit + PresentPacket push).
+        SlotLock slot_lock(s);
 
         // Publish parity early -- a pure function of pkt fields (no GPU
         // dependency) so the game thread's parity_cv wait clears immediately.
@@ -1289,6 +1371,11 @@ public:
 
         if (!graph_) {
             graph_ = std::make_unique<rhi::RenderGraph>(rhi_.resources, rhi_.alloc);
+            // #210 wire per-slot scratch arenas into the graph's slot table.
+            // Bake(slot) resolves slot_arenas_[slot] -> this slot's BumpArena.
+            for (uint32_t s = 0; s < kFramesInFlight; ++s) {
+                graph_->BindSlotArena(s, slots_[s].arena);
+            }
         }
         graph_->Reset();
 
@@ -1296,7 +1383,7 @@ public:
         // (Same world for both viewports this commit; multi-world content
         // lands in #195.)
         std::array<rhi::MeshDrawList, kNumViewports> mls{};
-        for (int v = 0; v < kNumViewports; ++v) {
+        for (int v = 0; v < active_viewport_count_; ++v) {
             mls[v].draws = pkt.draws;
             mls[v].sorted_draws = pkt.sorted;
             mls[v].pipeline = unlit_offscreen_;
@@ -1315,7 +1402,13 @@ public:
         const float clear[4] = {41.0f / 255.0f, 42.0f / 255.0f, 48.0f / 255.0f, 1.0f};
         const uint32_t fb_w = swap_target.width;
         const uint32_t fb_h = swap_target.height;
-        const uint32_t vp_w = fb_w / kNumViewports;
+        // #194 vp_w/vp_h were sized off kNumViewports (uniform horizontal
+        // tiling cap). Now active_viewport_count_ at runtime; layout_rect
+        // owns the per-viewport region. Today's default keeps vp_w = full
+        // when active=1 -- byte-identical to the pre-#194 single-viewport
+        // path.
+        const int n_live = std::max(1, active_viewport_count_);
+        const uint32_t vp_w = fb_w / static_cast<uint32_t>(n_live);
         const uint32_t vp_h = fb_h;
 
         // pass 1: particle_sim kCompute. import the writer ssbo so prune keeps
@@ -1360,7 +1453,7 @@ public:
         // submission that draws into each forward pass's encoder).
         std::array<rhi::GraphTexture, kNumViewports> color_off{};
         std::array<rhi::GraphTexture, kNumViewports> depth_off{};
-        for (int v = 0; v < kNumViewports; ++v) {
+        for (int v = 0; v < active_viewport_count_; ++v) {
             const int vp_idx = v;
             const char* pass_name = (vp_idx == 0) ? "forward_vp0" : "forward_vp1";
             graph_->AddPass(
@@ -1413,7 +1506,7 @@ public:
                                             : final_target_;
                 swap_tex = b.ImportTexture(swap_handle, td);
                 b.AddColorOutput("swapchain", swap_tex, rhi::LoadOp::kClear, clear);
-                for (int v = 0; v < kNumViewports; ++v) {
+                for (int v = 0; v < active_viewport_count_; ++v) {
                     b.AddAttachmentInput(color_off[v]);
                     b.AddAttachmentInput(depth_off[v]);
                 }
@@ -1421,14 +1514,14 @@ public:
             [&](rhi::CommandRecorder& cmd, const rhi::PassResources& res) {
                 std::array<rhi::Handle<rhi::Texture>, kNumViewports> vp_color{};
                 std::array<rhi::Handle<rhi::Texture>, kNumViewports> vp_depth{};
-                for (int v = 0; v < kNumViewports; ++v) {
+                for (int v = 0; v < active_viewport_count_; ++v) {
                     vp_color[v] = res.Resolve(color_off[v]);
                     vp_depth[v] = res.Resolve(depth_off[v]);
                 }
                 // Composite each viewport's color into its half of the swap.
                 const float vp_fw = static_cast<float>(vp_w);
                 const float vp_fh = static_cast<float>(vp_h);
-                for (int v = 0; v < kNumViewports; ++v) {
+                for (int v = 0; v < active_viewport_count_; ++v) {
                     const float x = vp_fw * static_cast<float>(v);
                     cmd.SetViewport(x, 0.0f, vp_fw, vp_fh);
                     cmd.SetScissor(static_cast<int32_t>(x), 0,
@@ -1465,7 +1558,7 @@ public:
             });
 
         graph_->SetOutput(swap_tex);
-        if (!graph_->Bake() || !graph_->Execute(fc, swap_target)) {
+        if (!graph_->Bake(pkt.slot) || !graph_->Execute(fc, swap_target)) {
             t_record.End();
             rhi_.frames.EndSubmit(swap_target, fc);
             {
@@ -1481,7 +1574,7 @@ public:
             fprintf(stderr, "[FLAKE-R] frame=%u slot=%u img=%u steps=%u",
                     frame_, pkt.slot, fc.swapchain_image_index,
                     pkt.sim_steps_this_frame);
-            for (int v = 0; v < kNumViewports; ++v) {
+            for (int v = 0; v < active_viewport_count_; ++v) {
                 const rhi::Handle<rhi::Texture> coff =
                     graph_->ResolveTexture(color_off[v]);
                 const rhi::Handle<rhi::Texture> doff =
@@ -1827,7 +1920,11 @@ private:
     // Per-slot frame buffers (drawList / drawListSorted / proxies /
     // resident_textures / draw_world_matrices / pending_globals / globals_offset
     // / dt_off / FramePacket). See PerSlot above.
-    std::vector<PerSlot> slots_;
+    // std::array (not std::vector): PerSlot holds std::atomic<bool> which
+    // is not move-constructible, so vector::resize would fail to compile.
+    // kFramesInFlight is compile-time anyway -- the runtime resize was
+    // never needed.
+    std::array<PerSlot, kFramesInFlight> slots_{};
 
     // EnTT scene-layer path. worlds_ pre-reserved at startup
     // (kMaxWorlds Acquire+Release cycle) to keep World::Cold* pointer
@@ -1844,11 +1941,25 @@ private:
     // cam_pose_override_ pins both controllers to a fixed (pos, yaw, pitch)
     // from CAIRNS_CAM_POSE so byte-gate dumps are deterministic regardless of
     // any keyboard/mouse input on this run.
-    static constexpr int kNumViewports = 1;
+    // #194: compile-time cap on simultaneous viewports. active_viewport_count_
+    // (runtime) tells the engine how many slots are LIVE. Default = 1 (full-
+    // frame viewport 0; per-viewport work for slots 1..N is skipped). Grow
+    // via cairns.viewport.open / shrink via cairns.viewport.close. Layout
+    // rects on Viewport.layout_rect (NDC 0..1 over the swap pane) describe
+    // where each live viewport tiles.
+    static constexpr int kNumViewports = 4;
     std::array<cairns::Viewport, kNumViewports> viewports_{};
     std::array<cairns::FlyController, kNumViewports> fly_{};
     int active_viewport_ = 0;
+    int active_viewport_count_ = 1;  // #194 runtime-live count, default 1
     bool cam_pose_override_ = false;
+
+    // #210 per-slot CPU arena capacity. 4 MiB headroom covers
+    // RenderGraph::Bake scratch + PassRecord int spans + CommandRecorder
+    // dispatch scratch + everything else the record path needs. Stored on
+    // PerSlot (the slot IS the lock). Initialized in initCpuAllocators,
+    // Reset()'d at slot Acquire (render thread already drained).
+    static constexpr size_t kArenaBytesPerSlot = 4u * 1024u * 1024u;
 
     rhi::Rhi rhi_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
