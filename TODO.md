@@ -281,30 +281,28 @@ draws. WebGPU / WebGL / DX12 have no base-instance (Aaltonen slide 42), so index
 per-instance data off `instance_index`. Consumers: two_die (die.glb ×2) + the
 grid scenarios.
 
-### White champion in the nested golden -- NOT a material bind (2026-07 investigation)
-In the golden `nested graph: 20 GLBs resolved color + depth strip`
-(`tests/test_golden_scenarios.cpp`, the `[scenarios]` nested case), one GLB renders
-as a near-white silhouette (faint blue tint) -- row 2, col 3 = spawn index 7 =
-**aatrox_prestige_blood_moon.glb** (entity 8, world (0,-1.21)). Deterministic.
-The current `nested.color.*` refs bake this white render (golden still gates
-green). The "bad texture/material bind" hypothesis was DISPROVEN -- every input to
-the fragment shader is verified correct on the GPU:
-  - material bind: set2 non-null, resolves to `cold.color` = tex pool 39 (Body),
-    tex 40 (Sword); forcing `BuildMaterialSet2` to always rebuild changes nothing.
-  - texture data: readback of tex 39 == the real dark-gold Body PNG (mean 107).
-  - UVs: on-GPU attr readback of the skinned alias == the GLB's UVs
-    (v0 = 0.592,0.805); the Body texel there is DARK (13,10,8).
-  - skinning/attr alias: gbv=0, voff=0, distinct per-actor buffers (correct --
-    each GLB loads as its own batch); disabling mips does not fix it.
-So: correct texture bound + correct UVs + a DARK source texel, yet WHITE output.
-That points to a per-draw descriptor/fragment issue for this one actor at the
-20-actor grid density (not reproduced by three_champ), likely needs a metal GPU
-capture to see the actually-bound descriptor. DEFERRED -- non-blocking (golden is
-green), and a fix risks the shared skinned-draw path (all animated goldens).
-Re-bake `nested.color.*` ONLY after a root-caused fix. Also noted en passant: the
-loader (`gltf_loader.hpp` material loop) drops a material's texture when the glTF
-texture lacks a sampler index, which would desync `hot.materials` -- but none of
-these 20 GLBs trigger it, so it is a separate latent bug, not this one.
+### White champion in the nested golden -- RESOLVED: broken asset, engine faithful (2026-07)
+The near-white champion in `nested graph: 20 GLBs` is **aatrox_victorious.glb**
+(kDebugGlbs idx 12, prefab 12, entity_id 13; earlier notes blamed
+aatrox_prestige_blood_moon idx 7 -- that was a crop x/y mix-up; idx 7/8 render
+fine). Root cause is IN THE GLB: its `images` are {Sword, Mini_Wings, Wings,
+Recall_Pillar} -- **no body diffuse image exists in the file** -- and the drawn
+body material `Aatrox_MAT` points its baseColorTexture at the Mini_Wings atlas.
+Body UVs sweeping a mostly-white/empty wings atlas = flat white body. Every
+healthy sibling (aatrox.glb, aatrox_sea_hunter.glb, ...) has a dedicated `Body`
+image that its body material references; victorious is a bad export. Verified by
+parsing the GLB JSON chunk directly and by per-draw probes (mats 109/110/111 ->
+images 0/1/1 exactly as the glTF says). The engine binds and samples faithfully
+-- other viewers show the same pale wings-on-body mapping. Non-bug for the
+renderer; `nested.color.*` refs stay as-is. Options if the white bothers us:
+re-export/replace the asset, or swap kDebugGlbs[12] (full nested rebake).
+Still open (separate, latent): the loader's material loop
+(`gltf_loader.hpp` "Material Mapping") silently SKIPS a material when
+baseColorTexture is absent or its texture lacks image/sampler indices, desyncing
+`hot.materials` positions from glTF material indices -- any GLB with an
+untextured material would bind neighbors' materials off-by-N. None of the 20
+debug GLBs trigger it today; fix by pushing a placeholder entry instead of
+skipping.
 
 ---
 
