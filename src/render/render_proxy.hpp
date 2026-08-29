@@ -94,6 +94,13 @@ struct SkinnedAttachment {
         // per frame. UINT32_MAX means scene not registered with anim_eval.
         uint32_t gpu_scene_header_idx = UINT32_MAX;
         float gpu_clip_duration = 1.0f;
+        // #222 Phase E.6: per-actor stream-0 alias of skin_output_pool_
+        // pre-offset by (pool_base + slice.offset * 16) so the skinned
+        // draw can set vertex_buffers[0] = pos_stream and revert the
+        // Draw::pos_buffer_byte_offset side channel (which this retires).
+        // Non-owning VIEW: validity = lifetime of the pool buffer (engine
+        // lifetime; pool is fixed). Release matched at TryDestroySkin.
+        rhi::Handle<rhi::Buffer> pos_stream = rhi::Handle<rhi::Buffer>::Null;
     };
     struct Cold {
         cairns::SceneId scene;

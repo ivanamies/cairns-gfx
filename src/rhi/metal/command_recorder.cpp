@@ -254,14 +254,13 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
             uint32_t pos_off = 0;
             MTL::Buffer* pos_buf = res.plat.GetMtlBuffer(
                 alloc, draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
-            // #221 Skinning F5 (Metal mirror): per-actor byte offset into
-            // the shared pos buffer. Static draws keep this 0.
-            const uint32_t pos_off_total = pos_off + draw.pos_buffer_byte_offset;
-            if (pos_buf != last_pos_buf || pos_off_total != last_pos_off) {
+            // #222 Phase E.6 (Metal mirror): stream-0 alias resolves to the
+            // final byte offset; no pos_buffer_byte_offset side channel.
+            if (pos_buf != last_pos_buf || pos_off != last_pos_off) {
                 last_pos_buf = pos_buf;
-                last_pos_off = pos_off_total;
+                last_pos_off = pos_off;
                 enc->useResource(pos_buf, MTL::ResourceUsageRead, MTL::RenderStageVertex);
-                enc->setVertexBuffer(pos_buf, pos_off_total, 0);
+                enc->setVertexBuffer(pos_buf, pos_off, 0);
             }
         }
         {

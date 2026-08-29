@@ -44,14 +44,11 @@ struct Draw {
     // todo @iamies figure out what this does
     std::array<uint32_t,2> dynamic_buffer_offsets = {};
     uint32_t triangle_count = 0;
-    // #221 Skinning F5: per-actor byte offset for the position vertex
-    // stream (kVertexBufferPosSlot). Static draws leave this 0 -- the
-    // shared pos region binds at offset 0 and the existing pack-meshes
-    // baseVertex (`vertex_offset`) selects the primitive globally.
-    // Skinned draws set this to slice.offset * sizeof(vec4) so stream 0
-    // reads from the actor's slab of skin_output_pool_; vertex_offset is
-    // then mesh-local (prim.vertexOffset - Mesh::Hot::global_base_vertex).
-    uint32_t pos_buffer_byte_offset = 0;
+    // #222 Phase E.6: Draw::pos_buffer_byte_offset retired. Skinned actors
+    // now point vertex_buffers[0] at SkinnedAttachment::Hot::pos_stream, an
+    // O(1) freelist alias of skin_output_pool_buffer_ pre-offset by the
+    // actor's slice start. Recorders read pos_off from handle resolution
+    // alone -- same byte cost on the wire, honest field on the struct.
 };
 
 } // namespace cairns

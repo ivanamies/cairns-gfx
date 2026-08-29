@@ -1395,7 +1395,6 @@ public:
                 // draw.vertex_offset becomes mesh-local
                 // (prim.vertex_offset - global_base_vertex).
                 bool skinned = false;
-                uint32_t skin_pos_byte_off = 0;
                 BufHandle skin_pos_buf{};
                 BufHandle skin_attr_buf{};
                 uint32_t skin_global_base_vertex = 0;
@@ -1410,12 +1409,11 @@ public:
                             meshes_.GetHot(sh->mesh);
                         if (mhot_s &&
                             !mhot_s->attr_skinned_alias.IsNull() &&
-                            !skin_output_pool_buffer_.IsNull()) {
+                            !sh->pos_stream.IsNull()) {
                             skinned = true;
-                            skin_pos_buf = skin_output_pool_buffer_;
-                            skin_pos_byte_off =
-                                sh->slice.offset *
-                                static_cast<uint32_t>(sizeof(glm::vec4));
+                            // #222 Phase E.6: pos_stream is the per-actor
+                            // pre-offset alias of skin_output_pool_buffer_.
+                            skin_pos_buf = sh->pos_stream;
                             skin_attr_buf = mhot_s->attr_skinned_alias;
                             skin_global_base_vertex =
                                 mhot_s->global_base_vertex;
@@ -1438,10 +1436,11 @@ public:
                         draw.vertex_offset =
                             prim.vertex_offset -
                             static_cast<int32_t>(skin_global_base_vertex);
+                        // #222 Phase E.6: stream-0 alias pre-baked; no
+                        // side-channel pos_buffer_byte_offset.
                         draw.vertex_buffers
                             [cairns::Draw::kVertexBufferPosSlot] =
                             skin_pos_buf;
-                        draw.pos_buffer_byte_offset = skin_pos_byte_off;
                         draw.vertex_buffers
                             [cairns::Draw::kVertexBufferAttrSlot] =
                             skin_attr_buf;
@@ -2716,6 +2715,25 @@ public:
         }
         cairns::SkinId sid = skins_.Acquire();
         cairns::Scene::Hot* scene_hot = scenes_.GetHot(scene_id);
+        // #222 Phase E.6: build the per-actor pos_stream alias of
+        // skin_output_pool_buffer_, pre-offset to slice.offset * 16 B.
+        // Skinned draws point Draw::vertex_buffers[0] at this handle;
+        // Draw::pos_buffer_byte_offset retires.
+        rhi::Handle<rhi::Buffer> pos_stream_h =
+            rhi::Handle<rhi::Buffer>::Null;
+        if (!skin_output_pool_buffer_.IsNull()) {
+            rhi::Buffer::Hot* pool_hot =
+                rhi_.resources.GetHot(skin_output_pool_buffer_);
+            if (pool_hot) {
+                pos_stream_h = rhi_.resources.buffers.Acquire();
+                rhi::Buffer::Hot* alias_hot =
+                    rhi_.resources.buffers.GetHot(pos_stream_h);
+                alias_hot->heap_buffer_index = pool_hot->heap_buffer_index;
+                alias_hot->offset_in_heap =
+                    pool_hot->offset_in_heap +
+                    slice.offset * static_cast<uint32_t>(sizeof(glm::vec4));
+            }
+        }
         if (auto* h = skins_.GetHot(sid)) {
             *h = cairns::SkinnedAttachment::Hot{};
             h->slice = slice;
@@ -2730,6 +2748,7 @@ public:
             h->gpu_clip_duration =
                 (scold->gpu_clip_duration > 0.0f) ? scold->gpu_clip_duration
                                                    : 1.0f;
+            h->pos_stream = pos_stream_h;
         }
         if (auto* c = skins_.GetCold(sid)) {
             *c = cairns::SkinnedAttachment::Cold{};

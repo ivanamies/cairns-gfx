@@ -564,11 +564,12 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
         uint32_t pos_off = 0;
         VkBuffer pos_buf =
             res.plat.GetVkBuffer(alloc,draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
-        const uint32_t pos_off_total = pos_off + draw.pos_buffer_byte_offset;
-        if (pos_buf != last_pos_buf || pos_off_total != last_pos_off) {
+        // #222 Phase E.6: stream-0 alias resolves to the final byte offset
+        // directly; no Draw::pos_buffer_byte_offset side channel.
+        if (pos_buf != last_pos_buf || pos_off != last_pos_off) {
             last_pos_buf = pos_buf;
-            last_pos_off = pos_off_total;
-            VkDeviceSize off = pos_off_total;
+            last_pos_off = pos_off;
+            VkDeviceSize off = pos_off;
             vkCmdBindVertexBuffers(cb, 0, 1, &pos_buf, &off);
         }
         uint32_t attr_off = 0;
