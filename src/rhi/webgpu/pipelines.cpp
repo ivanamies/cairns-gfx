@@ -309,9 +309,17 @@ Handle<Kernel> Pipelines::CreateComputePipeline(Resources& resources, Frames& fr
     }
 
     // Pipeline layout = the dyn-set's prebuilt group-0 layout (CreateDynamicBuffers
-    // built it from the same bindings, so they are group-equivalent).
+    // built it from the same bindings, so they are group-equivalent). Skin is the
+    // exception: vk's two sets fold into one webgpu set (7 bindings, see
+    // skin.wgsl / MakeSkinSetLayout), so it gets a dedicated layout kept on the
+    // kernel for the recorder's per-batch bind groups.
     WGPUBindGroupLayout bgl = nullptr;
-    if (!desc.dyn_set_0.IsNull()) {
+    if (desc.layout == ComputePipelineLayout::kSkin) {
+        bgl = webgpu::MakeSkinSetLayout(plat.device_);
+        hot->plat.set0_bgl = bgl;  // recorder builds per-batch bind groups from it
+    } else if (desc.layout == ComputePipelineLayout::kAnimEval) {
+        bgl = webgpu::MakeAnimEvalSetLayout(plat.device_);
+    } else if (!desc.dyn_set_0.IsNull()) {  // kParticle: dyn-set's prebuilt layout
         if (DynamicBuffers::Hot* dh =
                 resources.dynamic_buffers.GetHot(desc.dyn_set_0)) {
             bgl = dh->plat.layout;

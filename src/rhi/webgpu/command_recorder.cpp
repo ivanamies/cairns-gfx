@@ -51,12 +51,104 @@ void CommandRecorder::DispatchSkinBatches(Resources& res, Allocator& alloc, Hand
                                           Handle<Buffer> output_pool_buffer, Handle<Buffer> palette_buf,
                                           Handle<DynamicBuffers> dyn_set_0,
                                           std::span<const SkinDispatchBatch> batches) {
-    (void)res; (void)alloc; (void)kernel; (void)output_pool_buffer; (void)palette_buf;
-    (void)dyn_set_0; (void)batches;
+    (void)dyn_set_0;  // webgpu folds group A+B into the kernel's own set0 layout
+    if (batches.empty() || kernel.IsNull() || !plat.cmd_) { return; }
+    Kernel::Hot* kh = res.GetHot(kernel);
+    if (!kh || !kh->api_pso || !kh->plat.set0_bgl) { return; }
+    if (plat.enc_) { wgpuRenderPassEncoderEnd(plat.enc_); plat.enc_ = nullptr; }
+
+    // Persistent dedicated buffers (offset_in_heap == 0 on webgpu) bind whole at
+    // 0; per-mesh element bases ride in the WebBases UBO (binding 6). params /
+    // inst_meta live in the kDynamic master at their 256-aligned byte offsets.
+    WGPUBuffer dyn_master = res.plat.GetBumpMasterBuffer(alloc, Memory::kDynamic);
+    uint32_t pool_heap = 0;
+    WGPUBuffer pool = res.plat.GetWgpuBuffer(alloc, output_pool_buffer, &pool_heap);
+    uint32_t pal_heap = 0;
+    WGPUBuffer pal = palette_buf.IsNull()
+                         ? dyn_master
+                         : res.plat.GetWgpuBuffer(alloc, palette_buf, &pal_heap);
+    if (!dyn_master || !pool || !pal) { return; }
+
+    WGPUComputePassEncoder cenc =
+        wgpuCommandEncoderBeginComputePass(plat.cmd_, nullptr);
+    wgpuComputePassEncoderSetPipeline(
+        cenc, static_cast<WGPUComputePipeline>(kh->api_pso));
+
+    for (const SkinDispatchBatch& b : batches) {
+        if (b.workgroups == 0 || b.pos_buffer.IsNull() ||
+            b.skin_attr_buffer.IsNull()) {
+            continue;
+        }
+        uint32_t pos_heap = 0;
+        WGPUBuffer pos = res.plat.GetWgpuBuffer(alloc, b.pos_buffer, &pos_heap);
+        uint32_t sa_heap = 0;
+        WGPUBuffer sa = res.plat.GetWgpuBuffer(alloc, b.skin_attr_buffer, &sa_heap);
+        if (!pos || !sa) { continue; }
+
+        uint32_t wb[4];
+        wb[0] = (pos_heap + b.pos_byte_offset) / 16u;       // vec4 stride
+        wb[1] = (sa_heap + b.skin_attr_byte_offset) / 8u;   // vec2<u32> stride
+        wb[2] = (pal_heap + b.palettes_byte_offset) / 64u;  // mat4 stride
+        wb[3] = 0u;
+        uint32_t wb_off = 0;
+        void* wbptr = alloc.BumpAllocate(sizeof(wb), 256, Memory::kDynamic, &wb_off);
+        if (!wbptr) { continue; }
+        std::memcpy(wbptr, wb, sizeof(wb));
+
+        WGPUBindGroupEntry e[7] = {};
+        e[0].binding = 0; e[0].buffer = dyn_master;
+        e[0].offset = b.params_byte_offset; e[0].size = 16u;
+        e[1].binding = 1; e[1].buffer = pal;
+        e[1].offset = 0; e[1].size = WGPU_WHOLE_SIZE;
+        e[2].binding = 2; e[2].buffer = dyn_master;
+        e[2].offset = b.instance_meta_byte_offset;
+        e[2].size = b.instance_count * 8u;
+        e[3].binding = 3; e[3].buffer = pool;
+        e[3].offset = 0; e[3].size = WGPU_WHOLE_SIZE;
+        e[4].binding = 4; e[4].buffer = pos;
+        e[4].offset = 0; e[4].size = WGPU_WHOLE_SIZE;
+        e[5].binding = 5; e[5].buffer = sa;
+        e[5].offset = 0; e[5].size = WGPU_WHOLE_SIZE;
+        e[6].binding = 6; e[6].buffer = dyn_master;
+        e[6].offset = wb_off; e[6].size = 16u;
+
+        WGPUBindGroupDescriptor bgd = {};
+        bgd.layout = kh->plat.set0_bgl;
+        bgd.entryCount = 7;
+        bgd.entries = e;
+        WGPUBindGroup bg = wgpuDeviceCreateBindGroup(plat.device_, &bgd);
+        wgpuComputePassEncoderSetBindGroup(cenc, 0, bg, 0, nullptr);
+        wgpuComputePassEncoderDispatchWorkgroups(cenc, b.workgroups,
+                                                 b.instance_count, 1);
+        plat.transient_bind_groups_.push_back(bg);
+    }
+    wgpuComputePassEncoderEnd(cenc);
+    wgpuComputePassEncoderRelease(cenc);
 }
 void CommandRecorder::DispatchAnimEval(Resources& res, Allocator& alloc, Handle<Kernel> kernel,
                                        const AnimEvalArgs& args) {
-    (void)res; (void)alloc; (void)kernel; (void)args;
+    (void)alloc;
+    if (kernel.IsNull() || args.actor_count == 0 || args.dyn_set_0.IsNull() ||
+        !plat.cmd_) {
+        return;
+    }
+    Kernel::Hot* kh = res.GetHot(kernel);
+    if (!kh || !kh->api_pso) { return; }
+    DynamicBuffers::Hot* dh = res.dynamic_buffers.GetHot(args.dyn_set_0);
+    if (!dh || !dh->plat.sets[0]) { return; }
+    if (plat.enc_) { wgpuRenderPassEncoderEnd(plat.enc_); plat.enc_ = nullptr; }
+
+    // The 13-binding set is prebuilt (CreateDynamicBuffers); binding 0 (records
+    // UBO) is the sole dynamic offset. One workgroup per actor, 64 threads.
+    const uint32_t dyn = args.records_byte_offset;
+    WGPUComputePassEncoder cenc =
+        wgpuCommandEncoderBeginComputePass(plat.cmd_, nullptr);
+    wgpuComputePassEncoderSetPipeline(
+        cenc, static_cast<WGPUComputePipeline>(kh->api_pso));
+    wgpuComputePassEncoderSetBindGroup(cenc, 0, dh->plat.sets[0], 1, &dyn);
+    wgpuComputePassEncoderDispatchWorkgroups(cenc, args.actor_count, 1, 1);
+    wgpuComputePassEncoderEnd(cenc);
+    wgpuComputePassEncoderRelease(cenc);
 }
 void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& target,
                                       const RenderPassDesc& desc,

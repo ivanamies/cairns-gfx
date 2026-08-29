@@ -34,6 +34,7 @@ struct ShaderHotPlat {
 };
 struct KernelHotPlat {
     WGPUPipelineLayout layout = nullptr;
+    WGPUBindGroupLayout set0_bgl = nullptr;  // skin: per-batch bind group layout
 };
 // Dynamic-offset bind groups: one bind-group layout + a per-FIF bind group.
 struct DynamicBuffersHotPlat {

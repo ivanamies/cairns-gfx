@@ -79,6 +79,57 @@ inline WGPUBindGroupLayout MakeComputeSetLayout(
     return wgpuDeviceCreateBindGroupLayout(device, &d);
 }
 
+// anim_eval set 0: 13 bindings matching MakeComputeSetLayout's output for the
+// ae_b[] DynamicBindings (binding 0 = dynamic UBO, 1-12 = storage). Built here
+// from desc.layout==kAnimEval (like vk's anim_eval_layout_) so the kernel's
+// pipeline layout exists independent of when dyn_anim_eval_'s backings resolve;
+// wgpu-native dedups it against the bind group's identical descriptor.
+inline WGPUBindGroupLayout MakeAnimEvalSetLayout(WGPUDevice device) {
+    WGPUBindGroupLayoutEntry e[13] = {};
+    for (uint32_t i = 0; i < 13; ++i) {
+        e[i].binding = i;
+        e[i].visibility = WGPUShaderStage_Compute;
+        if (i == 0) {
+            e[i].buffer.type = WGPUBufferBindingType_Uniform;
+            e[i].buffer.hasDynamicOffset = 1;
+        } else {
+            e[i].buffer.type = WGPUBufferBindingType_Storage;
+        }
+        e[i].buffer.minBindingSize = 0;
+    }
+    WGPUBindGroupLayoutDescriptor d = {};
+    d.entryCount = 13;
+    d.entries = e;
+    return wgpuDeviceCreateBindGroupLayout(device, &d);
+}
+
+// Skin kernel set 0 (webgpu fold of vk group A+B). 7 bindings, all NON-dynamic
+// (the recorder bakes the 256-aligned params/inst_meta offsets into per-batch
+// bind groups; pos/skin/palette/pool bind whole at 0). 0=params UBO,
+// 1=palette SSBO, 2=inst_meta SSBO, 3=out_pos SSBO, 4=mesh_pos SSBO,
+// 5=skin_packed SSBO, 6=WebBases UBO (per-mesh element bases).
+inline WGPUBindGroupLayout MakeSkinSetLayout(WGPUDevice device) {
+    // 0,6 uniform; 3 (out_pos) read_write storage; 1,2,4,5 read-only storage so
+    // the shared kDynamic master (uniforms + inst_meta) stays all-reads.
+    WGPUBindGroupLayoutEntry e[7] = {};
+    for (uint32_t i = 0; i < 7; ++i) {
+        e[i].binding = i;
+        e[i].visibility = WGPUShaderStage_Compute;
+        if (i == 0 || i == 6) {
+            e[i].buffer.type = WGPUBufferBindingType_Uniform;
+        } else if (i == 3) {
+            e[i].buffer.type = WGPUBufferBindingType_Storage;
+        } else {
+            e[i].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+        }
+        e[i].buffer.minBindingSize = 0;
+    }
+    WGPUBindGroupLayoutDescriptor d = {};
+    d.entryCount = 7;
+    d.entries = e;
+    return wgpuDeviceCreateBindGroupLayout(device, &d);
+}
+
 inline WGPUVertexFormat ToWgpuVertexFormat(Format f) {
     switch (f) {
         case Format::kRgba32F: return WGPUVertexFormat_Float32x4;

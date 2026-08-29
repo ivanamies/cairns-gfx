@@ -57,7 +57,9 @@ inline bool LoadPrefabsGpu(std::span<const cairns::PrefabId> prefab_ids,
 
     BufferDesc vd{};
     vd.byte_size = static_cast<uint32_t>(pos_bytes + attr_bytes);
-    vd.usage = kUsageVertex | kUsageIndex;
+    // Storage too: the skin compute reads the position region as a flat array
+    // (webgpu enforces the usage flag; metal/vk ignore the extra bit).
+    vd.usage = kUsageVertex | kUsageIndex | kUsageStorage;
     vd.memory = Memory::kDefault;
     Handle<Buffer> shared_vtx = rm.CreateBuffer(alloc, vd);
     if (shared_vtx.IsNull()) {
