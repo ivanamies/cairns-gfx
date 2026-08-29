@@ -89,21 +89,32 @@ struct DrawTmp {
     uint32_t yolo_padding = std::numeric_limits<uint32_t>::max();
 };
 
-bool LoadTextureGpu([[maybe_unused]] Device& device, GpuAllocatorHeap& alloc_transient_heap, ResourceManager<Texture>& manager, Handle<Texture> handle) {
+bool LoadTextureGpu([[maybe_unused]] Device& device,
+                    [[maybe_unused]] GpuAllocatorHeap& alloc_transient_heap,
+                    ResourceManager<Texture>& manager, Handle<Texture> handle,
+                    rhi2::ResourceManager& rm) {
     ResourceObject<Texture>& hot = *manager.GetObj(handle);
     ResourceDescriptor<Texture>& cold = *manager.GetDesc(handle);
-    if (!cold.src_image) return false;
-
-    // todo @iamies dont hardcode this
-    cold.storage = static_cast<int64_t>(MTL::StorageModeShared);
-    if ( !alloc_transient_heap.AllocTexture(hot, cold, cold.undecorated_filename)) {
+    if (!cold.src_image) {
         return false;
     }
-
-    if (!hot.texture) return false;
-
-    MTL::Region region = MTL::Region(0, 0, 0, cold.width, cold.height, 1);
-    hot.texture->replaceRegion(region, 0, cold.src_image, cold.src_bytes_per_row);
+    rhi2::TextureDesc d;
+    d.dimensions = {static_cast<int32_t>(cold.width),
+                    static_cast<int32_t>(cold.height), 1};
+    d.format = rhi2::Format::kRgba8Unorm;
+    d.mip_levels = static_cast<uint32_t>(cold.levels > 0 ? cold.levels : 1);
+    d.array_layers = 1;
+    d.usage = rhi2::kTexUsageSampled | rhi2::kTexUsageTransferDst;
+    d.memory = rhi2::Memory::kDefault;
+    d.initial_data = rhi2::Span<const uint8_t>(
+        static_cast<const uint8_t*>(cold.src_image),
+        static_cast<size_t>(cold.src_bytes_per_row) *
+            static_cast<size_t>(cold.height));
+    rhi2::Handle<rhi2::Texture> rhi2_h = rm.CreateTexture(d);
+    if (rhi2_h.IsNull()) {
+        return false;
+    }
+    hot.texture = static_cast<MTL::Texture*>(rm.GetHot(rhi2_h)->api_view);
     return true;
 }
 
@@ -211,7 +222,7 @@ bool LoadSceneGpu(Device& device,
     
     for ( size_t i = 0; i < scene.textureHandles.size(); ++i ) {
         const auto h = scene.textureHandles[i];
-        if (!LoadTextureGpu(device, alloc_transient_heap, texMgr, h)) {
+        if (!LoadTextureGpu(device, alloc_transient_heap, texMgr, h, rm)) {
             return false;
         }
     }
@@ -460,19 +471,6 @@ public:
                 
                 scene.CleanupTmps();
             }
-            MTL::CommandBuffer* cmd = metalCommandQueue->commandBuffer();
-            MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
-            for ( size_t i = 0; i < scenes_.size(); ++i ) {
-                cairns::Scene& scene = scenes_[i];
-                for ( size_t k = 0; k < scene.textureHandles.size(); ++k ) {
-                    const auto h = scene.textureHandles[k];
-                    MTL::Texture* tex = texManager_->GetObj(h)->texture;
-                    blit->generateMipmaps(tex);
-                }
-            }
-            blit->endEncoding();
-            cmd->commit();
-            cmd->waitUntilCompleted();
         }
         if (!scenes_.empty() && !scenes_[0].meshes.empty()) {
             mesh_master_buf_ =
@@ -818,6 +816,15 @@ public:
             encoder->setFragmentBuffer(regObj->buffer, regObj->mem.offset, cairns::rhi::GpuSceneRegistry::kBindSlot);
             // use resource call for all textures in argument table
             encoder->useHeap(allocTransientHeap_->GetHeap());
+            for (auto& s : scenes_) {
+                for (const auto th : s.textureHandles) {
+                    MTL::Texture* tex = texManager_->GetObj(th)->texture;
+                    if (tex) {
+                        encoder->useResource(tex, MTL::ResourceUsageRead,
+                                             MTL::RenderStageFragment);
+                    }
+                }
+            }
             // use resource call for all vertex attributes in argument table
             encoder->useResource(mesh_master_buf_, MTL::ResourceUsageRead, MTL::RenderStageVertex);
             

@@ -35,6 +35,44 @@ bool is_host_visible(Memory mem) {
            mem == Memory::kReadback;
 }
 
+MTL::StorageMode storage_mode_for(Memory mem) {
+    switch (mem) {
+        case Memory::kDefault:   return MTL::StorageModePrivate;
+        case Memory::kUpload:    return MTL::StorageModeShared;
+        case Memory::kReadback:  return MTL::StorageModeShared;
+        case Memory::kDynamic:   return MTL::StorageModeShared;
+        case Memory::kTransient: return MTL::StorageModeMemoryless;
+        default:                 return MTL::StorageModePrivate;
+    }
+}
+
+MTL::PixelFormat to_mtl_pixel_format(Format f) {
+    switch (f) {
+        case Format::kR8Unorm:    return MTL::PixelFormatR8Unorm;
+        case Format::kRg8Unorm:   return MTL::PixelFormatRG8Unorm;
+        case Format::kRgba8Unorm: return MTL::PixelFormatRGBA8Unorm;
+        case Format::kRgba8Srgb:  return MTL::PixelFormatRGBA8Unorm_sRGB;
+        case Format::kBgra8Unorm: return MTL::PixelFormatBGRA8Unorm;
+        case Format::kBgra8Srgb:  return MTL::PixelFormatBGRA8Unorm_sRGB;
+        case Format::kR16F:       return MTL::PixelFormatR16Float;
+        case Format::kRgba16F:    return MTL::PixelFormatRGBA16Float;
+        case Format::kR32F:       return MTL::PixelFormatR32Float;
+        case Format::kRgba32F:    return MTL::PixelFormatRGBA32Float;
+        case Format::kD32F:       return MTL::PixelFormatDepth32Float;
+        default:                  return MTL::PixelFormatInvalid;
+    }
+}
+
+MTL::TextureUsage to_mtl_texture_usage(TextureUsage u, uint32_t mip_levels) {
+    NS::UInteger out = MTL::TextureUsageUnknown;
+    if (u & kTexUsageSampled)     { out |= MTL::TextureUsageShaderRead; }
+    if (u & kTexUsageStorage)     { out |= MTL::TextureUsageShaderRead | MTL::TextureUsageShaderWrite; }
+    if (u & kTexUsageColorTarget) { out |= MTL::TextureUsageRenderTarget; }
+    if (u & kTexUsageDepthTarget) { out |= MTL::TextureUsageRenderTarget; }
+    if (mip_levels > 1)           { out |= MTL::TextureUsageRenderTarget | MTL::TextureUsageShaderRead; }
+    return static_cast<MTL::TextureUsage>(out);
+}
+
 }  // namespace
 
 ResourceManager::~ResourceManager() {
@@ -109,8 +147,83 @@ Handle<Buffer> ResourceManager::CreateBuffer(const BufferDesc& d) {
     return h;
 }
 
-Handle<Texture> ResourceManager::CreateTexture(const TextureDesc&) {
-    return Handle<Texture>::Null;
+Handle<Texture> ResourceManager::CreateTexture(const TextureDesc& d) {
+    MTL::TextureDescriptor* td = MTL::TextureDescriptor::alloc()->init();
+    td->setTextureType(MTL::TextureType2D);
+    td->setPixelFormat(to_mtl_pixel_format(d.format));
+    td->setWidth(static_cast<NS::UInteger>(d.dimensions.x));
+    td->setHeight(static_cast<NS::UInteger>(d.dimensions.y));
+    td->setMipmapLevelCount(static_cast<NS::UInteger>(d.mip_levels));
+    td->setArrayLength(static_cast<NS::UInteger>(d.array_layers));
+    td->setUsage(to_mtl_texture_usage(d.usage, d.mip_levels));
+    td->setStorageMode(storage_mode_for(d.memory));
+    td->setHazardTrackingMode(MTL::HazardTrackingModeUntracked);
+
+    MTL::SizeAndAlign sa = impl_->params.device->heapTextureSizeAndAlign(td);
+
+    metal::AllocResult r = impl_->memory.AllocImage(
+        static_cast<uint32_t>(sa.size),
+        static_cast<uint32_t>(sa.align),
+        d.memory);
+    if (!r.ok) {
+        td->release();
+        return Handle<Texture>::Null;
+    }
+
+    MTL::Heap* heap = impl_->memory.HeapHandle(r.heap_index);
+    MTL::Texture* tex = heap->newTexture(td, r.offset);
+    td->release();
+    if (!tex) {
+        impl_->memory.FreeImage(r.heap_index, r.alloc, nullptr,
+                                impl_->frame_index + kFramesInFlight);
+        return Handle<Texture>::Null;
+    }
+
+    Handle<Texture> h = impl_->textures.Acquire();
+    Texture::Hot* hot = impl_->textures.GetHot(h);
+    hot->api_view = tex;
+    hot->descriptor_index = 0;
+
+    Texture::Cold* cold = impl_->textures.GetCold(h);
+    cold->alloc = r.alloc;
+    cold->api_image = tex;
+    cold->width = static_cast<uint32_t>(d.dimensions.x);
+    cold->height = static_cast<uint32_t>(d.dimensions.y);
+    cold->depth = 1;
+    cold->mip_levels = d.mip_levels;
+    cold->array_layers = d.array_layers;
+    cold->format = d.format;
+    cold->usage = d.usage;
+    cold->mem_type = d.memory;
+    cold->heap_buffer_index = r.heap_index;
+    cold->debug_name = d.debug_name;
+
+    if (!d.initial_data.empty()) {
+        uint32_t bytes_per_row = static_cast<uint32_t>(d.initial_data.size()) /
+                                 static_cast<uint32_t>(d.dimensions.y);
+        MTL::Buffer* staging = impl_->params.device->newBuffer(
+            d.initial_data.size(), MTL::ResourceStorageModeShared);
+        if (staging) {
+            std::memcpy(staging->contents(), d.initial_data.data(),
+                        d.initial_data.size());
+            MTL::CommandBuffer* cmd = impl_->params.queue->commandBuffer();
+            MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
+            blit->copyFromBuffer(
+                staging, 0, bytes_per_row, 0,
+                MTL::Size{static_cast<NS::UInteger>(d.dimensions.x),
+                          static_cast<NS::UInteger>(d.dimensions.y), 1},
+                tex, 0, 0, MTL::Origin{0, 0, 0});
+            if (d.mip_levels > 1) {
+                blit->generateMipmaps(tex);
+            }
+            blit->endEncoding();
+            cmd->commit();
+            cmd->waitUntilCompleted();
+            staging->release();
+        }
+    }
+
+    return h;
 }
 
 Handle<Sampler> ResourceManager::CreateSampler(const SamplerDesc&) {
