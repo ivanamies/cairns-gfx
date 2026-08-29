@@ -34,6 +34,9 @@
 #include "render/frame_packet.hpp"
 #include "render/render_extract.hpp"
 #include "render/render_scene.hpp"
+#include "render/render_thread.hpp"
+
+#include <memory>
 #include "rhi/rhi.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/command_recorder.hpp"
@@ -283,7 +286,8 @@ public:
             CAIRNS_PRINT("GreaterInit: initParticles failed\n");
             return false;
         }
-
+        render_thread_ = std::make_unique<cairns::RenderThread>(
+            [this](cairns::FramePacket& pkt) { this->RecordFrame(pkt); });
         return true;
     }
 
@@ -447,6 +451,11 @@ public:
     bool draw() {
         frame_++;
         const uint32_t slot = (frame_ - 1) % kFramesInFlight;
+
+        // Acquire BEFORE touching slot storage -- this is the backpressure
+        // gate, blocks if the render thread is still holding slot S.
+        render_thread_->Acquire(slot);
+
         PerSlot& s = slots_[slot];
 
         const uint64_t cpu_now_ns = cairns::timestamp_ns();
@@ -574,7 +583,7 @@ public:
             s.pkt.imgui_snapshot = nullptr;
         }
 
-        RecordFrame(s.pkt);
+        render_thread_->Submit(slot, &s.pkt);
 
         particle_parity_ ^= 1;
         t_frame.End();
@@ -596,6 +605,11 @@ public:
     // from draw(). Owns: rhi_.frames.Begin/End, the bump-ring EncodeDraws,
     // the compute + render-pass encode. Reads pkt + slots_[pkt.slot].
     void RecordFrame(FramePacket& pkt) {
+#if CAIRNS_METAL
+        // Render thread needs its own autorelease pool; main-thread iterate
+        // pool only covers game-thread code.
+        NS::AutoreleasePool* rt_pool = NS::AutoreleasePool::alloc()->init();
+#endif
         PerSlot& s = slots_[pkt.slot];
 
         if (pkt.request_dump) {
@@ -664,6 +678,9 @@ public:
         rhi_.frames.End(swapchain_, fc);
 
         pkt.particle_parity_out = pkt.particle_parity_in ^ 1;
+#if CAIRNS_METAL
+        rt_pool->release();
+#endif
     }
     
     bool initRenderPipeline() {
@@ -894,6 +911,10 @@ public:
     }
 
     bool deinit() {
+        if (render_thread_) {
+            render_thread_->Shutdown();
+            render_thread_.reset();
+        }
         swapchain_.Deinit();
         rhi_.pipelines.Deinit(rhi_.resources);
         rhi_.frames.Deinit();
@@ -945,6 +966,7 @@ private:
     rhi::Handle<rhi::Shader> particle_render_shader_;
     rhi::Handle<rhi::Buffer> particle_ssbo_[2];
     uint32_t particle_parity_ = 0;
+    std::unique_ptr<cairns::RenderThread> render_thread_;
     uint64_t last_ticks_ = 0;
     // cpu frame-time history (wall-clock between draw() calls) for the imgui graph
     static constexpr int kCpuMsHistory = 128;

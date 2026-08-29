@@ -111,7 +111,21 @@ file(GLOB_RECURSE ALL_SOURCES
   "src/iosLaunchScreen.storyboard"
 )
 
+list(REMOVE_ITEM ALL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/render/render_thread.cpp")
 target_sources(${EXECUTABLE_NAME} PRIVATE ${ALL_SOURCES})
+
+# Taskflow needs exceptions + has size_t->int narrowing in its headers, so the
+# one TU that includes it lives in its own static library with relaxed flags.
+add_library(cairns_render_thread STATIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/render/render_thread.cpp")
+target_include_directories(cairns_render_thread PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_BINARY_DIR}/generated"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/taskflow"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/glm")
+target_compile_features(cairns_render_thread PUBLIC cxx_std_20)
+target_compile_options(cairns_render_thread PRIVATE -Wall -Wextra)
+target_link_libraries(${EXECUTABLE_NAME} PRIVATE cairns_render_thread)
 
 # Set C++ version
 target_compile_features(${EXECUTABLE_NAME} PUBLIC cxx_std_20)
