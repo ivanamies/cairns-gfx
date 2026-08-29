@@ -50,6 +50,7 @@
 #include "util/render_pass_globals.hpp"
 #include "util/offset_allocator.hpp"
 #include "util/gltf_loader.hpp"
+#include "util/primitives.hpp"
 #include "util/debug_asset.hpp"
 #include "util/load_trace.hpp"  // #224 L3: LoadTrace / LoaderCounters PODs.
 #include "util/draw.hpp"
@@ -304,6 +305,17 @@ public:
     };
     LoadPrefabBatchResult LoadPrefabBatch(
             std::span<const std::filesystem::path> glbs);
+
+    // Procedural primitive (triangle/pyramid/cylinder/ellipse/ellipsoid) built
+    // on the CPU + pushed through the static-mesh path as a one-mesh, one-1x1-
+    // color-material prefab -- a normal vbo mesh, not a special-case draw.
+    LoadPrefabBatchResult LoadProceduralPrefab(cairns::PrimitiveKind kind,
+                                               const glm::vec4& color);
+    // Spawn one primitive fit to the active viewport (like SpawnFitted).
+    bool SpawnPrimitive(cairns::PrimitiveKind kind, const glm::vec4& color);
+    // Spawn one of each kind in a fitted grid (the "test all primitives" scene).
+    bool SpawnPrimitivesGrid(const std::vector<cairns::PrimitiveKind>& kinds,
+                             const std::vector<glm::vec4>& colors);
 
     // #224 L5: runtime entry point for cairns.prefab.loadBatch.
     //   (1) Device::WaitIdle so no in-flight frame reads pools being mutated

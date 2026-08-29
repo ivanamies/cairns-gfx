@@ -524,6 +524,42 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         });
 
     registry.Register(
+        "cairns.primitive.create",
+        json::object(),
+        "Spawn a procedural primitive mesh fit to the active scene -- a normal "
+        "vbo mesh through the static-mesh path (not a special-case draw). "
+        "{type:triangle|pyramid|cylinder|ellipse|ellipsoid, color:[r,g,b,a]?}. "
+        "Default color red.",
+        [engine = &engine](const json& args) -> json {
+            const std::string type =
+                args.value("type", std::string("triangle"));
+            float rgba[4] = {1.0f, 0.0f, 0.0f, 1.0f};
+            if (args.contains("color") && args["color"].is_array()) {
+                const auto& c = args["color"];
+                for (size_t i = 0; i < 4 && i < c.size(); ++i) {
+                    rgba[i] = c[i].get<float>();
+                }
+            }
+            if (!cairns::headless::CreatePrimitive(engine, type, rgba[0],
+                                                   rgba[1], rgba[2], rgba[3])) {
+                throw std::runtime_error("CreatePrimitive failed");
+            }
+            return {{"type", type}};
+        });
+
+    registry.Register(
+        "cairns.primitive.createAll",
+        json::object(),
+        "Spawn one of each primitive kind (triangle/pyramid/cylinder/ellipse/"
+        "ellipsoid) in a fitted grid -- the 'test all primitives' scenario.",
+        [engine = &engine](const json&) -> json {
+            if (!cairns::headless::CreateAllPrimitives(engine)) {
+                throw std::runtime_error("CreateAllPrimitives failed");
+            }
+            return {{"ok", true}};
+        });
+
+    registry.Register(
         "cairns.render.advanceFrames",
         json::object(),
         "Render `count` headless frames forward (fixed clock).",

@@ -36,7 +36,10 @@ namespace cairns {
 inline constexpr double   kFixedDt          = 1.0 / 60.0;
 inline constexpr uint32_t kMaxStepsPerFrame = 5;
 inline constexpr double   kMaxFrameDt       = 0.250;
-inline constexpr float    kRotDegPerSec     = 22.5f;
+// 0 = no turntable. A posable-scene editor doesn't auto-spin the scene; the
+// old demo spin (22.5 deg/s) fought placement/inspection. Re-enable per-entity
+// via a component if a spin is ever wanted, not as a global root rotation.
+inline constexpr float    kRotDegPerSec     = 0.0f;
 inline constexpr uint64_t kGoldenDumpFrame  = 60;
 // #221 Phase 9 (vk): budget for skin Group A bind groups (one per
 // skinned mesh in residence). Plan v7 § sizing -- 1024.

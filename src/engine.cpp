@@ -3889,6 +3889,205 @@ bool Engine::SpawnFitted(const std::vector<std::string>& glbs, uint32_t instance
         return true;
     }
 
+    // Generate a primitive mesh on the CPU and push it through the SAME static-
+    // mesh path as a GLB (one mesh, one identity node, one 1x1-color material) --
+    // so a primitive is a normal vbo mesh, not a special-case draw. Returns the
+    // new prefab's idx in {first_prefab_idx, count}.
+    Engine::LoadPrefabBatchResult Engine::LoadProceduralPrefab(
+                cairns::PrimitiveKind kind, const glm::vec4& color) {
+        LoadPrefabBatchResult r{};
+        r.first_prefab_idx =
+            static_cast<uint32_t>(prefab_store_.prefab_ids.size());
+        const cairns::PrimitiveMesh pm = cairns::MakePrimitive(kind);
+        if (pm.positions.empty() || pm.indices.empty()) {
+            return r;
+        }
+        rhi_.device.WaitIdle();
+
+        cairns::PrefabId sid = prefab_store_.prefabs.Acquire();
+        cairns::Prefab::Hot* shot = prefab_store_.prefabs.GetHot(sid);
+        cairns::Prefab::Cold* scold = prefab_store_.prefabs.GetCold(sid);
+        if (!shot || !scold) {
+            prefab_store_.prefabs.Release(sid);
+            return r;
+        }
+        // Re-seat the block-backed prefab vectors (mirrors LoadPrefabFromGltf).
+        auto reseat = [this](auto& v) {
+            using V = std::decay_t<decltype(v)>;
+            v = V(typename V::allocator_type(cpu_block_));
+        };
+        reseat(shot->meshes);
+        reseat(shot->rootNodes);
+        reseat(shot->materials);
+        reseat(scold->nodes);
+        reseat(scold->bind_pose);
+        reseat(scold->textureHandles);
+        reseat(scold->samplerHandles);
+        reseat(scold->gpu_parent);
+        reseat(scold->gpu_topo);
+        reseat(scold->gpu_bind_pose);
+        reseat(scold->gpu_channels);
+        reseat(scold->gpu_samplers);
+        reseat(scold->gpu_times);
+        reseat(scold->gpu_values);
+        reseat(scold->gpu_joint_nodes);
+        reseat(scold->gpu_inverse_binds);
+        reseat(scold->skins);
+        reseat(scold->clips);
+        reseat(scold->loaded_samplers);
+        reseat(scold->loaded_textures);
+        reseat(scold->materialToTextureIndex);
+        reseat(scold->materialToSamplerIndex);
+
+        // Mesh: pack generator output into the pos (vec4) + attr streams.
+        cairns::Handle<cairns::Mesh> mid = prefab_store_.meshes.Acquire();
+        cairns::Mesh::Hot* mhot = prefab_store_.meshes.GetHot(mid);
+        cairns::Mesh::Cold* mcold = prefab_store_.meshes.GetCold(mid);
+        const uint32_t vcount = static_cast<uint32_t>(pm.positions.size());
+        glm::vec3 aabb_min(std::numeric_limits<float>::max());
+        glm::vec3 aabb_max(std::numeric_limits<float>::lowest());
+        mcold->cpuPositions.reserve(vcount);
+        mcold->cpuAttrs.reserve(vcount);
+        for (uint32_t i = 0; i < vcount; ++i) {
+            const glm::vec3& p = pm.positions[i];
+            mcold->cpuPositions.emplace_back(p, 1.0f);
+            cairns::VertexAttribute a{};
+            a.normal = glm::vec4(pm.normals[i], 0.0f);
+            a.uv = pm.uvs[i];
+            mcold->cpuAttrs.push_back(a);
+            aabb_min = glm::min(aabb_min, p);
+            aabb_max = glm::max(aabb_max, p);
+        }
+        mcold->cpuIndices = pm.indices;
+        mhot->vert_count = vcount;
+        mhot->bind_aabb_min = aabb_min;
+        mhot->bind_aabb_max = aabb_max;
+        cairns::Primitive prim{};
+        prim.firstIndex = 0;
+        prim.indexCount = static_cast<uint32_t>(pm.indices.size());
+        prim.vertexOffset = 0;
+        prim.materialIndex = 0;
+        mhot->primitives.push_back(prim);
+        shot->meshes.push_back(mid);
+
+        // One identity root node -> mesh 0, no skin (static draw path).
+        cairns::Node node{};
+        node.localTransform = glm::mat4(1.0f);
+        node.globalTransform = glm::mat4(1.0f);
+        node.meshIndex = 0;
+        node.skinIndex = -1;
+        scold->nodes.push_back(node);
+        shot->rootNodes.push_back(0);
+
+        // 1x1 solid-color texture + sampler + material (unlit samples it).
+        auto to_u8 = [](float c) {
+            return static_cast<uint8_t>(glm::clamp(c, 0.0f, 1.0f) * 255.0f + 0.5f);
+        };
+        const uint8_t px[4] = {to_u8(color.r), to_u8(color.g), to_u8(color.b),
+                               to_u8(color.a)};
+        rhi::TextureDesc td{};
+        td.dimensions = {1, 1, 1};
+        td.format = rhi::Format::kRgba8Unorm;
+        td.mip_levels = 1;
+        td.array_layers = 1;
+        td.usage = rhi::kTexUsageSampled | rhi::kTexUsageTransferDst;
+        td.memory = rhi::Memory::kDefault;
+        td.initial_data = std::span<const uint8_t>(px, 4);
+        rhi::Handle<rhi::Texture> tex =
+            rhi_.resources.CreateTexture(rhi_.alloc, td);
+        rhi::SamplerDesc smp{};
+        smp.min_filter = rhi::Filter::kNearest;
+        smp.mag_filter = rhi::Filter::kNearest;
+        rhi::Handle<rhi::Sampler> samp = rhi_.resources.CreateSampler(smp);
+        scold->textureHandles.push_back(tex);
+        scold->samplerHandles.push_back(samp);
+        cairns::Handle<cairns::Material> matid =
+            prefab_store_.materials.Acquire();
+        cairns::Material::Cold* macold = prefab_store_.materials.GetCold(matid);
+        macold->color = tex;
+        macold->sampler = samp;
+        shot->materials.push_back(matid);
+
+        prefab_store_.prefab_ids.push_back(sid);
+        r.count = 1;
+
+        // ── upload + manifest, same order as LoadPrefabBatch ──
+        rhi::Handle<rhi::Buffer> batch_shared_skin =
+            rhi::Handle<rhi::Buffer>::Null;
+        std::span<const cairns::PrefabId> new_span(
+            prefab_store_.prefab_ids.data() + r.first_prefab_idx, r.count);
+        if (!cairns::rhi::LoadPrefabsGpu(new_span, prefab_store_.prefabs,
+                                          prefab_store_.meshes, rhi_.resources,
+                                          rhi_.alloc, &batch_shared_skin)) {
+            return r;
+        }
+        uint32_t batch_mesh_count = 0;
+        StampBatchSkinAndMeshIds(new_span, batch_shared_skin, batch_mesh_count);
+        BuildGroupABindGroups(new_span, batch_shared_skin);
+        cairns::ValidationReport vreport{};
+        ValidateAndCleanupTmps(new_span, r.first_prefab_idx, vreport);
+        BuildMaterialSet2();
+        BuildResidentTextures(new_span);
+        StampPerPrefabAsset(new_span);
+        std::array<std::filesystem::path, 1> synth{
+            std::filesystem::path("primitive")};
+        AppendGlbPaths(new_span,
+                       std::span<const std::filesystem::path>(synth));
+        return r;
+    }
+
+    // Spawn one primitive fit to the active viewport (like SpawnFitted).
+    bool Engine::SpawnPrimitive(cairns::PrimitiveKind kind,
+                                const glm::vec4& color) {
+        const LoadPrefabBatchResult r = LoadProceduralPrefab(kind, color);
+        if (r.count == 0) {
+            return false;
+        }
+        const uint32_t scene_idx = r.first_prefab_idx;
+        std::vector<float> extents{PrefabExtentMax(scene_idx)};
+        const std::vector<glm::mat4> worlds = FitGridToViewport(1, extents);
+        const glm::vec3 center = PrefabAabbCenter(scene_idx);
+        const glm::mat4 world =
+            worlds[0] * glm::translate(glm::mat4(1.0f), -center);
+        return InstantiatePrefabNoSkin(scene_idx, world) != UINT32_MAX;
+    }
+
+    // Spawn one of each kind in a fitted grid (the "test all primitives"
+    // scenario). Reuses FitGridToViewport exactly like SpawnFitted.
+    bool Engine::SpawnPrimitivesGrid(
+                const std::vector<cairns::PrimitiveKind>& kinds,
+                const std::vector<glm::vec4>& colors) {
+        if (kinds.empty()) {
+            return true;
+        }
+        std::vector<uint32_t> pidx;
+        pidx.reserve(kinds.size());
+        for (size_t i = 0; i < kinds.size(); ++i) {
+            const glm::vec4 c =
+                (i < colors.size()) ? colors[i] : glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+            const LoadPrefabBatchResult r = LoadProceduralPrefab(kinds[i], c);
+            if (r.count == 0) {
+                return false;
+            }
+            pidx.push_back(r.first_prefab_idx);
+        }
+        std::vector<float> extents(pidx.size());
+        for (size_t i = 0; i < pidx.size(); ++i) {
+            extents[i] = PrefabExtentMax(pidx[i]);
+        }
+        const std::vector<glm::mat4> worlds =
+            FitGridToViewport(static_cast<uint32_t>(pidx.size()), extents);
+        for (size_t i = 0; i < pidx.size(); ++i) {
+            const glm::vec3 center = PrefabAabbCenter(pidx[i]);
+            const glm::mat4 world =
+                worlds[i] * glm::translate(glm::mat4(1.0f), -center);
+            if (InstantiatePrefabNoSkin(pidx[i], world) == UINT32_MAX) {
+                return false;
+            }
+        }
+        return true;
+    }
+
 }  // namespace cairns
 
 namespace cairns {

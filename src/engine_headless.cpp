@@ -513,6 +513,39 @@ bool SpawnFitted(Engine* engine, const std::vector<std::string>& glbs,
     return engine ? engine->SpawnFitted(glbs, instances, animated) : false;
 }
 
+bool CreatePrimitive(Engine* engine, const std::string& type,
+                     float r, float g, float b, float a) {
+    if (!engine) {
+        return false;
+    }
+    cairns::PrimitiveKind kind = cairns::PrimitiveKind::kTriangle;
+    if (type == "pyramid") {
+        kind = cairns::PrimitiveKind::kPyramid;
+    } else if (type == "cylinder") {
+        kind = cairns::PrimitiveKind::kCylinder;
+    } else if (type == "ellipse") {
+        kind = cairns::PrimitiveKind::kEllipse;
+    } else if (type == "ellipsoid") {
+        kind = cairns::PrimitiveKind::kEllipsoid;
+    }
+    return engine->SpawnPrimitive(kind, glm::vec4(r, g, b, a));
+}
+
+bool CreateAllPrimitives(Engine* engine) {
+    if (!engine) {
+        return false;
+    }
+    const std::vector<cairns::PrimitiveKind> kinds = {
+        cairns::PrimitiveKind::kTriangle, cairns::PrimitiveKind::kPyramid,
+        cairns::PrimitiveKind::kCylinder, cairns::PrimitiveKind::kEllipse,
+        cairns::PrimitiveKind::kEllipsoid};
+    const std::vector<glm::vec4> colors = {
+        glm::vec4(0.9f, 0.2f, 0.2f, 1.0f), glm::vec4(0.2f, 0.8f, 0.3f, 1.0f),
+        glm::vec4(0.3f, 0.5f, 0.9f, 1.0f), glm::vec4(0.9f, 0.7f, 0.2f, 1.0f),
+        glm::vec4(0.8f, 0.3f, 0.7f, 1.0f)};
+    return engine->SpawnPrimitivesGrid(kinds, colors);
+}
+
 void UseScene(Engine* engine, uint32_t index) {
     if (engine) {
         engine->UseScene(index);

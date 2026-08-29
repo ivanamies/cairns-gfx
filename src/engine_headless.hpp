@@ -188,6 +188,12 @@ uint32_t RuntimeLoadGlbPath(Engine* engine, const std::string& path);
 // (cairns.dispatch); these are the general engine ops it composes.
 bool SpawnFitted(Engine* engine, const std::vector<std::string>& glbs,
                  uint32_t instances, bool animated);
+// Spawn a procedural primitive (type: triangle|pyramid|cylinder|ellipse|
+// ellipsoid) fit to the active viewport, colored (r,g,b,a in 0..1).
+bool CreatePrimitive(Engine* engine, const std::string& type,
+                     float r, float g, float b, float a);
+// Spawn one of each primitive kind in a fitted grid (test-all scenario).
+bool CreateAllPrimitives(Engine* engine);
 void UseScene(Engine* engine, uint32_t index);
 bool SetViewportScene(Engine* engine, int viewport, uint32_t scene_index);
 bool SetViewportParticles(Engine* engine, int viewport, bool on);
