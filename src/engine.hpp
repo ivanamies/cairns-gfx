@@ -2042,6 +2042,7 @@ public:
             glm::vec3 hero_min(0.0f);
             glm::vec3 hero_max(0.0f);
             bool hero_has_aabb = false;
+            bool hero_animated = false;
             if (ok && entity_plus_one != 0u && !scene_ids_.empty()) {
                 const uint32_t eid = entity_plus_one - 1u;
                 hero_scene_idx =
@@ -2056,6 +2057,12 @@ public:
                         worlds_.GetCold(active_world_)) {
                     entt::entity ent{eid};
                     if (wcc->registry.valid(ent)) {
+                        // #222: animated? entity gets a SkinRef when
+                        // TryCreateSkinForScene succeeded at init.
+                        // Absence -> static bind pose; check [SKIN-FAIL]
+                        // logs at init time for the reason.
+                        hero_animated =
+                            wcc->registry.all_of<cairns::SkinRef>(ent);
                         const auto* wt =
                             wcc->registry.try_get<cairns::WorldTransform>(ent);
                         cairns::Scene::Hot* sh =
@@ -2090,11 +2097,12 @@ public:
             }
             CAIRNS_PRINT(
                     "[PICK] vp=%d xy=(%u,%u) tex_dims=(%u,%u) ok=%d "
-                    "id+1=%u hero=%s scene_idx=%u "
+                    "id+1=%u hero=%s scene_idx=%u animated=%d "
                     "aabb=[%s%.3f,%.3f,%.3f]-[%.3f,%.3f,%.3f]\n",
                     pick_viewport_, pick_x_, pick_y_, id_target_w_,
                     id_target_h_, ok ? 1 : 0, entity_plus_one,
                     hero_name, hero_scene_idx,
+                    hero_animated ? 1 : 0,
                     hero_has_aabb ? "" : "n/a:",
                     hero_min.x, hero_min.y, hero_min.z,
                     hero_max.x, hero_max.y, hero_max.z);
@@ -2872,16 +2880,31 @@ public:
     // clip_index + time_offset and writes deformed verts at slice.offset.
     cairns::SkinId TryCreateSkinForScene(cairns::SceneId scene_id,
                                           float time_offset) {
+        // #222: loud reason for every Null return so we don't silently
+        // drop heroes to bind pose. Names the scene so the user can map
+        // back to a GLB filename via scene_ids_[scene_idx].
+        auto fail = [&](const char* why) -> cairns::SkinId {
+            CAIRNS_PRINT_ERR(
+                "[SKIN-FAIL] scene_id=(idx=%u,gen=%u) reason=%s\n",
+                static_cast<unsigned>(scene_id.index),
+                static_cast<unsigned>(scene_id.generation), why);
+            return cairns::SkinId::Null;
+        };
         cairns::Scene::Hot* shot = scenes_.GetHot(scene_id);
         cairns::Scene::Cold* scold = scenes_.GetCold(scene_id);
-        if (!shot || !scold || scold->skins.empty() ||
-            scold->clips.empty()) {
-            return cairns::SkinId::Null;
+        if (!shot || !scold) {
+            return fail("scene handle dead");
+        }
+        if (scold->skins.empty()) {
+            return fail("scold.skins empty");
+        }
+        if (scold->clips.empty()) {
+            return fail("scold.clips empty");
         }
         const int clip_idx =
             cairns::SelectWalkingClip(scold->clips);
         if (clip_idx < 0) {
-            return cairns::SkinId::Null;
+            return fail("SelectWalkingClip returned -1");
         }
         cairns::Handle<cairns::Mesh> skinned_mesh;
         uint32_t vert_count = 0;
@@ -2895,11 +2918,11 @@ public:
             }
         }
         if (skinned_mesh.IsNull() || vert_count == 0) {
-            return cairns::SkinId::Null;
+            return fail("no mesh with attr_skinned_alias + vert_count");
         }
         cairns::PoolSlice slice = skin_output_pool_.Alloc(vert_count);
         if (!slice.IsValid()) {
-            return cairns::SkinId::Null;
+            return fail("skin_output_pool_.Alloc exhausted");
         }
         cairns::SkinId sid = skins_.Acquire();
         cairns::Scene::Hot* scene_hot = scenes_.GetHot(scene_id);
