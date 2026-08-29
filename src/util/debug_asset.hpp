@@ -14,6 +14,9 @@ namespace cairns {
 static constexpr uint32_t kDebugGlbsToParseStart = 3;
 static constexpr uint32_t kDebugGlbsToParse = 100;
 
+// Fail-fast: the range MUST fit. If you delete entries and break this,
+// the build dies here -- not at strlen(nullptr) on the deployed device.
+
 static constexpr std::array kDebugGlbs = {
     "die.glb",
     "viking_room.glb",
@@ -116,7 +119,12 @@ static constexpr std::array kDebugGlbs = {
     "anivia_festival_queen.glb",
     "anivia_hextech.glb",
     "anivia_noxus_hunter.glb",
+    "anivia_papercraft.glb",
+    "anivia_prehistoric.glb",
 };
+
+static_assert(kDebugGlbsToParseStart + kDebugGlbsToParse <= kDebugGlbs.size(),
+              "kDebugGlbs is too small for the requested [start, start+count) range");
 
 // for 9 debug assets:
 // x0 = -1, dx = 1

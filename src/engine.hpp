@@ -663,6 +663,8 @@ public:
                     start = comma + 1;
                 }
             } else {
+                // Range invariant is enforced at compile time by a
+                // static_assert in debug_asset.hpp. Hit the exact count or die.
                 for (size_t glb_idx = cairns::kDebugGlbsToParseStart;
                      glb_idx < cairns::kDebugGlbsToParseStart + cairns::kDebugGlbsToParse;
                      ++glb_idx) {

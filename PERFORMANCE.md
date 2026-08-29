@@ -44,16 +44,31 @@ Steady-state medians (last 3 of 9–10 timer reports, warmup window dropped).
 | `swap` (GPU)          |  0.04 ms | -0.06 |
 | GPU total             | ~10.14 ms | +0.94 |
 
-### Android Vulkan Release — Samsung Galaxy S22 (SM-S901U, Adreno)
-**Crashes at `Engine::GreaterInit+1244` -- SIGSEGV null-pointer deref in
-strlen.** Built clean via `third_party/SDL/android-project/gradlew
-assembleRelease`, installed cleanly to the connected device. APK
-bundles all 100 GLBs in `assets/`. Crash is on the SDLThread during
-engine init; backtrace lines up with the asset-loading loop or the
-swap-pass-target plumbing. Last-known-good Android perf is `f87198d`
-on S22 Vulkan; lots of churn since (P0–P4, SwapResolveTarget refactor,
-rhi composition refactor, viewport count flip). Not investigated this
-session.
+### Android Vulkan Release — Samsung Galaxy S22 (SM-S901U, Adreno), 2115×1008
+| Pass                  | avg      |
+|-----------------------|----------|
+| `frame` (CPU)         |   7.96 ms |
+| `build_draws` (CPU)   |   6.97 ms |
+| `record` (CPU)        |  10.83 ms |
+| `particle_sim` (GPU)  |   0.000 ms |
+| `forward_vp0` (GPU)   | 109.4 ms |
+| `swap` (GPU)          |   0.88 ms |
+| GPU total             | ~110.3 ms |
+
+~9 fps. Native portrait-rotated landscape resolution is 2115×1008 ≈
+2.13 M pixels, **2.3×** the macOS 1280×720 workload. GPU forward is
+~110 ms (vs ~10 ms on M2 Max -- expected for a phone GPU).
+
+The earlier crash on this branch (`Engine::GreaterInit+1244` SIGSEGV
+in strlen) was: I removed `ambessa.glb` + `ambessa_chosen_of_the_wolf.
+glb` from the `kDebugGlbs` array, but the loop still indexed
+`kDebugGlbs[3..103)` -- past the new array end. `std::string_view(nullptr)`
+on the past-end garbage entry called `strlen(nullptr)`. Fix in this
+commit: refilled the array to 103 entries with the two new
+`anivia_papercraft` / `anivia_prehistoric` files from the staging
+rename, and added a `static_assert` in `debug_asset.hpp` so the same
+bug fails the build instead of the device. No defensive `std::min` --
+hit the exact count or die at compile.
 
 ### iOS Release — iPhone 15
 Not measured this commit. Needs device deploy; the iOS Xcode target
