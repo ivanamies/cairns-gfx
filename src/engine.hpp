@@ -541,12 +541,18 @@ public:
         // hunting for the LoadTrace summary.
         CAIRNS_PRINT_ERR("[LOAD] end batch ms=%.3f count=%u\n",
                           trace.total_ms, r.count);
-        // #229: prefab interning arena high-water -- sizes the mobile budget
-        // (kPrefabArenaBytes scaled by block/16); AllocSliceOrDie aborts if it
-        // ever exceeds. Logged so the S22/desktop footprint is visible.
+        // #229: arena/block high-water -- visible in logcat so the S22's 256 MB
+        // budget headroom is observable. prefab_arena (names/children/skin/clip
+        // slices) and the cpu_block_ in-class total (pools + prefab tables +
+        // entt; mesh cpu* are malloc, not here).
         CAIRNS_PRINT_ERR("[PREFAB-ARENA] used=%zu KiB / %zu KiB cap\n",
                           prefab_arena_.Used() / 1024,
                           prefab_arena_.Capacity() / 1024);
+        CAIRNS_PRINT_ERR("[CPU-BLOCK] in_use=%llu KiB / %llu KiB budget\n",
+                          (unsigned long long)(cpu_block_.BytesInUse() / 1024),
+                          (unsigned long long)(
+                              cairns::MemoryBudget::Default().cpu_persistent_bytes
+                              / 1024));
 #if CAIRNS_ALLOC_TRACE
         cairns::alloc_count::PrintDelta("[LOAD]", alloc_load_begin);
 #endif

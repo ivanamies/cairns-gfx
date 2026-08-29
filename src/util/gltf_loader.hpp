@@ -231,19 +231,21 @@ struct Mesh {
     };
     struct Cold {
         NameRef name;  // #229 P3: slice into prefab_arena_ (was std::string)
-        // CPU load-time temporaries. Cleared post-upload by
-        // Engine's mesh-pool sweep (was scene.CleanupTmps's job).
-        // #229 P3: load-scratch temporaries are block-backed (cpu_block_,
-        // kRegionPersistent until kRegionLoadScratch lands) so they fall under
-        // the 1 GB cap + the per-frame hash. Re-seated onto the block in
-        // LoadMeshFromGltf (null-arena default ctor = malloc until then).
-        std::vector<glm::vec4, cairns::ChunkStdAllocator<glm::vec4>> cpuPositions;
-        std::vector<VertexAttribute, cairns::ChunkStdAllocator<VertexAttribute>> cpuAttrs;
-        std::vector<uint32_t, cairns::ChunkStdAllocator<uint32_t>> cpuIndices;
+        // CPU load-time temporaries. Cleared post-upload by Engine's mesh-pool
+        // sweep (was scene.CleanupTmps's job). #229: these stay on malloc, NOT
+        // cpu_block_ -- they are TRANSIENT (peak at hundreds of MB across a
+        // 100-GLB batch before the post-upload clear) and would exhaust the
+        // 256 MB mobile block (the S22 load-time abort). They are also empty
+        // before any frame renders, so they are not in the determinism hash.
+        // A kRegionLoadScratch BumpArena (Reset per batch) is the proper
+        // in-block home; malloc is the transient stand-in until then.
+        std::vector<glm::vec4> cpuPositions;
+        std::vector<VertexAttribute> cpuAttrs;
+        std::vector<uint32_t> cpuIndices;
         // #221 Skinning Phase 1: per-vertex joint indices + weights aligned
         // with cpuPositions/cpuAttrs (size() == cpuPositions.size() when
         // mesh is skinned; empty when not).
-        std::vector<SkinVertex, cairns::ChunkStdAllocator<SkinVertex>> cpuSkinAttrs;
+        std::vector<SkinVertex> cpuSkinAttrs;
     };
 };
 
@@ -428,20 +430,16 @@ using PrefabId = cairns::Handle<Prefab>;
 inline bool LoadMeshFromGltf(const fastgltf::Asset& asset,
                              const fastgltf::Mesh& gltfMesh,
                              Mesh::Hot& outHot, Mesh::Cold& outCold,
-                             cairns::ChunkAllocator& block,
+                             [[maybe_unused]] cairns::ChunkAllocator& block,
                              cairns::BumpArena& arena) {
     outCold.name = InternName(arena, std::string_view(gltfMesh.name.data(),
                                                        gltfMesh.name.size()));
-    // #229 P3: re-seat the load-scratch temporaries onto cpu_block_ (POCMA
-    // move-assign adopts the block; also empties them, replacing the clears).
-    outCold.cpuPositions = decltype(outCold.cpuPositions)(
-        cairns::ChunkStdAllocator<glm::vec4>(block));
-    outCold.cpuAttrs = decltype(outCold.cpuAttrs)(
-        cairns::ChunkStdAllocator<VertexAttribute>(block));
-    outCold.cpuIndices = decltype(outCold.cpuIndices)(
-        cairns::ChunkStdAllocator<uint32_t>(block));
-    outCold.cpuSkinAttrs = decltype(outCold.cpuSkinAttrs)(
-        cairns::ChunkStdAllocator<SkinVertex>(block));
+    // #229: cpu* stay on malloc (transient load buffers; see Mesh::Cold). Just
+    // clear them -- they are reused per mesh and dropped post-upload.
+    outCold.cpuPositions.clear();
+    outCold.cpuAttrs.clear();
+    outCold.cpuIndices.clear();
+    outCold.cpuSkinAttrs.clear();
 
     // #221 Skinning Phase 1: mesh is "skinned" if ANY primitive carries
     // JOINTS_0 (per glTF spec, JOINTS_0 + WEIGHTS_0 travel together).
