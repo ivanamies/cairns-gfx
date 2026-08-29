@@ -48,6 +48,7 @@
 #include <filesystem>
 #include <unordered_map>
 
+#include "gpu_scene_registry.hpp"
 #include "rhi/resource_manager.hpp"
 #include "util/debug_asset.hpp"
 #include "util/gltf_loader.hpp"
@@ -272,6 +273,7 @@ private:
         if (!createCommandPool()) return false;
         if (!initResourceManager()) return false;
         if (!loadScenes()) return false;
+        if (!createBindlessRegistry()) return false;
         if (!createDescriptorSetLayout()) return false;
         if (!createComputePipeline()) return false;
         if (!createGraphicsPipeline()) return false;
@@ -469,6 +471,160 @@ private:
             return false;
         }
         vkBindImageMemory(device, image, imageMemory, 0);
+        return true;
+    }
+
+    bool createBindlessRegistry() {
+        using R = cairns::rhi::GpuSceneRegistry;
+
+        VkDescriptorBindingFlags binding_flags[3] = {
+            VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
+            VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
+            VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
+        };
+        VkDescriptorSetLayoutBindingFlagsCreateInfo flags_info{};
+        flags_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+        flags_info.bindingCount = 3;
+        flags_info.pBindingFlags = binding_flags;
+
+        VkDescriptorSetLayoutBinding bindings[3]{};
+        bindings[0].binding = 0;
+        bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        bindings[0].descriptorCount = R::kMaxTextures;
+        bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[1].binding = 1;
+        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[1].descriptorCount = R::kMaxMeshes;
+        bindings[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[2].binding = 2;
+        bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+        bindings[2].descriptorCount = R::kMaxSamplers;
+        bindings[2].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        VkDescriptorSetLayoutCreateInfo layout_info{};
+        layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layout_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+        layout_info.bindingCount = 3;
+        layout_info.pBindings = bindings;
+        layout_info.pNext = &flags_info;
+
+        if (vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &bindlessLayout_) != VK_SUCCESS) {
+            return false;
+        }
+
+        VkDescriptorPoolSize pool_sizes[3]{};
+        pool_sizes[0].type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        pool_sizes[0].descriptorCount = R::kMaxTextures;
+        pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        pool_sizes[1].descriptorCount = R::kMaxMeshes;
+        pool_sizes[2].type = VK_DESCRIPTOR_TYPE_SAMPLER;
+        pool_sizes[2].descriptorCount = R::kMaxSamplers;
+
+        VkDescriptorPoolCreateInfo pool_info{};
+        pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+        pool_info.maxSets = 1;
+        pool_info.poolSizeCount = 3;
+        pool_info.pPoolSizes = pool_sizes;
+
+        if (vkCreateDescriptorPool(device, &pool_info, nullptr, &bindlessPool_) != VK_SUCCESS) {
+            return false;
+        }
+
+        VkDescriptorSetAllocateInfo alloc_info{};
+        alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        alloc_info.descriptorPool = bindlessPool_;
+        alloc_info.descriptorSetCount = 1;
+        alloc_info.pSetLayouts = &bindlessLayout_;
+
+        if (vkAllocateDescriptorSets(device, &alloc_info, &bindlessSet_) != VK_SUCCESS) {
+            return false;
+        }
+
+        mesh_attr_id_map_.clear();
+        sampler_id_map_.clear();
+
+        std::vector<VkDescriptorImageInfo> tex_infos;
+        std::vector<VkDescriptorBufferInfo> attr_infos;
+        std::vector<VkDescriptorImageInfo> sampler_infos;
+
+        for (size_t i = 0; i < scenes_.size(); ++i) {
+            cairns::Scene& scene = scenes_[i];
+            for (size_t j = 0; j < scene.textureHandles.size(); ++j) {
+                auto h = scene.textureHandles[j];
+                rhi::Texture::Hot* hot = rm_.GetHot(h);
+                if (hot && hot->api_view) {
+                    VkDescriptorImageInfo img{};
+                    img.imageView = static_cast<VkImageView>(hot->api_view);
+                    img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    tex_infos.push_back(img);
+                }
+            }
+            for (size_t j = 0; j < scene.meshes.size(); ++j) {
+                auto h = scene.meshes[j].attrHandle;
+                if (!h.IsNull()) {
+                    uint32_t off = 0;
+                    VkBuffer buf = rm_.GetVkBuffer(h, &off);
+                    if (buf != VK_NULL_HANDLE) {
+                        VkDescriptorBufferInfo buf_info{};
+                        buf_info.buffer = buf;
+                        buf_info.offset = off;
+                        buf_info.range = rm_.GetBufferByteSize(h);
+                        attr_infos.push_back(buf_info);
+                        mesh_attr_id_map_[h.index] = static_cast<uint32_t>(attr_infos.size()) - 1;
+                    }
+                }
+            }
+            for (size_t j = 0; j < scene.samplerHandles.size(); ++j) {
+                auto h = scene.samplerHandles[j];
+                rhi::Sampler::Hot* hot = rm_.GetHot(h);
+                if (hot && hot->api_sampler) {
+                    VkDescriptorImageInfo samp{};
+                    samp.sampler = static_cast<VkSampler>(hot->api_sampler);
+                    sampler_infos.push_back(samp);
+                    sampler_id_map_[h.index] = static_cast<uint32_t>(sampler_infos.size()) - 1;
+                }
+            }
+        }
+
+        std::vector<VkWriteDescriptorSet> writes;
+        if (!tex_infos.empty()) {
+            VkWriteDescriptorSet w{};
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet = bindlessSet_;
+            w.dstBinding = 0;
+            w.dstArrayElement = 0;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            w.descriptorCount = static_cast<uint32_t>(tex_infos.size());
+            w.pImageInfo = tex_infos.data();
+            writes.push_back(w);
+        }
+        if (!attr_infos.empty()) {
+            VkWriteDescriptorSet w{};
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet = bindlessSet_;
+            w.dstBinding = 1;
+            w.dstArrayElement = 0;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w.descriptorCount = static_cast<uint32_t>(attr_infos.size());
+            w.pBufferInfo = attr_infos.data();
+            writes.push_back(w);
+        }
+        if (!sampler_infos.empty()) {
+            VkWriteDescriptorSet w{};
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet = bindlessSet_;
+            w.dstBinding = 2;
+            w.dstArrayElement = 0;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+            w.descriptorCount = static_cast<uint32_t>(sampler_infos.size());
+            w.pImageInfo = sampler_infos.data();
+            writes.push_back(w);
+        }
+        if (!writes.empty()) {
+            vkUpdateDescriptorSets(device,
+                static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        }
         return true;
     }
 
@@ -2330,10 +2486,10 @@ private:
         // do not clean up resources that are still being used
         vkDeviceWaitIdle(device);
 
-        rm_.Destroy(sampler_);
-        rm_.Destroy(texture_);
-
         cleanupSwapChain();
+
+        vkDestroyDescriptorPool(device, bindlessPool_, nullptr);
+        vkDestroyDescriptorSetLayout(device, bindlessLayout_, nullptr);
 
         vkDestroyDescriptorPool(device, descriptorPool, nullptr);
 
@@ -2553,6 +2709,10 @@ private:
     std::array<void*, MAX_FRAMES_IN_FLIGHT> computeUniformBuffersMapped{};
 
     std::array<rhi::Handle<rhi::Buffer>, MAX_FRAMES_IN_FLIGHT> ssbo_;
+
+    VkDescriptorSetLayout bindlessLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool bindlessPool_ = VK_NULL_HANDLE;
+    VkDescriptorSet bindlessSet_ = VK_NULL_HANDLE;
 
     VkDescriptorPool descriptorPool;
     std::vector<VkDescriptorSet> descriptorSets;

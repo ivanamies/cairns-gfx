@@ -437,6 +437,14 @@ void ResourceManager::BeginFrame() {
 
 void ResourceManager::EndFrame() {}
 
+uint32_t ResourceManager::GetBufferByteSize(Handle<Buffer> h) const {
+    Buffer::Cold* cold = impl_->buffers.GetCold(h);
+    if (!cold) {
+        return 0;
+    }
+    return cold->size_bytes;
+}
+
 MTL::Buffer* ResourceManager::GetMtlBuffer(Handle<Buffer> h,
                                             uint32_t* out_offset) {
     Buffer::Hot* hot = impl_->buffers.GetHot(h);

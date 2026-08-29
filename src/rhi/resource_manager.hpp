@@ -495,6 +495,8 @@ public:
     void BeginFrame();
     void EndFrame();
 
+    uint32_t GetBufferByteSize(Handle<Buffer> h) const;
+
 #if CAIRNS_VULKAN
     // Same-backend native-handle access for Engine2's hand-written draw loop.
     // The neutral surface above stays pointer-free; this is Vulkan-only.
