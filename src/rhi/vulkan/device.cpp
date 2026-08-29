@@ -22,24 +22,16 @@
 #include "rhi/device.hpp"
 #include "rhi/init_config.hpp"
 #include "rhi/swap_chain.hpp"
-#include "util/alloc_tags.hpp"
-#include "util/print_allocator.hpp"
 
 namespace cairns::rhi {
 
 namespace {
 
-const std::vector<const char*,
-                  cairns::print_allocator<const char*,
-                                          cairns::tags::VkDeviceValidationLayers>>
-    kValidationLayers = {"VK_LAYER_KHRONOS_validation"};
-const std::vector<const char*,
-                  cairns::print_allocator<const char*,
-                                          cairns::tags::VkDeviceExtensionsConst>>
-    kDeviceExtensions = {
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+const std::vector<const char*> kValidationLayers = {"VK_LAYER_KHRONOS_validation"};
+const std::vector<const char*> kDeviceExtensions = {
+    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 #if CAIRNS_APPLE
-        VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
+    VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
 #endif
 };
 
@@ -81,10 +73,7 @@ void populate_debug_ci(VkDebugUtilsMessengerCreateInfoEXT& ci) {
 bool check_validation_layer_support() {
     uint32_t count = 0;
     vkEnumerateInstanceLayerProperties(&count, nullptr);
-    std::vector<VkLayerProperties,
-                cairns::print_allocator<VkLayerProperties,
-                                        cairns::tags::VkDeviceLayerProps>>
-        available(count);
+    std::vector<VkLayerProperties> available(count);
     vkEnumerateInstanceLayerProperties(&count, available.data());
     for (const char* name : kValidationLayers) {
         bool found = false;
@@ -113,10 +102,7 @@ QueueFamilies find_queue_families(VkPhysicalDevice device, VkSurfaceKHR surface)
     QueueFamilies indices;
     uint32_t count = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(device, &count, nullptr);
-    std::vector<VkQueueFamilyProperties,
-                cairns::print_allocator<VkQueueFamilyProperties,
-                                        cairns::tags::VkDeviceQueueFamilies>>
-        families(count);
+    std::vector<VkQueueFamilyProperties> families(count);
     vkGetPhysicalDeviceQueueFamilyProperties(device, &count, families.data());
     for (uint32_t i = 0; i < count; ++i) {
         if ((families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) &&
@@ -138,10 +124,7 @@ QueueFamilies find_queue_families(VkPhysicalDevice device, VkSurfaceKHR surface)
 bool check_device_extension_support(VkPhysicalDevice device) {
     uint32_t count = 0;
     vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr);
-    std::vector<VkExtensionProperties,
-                cairns::print_allocator<VkExtensionProperties,
-                                        cairns::tags::VkDeviceExtProps>>
-        available(count);
+    std::vector<VkExtensionProperties> available(count);
     vkEnumerateDeviceExtensionProperties(device, nullptr, &count, available.data());
     std::set<std::string> required(kDeviceExtensions.begin(), kDeviceExtensions.end());  // INIT ONLY
     for (const auto& ext : available) {
@@ -188,10 +171,7 @@ QueueFamilies find_queue_families_headless(VkPhysicalDevice device) {
     QueueFamilies indices;
     uint32_t count = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(device, &count, nullptr);
-    std::vector<VkQueueFamilyProperties,
-                cairns::print_allocator<VkQueueFamilyProperties,
-                                        cairns::tags::VkDeviceQueueFamilies>>
-        families(count);
+    std::vector<VkQueueFamilyProperties> families(count);
     vkGetPhysicalDeviceQueueFamilyProperties(device, &count, families.data());
     for (uint32_t i = 0; i < count; ++i) {
         if ((families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) &&
@@ -244,12 +224,9 @@ bool Device::Init(const InitConfig& cfg) {
         app.engineVersion = VK_MAKE_VERSION(1, 0, 0);
         app.apiVersion = VK_API_VERSION_1_2;
 
-        std::vector<const char*,
-                    cairns::print_allocator<const char*,
-                                            cairns::tags::VkDeviceInstanceExts>>
-            extensions(
-                cfg.plat.vk_instance_extensions,
-                cfg.plat.vk_instance_extensions + cfg.plat.vk_instance_extension_count);
+        std::vector<const char*> extensions(
+            cfg.plat.vk_instance_extensions,
+            cfg.plat.vk_instance_extensions + cfg.plat.vk_instance_extension_count);
         if (plat.validation_enabled_) {
             extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         }
@@ -297,10 +274,7 @@ bool Device::Init(const InitConfig& cfg) {
         if (count == 0) {
             return false;
         }
-        std::vector<VkPhysicalDevice,
-                    cairns::print_allocator<VkPhysicalDevice,
-                                            cairns::tags::VkDevicePhysicalDevices>>
-            devices(count);
+        std::vector<VkPhysicalDevice> devices(count);
         vkEnumeratePhysicalDevices(plat.instance_, &count, devices.data());
         for (VkPhysicalDevice d : devices) {
             const bool suitable = cfg.surfaceless
@@ -324,10 +298,7 @@ bool Device::Init(const InitConfig& cfg) {
     {  // logical device + queues
         std::set<uint32_t> unique = {indices.graphics_compute.value(),  // INIT ONLY
                                      indices.present.value()};
-        std::vector<VkDeviceQueueCreateInfo,
-                    cairns::print_allocator<VkDeviceQueueCreateInfo,
-                                            cairns::tags::VkDeviceQueueCreateInfos>>
-            queue_cis;
+        std::vector<VkDeviceQueueCreateInfo> queue_cis;
         const float priority = 1.0f;
         for (uint32_t fam : unique) {
             VkDeviceQueueCreateInfo qci{};
@@ -380,10 +351,7 @@ bool Device::Init(const InitConfig& cfg) {
 
         // Headless device skips VK_KHR_SWAPCHAIN (the only required one
         // besides portability_subset on Apple); portability_subset stays.
-        std::vector<const char*,
-                    cairns::print_allocator<const char*,
-                                            cairns::tags::VkDeviceDeviceExts>>
-            device_exts;
+        std::vector<const char*> device_exts;
         for (const char* e : kDeviceExtensions) {
             if (cfg.surfaceless &&
                 std::strcmp(e, VK_KHR_SWAPCHAIN_EXTENSION_NAME) == 0) {

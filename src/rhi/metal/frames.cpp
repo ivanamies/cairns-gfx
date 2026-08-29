@@ -21,8 +21,6 @@
 #include "rhi/swap_chain.hpp"
 #include "rhi/swap_resolve_target.hpp"
 #include "rhi/command_recorder.hpp"
-#include "util/alloc_tags.hpp"
-#include "util/print_allocator.hpp"
 #include "util/timer.hpp"
 
 namespace cairns::rhi {
@@ -243,10 +241,7 @@ void Frames::EndSubmit(const SwapResolveTarget& target,
         }
         term->commit();
         term->waitUntilCompleted();
-        std::vector<uint8_t,
-                    cairns::print_allocator<uint8_t,
-                                            cairns::tags::MtlFramesReadbackRgba>>
-            rgba(bufSize);
+        std::vector<uint8_t> rgba(bufSize);
         const uint8_t* bgra = static_cast<const uint8_t*>(readback->contents());
         for (NS::UInteger i = 0; i < w * h; ++i) {
             rgba[i * 4 + 0] = bgra[i * 4 + 2];

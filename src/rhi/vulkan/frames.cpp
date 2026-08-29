@@ -21,9 +21,7 @@
 #include "rhi/swap_chain.hpp"
 #include "rhi/swap_resolve_target.hpp"
 #include "rhi/command_recorder.hpp"
-#include "util/alloc_tags.hpp"
 #include "util/material_gpu.hpp"        // DrawTmp
-#include "util/print_allocator.hpp"
 #include "util/render_pass_globals.hpp" // RenderPassGlobals
 #include "util/timer.hpp"
 
@@ -133,10 +131,7 @@ void dump_swapchain_image(VkDevice device, VkPhysicalDevice phys,
     const uint8_t* src = static_cast<const uint8_t*>(mapped);
     const bool is_bgra = (format == VK_FORMAT_B8G8R8A8_SRGB ||
                           format == VK_FORMAT_B8G8R8A8_UNORM);
-    std::vector<uint8_t,
-                cairns::print_allocator<uint8_t,
-                                        cairns::tags::VkFramesDumpRgba>>
-        rgba(static_cast<size_t>(buf_size));
+    std::vector<uint8_t> rgba(static_cast<size_t>(buf_size));
     for (uint32_t i = 0; i < w * h; ++i) {
         if (is_bgra) {
             rgba[i * 4 + 0] = src[i * 4 + 2];
@@ -262,10 +257,7 @@ bool Frames::Init(Device& device, Pipelines& pipelines) {
 
         auto alloc_sets = [&](VkDescriptorSetLayout layout,
                               std::vector<VkDescriptorSet>& out) -> bool {
-            std::vector<VkDescriptorSetLayout,
-                        cairns::print_allocator<VkDescriptorSetLayout,
-                                                cairns::tags::VkFramesAllocSetLayouts>>
-                layouts(n, layout);
+            std::vector<VkDescriptorSetLayout> layouts(n, layout);
             VkDescriptorSetAllocateInfo ai{};
             ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             ai.descriptorPool = plat.descriptor_pool_;
@@ -284,14 +276,8 @@ bool Frames::Init(Device& device, Pipelines& pipelines) {
         plat.composite_sets_.resize(n);
         {
             const uint32_t total = n * kCompositeRingSize;
-            std::vector<VkDescriptorSetLayout,
-                        cairns::print_allocator<VkDescriptorSetLayout,
-                                                cairns::tags::VkFramesCompositeLayouts>>
-                layouts(total, pp.composite_set_layout_);
-            std::vector<VkDescriptorSet,
-                        cairns::print_allocator<VkDescriptorSet,
-                                                cairns::tags::VkFramesCompositeFlat>>
-                flat(total);
+            std::vector<VkDescriptorSetLayout> layouts(total, pp.composite_set_layout_);
+            std::vector<VkDescriptorSet> flat(total);
             VkDescriptorSetAllocateInfo ai{};
             ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             ai.descriptorPool = plat.descriptor_pool_;

@@ -275,7 +275,7 @@ AllocResult MemoryAllocator::AllocBuffer(uint32_t bytes, BufferUsage,
     AllocResult out;
     const uint32_t padded = bytes + (align > 1 ? align - 1 : 0);
 
-    auto& pool = buffer_pools_[mem_index(mem)];
+    std::vector<uint32_t>& pool = buffer_pools_[mem_index(mem)];
     for (uint32_t hi : pool) {
         OffsetAllocator::Allocation a = blocks_[hi].offset_alloc.allocate(padded);
         if (a.offset != OffsetAllocator::Allocation::NO_SPACE) {
@@ -312,7 +312,7 @@ AllocResult MemoryAllocator::AllocImage(uint32_t bytes, uint32_t align,
     AllocResult out;
     const uint32_t padded = bytes + (align > 1 ? align - 1 : 0);
 
-    auto& pool = image_pools_[mem_index(mem)];
+    std::vector<uint32_t>& pool = image_pools_[mem_index(mem)];
     for (uint32_t hi : pool) {
         OffsetAllocator::Allocation a = blocks_[hi].offset_alloc.allocate(padded);
         if (a.offset != OffsetAllocator::Allocation::NO_SPACE) {
@@ -432,7 +432,7 @@ void MemoryAllocator::BeginFrame(uint32_t frame_index) {
 }
 
 void MemoryAllocator::RetireFrame(uint32_t frame_slot) {
-    auto& pending = pending_frees_[frame_slot];
+    std::vector<PendingFree>& pending = pending_frees_[frame_slot];
     for (PendingFree& p : pending) {
         if (p.is_image && p.texture) {
             p.texture->release();

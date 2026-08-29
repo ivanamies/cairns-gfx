@@ -27,10 +27,8 @@
 #include <vector>
 
 #include "core/handle.hpp"
-#include "util/alloc_tags.hpp"
 #include "util/define.hpp"
 #include "util/offset_allocator.hpp"
-#include "util/print_allocator.hpp"
 
 #if CAIRNS_METAL
 #include "rhi/metal/resource_manager_plat.hpp"
@@ -305,10 +303,7 @@ struct DynamicBuffers {
         DynamicBuffersHotPlat plat;
     };
     struct Cold {
-        std::vector<DynamicBinding,
-                    cairns::print_allocator<DynamicBinding,
-                                            cairns::tags::DynamicBuffersLayout>>
-            layout;
+        std::vector<DynamicBinding> layout;
         const char* debug_name = nullptr;
     };
 };

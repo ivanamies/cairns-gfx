@@ -20,9 +20,6 @@
 #include <cstdint>
 #include <vector>
 
-#include "util/alloc_tags.hpp"
-#include "util/print_allocator.hpp"
-
 namespace cairns {
 
 template <typename T>
@@ -111,18 +108,10 @@ public:
     }
 
 private:
-    std::vector<typename T::Hot,
-                cairns::print_allocator<typename T::Hot, cairns::tags::RmHot>>
-        hot_;
-    std::vector<typename T::Cold,
-                cairns::print_allocator<typename T::Cold, cairns::tags::RmCold>>
-        cold_;
-    std::vector<uint16_t,
-                cairns::print_allocator<uint16_t, cairns::tags::RmGeneration>>
-        generation_;
-    std::vector<uint16_t,
-                cairns::print_allocator<uint16_t, cairns::tags::RmFreelist>>
-        freelist_;
+    std::vector<typename T::Hot> hot_;
+    std::vector<typename T::Cold> cold_;
+    std::vector<uint16_t> generation_;
+    std::vector<uint16_t> freelist_;
 };
 
 }  // namespace cairns

@@ -18,9 +18,7 @@
 #include <string>
 #include <vector>
 
-#include "util/alloc_tags.hpp"
 #include "util/json.hpp"
-#include "util/print_allocator.hpp"
 
 namespace cairns::control {
 
@@ -96,19 +94,10 @@ private:
     // Command::name so sorted_names_ stores std::string copies (small
     // hashable map -> sorted vector trade); reserve once and re-sort
     // after each Register.
-    std::vector<Command,
-                cairns::print_allocator<Command,
-                                        cairns::tags::RegistryCommands>>
-        commands_;
-    std::vector<CommandIndex,
-                cairns::print_allocator<CommandIndex,
-                                        cairns::tags::RegistrySortedNames>>
-        sorted_names_;
+    std::vector<Command> commands_;
+    std::vector<CommandIndex> sorted_names_;
     std::mutex events_m_;
-    std::vector<json,
-                cairns::print_allocator<json,
-                                        cairns::tags::RegistryEvents>>
-        events_;
+    std::vector<json> events_;
 };
 
 }  // namespace cairns::control

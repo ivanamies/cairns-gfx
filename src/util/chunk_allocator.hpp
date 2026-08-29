@@ -25,9 +25,6 @@
 #include <cstring>
 #include <vector>
 
-#include "util/alloc_tags.hpp"
-#include "util/print_allocator.hpp"
-
 namespace cairns {
 
 inline constexpr uint16_t kNoRegion = 0;
@@ -259,10 +256,7 @@ private:
     uint32_t block_bytes_ = 0;
     uint32_t max_class_log_ = 0;
     FreeCell* free_lists_[kNumClasses] = {};
-    std::vector<Chunk,
-                cairns::print_allocator<Chunk,
-                                        cairns::tags::ChunkAllocatorChunks>>
-        chunks_;
+    std::vector<Chunk> chunks_;
     uint64_t bytes_in_use_ = 0;
     uint64_t bytes_in_use_by_class_[kNumClasses] = {};
     uint32_t oversize_count_ = 0;

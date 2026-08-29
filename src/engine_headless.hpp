@@ -14,9 +14,7 @@
 #include <vector>
 
 #include "scene/selection.hpp"
-#include "util/alloc_tags.hpp"
 #include "util/load_trace.hpp"
-#include "util/print_allocator.hpp"
 
 namespace cairns {
 
@@ -163,11 +161,7 @@ uint32_t DebugAssertAppendOnly(Engine* engine);
 // new state bucket was added without its matching invariant).
 struct InvariantsExport {
     uint32_t violations = 0;
-    std::vector<std::string,
-                cairns::print_allocator<
-                    std::string,
-                    cairns::tags::EngineHeadlessMessages>>
-        messages;
+    std::vector<std::string> messages;
 };
 InvariantsExport DebugCheckInvariants(Engine* engine);
 

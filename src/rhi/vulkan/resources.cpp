@@ -16,8 +16,6 @@
 #include "rhi/frames.hpp"
 #include "rhi/pipelines.hpp"
 #include "rhi/resource_manager.hpp"
-#include "util/alloc_tags.hpp"
-#include "util/print_allocator.hpp"
 
 namespace cairns::rhi {
 
@@ -857,10 +855,7 @@ Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
         }
         return f;
     };
-    std::vector<VkDescriptorSetLayoutBinding,
-                cairns::print_allocator<VkDescriptorSetLayoutBinding,
-                                        cairns::tags::VkResourcesDynBindings>>
-        vk_bindings;
+    std::vector<VkDescriptorSetLayoutBinding> vk_bindings;
     vk_bindings.reserve(desc.bindings.size());
     for (const DynamicBinding& b : desc.bindings) {
         VkDescriptorSetLayoutBinding vb{};
@@ -881,10 +876,7 @@ Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
 
     // Allocate kFramesInFlight sets, write each against kDynamic master.
     const uint32_t n = kFramesInFlight;
-    std::vector<VkDescriptorSetLayout,
-                cairns::print_allocator<VkDescriptorSetLayout,
-                                        cairns::tags::VkResourcesDynLayouts>>
-        layouts(n, hot->plat.vk_layout);
+    std::vector<VkDescriptorSetLayout> layouts(n, hot->plat.vk_layout);
     VkDescriptorSetAllocateInfo ai{};
     ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     ai.descriptorPool = frames.plat.descriptor_pool_;
@@ -899,14 +891,8 @@ Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
     VkBuffer dyn_master = plat.GetVkBumpMasterBuffer(alloc, Memory::kDynamic);
     for (uint32_t f = 0; f < n; ++f) {
         hot->plat.vk_sets[f] = sets[f];
-        std::vector<VkDescriptorBufferInfo,
-                    cairns::print_allocator<VkDescriptorBufferInfo,
-                                            cairns::tags::VkResourcesDynBufferInfo>>
-            bi(desc.bindings.size());
-        std::vector<VkWriteDescriptorSet,
-                    cairns::print_allocator<VkWriteDescriptorSet,
-                                            cairns::tags::VkResourcesDynWrites>>
-            w(desc.bindings.size());
+        std::vector<VkDescriptorBufferInfo> bi(desc.bindings.size());
+        std::vector<VkWriteDescriptorSet> w(desc.bindings.size());
         for (size_t i = 0; i < desc.bindings.size(); ++i) {
             const DynamicBinding& b = desc.bindings[i];
             // #222 Phase D.3: per-binding backing. Null = kDynamic master;

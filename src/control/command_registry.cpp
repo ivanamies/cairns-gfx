@@ -17,8 +17,7 @@ namespace {
 // #215 binary-search the sorted lookup table for `name`. Returns op_id or
 // UINT32_MAX if not found.
 constexpr uint32_t kNoOp = 0xFFFFFFFFu;
-template <typename SortedT>
-uint32_t FindOp(const SortedT& sorted, const std::string& name) {
+uint32_t FindOp(const std::vector<CommandIndex>& sorted, const std::string& name) {
     auto it = std::lower_bound(sorted.begin(), sorted.end(),
                                 CommandIndex{name, 0});
     if (it == sorted.end() || it->name != name) {
@@ -27,8 +26,7 @@ uint32_t FindOp(const SortedT& sorted, const std::string& name) {
     return it->op_id;
 }
 
-template <typename SortedT>
-void InsertSorted(SortedT& sorted, std::string name,
+void InsertSorted(std::vector<CommandIndex>& sorted, std::string name,
                   uint32_t op_id) {
     CommandIndex idx{std::move(name), op_id};
     auto it = std::lower_bound(sorted.begin(), sorted.end(), idx);
@@ -254,11 +252,7 @@ void CommandRegistry::PublishEvent(std::string&& topic, json&& data) {
 std::vector<json> CommandRegistry::DrainEvents() {
     std::vector<json> out;
     std::lock_guard<std::mutex> lk(events_m_);
-    out.reserve(events_.size());
-    for (json& e : events_) {
-        out.push_back(std::move(e));
-    }
-    events_.clear();
+    out.swap(events_);
     return out;
 }
 

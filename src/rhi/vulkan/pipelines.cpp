@@ -22,9 +22,7 @@
 #include "rhi/resources.hpp"
 #include "rhi/frames.hpp"
 #include "rhi/swap_chain.hpp"
-#include "util/alloc_tags.hpp"
 #include "util/log.hpp"
-#include "util/print_allocator.hpp"
 
 namespace cairns::rhi {
 
@@ -241,8 +239,7 @@ void Pipelines::Deinit(Resources& resources) {
 
 namespace {
 
-template <typename Vec>
-bool read_spv_file(const std::string& path, Vec* out) {
+bool read_spv_file(const std::string& path, std::vector<char>* out) {
     size_t size = 0;
     void* data = SDL_LoadFile(path.c_str(), &size);
     if (!data) {
@@ -256,8 +253,7 @@ bool read_spv_file(const std::string& path, Vec* out) {
     return true;
 }
 
-template <typename Vec>
-VkShaderModule make_shader_module(VkDevice device, const Vec& code) {
+VkShaderModule make_shader_module(VkDevice device, const std::vector<char>& code) {
     VkShaderModuleCreateInfo ci{};
     ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     ci.codeSize = code.size();
@@ -430,14 +426,8 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     const VkShaderFiles files = resolve_vk_shader(desc.logical_shader);
     const std::filesystem::path dir = desc.shader_dir ? desc.shader_dir : "";
 
-    std::vector<char,
-                cairns::print_allocator<char,
-                                        cairns::tags::VkPipelinesVertCode>>
-        vert_code;
-    std::vector<char,
-                cairns::print_allocator<char,
-                                        cairns::tags::VkPipelinesFragCode>>
-        frag_code;
+    std::vector<char> vert_code;
+    std::vector<char> frag_code;
     if (!read_spv_file((dir / files.vert).string(), &vert_code) ||
         !read_spv_file((dir / files.frag).string(), &frag_code)) {
         return Handle<Shader>::Null;
@@ -458,10 +448,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     stages[1].module = frag_mod;
     stages[1].pName = "main";
 
-    std::vector<VkVertexInputBindingDescription,
-                cairns::print_allocator<VkVertexInputBindingDescription,
-                                        cairns::tags::VkPipelinesVtxBindings>>
-        bindings;
+    std::vector<VkVertexInputBindingDescription> bindings;
     for (size_t i = 0; i < desc.vertex_buffers.size(); ++i) {
         VkVertexInputBindingDescription b{};
         b.binding = desc.vertex_buffers[i].buffer_slot;
@@ -469,10 +456,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
         b.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
         bindings.push_back(b);
     }
-    std::vector<VkVertexInputAttributeDescription,
-                cairns::print_allocator<VkVertexInputAttributeDescription,
-                                        cairns::tags::VkPipelinesVtxAttrs>>
-        attrs;
+    std::vector<VkVertexInputAttributeDescription> attrs;
     for (size_t i = 0; i < desc.vertex_attributes.size(); ++i) {
         const VertexInputAttribute& a = desc.vertex_attributes[i];
         VkVertexInputAttributeDescription va{};
@@ -580,10 +564,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     pc_range.offset = 0;
     pc_range.size = desc.push_constant_bytes;
     const std::string ls = desc.logical_shader ? desc.logical_shader : "";
-    std::vector<VkDescriptorSetLayout,
-                cairns::print_allocator<VkDescriptorSetLayout,
-                                        cairns::tags::VkPipelinesSetLayouts>>
-        set_layouts;
+    std::vector<VkDescriptorSetLayout> set_layouts;
     VkDescriptorSetLayout imgui_set_layout = VK_NULL_HANDLE;
     if (ls == "unlit" || ls == "unlit_offscreen" ||
         ls == "unlit_offscreen_noid") {
@@ -712,10 +693,7 @@ Handle<Kernel> Pipelines::CreateComputePipeline(
     const VkShaderFiles files = resolve_vk_shader(desc.logical_shader);
     const std::filesystem::path dir = desc.shader_dir ? desc.shader_dir : "";
 
-    std::vector<char,
-                cairns::print_allocator<char,
-                                        cairns::tags::VkPipelinesCompCode>>
-        comp_code;
+    std::vector<char> comp_code;
     if (!read_spv_file((dir / files.comp).string(), &comp_code)) {
         return Handle<Kernel>::Null;
     }
