@@ -954,7 +954,7 @@ public:
         if (frame_ <= 6) {
             const glm::mat4& vp = s.pending_globals[active_viewport_].view_proj;
             const float vp_w = static_cast<float>(FrameWidth()) /
-                                static_cast<float>(kNumViewports);
+                                static_cast<float>(std::max(1, active_viewport_count_));
             const float aspect_ratio = vp_w / static_cast<float>(FrameHeight());
             size_t entity_count = 0;
             if (auto* wc = worlds_.GetCold(active_world_)) {
