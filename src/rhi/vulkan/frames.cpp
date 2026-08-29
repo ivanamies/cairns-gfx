@@ -379,6 +379,11 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
         vkWaitForFences(dev, 1, &plat.compute_in_flight_[cf], VK_TRUE, UINT64_MAX);
         vkWaitForFences(dev, 1, &plat.in_flight_[cf], VK_TRUE, UINT64_MAX);
     }
+    // #228 F1: drain slot |cf|'s deferred-free bucket. Both fences for
+    // this slot signaled above prove the kFIF-frames-ago frame that
+    // pushed into the bucket is GPU-done; the underlying objects are
+    // now safe to release.
+    resources.DrainDeferredFrees(alloc, cf);
 
     // Both queues' slot-`cf` timestamps are now resolved -- read them BEFORE
     // resetting fences / cmd buffers / the query pool itself.

@@ -89,6 +89,28 @@ public:
     void Destroy(Handle<Shader> h);
     void Destroy(Handle<Kernel> h);
 
+    // #228 F1: fenced deferred deletion. Enqueue a handle to be Destroy()'d
+    // kFramesInFlight frames from now -- safely past the in-flight window
+    // that might still reference the underlying GPU object. The drain
+    // happens in Frames::Begin at the existing vkWaitForFences /
+    // cmd-buffer-completion sync point; no new fence is introduced. Use
+    // DeferFree() instead of Destroy() when the resource may be bound by
+    // the current or last-kFIF frames (e.g. swapping a pipeline behind
+    // its handle, replacing a descriptor set, evicting a prefab batch).
+    // Use Destroy() directly only for one-shot teardown after Device::
+    // WaitIdle() or during shutdown.
+    void DeferFree(Allocator& alloc, Handle<Buffer> h);
+    void DeferFree(Allocator& alloc, Handle<Texture> h);
+    void DeferFree(Handle<Sampler> h);
+    void DeferFree(Handle<BindGroup> h);
+    void DeferFree(Handle<DynamicBuffers> h);
+    void DeferFree(Handle<Shader> h);
+    void DeferFree(Handle<Kernel> h);
+    // Drain the bucket for |cur_slot| -- everything enqueued during this
+    // slot's previous frame (kFIF frames ago). Called by Frames::Begin
+    // after the slot's fence/cmd-buffer wait.
+    void DrainDeferredFrees(Allocator& alloc, uint32_t cur_slot);
+
     Buffer::Hot* GetHot(Handle<Buffer> h);
     Texture::Hot* GetHot(Handle<Texture> h);
     Sampler::Hot* GetHot(Handle<Sampler> h);
@@ -141,6 +163,34 @@ public:
 
 private:
     bool inited_ = false;
+
+    // #228 F1: per-slot flat deferred-free ring. Push appends to the
+    // current slot's bucket; DrainDeferredFrees(S) replays + clears
+    // bucket[S] at Frames::Begin after the slot's GPU work is proven
+    // done by the existing fence/cmd-buffer wait. Per-slot capacity
+    // covers ~one frame's worth of resource churn at the remixer's
+    // peak scroll rate; overflow asserts so we notice if we ever
+    // need to raise it.
+    enum DeferKind : uint8_t {
+        kDeferBuffer,
+        kDeferTexture,
+        kDeferSampler,
+        kDeferBindGroup,
+        kDeferDynamicBuffers,
+        kDeferShader,
+        kDeferKernel,
+    };
+    struct DeferEntry {
+        uint16_t index = 0;
+        uint16_t generation = 0;
+        uint8_t kind = 0;
+    };
+    static constexpr uint32_t kPerSlotDeferCap = 1024;
+    DeferEntry defer_buckets_[kFramesInFlight][kPerSlotDeferCap]{};
+    uint32_t defer_counts_[kFramesInFlight] = {0};
+    uint32_t defer_push_slot_ = 0;
+
+    void DeferPushRaw(uint16_t index, uint16_t generation, uint8_t kind);
 };
 
 }  // namespace cairns::rhi

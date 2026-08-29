@@ -3963,12 +3963,12 @@ public:
         ae_d.debug_name = "dyn_anim_eval";
         ae_d.bindings =
             std::span<const cairns::rhi::DynamicBinding>(ae_b, 13);
-        // WaitIdle so any in-flight frame still using the old descriptor
-        // set is drained before we replace it. F1 fenced deferred deletion
-        // will eventually fold this in; for now WaitIdle (rare path).
+        // #228 F1 user: enqueue the old set for kFIF-frame fenced deletion
+        // instead of WaitIdle+Destroy. The new set is created+used
+        // immediately; the old one persists in-flight one more frame and
+        // then gets Released when the slot's bucket drains. No GPU drain.
         if (!dyn_anim_eval_.IsNull()) {
-            rhi_.device.WaitIdle();
-            rhi_.resources.Destroy(dyn_anim_eval_);
+            rhi_.resources.DeferFree(dyn_anim_eval_);
         }
         dyn_anim_eval_ =
             rhi_.resources.CreateDynamicBuffers(rhi_.alloc, rhi_.frames, ae_d);
