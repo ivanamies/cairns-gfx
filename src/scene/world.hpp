@@ -29,6 +29,13 @@
 namespace cairns {
 
 struct Scene {
+    // #229 M0b: the entt registry is parameterized with the block allocator (its
+    // own quarantined kRegionEcs region per the pointer-quarantine plan). The
+    // null-arena default ctor falls back to malloc until re-seated onto
+    // cpu_block_ at scene Acquire (Engine::ReseatSceneOnBlock).
+    using Registry = entt::basic_registry<entt::entity,
+                                          cairns::ChunkStdAllocator<entt::entity>>;
+
     struct Hot {
         glm::mat4 root_transform{1.0f};
         bool dirty = true;
@@ -36,7 +43,7 @@ struct Scene {
     };
 
     struct Cold {
-        entt::registry registry;
+        Registry registry;
         // Future: undo stack, document name, std::vector<AssetId> referenced
         // (for ref-counting cascade on world close).
     };

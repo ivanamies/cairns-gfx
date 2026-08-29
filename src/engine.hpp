@@ -2467,6 +2467,10 @@ public:
             if (cairns::Scene::Cold* wc =
                     scenes_.GetCold(active_scene_)) {
                 *wc = cairns::Scene::Cold{};
+                // #229 M0b: re-seat the entt registry onto cpu_block_ (the
+                // default Cold{} gives it the null-arena malloc fallback).
+                wc->registry = cairns::Scene::Registry(
+                    cairns::ChunkStdAllocator<entt::entity>(cpu_block_));
                 wh->proxy_slot = 0;
                 wh->dirty = true;
             }
@@ -2490,6 +2494,8 @@ public:
             if (cairns::Scene::Cold* wc2 =
                     scenes_.GetCold(secondary_scene_)) {
                 *wc2 = cairns::Scene::Cold{};
+                wc2->registry = cairns::Scene::Registry(
+                    cairns::ChunkStdAllocator<entt::entity>(cpu_block_));
                 wh2->proxy_slot = 1;
                 wh2->dirty = true;
             }
