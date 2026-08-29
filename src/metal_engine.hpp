@@ -224,20 +224,59 @@ public:
             return false;
         }
         { // init debug assets
-//             debugSceneXforms_ = cairns::GenerateDebugGridTransforms(glm::vec3(-1, -1, -3), 3, 1, 1, 1, 0.5, 9);
-         debugSceneXforms_ = cairns::GenerateDebugGridTransforms(glm::vec3(-1, -1, -3), 3, 1, 1, 1, 0.005, 9);
-            //            debugSceneXforms_ = cairns::GenerateDebugGridTransforms(glm::vec3(-1.25, -2.5, -3), 10, 0.25, 0.5, -0.25, 0.001, 100);
-//            debugSceneXforms_ = cairns::GenerateDebugGridTransforms(glm::vec3(-1.25, -2.5, -3), 10, 0.25, 0.5, 0.25, 0.001, 3000);
-            
-            for ( size_t glb_idx = cairns::kDebugGlbsToParseStart; glb_idx < cairns::kDebugGlbsToParseStart + cairns::kDebugGlbsToParse; ++glb_idx ) {
+            std::vector<std::filesystem::path> glb_paths;
+            if (const char* env_glb = std::getenv("CAIRNS_GLB")) {
+                std::string spec(env_glb);
+                size_t start = 0;
+                while (start <= spec.size()) {
+                    size_t comma = spec.find(',', start);
+                    std::string tok = spec.substr(
+                        start, comma == std::string::npos ? std::string::npos
+                                                          : comma - start);
+                    if (!tok.empty()) {
+                        std::filesystem::path p(tok);
+                        if (p.is_absolute()) {
+                            glb_paths.push_back(p);
+                        } else {
+                            std::filesystem::path resolved;
+                            if (!cairns::GetStaticResourceFilepath(tok, resolved)) {
+                                return false;
+                            }
+                            glb_paths.push_back(resolved);
+                        }
+                    }
+                    if (comma == std::string::npos) {
+                        break;
+                    }
+                    start = comma + 1;
+                }
+            } else {
+                for (size_t glb_idx = cairns::kDebugGlbsToParseStart;
+                     glb_idx < cairns::kDebugGlbsToParseStart + cairns::kDebugGlbsToParse;
+                     ++glb_idx) {
+                    std::filesystem::path filepath;
+                    if (!cairns::GetStaticResourceFilepath(cairns::kDebugGlbs[glb_idx],
+                                                           filepath)) {
+                        printf("file missing %s\n", cairns::kDebugGlbs[glb_idx]);
+                        return false;
+                    }
+                    glb_paths.push_back(filepath);
+                }
+            }
+
+            const int instance_count =
+                std::getenv("CAIRNS_N") ? std::atoi(std::getenv("CAIRNS_N"))
+                                        : static_cast<int>(glb_paths.size());
+            const float scale =
+                std::getenv("CAIRNS_SCALE")
+                    ? static_cast<float>(std::atof(std::getenv("CAIRNS_SCALE")))
+                    : 0.005f;
+            debugSceneXforms_ = cairns::GenerateDebugGridTransforms(
+                glm::vec3(-1, -1, -3), 3, 1, 1, 1, scale, instance_count);
+
+            for (const std::filesystem::path& filepath : glb_paths) {
                 scenes_.push_back(cairns::Scene(hot_arena_));
                 cairns::Scene& scene = scenes_.back();
-                std::string_view file = cairns::kDebugGlbs[glb_idx];
-                std::filesystem::path filepath;
-                if (!cairns::GetStaticResourceFilepath(file, filepath)) {
-                    printf("file missing %s\n",file.data());
-                    return false;
-                }
                 if (!cairns::LoadSceneFromGltf(filepath, scene)) {
                     return false;
                 }
@@ -405,9 +444,12 @@ public:
                 root_nodes_stack_cache_.pop_back();
                 const auto& node = scene.nodes[nodeIdx];
                 if ( node.meshIndex < 0 ) {
+                    for (int32_t c : node.children) {
+                        root_nodes_stack_cache_.push_back(c);
+                    }
                     continue;
                 }
-                
+
                 const auto& mesh = scene.meshes[node.meshIndex];
                 const BufHandle pos = mesh.posHandle;
                 [[maybe_unused]] const BufHandle attr = mesh.attrHandle;

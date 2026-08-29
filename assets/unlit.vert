@@ -40,13 +40,17 @@ layout(set = 1, binding = 2) uniform DrawTmpUBO {
     uint yolo_padding;
 } draw_tmp;
 
+layout(push_constant) uniform PushConstants {
+    uint base_vertex;
+} pc;
+
 layout(location = 0) out vec2 outTexCoord;
 layout(location = 1) flat out uint outTexId;
 layout(location = 2) flat out uint outSamplerId;
 
 void main() {
     gl_Position = globals.view_proj * draw_tmp.model_matrix * inPos;
-    outTexCoord = attrs_buf[draw_tmp.mesh_id].verts[gl_VertexIndex].uv;
+    outTexCoord = attrs_buf[draw_tmp.mesh_id].verts[pc.base_vertex + gl_VertexIndex].uv;
     outTexId = material.tex_color_id;
     outSamplerId = material.sampler_id;
 }

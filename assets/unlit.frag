@@ -11,7 +11,5 @@ layout(location = 2) flat in uint inSamplerId;
 layout(location = 0) out vec4 outColor;
 
 void main() {
-    outColor = texture(
-        sampler2D(textures[nonuniformEXT(inTexId)], samplers[nonuniformEXT(inSamplerId)]),
-        inTexCoord);
+    outColor = texture(sampler2D(textures[nonuniformEXT(inTexId)], samplers[nonuniformEXT(inSamplerId)]), inTexCoord);
 }

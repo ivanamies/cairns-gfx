@@ -73,7 +73,7 @@ namespace vk_debug {
 
 // Default: no debug instrumentation. Flip to vk_debug::kDumpSwapchain to enable
 // the swapchain readback (which also adds TRANSFER_SRC to the swapchain images).
-inline constexpr uint64_t kVkDebugFlags = vk_debug::kNone;
+inline constexpr uint64_t kVkDebugFlags = vk_debug::kDumpSwapchain;
 
 constexpr bool vk_debug_has(uint64_t bit) {
     return (kVkDebugFlags & bit) != 0;
@@ -243,18 +243,58 @@ public:
 private:
 
     bool loadScenes() {
+        std::vector<std::filesystem::path> glb_paths;
+        if (const char* env_glb = std::getenv("CAIRNS_GLB")) {
+            std::string spec(env_glb);
+            size_t start = 0;
+            while (start <= spec.size()) {
+                size_t comma = spec.find(',', start);
+                std::string tok = spec.substr(
+                    start, comma == std::string::npos ? std::string::npos
+                                                      : comma - start);
+                if (!tok.empty()) {
+                    std::filesystem::path p(tok);
+                    if (p.is_absolute()) {
+                        glb_paths.push_back(p);
+                    } else {
+                        std::filesystem::path resolved;
+                        if (!cairns::GetStaticResourceFilepath(tok, resolved)) {
+                            return false;
+                        }
+                        glb_paths.push_back(resolved);
+                    }
+                }
+                if (comma == std::string::npos) {
+                    break;
+                }
+                start = comma + 1;
+            }
+        } else {
+            for (size_t glb_idx = cairns::kDebugGlbsToParseStart;
+                 glb_idx < cairns::kDebugGlbsToParseStart + cairns::kDebugGlbsToParse;
+                 ++glb_idx) {
+                std::filesystem::path filepath;
+                if (!cairns::GetStaticResourceFilepath(cairns::kDebugGlbs[glb_idx],
+                                                       filepath)) {
+                    return false;
+                }
+                glb_paths.push_back(filepath);
+            }
+        }
+
+        const int instance_count =
+            std::getenv("CAIRNS_N") ? std::atoi(std::getenv("CAIRNS_N"))
+                                    : static_cast<int>(glb_paths.size());
+        const float scale =
+            std::getenv("CAIRNS_SCALE")
+                ? static_cast<float>(std::atof(std::getenv("CAIRNS_SCALE")))
+                : 0.005f;
         debugSceneXforms_ = cairns::GenerateDebugGridTransforms(
-            glm::vec3(-1, -1, -3), 3, 1, 1, 1, 0.005f, 9);
-        for (size_t glb_idx = cairns::kDebugGlbsToParseStart;
-             glb_idx < cairns::kDebugGlbsToParseStart + cairns::kDebugGlbsToParse;
-             ++glb_idx) {
+            glm::vec3(-1, -1, -3), 3, 1, 1, 1, scale, instance_count);
+
+        for (const std::filesystem::path& filepath : glb_paths) {
             scenes_.push_back(cairns::Scene(hot_arena_));
             cairns::Scene& scene = scenes_.back();
-            std::string_view file = cairns::kDebugGlbs[glb_idx];
-            std::filesystem::path filepath;
-            if (!cairns::GetStaticResourceFilepath(file, filepath)) {
-                return false;
-            }
             if (!cairns::LoadSceneFromGltf(filepath, scene)) {
                 return false;
             }
@@ -388,6 +428,16 @@ private:
                     node_stack.push_back(c);
                 }
             }
+        }
+
+        if (frame_log_ < 1) {
+            uint32_t tris = 0;
+            for (const auto& d : drawList_) {
+                tris += d.triangle_count;
+            }
+            fprintf(stderr, "[draws] scenes=%zu draws=%zu tris=%u\n",
+                    scenes_.size(), drawList_.size(), tris);
+            ++frame_log_;
         }
 
         return true;
@@ -1475,12 +1525,14 @@ private:
                 uint32_t pos_off = 0;
                 VkBuffer pos_buf = rm_.GetVkBuffer(
                     draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
-                VkDeviceSize pos_off_dev = pos_off;
+                VkDeviceSize pos_off_dev = pos_off +
+                    static_cast<VkDeviceSize>(draw.vertex_offset) * sizeof(glm::vec4);
                 vkCmdBindVertexBuffers(commandBuffer, 0, 1, &pos_buf, &pos_off_dev);
 
-                uint32_t idx_ignore = 0;
-                VkBuffer idx_buf = rm_.GetVkBuffer(draw.index_buffer, &idx_ignore);
-                vkCmdBindIndexBuffer(commandBuffer, idx_buf, draw.index_offset, VK_INDEX_TYPE_UINT32);
+                uint32_t idx_base = 0;
+                VkBuffer idx_buf = rm_.GetVkBuffer(draw.index_buffer, &idx_base);
+                vkCmdBindIndexBuffer(commandBuffer, idx_buf, idx_base, VK_INDEX_TYPE_UINT32);
+                const uint32_t first_index = (draw.index_offset - idx_base) / sizeof(uint32_t);
 
                 std::array<uint32_t, 3> dyn_offsets = {
                     globals_offset_,
@@ -1491,11 +1543,15 @@ private:
                     pipelineLayout, 1, 1, &dynUboSets_[currentFrame],
                     static_cast<uint32_t>(dyn_offsets.size()), dyn_offsets.data());
 
+                const uint32_t base_vertex = draw.vertex_offset;
+                vkCmdPushConstants(commandBuffer, pipelineLayout,
+                    VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(uint32_t), &base_vertex);
+
                 vkCmdDrawIndexed(commandBuffer,
                     draw.triangle_count * 3,
                     draw.instance_count,
+                    first_index,
                     0,
-                    draw.vertex_offset,
                     draw.instance_offset);
             }
         }
@@ -1796,12 +1852,16 @@ private:
             depthStencil.back = {};
 
             VkDescriptorSetLayout unlit_layouts[2] = {bindlessLayout_, dynamicUboLayout_};
+            VkPushConstantRange pc_range{};
+            pc_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+            pc_range.offset = 0;
+            pc_range.size = sizeof(uint32_t);
             VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
             pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
             pipelineLayoutInfo.setLayoutCount = 2;
             pipelineLayoutInfo.pSetLayouts = unlit_layouts;
-            pipelineLayoutInfo.pushConstantRangeCount = 0;
-            pipelineLayoutInfo.pPushConstantRanges = nullptr;
+            pipelineLayoutInfo.pushConstantRangeCount = 1;
+            pipelineLayoutInfo.pPushConstantRanges = &pc_range;
 
             if ( vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS ) {
                 return false;
@@ -2995,6 +3055,7 @@ private:
     std::vector<VkDescriptorSet> computeDescriptorSets;
 
     uint32_t mipLevels = 0;
+    uint32_t frame_log_ = 0;
     rhi::Handle<rhi::Texture> texture_;
     rhi::Handle<rhi::Sampler> sampler_;
 
