@@ -4164,10 +4164,18 @@ bool Engine::SetEntityTransform(uint32_t entity_int, const glm::mat4& world) {
         }
         auto& reg = wc->registry;
         const entt::entity e = static_cast<entt::entity>(entity_int);
-        if (!reg.valid(e) || !reg.all_of<cairns::WorldTransform>(e)) {
+        if (!reg.valid(e) || !reg.all_of<cairns::Transform>(e)) {
             return false;
         }
-        reg.get<cairns::WorldTransform>(e).world = world;
+        // #229 C4.1: author TRS (was WorldTransform). Extract t+s from the
+        // translate*scale world; rotation stays as authored (set via the C4.2
+        // entity ops). PropagateTransforms recomposes WorldTransform.
+        cairns::Transform& tr = reg.get<cairns::Transform>(e);
+        tr.t = glm::vec3(world[3]);
+        tr.s = glm::vec3(world[0][0], world[1][1], world[2][2]);
+        if (!reg.all_of<cairns::DirtyTransform>(e)) {
+            reg.emplace<cairns::DirtyTransform>(e);
+        }
         if (auto* wh = scene_mgr_.pool.GetHot(scene_mgr_.active)) {
             wh->dirty = true;
         }
@@ -4549,9 +4557,17 @@ uint32_t Engine::InstantiatePrefabImpl(uint32_t scene_idx, const glm::mat4& worl
         }
         auto& reg = wc->registry;
         const entt::entity e = reg.create();
-        cairns::WorldTransform wt;
-        wt.world = world;
-        reg.emplace<cairns::WorldTransform>(e, wt);
+        // #229 C4.1 (P7): author TRS, not a baked WorldTransform.
+        // PropagateTransforms composes WorldTransform each frame (identity
+        // root; the scene root is applied in Extract). Every current caller
+        // passes translate(t)*scale(s), so extract t (col 3) + s (diagonal)
+        // EXACTLY -- ComposeTRS reproduces `world` bit-for-bit
+        // (STATEHASH-neutral). Rotation authoring arrives with the entity ops.
+        cairns::Transform tr;
+        tr.t = glm::vec3(world[3]);
+        tr.s = glm::vec3(world[0][0], world[1][1], world[2][2]);
+        reg.emplace<cairns::Transform>(e, tr);
+        reg.emplace<cairns::DirtyTransform>(e);
         cairns::AssetRef ar;
         ar.asset = prefab_store_.per_prefab_asset[scene_idx];
         reg.emplace<cairns::AssetRef>(e, ar);
