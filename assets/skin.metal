@@ -37,7 +37,7 @@ kernel void skin_compute(uint3 gid [[thread_position_in_grid]],
                           const device uint4* skin_joints_then_weights [[buffer(5)]]) {
     uint inst = wid.y;
     uint vid = gid.x;
-    if (inst >= params.instance_count || vid >= params.vertex_count) {
+    if (vid >= params.vertex_count) {
         return;
     }
     uint2 meta = inst_meta[inst];

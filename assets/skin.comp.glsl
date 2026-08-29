@@ -32,6 +32,7 @@ const uint kSkinModeOnePalette = 1u;
 const uint kSkinModeNoSkinAttrs = 2u;
 const uint kSkinModePassthrough = 3u;
 
+
 layout(set = 0, binding = 1) readonly buffer Palettes {
     mat4 palette[];
 };
@@ -72,7 +73,7 @@ uvec4 skin_joints_at(uint vid) {
 void main() {
     uint inst = gl_WorkGroupID.y;
     uint vid = gl_GlobalInvocationID.x;
-    if (inst >= params.instance_count || vid >= params.vertex_count) {
+    if (vid >= params.vertex_count) {
         return;
     }
     uvec2 meta = inst_meta[inst];
