@@ -25,7 +25,15 @@ if(MSVC)
 endif()
 
 # GPU backend is a true compile-time feature: pick exactly one.
-set(CAIRNS_GFX_BACKEND "metal" CACHE STRING "GPU backend: metal or vulkan")
+# No silent default -- forgetting the flag once cost a chunk-bisect session
+# (built metal while debugging a vk regression). Hard-fail at configure time.
+if(NOT DEFINED CAIRNS_GFX_BACKEND)
+  message(FATAL_ERROR
+    "CAIRNS_GFX_BACKEND is not set. Pass -DCAIRNS_GFX_BACKEND=metal "
+    "or -DCAIRNS_GFX_BACKEND=vulkan on the cmake configure line.")
+endif()
+set(CAIRNS_GFX_BACKEND "${CAIRNS_GFX_BACKEND}" CACHE STRING
+    "GPU backend: metal or vulkan" FORCE)
 set_property(CACHE CAIRNS_GFX_BACKEND PROPERTY STRINGS metal vulkan)
 
 if(CAIRNS_GFX_BACKEND STREQUAL "metal")

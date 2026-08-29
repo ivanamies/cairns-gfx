@@ -4291,6 +4291,58 @@ public:
         return true;
     }
 
+    // #224 L9 wedge-at-scale fix: dyn_skin_group_b_ binding 1 (palettes)
+    // is gated on anim_eval_tables_uploaded_ at GreaterInit. L9's empty
+    // boot leaves it false, so binding 1 falls back to the kDynamic master
+    // (a per-frame 64 KB ring) instead of palette_out_buf_ (16 MB). The
+    // skin compute then reads palette transforms out of the wrong buffer
+    // -- at ~9 actors the dyn master happens to contain enough zeros to
+    // pass, but at 100+ actors every joint read is garbage and the mesh
+    // wedges into giant tendrils. Recreate the set after first upload so
+    // binding 1 captures palette_out_buf_. Mirrors GreaterInit's gb[] tab.
+    bool recreateSkinGroupB() {
+        if (skin_kernel_.IsNull() || skin_output_pool_buffer_.IsNull()) {
+            return true;
+        }
+        cairns::rhi::DynamicBinding gb[4]{};
+        for (uint32_t i = 0; i < 4; ++i) {
+            gb[i].stages = cairns::rhi::kStageCompute;
+        }
+        gb[0].slot = 0;
+        gb[0].kind = cairns::rhi::BufferKind::kUniform;
+        gb[0].max_range = 64u;
+        gb[0].has_dynamic_offset = true;
+        gb[1].slot = 1;
+        gb[1].kind = cairns::rhi::BufferKind::kStorage;
+        gb[1].max_range = 1u << 20;
+        gb[1].has_dynamic_offset = true;
+        if (anim_eval_tables_uploaded_) {
+            gb[1].backing = palette_out_buf_;
+        }
+        gb[2].slot = 2;
+        gb[2].kind = cairns::rhi::BufferKind::kStorage;
+        gb[2].max_range = 16384u;
+        gb[2].has_dynamic_offset = true;
+        gb[3].slot = 3;
+        gb[3].kind = cairns::rhi::BufferKind::kStorage;
+        gb[3].max_range = 0;  // VK_WHOLE_SIZE
+        gb[3].has_dynamic_offset = false;
+        gb[3].backing = skin_output_pool_buffer_;
+        cairns::rhi::DynamicBuffersDesc gd{};
+        gd.debug_name = "dyn_skin_group_b";
+        gd.bindings = std::span<const cairns::rhi::DynamicBinding>(gb, 4);
+        if (!dyn_skin_group_b_.IsNull()) {
+            rhi_.resources.DeferFree(dyn_skin_group_b_);
+        }
+        dyn_skin_group_b_ =
+            rhi_.resources.CreateDynamicBuffers(rhi_.alloc, rhi_.frames, gd);
+        if (dyn_skin_group_b_.IsNull()) {
+            CAIRNS_PRINT("recreateSkinGroupB: dyn_skin_group_b create failed\n");
+            return false;
+        }
+        return true;
+    }
+
     void uploadAnimTablesGpu() {
         if (anim_eval_kernel_.IsNull()) {
             return;
@@ -4593,6 +4645,7 @@ public:
         // GreaterInit gate left it Null post-L9.
         if (anim_dyn_dirty_) {
             recreateAnimDynBindings();
+            recreateSkinGroupB();
             anim_dyn_dirty_ = false;
         }
         CAIRNS_PRINT("uploadAnimTablesGpu: %s | +%zu scenes -> %u total | "
