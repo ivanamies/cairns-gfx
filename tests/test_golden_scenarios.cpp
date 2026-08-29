@@ -691,3 +691,67 @@ SCENARIO("C4.2 time.get: deterministic sim clock + studio.js Time",
     REQUIRE(out["f"].get<uint64_t>() == f1);
     REQUIRE(out["t"].get<double>() == time1);
 }
+
+// #229 C4.2 CAP-1: the camera surface -- cairns.scene.listCameras,
+// cairns.viewport.setCameraEntity, and loud-strict studio.js Camera.main
+// (0 or >1 is_main throws, exactly 1 resolves).
+SCENARIO("C4.2 CAP-1 camera surface: listCameras + Camera.main + setCameraEntity",
+         "[spec][scenarios][camera]") {
+    if (!seam::AssetsPresent({"aatrox.glb"})) {
+        SKIP("assets absent");
+    }
+    seam::EnsureImguiContext();
+    cairns::rhi::InitConfig icfg{};
+    icfg.surfaceless = true;
+    icfg.width = 256;
+    icfg.height = 256;
+    cairns::EngineConfig ecfg{};
+    ecfg.use_fixed_clock = true;
+    cairns::Engine e;
+    REQUIRE(e.GreaterInit(icfg, ecfg));
+    cairns::control::CommandRegistry& reg = cairns::golden::SetupJs(e);
+    auto disp = [&](const char* op, const cairns::json& args) -> cairns::json {
+        return reg.Dispatch({{"op", op}, {"args", args}});
+    };
+    disp("cairns.scene.spawnFitted",
+         {{"glbs", {"aatrox.glb"}}, {"instances", 2}});
+    const cairns::json l =
+        disp("cairns.scene.listEntities", cairns::json::object());
+    REQUIRE(l["result"]["entities"].size() >= 2u);
+    const uint32_t e0 = l["result"]["entities"][0].get<uint32_t>();
+    const uint32_t e1 = l["result"]["entities"][1].get<uint32_t>();
+
+    // No cameras initially.
+    REQUIRE(disp("cairns.scene.listCameras", cairns::json::object())["result"]
+                ["cameras"]
+                    .empty());
+
+    // Drive the loud-strict Camera.main contract + setCameraEntity via JS.
+    const std::string code =
+        "var out={};"
+        "try{Camera.main;out.none='NO'}catch(x){out.none='threw'}"
+        "cairns.dispatch('cairns.entity.addComponent',"
+        "  {entity:" + std::to_string(e0) +
+        ",type:'Camera',props:{isMain:true}});"
+        "out.mainEnt=Camera.main.entity;"
+        "out.setOk=cairns.dispatch('cairns.viewport.setCameraEntity',"
+        "  {viewport:0,entity:" + std::to_string(e0) + "}).result.ok;"
+        "cairns.dispatch('cairns.entity.addComponent',"
+        "  {entity:" + std::to_string(e1) +
+        ",type:'Camera',props:{isMain:true}});"
+        "try{Camera.main;out.two='NO'}catch(x){out.two='threw'}"
+        "JSON.stringify(out);";
+    const cairns::json ev = disp("cairns.script.eval", {{"code", code}});
+    REQUIRE(ev["ok"] == true);
+    const cairns::json out =
+        cairns::json::parse(ev["result"]["result"].get<std::string>());
+    REQUIRE(out["none"] == "threw");            // 0 main -> throw
+    REQUIRE(out["mainEnt"].get<uint32_t>() == e0);  // exactly 1 -> resolves
+    REQUIRE(out["setOk"] == true);              // setCameraEntity ok
+    REQUIRE(out["two"] == "threw");             // >1 main -> throw
+
+    // Op path now sees both cameras.
+    const cairns::json lc =
+        disp("cairns.scene.listCameras", cairns::json::object());
+    REQUIRE(lc["result"]["cameras"].size() == 2u);
+}

@@ -269,21 +269,25 @@ const Time = {
 // =====================================================================
 
 const Camera = {
+    // #229 C4.2: real over cairns.scene.listCameras. Loud-strict: exactly one
+    // is_main Camera or throw. Unity property, so scene 0 by default; [N-node]
+    // power users call cairns.scene.listCameras({scene}) directly for others.
     get main() {
-        // TODO: query cairns.viewport.list (or equivalent) for camera
-        // components. Today: nothing registered -> always throw.
-        const cameras = [];
-        if (cameras.length === 0) {
+        const r = cairns.dispatch("cairns.scene.listCameras", { scene: 0 });
+        const all = (r.ok && r.result && r.result.cameras) ? r.result.cameras
+                                                           : [];
+        const mains = all.filter(function (c) { return c.isMain; });
+        if (mains.length === 0) {
             throw new Error(
-                "Camera.main: no Camera component exists. " +
-                "Add one via gameObject.AddComponent('Camera') first.");
+                "Camera.main: no main Camera component in scene 0. Add one via " +
+                "gameObject.AddComponent('Camera',{isMain:true}).");
         }
-        if (cameras.length > 1) {
+        if (mains.length > 1) {
             throw new Error(
-                "Camera.main: multiple cameras (" + cameras.length +
-                "). Use cairns.viewport.list to disambiguate.");
+                "Camera.main: " + mains.length +
+                " main Cameras in scene 0; exactly one must be is_main.");
         }
-        return cameras[0];
+        return new GameObject(mains[0].entity, 0);
     },
 };
 

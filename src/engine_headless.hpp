@@ -136,6 +136,13 @@ bool GetEntityRenderable(Engine* engine, int scene_index, uint32_t entity,
                          uint32_t& layer_mask, uint32_t& flags);
 // #229 C4.2 cairns.time.get: read-only sim-clock snapshot (never ticks).
 void TimeNow(Engine* engine, double& time, double& dt, uint64_t& frame);
+// #229 C4.2 CAP-1 camera surface.
+struct CameraEntry {
+    uint32_t entity = 0;
+    bool is_main = false;
+};
+std::vector<CameraEntry> ListCameras(Engine* engine, int scene_index);
+bool SetViewportCameraEntity(Engine* engine, int viewport, uint32_t entity);
 uint32_t ClearActiveScene(Engine* engine);
 // #229 M0b: per-Engine synthetic scene id (was the g_scene_counter global).
 uint64_t NextSceneId(Engine* engine);

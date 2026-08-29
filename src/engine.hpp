@@ -865,6 +865,37 @@ public:
         time = static_cast<double>(sim_frame_) * cairns::kFixedDt;
     }
 
+    // #229 C4.2 CAP-1. Two parallel out-vectors (headless zips them) since the
+    // control-facing CameraEntry POD isn't visible from engine.hpp.
+    void ListCameras(int scene_index, std::vector<uint32_t>& out_entities,
+                     std::vector<uint8_t>& out_is_main) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return;
+        }
+        auto view = wc->registry.view<const cairns::CameraComponent>();
+        for (const entt::entity e : view) {
+            out_entities.push_back(static_cast<uint32_t>(entt::to_integral(e)));
+            out_is_main.push_back(
+                view.get<const cairns::CameraComponent>(e).is_main ? 1u : 0u);
+        }
+    }
+    // Records the camera entity on the viewport (resolution into the view
+    // matrix is a later wiring; the field is the stable seam). Returns false
+    // for an out-of-range viewport.
+    bool SetViewportCameraEntity(int viewport, uint32_t entity_int) {
+        if (viewport < 0 || viewport >= cairns::kNumViewports) {
+            return false;
+        }
+        cairns::Viewport::Cold* vc =
+            viewport_mgr_.pool.GetCold(viewport_mgr_.ids[viewport]);
+        if (!vc) {
+            return false;
+        }
+        vc->camera_entity = static_cast<entt::entity>(entity_int);
+        return true;
+    }
+
     uint32_t ClearActiveScene() {
         cairns::Scene::Cold* wc = scene_mgr_.pool.GetCold(scene_mgr_.active);
         if (!wc) {

@@ -629,6 +629,38 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.RegisterAlias("world.instantiate",    "cairns.scene.instantiate");
     registry.RegisterAlias("world.instantiateGrid","cairns.scene.instantiateGrid");
     registry.RegisterAlias("asset.load",           "cairns.prefab.load");
+    // #229 C4.2 CAP-1: enumerate Camera-component entities; studio.js
+    // Camera.main is loud-strict over the is_main ones.
+    registry.Register(
+        "cairns.scene.listCameras",
+        /*schema=*/json::object(),
+        /*doc=*/"List entities carrying a Camera component. Args: {scene? "
+                "(0/1, default active)}. Returns {cameras:[{entity, isMain}]}.",
+        [&engine](const json& args) -> json {
+            const int scene = args.value("scene", -1);
+            const std::vector<cairns::headless::CameraEntry> cams =
+                cairns::headless::ListCameras(&engine, scene);
+            json arr = json::array();
+            for (const cairns::headless::CameraEntry& c : cams) {
+                arr.push_back({{"entity", c.entity}, {"isMain", c.is_main}});
+            }
+            return {{"cameras", arr}};
+        });
+
+    registry.Register(
+        "cairns.viewport.setCameraEntity",
+        /*schema=*/json::object(),
+        /*doc=*/"Bind a Camera-component entity to a viewport (records the "
+                "entity; view-matrix resolution is a later wiring). Args: "
+                "{viewport, entity}. Returns {ok}.",
+        [&engine](const json& args) -> json {
+            const int vp = static_cast<int>(args.value("viewport", 0));
+            const uint32_t entity = args.value("entity", UINT32_MAX);
+            const bool ok =
+                cairns::headless::SetViewportCameraEntity(&engine, vp, entity);
+            return {{"ok", ok}};
+        });
+
     registry.RegisterAlias("viewport.open",        "cairns.viewport.open");
     registry.RegisterAlias("viewport.close",       "cairns.viewport.close");
     registry.RegisterAlias("viewport.setLayout",   "cairns.viewport.setLayout");

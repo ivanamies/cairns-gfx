@@ -306,6 +306,24 @@ void TimeNow(Engine* engine, double& time, double& dt, uint64_t& frame) {
     engine->TimeNow(time, dt, frame);
 }
 
+std::vector<CameraEntry> ListCameras(Engine* engine, int scene_index) {
+    std::vector<CameraEntry> out;
+    if (!engine) {
+        return out;
+    }
+    std::vector<uint32_t> entities;
+    std::vector<uint8_t> is_main;
+    engine->ListCameras(scene_index, entities, is_main);
+    out.reserve(entities.size());
+    for (size_t i = 0; i < entities.size(); ++i) {
+        out.push_back(CameraEntry{entities[i], is_main[i] != 0});
+    }
+    return out;
+}
+bool SetViewportCameraEntity(Engine* engine, int viewport, uint32_t entity) {
+    return engine ? engine->SetViewportCameraEntity(viewport, entity) : false;
+}
+
 uint32_t ClearActiveScene(Engine* engine) {
     return engine ? engine->ClearActiveScene() : 0;
 }
