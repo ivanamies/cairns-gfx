@@ -148,6 +148,7 @@ public:
     bool GreaterInit(SDL_Window* window) {
         // Clock selection: CAIRNS_DUMP => FixedClock (golden); else WallClock.
         golden_ = (std::getenv("CAIRNS_DUMP") != nullptr);
+        tiny_quad_test_ = (std::getenv("CAIRNS_TINY_QUAD") != nullptr);
         if (golden_) {
             clock_ = std::make_unique<cairns::FixedClock>(cairns::kFixedDt);
         } else {
@@ -383,7 +384,8 @@ public:
                 draw.dynamic_buffer_offsets[0] = UINT32_MAX;  // material   - filled by EncodeDraws
                 draw.dynamic_buffer_offsets[1] = UINT32_MAX;  // draw_tmp   - filled by EncodeDraws
                 assert(prim.index_count % 3 == 0);
-                draw.triangle_count = prim.index_count / 3;
+                draw.triangle_count =
+                    tiny_quad_test_ ? 2 : prim.index_count / 3;
 
                 const glm::vec4 view_pos = view_matrix * world_mat[3];
                 const float view_depth = -view_pos.z;
@@ -1052,6 +1054,10 @@ private:
     float render_angle_deg_ = 0.0f;
     uint32_t sim_steps_this_frame_ = 0;
     bool golden_ = false;
+    // Diagnostic: pin every draw to 2 triangles. Draw count + submission
+    // identical, geometry throughput ~700x smaller. Isolates draw-submission
+    // overhead vs geometry-throughput in the forward pass cost.
+    bool tiny_quad_test_ = false;
     // cpu frame-time history (wall-clock between draw() calls) for the imgui graph
     static constexpr int kCpuMsHistory = 128;
     float cpu_ms_history_[kCpuMsHistory] = {};

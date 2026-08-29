@@ -5,6 +5,43 @@ Newest first.
 
 ---
 
+## `6386768` (2026-06-04) — tiny-quad diagnostic isolates geometry vs draw-submission
+
+S22 Android Vulkan Release. CAIRNS_TINY_QUAD=1 pins every draw's
+`triangle_count = 2`. Draw count + submission identical (11517 draws);
+geometry throughput ~700× smaller.
+
+| Pass                | Baseline (tiny=0) | Diagnostic (tiny=1) |
+|---------------------|-------------------|---------------------|
+| `forward` GPU       | ~124 ms           | **30-37 ms**        |
+| `record` (CPU)      | ~10.6 ms          | ~16.6 ms            |
+| `build_draws` (CPU) | ~6.7 ms           | ~11.7 ms            |
+
+**Interpretation** (per planning-Claude's diagnostic schema):
+- 20-30 ms → geometry-bound
+- 60-80 → both
+- 120+ → submission-bound
+
+30-37 ms lands cleanly in the geometry-bound zone. Decomposition:
+- ~94 ms attributable to vertex/binner throughput on the 16.5M-triangle scene
+- ~30 ms irreducible draw-submission floor at 11517 draws
+
+Adreno's per-draw submission cost is real (~2.6 µs/draw at the floor =
+~30ms/11517) but **not** dominant. The bulk is the per-triangle binner
+load Adreno pays on every triangle regardless of coverage — exactly what
+the planning Claude predicted when they pointed out small-on-screen
+doesn't help on a tiler.
+
+**Banned-lever-free lever**: LOD. Attacks the per-triangle term directly,
+doesn't touch draw count, stays clear of instancing/MDI. Floors at the
+~30 ms submission term — below that needs the deferred levers.
+
+Diagnostic toggle stays in tree: `CAIRNS_TINY_QUAD=1` (env-gated;
+Android-side requires patching the runtime since std::getenv doesn't see
+intent extras).
+
+---
+
 ## `fce2ade` (2026-06-04) — game/render thread split landed; APK asset loading
 
 Workload: `100 GLBs × 33 slices = 3300 entities`, 11517 draws. Release.
