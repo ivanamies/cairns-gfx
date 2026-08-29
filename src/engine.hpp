@@ -38,6 +38,7 @@
 #include "scene/scene_world.hpp"
 #include "render/frame_packet.hpp"
 #include "render/render_extract.hpp"
+#include "render/render_graph.hpp"
 #include "render/render_scene.hpp"
 #include "render/render_thread.hpp"
 
@@ -682,69 +683,149 @@ public:
         cairns::Timer t_record("record", 2);
         EncodeDraws(pkt);
 
-        rhi::ComputeDispatch cd{};
-        cd.kernel = particle_kernel_;
-        cd.groups_x = kParticleCount / 256;
-        cd.local_x = 256;
+        if (!graph_) {
+            graph_ = std::make_unique<rhi::RenderGraph>(rhi_.resources, rhi_.alloc);
+        }
+        graph_->Reset();
 
         rhi::MeshDrawList ml{};
         ml.draws = pkt.draws;
         ml.sorted_draws = pkt.sorted;
-        ml.pipeline = unlit_;
+        ml.pipeline = unlit_offscreen_;
         ml.globals_offset = s.globals_offset;
         ml.resident_textures = pkt.resident_textures;
         ml.resident_buffers =
             std::span<const rhi::Handle<rhi::Buffer>>(&mesh_master_handle_, 1);
 
         rhi::PointDraw pd{};
-        pd.pipeline = particle_render_shader_;
+        pd.pipeline = particle_render_offscreen_;
         pd.vertex_buffer = particle_ssbo_[pkt.particle_parity_out];
         pd.vertex_offset = 0;
         pd.vertex_count = kParticleCount;
 
         const float clear[4] = {41.0f / 255.0f, 42.0f / 255.0f, 48.0f / 255.0f, 1.0f};
+        const uint32_t fb_w = swapchain_.Width();
+        const uint32_t fb_h = swapchain_.Height();
 
-        // Particle compute: N steps per frame, ping-ponging SSBOs each step.
-        // Metal: sequential ComputeCommandEncoders self-hazard on R/W ordering
-        // (MTLHazardTrackingModeTracked). Vulkan: command_recorder emits a
-        // compute->compute pipeline barrier between consecutive dispatches
-        // (commit 4 lands the descriptor-set-per-step plumbing).
-        fc.cmd.PassTimerBegin("particle_sim");
-        for (uint32_t k = 0; k < pkt.sim_steps_this_frame; ++k) {
-            const uint32_t step_src = pkt.particle_parity_in ^ (k & 1u);
-            const uint32_t step_dst = step_src ^ 1u;
-            rhi::BoundBuffer cbufs[3] = {
-                {0, rhi_.alloc.BumpMasterBuffer(rhi::Memory::kDynamic), s.dt_off},
-                {1, particle_ssbo_[step_src], 0},
-                {2, particle_ssbo_[step_dst], 0},
-            };
-            cd.buffers = std::span<const rhi::BoundBuffer>(cbufs, 3);
-            cd.step_index = k;
-            fc.cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
-        }
-        fc.cmd.PassTimerEnd();
+        // pass 1: particle_sim kCompute. import the writer ssbo so prune keeps
+        // it (external side effect -- game thread reads particle_parity_out).
+        rhi::GraphBuffer sim_out;
+        graph_->AddPass(
+            "particle_sim", rhi::PassType::kCompute,
+            [&](rhi::PassBuilder& b) {
+                rhi::GraphBufferDesc bd{};
+                bd.usage = rhi::kUsageStorage;
+                sim_out = b.ImportBuffer(
+                    particle_ssbo_[pkt.particle_parity_out], bd);
+                b.WriteBuffer(sim_out);
+            },
+            [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
+                rhi::ComputeDispatch cd{};
+                cd.kernel = particle_kernel_;
+                cd.groups_x = kParticleCount / 256;
+                cd.local_x = 256;
+                // Metal: sequential ComputeCommandEncoders self-hazard on R/W
+                // ordering (MTLHazardTrackingModeTracked). Vulkan: recorder
+                // emits a compute->compute pipeline barrier between dispatches.
+                for (uint32_t k = 0; k < pkt.sim_steps_this_frame; ++k) {
+                    const uint32_t step_src =
+                        pkt.particle_parity_in ^ (k & 1u);
+                    const uint32_t step_dst = step_src ^ 1u;
+                    rhi::BoundBuffer cbufs[3] = {
+                        {0, rhi_.alloc.BumpMasterBuffer(rhi::Memory::kDynamic),
+                         s.dt_off},
+                        {1, particle_ssbo_[step_src], 0},
+                        {2, particle_ssbo_[step_dst], 0},
+                    };
+                    cd.buffers = std::span<const rhi::BoundBuffer>(cbufs, 3);
+                    cd.step_index = k;
+                    cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
+                }
+            });
 
-        rhi::ColorAttachment ca{};
-        ca.clear[0] = clear[0];
-        ca.clear[1] = clear[1];
-        ca.clear[2] = clear[2];
-        ca.clear[3] = clear[3];
-        ca.load = rhi::LoadOp::kClear;
-        ca.store = rhi::StoreOp::kStore;
-        rhi::RenderPassDesc rp{};
-        rp.color = std::span<const rhi::ColorAttachment>(&ca, 1);
-        rp.width = swapchain_.Width();
-        rp.height = swapchain_.Height();
-        fc.cmd.PassTimerBegin("forward");
-        fc.cmd.BeginRenderPass(rhi_.resources, swapchain_, rp);
-        fc.cmd.DrawMeshes(rhi_.resources, rhi_.alloc, ml);
-        fc.cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
-        if (pkt.imgui_snapshot) {
-            fc.cmd.DrawImGui(rhi_.resources, rhi_.alloc, imgui_, imgui_font_,
-                             imgui_sampler_, pkt.imgui_snapshot);
+        // pass 2: forward kGraphics. offscreen color + depth, single-sample.
+        rhi::GraphTexture color_off;
+        rhi::GraphTexture depth_off;
+        graph_->AddPass(
+            "forward", rhi::PassType::kGraphics,
+            [&](rhi::PassBuilder& b) {
+                rhi::GraphTextureDesc cd{};
+                cd.width = fb_w;
+                cd.height = fb_h;
+                cd.format = rhi::Format::kBgra8Unorm;
+                cd.usage = rhi::kTexUsageColorTarget | rhi::kTexUsageSampled;
+                color_off = b.CreateColorTarget(cd);
+                rhi::GraphTextureDesc dd{};
+                dd.width = fb_w;
+                dd.height = fb_h;
+                dd.format = rhi::Format::kD32F;
+                dd.usage = rhi::kTexUsageDepthTarget | rhi::kTexUsageSampled;
+                depth_off = b.CreateDepthTarget(dd);
+                b.AddColorOutput("color", color_off, rhi::LoadOp::kClear, clear);
+                b.AddDepthOutput("fwd_depth", depth_off, rhi::LoadOp::kClear, 1.0f);
+            },
+            [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
+                cmd.DrawMeshes(rhi_.resources, rhi_.alloc, ml);
+                cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
+            });
+
+        // pass 3: composite + ui kGraphics. Composite samples color_off full-
+        // screen, depth_off PIP in the bottom-right; ImGui draws on top into the
+        // same encoder. Both backends use MSAA swapchain renderpasses where the
+        // MSAA color attachment storeOp is "resolve + don't-keep-MSAA" (Adreno
+        // tile-residency optimization). Two back-to-back render passes targeting
+        // the same swap framebuffer would either clear or load undefined MSAA
+        // between passes, so we keep them under one encoder. The graph still
+        // expresses the dependencies (this pass reads color_off + depth_off
+        // produced by forward) -- "ui" is conceptually a separate phase that
+        // physically shares the swap encoder for MSAA reasons.
+        rhi::GraphTexture swap_tex;
+        graph_->AddPass(
+            "swap", rhi::PassType::kGraphics,
+            [&](rhi::PassBuilder& b) {
+                rhi::GraphTextureDesc td{};
+                td.width = fb_w;
+                td.height = fb_h;
+                swap_tex = b.ImportTexture(rhi::Handle<rhi::Texture>::Null, td);
+                b.AddColorOutput("swapchain", swap_tex, rhi::LoadOp::kClear, clear);
+                b.AddAttachmentInput(color_off);
+                b.AddAttachmentInput(depth_off);
+            },
+            [&](rhi::CommandRecorder& cmd, const rhi::PassResources& res) {
+                const rhi::Handle<rhi::Texture> color = res.Resolve(color_off);
+                const rhi::Handle<rhi::Texture> depth = res.Resolve(depth_off);
+                // composite: full-screen forward color.
+                cmd.DrawFullscreen(rhi_.resources, composite_pip_,
+                                   std::span<const rhi::Handle<rhi::Texture>>(&color, 1),
+                                   composite_sampler_);
+                // bottom-right 25% PIP, depthviz silhouette.
+                const float x = 0.75f * static_cast<float>(fb_w);
+                const float y = 0.75f * static_cast<float>(fb_h);
+                const float w = 0.25f * static_cast<float>(fb_w);
+                const float h = 0.25f * static_cast<float>(fb_h);
+                cmd.SetViewport(x, y, w, h);
+                cmd.SetScissor(static_cast<int32_t>(x), static_cast<int32_t>(y),
+                               static_cast<uint32_t>(w), static_cast<uint32_t>(h));
+                cmd.DrawFullscreen(rhi_.resources, depthviz_,
+                                   std::span<const rhi::Handle<rhi::Texture>>(&depth, 1),
+                                   composite_sampler_);
+                // restore full extent before the ui draw.
+                cmd.SetViewport(0.0f, 0.0f, static_cast<float>(fb_w),
+                                static_cast<float>(fb_h));
+                cmd.SetScissor(0, 0, fb_w, fb_h);
+                // ui (in-encoder phase).
+                if (pkt.imgui_snapshot) {
+                    cmd.DrawImGui(rhi_.resources, rhi_.alloc, imgui_, imgui_font_,
+                                  imgui_sampler_, pkt.imgui_snapshot);
+                }
+            });
+
+        graph_->SetOutput(swap_tex);
+        if (!graph_->Bake() || !graph_->Execute(fc, swapchain_)) {
+            t_record.End();
+            rhi_.frames.End(swapchain_, fc);
+            return;
         }
-        fc.cmd.EndRenderPass();
-        fc.cmd.PassTimerEnd();
         t_record.End();
         rhi_.frames.End(swapchain_, fc);
     }
@@ -908,6 +989,16 @@ public:
             if (particle_render_shader_.IsNull()) {
                 return false;
             }
+            // Offscreen variant for the render-graph forward pass.
+            rhi::GraphicsPipelineDesc opd = desc;
+            opd.sample_count = 1;
+            opd.swap_chain = nullptr;
+            opd.debug_name = "particle_render_offscreen";
+            particle_render_offscreen_ = rhi_.pipelines.CreateGraphicsPipeline(
+                rhi_.resources, rhi_.frames, opd);
+            if (particle_render_offscreen_.IsNull()) {
+                return false;
+            }
         }
 
         {
@@ -1067,6 +1158,10 @@ private:
 
     rhi::Rhi rhi_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
+    // Per-frame render graph. Reused via Reset() across frames (vector storage
+    // for passes/textures is preserved). Constructed lazily on first RecordFrame
+    // because Resources& / Allocator& must already be initialized.
+    std::unique_ptr<rhi::RenderGraph> graph_;
 
     cairns::rhi::SwapChain swapchain_;
     // shaders
@@ -1083,6 +1178,7 @@ private:
     static constexpr uint32_t kParticleCount = 512;
     rhi::Handle<rhi::Kernel> particle_kernel_;
     rhi::Handle<rhi::Shader> particle_render_shader_;
+    rhi::Handle<rhi::Shader> particle_render_offscreen_;
     rhi::Handle<rhi::Buffer> particle_ssbo_[2];
     std::unique_ptr<cairns::RenderThread> render_thread_;
     // Render thread writes back particle_parity_out under parity_m_ so the

@@ -420,9 +420,11 @@ bool RenderGraph::Execute(FrameContext& fc, SwapChain& sc) {
     for (uint32_t p : topo_order_) {
         PassRecord& pass = passes_[p];
         if (pass.type == PassType::kCompute) {
+            fc.cmd.PassTimerBegin(pass.name.c_str());
             if (pass.execute) {
                 pass.execute(fc.cmd, res);
             }
+            fc.cmd.PassTimerEnd();
             continue;
         }
         RenderPassDesc rp{};
@@ -435,11 +437,13 @@ bool RenderGraph::Execute(FrameContext& fc, SwapChain& sc) {
         rp.height = sc.Height();
         rp.input_textures = std::span<const Handle<Texture>>(
             pass.baked_inputs.data(), pass.baked_inputs.size());
+        fc.cmd.PassTimerBegin(pass.name.c_str());
         fc.cmd.BeginRenderPass(resources_, sc, rp);
         if (pass.execute) {
             pass.execute(fc.cmd, res);
         }
         fc.cmd.EndRenderPass();
+        fc.cmd.PassTimerEnd();
     }
     return true;
 }
