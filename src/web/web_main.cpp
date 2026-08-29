@@ -89,10 +89,34 @@ EM_BOOL OnMouseMove(int, const EmscriptenMouseEvent* e, void* u) {
 }
 
 EM_BOOL OnMouseButton(int type, const EmscriptenMouseEvent* e, void* u) {
-    FeedMousePos(static_cast<WebApp*>(u), e);
+    WebApp* app = static_cast<WebApp*>(u);
+    FeedMousePos(app, e);
     // DOM button {0=L,1=M,2=R} -> ImGui {0=L,1=R,2=M}.
     const int btn = (e->button == 0) ? 0 : (e->button == 2) ? 1 : 2;
-    ImGui::GetIO().AddMouseButtonEvent(btn, type == EMSCRIPTEN_EVENT_MOUSEDOWN);
+    const bool down = (type == EMSCRIPTEN_EVENT_MOUSEDOWN);
+    ImGui::GetIO().AddMouseButtonEvent(btn, down);
+    // Left-click on the SCENE (not an imgui panel) -> pick -> highlight, mirroring
+    // the native windowed app. The pick is a CPU ray-cast (synchronous, no GLB
+    // fetch), so it resolves next frame regardless of ASYNCIFY. Map the canvas CSS
+    // pixel to the render-target pixel (same scale as the imgui mouse feed).
+    if (down && e->button == 0 && !ImGui::GetIO().WantCaptureMouse) {
+        double css_w = 0.0;
+        double css_h = 0.0;
+        emscripten_get_element_css_size("#canvas", &css_w, &css_h);
+        const uint32_t px =
+            css_w > 0.0 ? static_cast<uint32_t>(e->targetX *
+                                                static_cast<double>(app->width) /
+                                                css_w)
+                        : 0u;
+        const uint32_t py =
+            css_h > 0.0 ? static_cast<uint32_t>(e->targetY *
+                                                static_cast<double>(app->height) /
+                                                css_h)
+                        : 0u;
+        cairns::control::CommandRegistry::Instance().Dispatch(
+            cairns::json{{"op", "cairns.pick"},
+                         {"args", {{"viewport", 0}, {"x", px}, {"y", py}}}});
+    }
     return EM_FALSE;
 }
 
