@@ -128,10 +128,6 @@ public:
             CAIRNS_PRINT("GreaterInit: resources.Init failed\n");
             return false;
         }
-        if (!rhi_.bindless.Init(rhi_.device)) {
-            CAIRNS_PRINT("GreaterInit: bindless.Init failed\n");
-            return false;
-        }
         if (!rhi_.frames.Init(rhi_.device)) {
             CAIRNS_PRINT("GreaterInit: frames.Init failed\n");
             return false;
@@ -318,17 +314,7 @@ public:
                 for(const auto& prim : mesh.primitives) {
                     const uint32_t scene_mat_idx = prim.materialIndex;
                     const MatId mat_id = scene.materialIds[scene_mat_idx];
-                    const rhi::Handle<rhi::Texture> tex_handle = materials_[mat_id].color;
-                    const SamplerHandle sampler_handle = materials_[mat_id].sampler;
-                    
-                    const uint32_t gpu_tex_id = texture_id_map_[tex_handle.index];
-                    const uint32_t gpu_sampler_id = sampler_id_map_[sampler_handle.index];
-                    const uint32_t gpu_attr_idx = mesh_attr_id_map_[mesh.attrHandle.index];
-                    
-                    const cairns::rhi::MaterialGpu material_gpu {
-                        .tex_color_id = gpu_tex_id,
-                        .sampler_id = gpu_sampler_id,
-                    };
+                    const cairns::rhi::MaterialGpu material_gpu {};
                     uint32_t material_offset = 0;
                     void* mptr = rhi_.alloc.BumpAllocate(
                         sizeof(cairns::rhi::MaterialGpu), rhi_.alloc.UboAlign(),
@@ -341,9 +327,6 @@ public:
                     const glm::mat4 world_mat = node.globalTransform * model_matrix;
                     const cairns::rhi::DrawTmp draw_tmp {
                         .model_matrix = world_mat,
-                        .mesh_id = gpu_attr_idx,
-                        .tex_id = gpu_tex_id,
-                        .sampler_id = gpu_sampler_id
                     };
                     uint32_t drawtmp_offset = 0;
                     void* tptr = rhi_.alloc.BumpAllocate(
@@ -464,7 +447,6 @@ public:
         ml.sorted_draws = std::span<const std::pair<cairns::DrawKey, uint32_t>>(
             drawListSorted_.data(), drawListSorted_.size());
         ml.pipeline = unlit_;
-        ml.bindless = bindless_bg_;
         ml.globals_offset = globals_offset_;
         ml.resident_textures = std::span<const rhi::Handle<rhi::Texture>>(
             resident_textures_.data(), resident_textures_.size());
@@ -493,60 +475,7 @@ public:
     }
     
     bool initRenderPipeline() {
-        // Bindless registry FIRST: on Vulkan the unlit pipeline layout references
-        // the bindless descriptor-set layout, which CreateBindlessRegistry creates.
-        // (Metal pipelines don't reference it; order is byte-neutral there.)
-        { // bindless resources set up via rhi
-            using R = cairns::rhi::GpuSceneRegistry;
-            rhi::BindlessRegistryDesc rdesc{};
-            rdesc.max_textures = R::kMaxTextures;
-            rdesc.max_attr_buffers = R::kMaxMeshes;
-            rdesc.max_samplers = R::kMaxSamplers;
-            rdesc.texture_slot = R::kTextureRegistrySlot;
-            rdesc.attr_buffer_slot = R::kAttrBufferRegistrySlot;
-            rdesc.sampler_slot = R::kSamplerRegistrySlot;
-            rdesc.debug_name = "bindless";
-            bindless_bg_ = rhi_.bindless.CreateRegistry(rhi_.resources, rhi_.alloc, rdesc);
-
-            texture_id_map_.clear();
-            mesh_attr_id_map_.clear();
-            sampler_id_map_.clear();
-
-            for (size_t i = 0; i < scenes_.size(); ++i) {
-                cairns::Scene& scene = scenes_[i];
-                for (size_t j = 0; j < scene.textureHandles.size(); ++j) {
-                    auto h = scene.textureHandles[j];
-                    if (h.index >= texture_id_map_.size()) {
-                        texture_id_map_.resize(h.index + 1, 0);
-                    }
-                    rhi::Texture::Hot* hot = rhi_.resources.GetHot(h);
-                    if (hot && hot->api_view) {
-                        texture_id_map_[h.index] =
-                            rhi_.bindless.AddTexture(rhi_.resources, bindless_bg_, h);
-                    }
-                }
-                for (size_t j = 0; j < scene.meshes.size(); ++j) {
-                    auto h = scene.meshes[j].attrHandle;
-                    if (!h.IsNull()) {
-                        if (h.index >= mesh_attr_id_map_.size()) {
-                            mesh_attr_id_map_.resize(h.index + 1, 0);
-                        }
-                        mesh_attr_id_map_[h.index] =
-                            rhi_.bindless.AddAttrBuffer(rhi_.resources, rhi_.alloc, bindless_bg_, h);
-                    }
-                }
-                for (size_t j = 0; j < scene.samplerHandles.size(); ++j) {
-                    auto h = scene.samplerHandles[j];
-                    if (h.index >= sampler_id_map_.size()) {
-                        sampler_id_map_.resize(h.index + 1, 0);
-                    }
-                    sampler_id_map_[h.index] =
-                        rhi_.bindless.AddSampler(rhi_.resources, bindless_bg_, h);
-                }
-            }
-
-            rhi_.bindless.Finalize(bindless_bg_);
-
+        {
             // set-2 per-material bind groups (portable path). Dense, indexed by
             // MatId. Texture+sampler arrive via this group, not the global table.
             material_bind_groups_.assign(materials_.size(),
@@ -592,7 +521,7 @@ public:
             desc.push_constant_bytes = 0;  // base_vertex no longer needed (attrs are a vertex stream)
             desc.debug_name = "unlit";
             desc.swap_chain = &swapchain_;
-            unlit_ = rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources, rhi_.bindless, rhi_.frames, desc);
+            unlit_ = rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources, rhi_.frames, desc);
             if (unlit_.IsNull()) {
                 std::exit(0);
             }
@@ -653,7 +582,7 @@ public:
             desc.push_constant_bytes = 0;
             desc.debug_name = "particle_render";
             desc.swap_chain = &swapchain_;
-            particle_render_shader_ = rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources, rhi_.bindless, rhi_.frames, desc);
+            particle_render_shader_ = rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources, rhi_.frames, desc);
             if (particle_render_shader_.IsNull()) {
                 return false;
             }
@@ -696,7 +625,6 @@ public:
         swapchain_.Deinit();
         rhi_.pipelines.Deinit(rhi_.resources);
         rhi_.frames.Deinit();
-        rhi_.bindless.Deinit();
         rhi_.resources.Deinit();
         rhi_.alloc.Deinit();
         rhi_.device.Deinit();
@@ -728,10 +656,6 @@ private:
     
     rhi::Rhi rhi_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
-    rhi::Handle<rhi::BindGroup> bindless_bg_;
-    std::vector<uint32_t> texture_id_map_;
-    std::vector<uint32_t> mesh_attr_id_map_;
-    std::vector<uint32_t> sampler_id_map_;
 
     cairns::rhi::SwapChain swapchain_;
     // shaders

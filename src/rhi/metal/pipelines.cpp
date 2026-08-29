@@ -131,7 +131,7 @@ MetalShaderInfo resolve_metal_shader(const char* logical) {
 }  // namespace
 
 Handle<Shader> Pipelines::CreateGraphicsPipeline(
-    Resources& resources, Bindless&, Frames&, const GraphicsPipelineDesc& desc) {
+    Resources& resources, Frames&, const GraphicsPipelineDesc& desc) {
     MTL::Device* device = device_;
     const MetalShaderInfo info = resolve_metal_shader(desc.logical_shader);
     const std::filesystem::path dir = desc.shader_dir ? desc.shader_dir : "";

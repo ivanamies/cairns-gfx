@@ -15,7 +15,6 @@ namespace cairns::rhi {
 
 class Device;
 class Resources;
-class Bindless;
 class Frames;
 
 class Pipelines {
@@ -28,7 +27,7 @@ public:
     [[nodiscard]] bool Init(Device& device);
     void Deinit(Resources& resources);
 
-    Handle<Shader> CreateGraphicsPipeline(Resources& resources, Bindless& bindless,
+    Handle<Shader> CreateGraphicsPipeline(Resources& resources,
                                           Frames& frames, const GraphicsPipelineDesc& desc);
     Handle<Kernel> CreateComputePipeline(Resources& resources, Frames& frames,
                                          const ComputePipelineDesc& desc);

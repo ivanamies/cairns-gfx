@@ -9,7 +9,6 @@
 #include "rhi/device.hpp"
 #include "rhi/allocator.hpp"
 #include "rhi/resources.hpp"
-#include "rhi/bindless.hpp"
 #include "rhi/frames.hpp"
 #include "rhi/pipelines.hpp"
 
@@ -19,7 +18,6 @@ struct Rhi {
     Device device;
     Allocator alloc;
     Resources resources;
-    Bindless bindless;
     Frames frames;
     Pipelines pipelines;
 };

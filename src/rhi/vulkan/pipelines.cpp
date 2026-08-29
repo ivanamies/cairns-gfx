@@ -20,7 +20,6 @@
 #include "rhi/resource_manager.hpp"
 #include "rhi/device.hpp"
 #include "rhi/resources.hpp"
-#include "rhi/bindless.hpp"
 #include "rhi/frames.hpp"
 #include "rhi/swap_chain.hpp"
 #include "util/log.hpp"
@@ -186,7 +185,7 @@ VkShaderFiles resolve_vk_shader(const char* logical) {
 }  // namespace
 
 Handle<Shader> Pipelines::CreateGraphicsPipeline(
-    Resources& resources, Bindless& bindless, Frames& frames,
+    Resources& resources, Frames& frames,
     const GraphicsPipelineDesc& desc) {
     VkDevice device = device_;
     const VkShaderFiles files = resolve_vk_shader(desc.logical_shader);
@@ -306,9 +305,8 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     pc_range.size = desc.push_constant_bytes;
     std::vector<VkDescriptorSetLayout> set_layouts;
     if (desc.logical_shader && std::string(desc.logical_shader) == "unlit") {
-        set_layouts = {bindless.bindless_layout_,
-                       frames.dyn_ubo_layout_,
-                       resources.MaterialSetLayout()};  // set 2: per-material
+        set_layouts = {frames.dyn_ubo_layout_,        // set 0: per-draw dynamic UBOs
+                       resources.MaterialSetLayout()};  // set 1: per-material
     } else {
         set_layouts = {frames.point_layout_};
     }

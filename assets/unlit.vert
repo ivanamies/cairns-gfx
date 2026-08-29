@@ -3,7 +3,7 @@
 layout(location = 0) in vec4 inPos;
 layout(location = 1) in vec2 inUV;   // stream 1: VertexAttribute.uv (offset 48, stride 64)
 
-layout(set = 1, binding = 0) uniform GlobalsUBO {
+layout(set = 0, binding = 0) uniform GlobalsUBO {
     mat4 view_proj;
     mat4 inv_view_proj;
     vec4 camera_pos;
@@ -11,7 +11,7 @@ layout(set = 1, binding = 0) uniform GlobalsUBO {
     vec4 screen_params;
 } globals;
 
-layout(set = 1, binding = 2) uniform DrawTmpUBO {
+layout(set = 0, binding = 2) uniform DrawTmpUBO {
     mat4 model_matrix;
     uint mesh_id;
     uint tex_id;

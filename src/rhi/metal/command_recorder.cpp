@@ -49,13 +49,6 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     enc->setDepthStencilState(depth_stencil_);
     enc->setFrontFacingWinding(MTL::WindingCounterClockwise);
     enc->setCullMode(MTL::CullModeBack);
-    {
-        BindGroup::Hot* bg = res.GetHot(list.bindless);
-        MTL::Buffer* bg_buf = bg->api_descriptor_set;
-        const uint32_t bg_off = bg->arg_buf_offset;
-        enc->setVertexBuffer(bg_buf, bg_off, GpuSceneRegistry::kBindSlot);
-        enc->setFragmentBuffer(bg_buf, bg_off, GpuSceneRegistry::kBindSlot);
-    }
     for (size_t i = 0; i < list.resident_textures.size(); ++i) {
         MTL::Texture* tex = res.GetHot(list.resident_textures[i])->api_view;
         if (tex) {

@@ -72,7 +72,6 @@ struct MeshDrawList {
     std::span<const cairns::Draw> draws;
     std::span<const std::pair<DrawKey, uint32_t>> sorted_draws;
     Handle<Shader> pipeline;
-    Handle<BindGroup> bindless;
     uint32_t globals_offset = 0;
     std::span<const Handle<Texture>> resident_textures;
     std::span<const Handle<Buffer>> resident_buffers;

@@ -115,11 +115,7 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     vkUpdateDescriptorSets(device_, 3, writes.data(), 0, nullptr);
 
     Shader::Hot* unlit = res.GetHot(list.pipeline);
-    VkDescriptorSet bindless =
-        static_cast<VkDescriptorSet>(res.GetHot(list.bindless)->api_descriptor_set);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_pipeline);
-    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_layout, 0, 1,
-                            &bindless, 0, nullptr);
 
     uint32_t last_mat_bg = 0xFFFFFFFFu;
     for (size_t i = 0; i < list.sorted_draws.size(); ++i) {
@@ -132,7 +128,7 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
             VkDescriptorSet ms = static_cast<VkDescriptorSet>(
                 res.GetHot(draw.bind_groups[1])->api_descriptor_set);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    unlit->vk_layout, 2, 1, &ms, 0, nullptr);
+                                    unlit->vk_layout, 1, 1, &ms, 0, nullptr);
         }
         uint32_t pos_off = 0;
         VkBuffer pos_buf =
@@ -153,7 +149,7 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
         std::array<uint32_t, 3> dyn_offsets = {list.globals_offset,
                                                draw.dynamic_buffer_offsets[0],
                                                draw.dynamic_buffer_offsets[1]};
-        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_layout, 1, 1,
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_layout, 0, 1,
                                 &dyn_set, 3, dyn_offsets.data());
         vkCmdDrawIndexed(cb, draw.triangle_count * 3, draw.instance_count, first_index, 0,
                          draw.instance_offset);

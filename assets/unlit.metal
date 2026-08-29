@@ -85,13 +85,10 @@ struct MaterialArg {
     sampler samp [[id(1)]];
 };
 
-vertex VertexOut vertexShader(uint vertexID [[vertex_id]],
-                              VertexInput in [[stage_in]],
+vertex VertexOut vertexShader(VertexInput in [[stage_in]],
                               constant RenderPassGlobals& globals [[buffer(CUBE_GLOBALS_BUFFER_SLOT)]],
                               constant MaterialGpu& material [[buffer(CUBE_MATERIAL_BUFFER_SLOT)]],
-                              /* this is an unlit pso we don't care about ssbos or luts */
-                              constant DrawTmp& draw_tmp [[buffer(CUBE_DRAW_TMP_BUFFER_SLOT)]],
-                              constant SceneRegistry& scene [[buffer(CUBE_SCENE_REGISTRY_BUFFER_SLOT)]]) {
+                              constant DrawTmp& draw_tmp [[buffer(CUBE_DRAW_TMP_BUFFER_SLOT)]]) {
     VertexOut out;
     out.position = globals.view_proj * draw_tmp.model_matrix * in.pos;
     out.textureCoordinate = in.uv;
