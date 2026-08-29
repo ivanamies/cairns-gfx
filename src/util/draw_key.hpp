@@ -1,7 +1,6 @@
 #pragma once
 
 #include "util/draw.hpp"
-#include "rhi/resource_impl.hpp"
 
 #include <cstdint>
 

@@ -1,7 +1,8 @@
 #pragma once
 
-#include "rhi/resource_impl.hpp"
+#include "sampler.hpp"
 #include "rhi2/resource_manager.hpp"
+#include "util/std_allocator.hpp"
 
 #include <fastgltf/glm_element_traits.hpp>
 #include <fastgltf/core.hpp>

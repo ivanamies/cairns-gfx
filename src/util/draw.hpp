@@ -1,8 +1,8 @@
 #pragma once
 
-#include "rhi/resource_impl.hpp"
 #include "rhi2/resource_manager.hpp"
 
+#include <array>
 #include <cstdint>
 
 namespace cairns {

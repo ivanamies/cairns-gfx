@@ -17,12 +17,11 @@
 
 #include <stb_image_write.h>
 
-#include "rhi/tag.hpp"
-#include "rhi/sampler.hpp"
-#include "rhi/resource.hpp"
 #include "swap_chain.hpp"
-#include "rhi/gpu_scene_registry.hpp"
+#include "gpu_scene_registry.hpp"
 #include "util/misc.hpp"
+#include "util/std_allocator.hpp"
+#include "util/render_pass_globals.hpp"
 #include "util/offset_allocator.hpp"
 #include "util/gltf_loader.hpp"
 #include "util/debug_asset.hpp"
@@ -167,6 +166,7 @@ namespace cairns {
 
 inline static constexpr uint32_t kHotArenaMemorySize = 1 << 29;
 inline static constexpr uint32_t kUboAlign = 32;
+inline static constexpr uint32_t kMeshPosBindSlot = 0;
 
 class Engine {
 public:
@@ -765,7 +765,7 @@ public:
             MTL::VertexAttributeDescriptor* const attr0 = vertex_desc->attributes()->object(0);
             attr0->setFormat(MTL::VertexFormatFloat4);
             attr0->setOffset(0);
-            attr0->setBufferIndex(cairns::rhi::ResourceDescriptor<cairns::rhi::Shader>::kMeshPosBindSlot);
+            attr0->setBufferIndex(cairns::kMeshPosBindSlot);
             
             MTL::VertexBufferLayoutDescriptor* const layout0 = vertex_desc->layouts()->object(0);
             layout0->setStride(sizeof(glm::vec4));

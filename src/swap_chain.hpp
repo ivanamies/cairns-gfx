@@ -1,6 +1,6 @@
 #pragma once
 
-#include "rhi/gfx_api.hpp"
+#include "gfx_api.hpp"
 #include "util/size.hpp"
 
 namespace cairns::rhi {

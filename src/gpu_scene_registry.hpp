@@ -19,18 +19,6 @@ struct GpuSceneRegistry {
     static constexpr uint32_t kTexturesSlotOffset = 0;
     static constexpr uint32_t kMeshesSlotOffset = kTexturesSlotOffset + kMaxTextures;
     static constexpr uint32_t kSamplersSlotOffset = kMeshesSlotOffset + kMaxMeshes;
-    
-    uint32_t num_tex = 0;
-    uint32_t num_attr = 0;
-    uint32_t num_sampler = 0;
-    
-    // Handle id to GPU residency slot
-    // the draw packet producer takes a handle to a eg texture, and it calls Handle<Texture>::get_id() to get an id to look up in the vector.
-    // gpu resource id = tex_id[Handle<Texture>::get_id()]
-    // IN ALL CASES, THE SCENE'S TEXTURE HANDLE MANAGER SHOULD BE 1-1 WITH THE PSO SCENE REGISTRY
-    // std::vector<uint32_t> tex_id;
-    std::vector<uint32_t> attr_id;
-    std::vector<uint32_t> sampler_id;
 };
 
 } // namespace cairns::rhi
