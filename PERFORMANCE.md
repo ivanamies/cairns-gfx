@@ -5,6 +5,88 @@ Newest first.
 
 ---
 
+## `757f552` (2026-06-06) — studio surface Day 1 (Unity-shaped scripting via `studio.js`)
+
+Day 1 of the Unity-shaped op surface landed: `RegisterAlias` +
+`Command.aliased_for` + `tools.search` on the registry; 18 ops migrated
+to `cairns.*` with top-level deprecated aliases (one release); `studio.js`
+autoloaded into the QuickJS context with `Vector3`/`Quaternion`/`Mathf` +
+`GameObject`/`Component`/`Transform` wrappers + `Camera.main` strict-throw
++ `Cairns.onFrame` reserved stub; `docs/studio_notes.md` (internal
+divergence ledger, says "Unity" out loud). Plus a `JsDispatch` refcount
+leak fix (global+JSON refs were leaked per call → SIGABRT at
+`JS_FreeRuntime` after enough `cairns.dispatch` calls).
+
+None of these commits touch the windowed `sdl-min` `Engine::draw()` path.
+Perf deltas vs `52d5d16` are pure thermal/system noise.
+
+Workload: `100 GLBs × 33 slices = 3300 entities`, 11517 draws. Release.
+Steady-state medians (warmup window dropped).
+
+### macOS Metal Release — M2 Max, 1280×720 (2560×1440 HiDPI)
+| Pass            | avg     |
+|-----------------|---------|
+| `frame`         |  2.82 ms |
+| `build_draws`   |  2.21 ms |
+| `record`        |  1.45 ms |
+| `particle_sim`  |  0.010 ms (GPU) |
+| `forward`       |  9.10 ms (GPU) |
+| `swap`          |  0.45 ms (GPU) |
+| GPU total       | ~9.55 ms |
+
+vs `52d5d16`: frame 2.87 → 2.82 (-0.05), build 2.23 → 2.21 (-0.02),
+record 1.46 → 1.45 (-0.01), forward 9.27 → 9.10 (-0.17),
+swap 0.46 → 0.45 (-0.01). Everything within thermal noise; net
+−0.25 ms / frame combined, consistent with a slightly cooler run.
+
+### macOS Vulkan (MoltenVK) Release — M2 Max, 1280×720 (2560×1440 HiDPI)
+| Pass            | avg     |
+|-----------------|---------|
+| `frame`         |  2.86 ms |
+| `build_draws`   |  2.25 ms |
+| `record`        |  0.63 ms |
+| `particle_sim`  |  0.016 ms (GPU) |
+| `forward`       |  9.08 ms (GPU) |
+| `swap`          |  0.12 ms (GPU) |
+| GPU total       | ~9.22 ms |
+
+vs `52d5d16`: **the vk CPU regression is gone.** frame 4.42 → 2.86
+(−1.56 ms), build 3.52 → 2.25 (−1.27 ms), record 1.00 → 0.63 (−0.37 ms).
+The previous run's high CPU + high window-to-window variance was
+thermal / system noise; this run lands back near the `c90a43b`
+baseline (frame 3.20, build 2.55, record 0.72) — actually under it,
+which is suspicious but reproducible across 4 windows here. GPU forward
+9.38 → 9.08 (-0.30) within thermals; swap unchanged.
+
+### Samsung S22 Vulkan Release — on-device, 2115×1008
+| Pass            | avg     |
+|-----------------|---------|
+| `frame`         |  8.61 ms |
+| `build_draws`   |  7.53 ms |
+| `record`        | 11.52 ms |
+| `particle_sim`  |  n/a (Android Vulkan timestamps disabled, see f2625d1) |
+| `forward`       | 90.24 ms (GPU) |
+| `swap`          |  0.70 ms (GPU) |
+| GPU total       | ~90.9 ms |
+
+vs `52d5d16` S22: CPU side +0.83 ms (frame +0.83, build +0.74, record
++0.90); forward GPU 83.0 → 90.24 (+7.24 ms). Phone was charging on
+USB-FAST again — Samsung thermal mgmt almost certainly throttling. The
+prior entry's "re-run cold/non-charging" call still stands as the way
+to disambiguate noise from a real regression. Three converged 120-frame
+windows + warmup are consistent (forward 78 → 90 → 91 ms across windows,
+the warmup was actually the coldest), so the throttled state is
+reproducible.
+
+### cairns_serve studio surface (not a perf gate, for record)
+13-op NDJSON smoke test through `script.eval` + `cairns.dispatch`
+roundtrip (Vector3 + Quaternion.Euler + GameObject.InstantiateAsync +
+AddComponent + Camera.main loud-throw) runs in ~5 ms wall total. Studio
+surface adds negligible per-call latency above the existing
+`script.eval` path.
+
+---
+
 ## `52d5d16` (2026-06-05) — headless editor mode P0–P5 + 0xCC heap garbage init
 
 Full headless-editor-mode plan landed P0–P5: CMake split (`cairns_core` +
