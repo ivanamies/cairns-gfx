@@ -7,6 +7,8 @@
 #include "rhi/resources.hpp"
 #include "rhi/frames.hpp"
 
+#include <cstdio>
+
 namespace cairns::rhi {
 
 bool Pipelines::Init(Device& device) { plat.device_ = device.plat.device; inited_ = true; return true; }
@@ -14,13 +16,17 @@ void Pipelines::Deinit(Resources& resources) { (void)resources; }
 
 Handle<Shader> Pipelines::CreateGraphicsPipeline(Resources& resources, Frames& frames,
                                                  const GraphicsPipelineDesc& desc) {
-    (void)resources; (void)frames; (void)desc;
-    return Handle<Shader>::Null;
+    (void)frames; (void)desc;
+    Handle<Shader> h = resources.shaders.Acquire();
+    if (Shader::Hot* hot = resources.shaders.GetHot(h)) { hot->api_pso = nullptr; }
+    return h;
 }
 Handle<Kernel> Pipelines::CreateComputePipeline(Resources& resources, Frames& frames,
                                                 const ComputePipelineDesc& desc) {
-    (void)resources; (void)frames; (void)desc;
-    return Handle<Kernel>::Null;
+    (void)frames; (void)desc;
+    Handle<Kernel> h = resources.kernels.Acquire();
+    if (Kernel::Hot* hot = resources.kernels.GetHot(h)) { hot->api_pso = nullptr; }
+    return h;
 }
 
 }  // namespace cairns::rhi

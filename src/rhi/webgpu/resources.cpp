@@ -13,6 +13,8 @@
 #include "rhi/pipelines.hpp"
 
 #include <webgpu/webgpu.h>
+#include <cstdio>
+
 #include <webgpu/wgpu.h>
 
 namespace cairns::rhi {
@@ -201,9 +203,17 @@ bool Resources::ReadBackTextureRgba(Handle<Texture> h, std::vector<uint8_t>& out
     const uint8_t* data = static_cast<const uint8_t*>(wgpuBufferGetConstMappedRange(buf, 0, bd.size));
     if (!data) { wgpuBufferRelease(buf); return false; }
     out.resize(static_cast<size_t>(unpadded) * ht);
+    // final_target_ is BGRA8Unorm; swizzle to RGBA8 (matches metal/vk readback
+    // so the macos-webgpu goldens are comparable).
     for (uint32_t y = 0; y < ht; ++y) {
-        std::memcpy(out.data() + static_cast<size_t>(y) * unpadded,
-                    data + static_cast<size_t>(y) * padded, unpadded);
+        const uint8_t* srow = data + static_cast<size_t>(y) * padded;
+        uint8_t* drow = out.data() + static_cast<size_t>(y) * unpadded;
+        for (uint32_t x = 0; x < w; ++x) {
+            drow[x * 4 + 0] = srow[x * 4 + 2];
+            drow[x * 4 + 1] = srow[x * 4 + 1];
+            drow[x * 4 + 2] = srow[x * 4 + 0];
+            drow[x * 4 + 3] = srow[x * 4 + 3];
+        }
     }
     wgpuBufferUnmap(buf);
     wgpuBufferRelease(buf);

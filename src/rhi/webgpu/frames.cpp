@@ -11,6 +11,8 @@
 #include "rhi/offscreen_targets.hpp"
 #include "rhi/frame_capture.hpp"
 
+#include <cstdio>
+
 #include <webgpu/webgpu.h>
 #include <webgpu/wgpu.h>
 

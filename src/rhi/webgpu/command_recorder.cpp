@@ -7,6 +7,8 @@
 #include "rhi/resources.hpp"
 #include "rhi/allocator.hpp"
 
+#include <cstdio>
+
 #include <webgpu/webgpu.h>
 
 namespace cairns::rhi {

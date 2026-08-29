@@ -6,6 +6,8 @@
 #include "rhi/init_config.hpp"
 #include "rhi/swap_chain.hpp"
 
+#include <cstdio>
+
 #include <webgpu/webgpu.h>
 #include <webgpu/wgpu.h>
 
