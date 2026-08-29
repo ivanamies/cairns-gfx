@@ -4,7 +4,7 @@
 cairns.dispatch("cairns.primitive.createAll", {});
 const e = cairns.dispatch("cairns.entity.new", { name: "sun" });
 cairns.dispatch("cairns.entity.addComponent", {
-    entity: e.entity, type: "DirectionalLight",
+    entity: e.result.entity, type: "DirectionalLight",
     props: { dirX: -0.5, dirY: -1.0, dirZ: -0.3,
              colorR: 1.0, colorG: 0.95, colorB: 0.85,
              intensity: 1.0,

@@ -1177,10 +1177,18 @@ bool Engine::initRenderPipeline() {
                 spd.push_constant_bytes = 0;
                 shadow_pso_ = rhi_.pipelines.CreateGraphicsPipeline(
                     rhi_.resources, rhi_.frames, spd);
+#if CAIRNS_WEBGPU
+                // webgpu Classify stubs shadow_depth: CreateGraphicsPipeline
+                // returns a REAL handle with a null internal PSO (never
+                // IsNull). Force it Null so every downstream
+                // !shadow_pso_.IsNull() gate disables shadows on webgpu (no
+                // depth-only pipeline builder yet), honestly.
+                shadow_pso_ = ShaderHandle::Null;
+#endif
                 if (shadow_pso_.IsNull()) {
                     CAIRNS_PRINT_ERR(
-                        "[shadow] shadow_depth PSO failed -- shadow pass "
-                        "disabled\n");
+                        "[shadow] shadow_depth PSO unavailable -- shadow pass "
+                        "disabled on this backend\n");
                 }
             }
 
@@ -1581,6 +1589,49 @@ void Engine::RecordFrame(FramePacket& pkt) {
                 }
             });
         }  // particles_active (emitter gate)
+
+        // pass 1.5: shadow map. ONE depth pass from the active scene's light
+        // POV, BEFORE forward. Gated on a cast_shadows light + a live PSO
+        // (webgpu stubs shadow_pso_ null -> pass absent there, honest until
+        // its depth-only builder lands). Renders at the fixed 2048^2 shadow
+        // extent; lit fragments sample it via the slot-3 bind group.
+        if (s.shadow_active && !shadow_pso_.IsNull() &&
+            !s.shadowDrawList.empty()) {
+            graph_->AddPass(
+                "shadow_vp0", rhi::PassType::kGraphics,
+                [&](rhi::PassBuilder& b) {
+                    rhi::GraphTextureDesc sdd{};
+                    sdd.width = 2048;
+                    sdd.height = 2048;
+                    sdd.format = rhi::Format::kD32F;
+                    sdd.usage = rhi::kTexUsageDepthTarget | rhi::kTexUsageSampled;
+                    rhi::GraphTexture sg = b.ImportTexture(shadow_target_, sdd);
+                    b.AddDepthOutput("shadow_depth", sg, rhi::LoadOp::kClear,
+                                     1.0f);
+                    b.SetRenderExtent(2048, 2048);
+                    // Skinned casters: shadow vertex fetch reads the skin pool
+                    // the skinning pass wrote -> declare it so the graph orders
+                    // + barriers the edge.
+                    if (!pkt.skin_batches.empty() &&
+                        !skinning_.output_pool_buffer.IsNull()) {
+                        rhi::GraphBufferDesc sbd{};
+                        sbd.usage = rhi::kUsageStorage;
+                        rhi::GraphBuffer pool = b.ImportBuffer(
+                            skinning_.output_pool_buffer, sbd);
+                        b.ReadBuffer(pool);
+                    }
+                },
+                [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
+                    rhi::MeshDrawList sdl{};
+                    sdl.draws = std::span<const cairns::Draw>(
+                        s.shadowDrawList.data(), s.shadowDrawList.size());
+                    sdl.sorted_draws = pkt.sorted;  // all casters, all scenes
+                    sdl.pipeline = shadow_pso_;
+                    sdl.dyn_globals = dyn_globals_;
+                    sdl.globals_offset = s.shadow_globals_offset;
+                    cmd.DrawMeshes(rhi_.resources, rhi_.alloc, sdl);
+                });
+        }
 
         // pass 2: forward, ONCE PER VIEWPORT. Each pass writes to a private
         // half-width color+depth target. Particles render into both viewports
@@ -2428,6 +2479,18 @@ void Engine::EncodeDraws(const FramePacket& pkt) {
             assert(gptr && "bump alloc failed: render pass globals");
             memcpy(gptr, &s.pending_globals[v], sizeof(cairns::rhi::RenderPassGlobals));
         }
+        // Shadow globals: a copy of viewport 0's globals with the LIGHT
+        // view_proj in the view_proj slot, so depth_only.vert projects from
+        // the light's POV without knowing it is a light.
+        if (s.shadow_active) {
+            cairns::rhi::RenderPassGlobals sg = s.pending_globals[0];
+            sg.view_proj = s.light_view_proj;
+            void* sgp = rhi_.alloc.BumpAllocate(
+                sizeof(cairns::rhi::RenderPassGlobals), rhi_.alloc.UboAlign(),
+                rhi::Memory::kDynamic, &s.shadow_globals_offset);
+            assert(sgp && "bump alloc failed: shadow globals");
+            memcpy(sgp, &sg, sizeof(cairns::rhi::RenderPassGlobals));
+        }
         if (frame_ <= 6) {
             const glm::mat4& vp = s.pending_globals[viewport_mgr_.active_index].view_proj;
             const float vp_w = static_cast<float>(FrameWidth()) /
@@ -2470,6 +2533,16 @@ void Engine::EncodeDraws(const FramePacket& pkt) {
                 mcold->shader_key == cairns::ShaderKey::kLit) {
                 s.drawList[i].shader =
                     enc_id_path ? lit_offscreen_ : lit_offscreen_noid_;
+                // ALWAYS bind the shadow map (slot 3) on lit draws where the
+                // backend has a shadow PSO (metal/vk; webgpu stubs it null +
+                // its WGSL lit shaders declare no group 3). The bind group is
+                // a valid depth tex+sampler even when no map rendered this
+                // frame; the lit fragment's light_dir.w>0 (== cast_shadows)
+                // guard prevents sampling stale/undefined shadow data. This
+                // keeps slot 3 bound so metal never hits an unbound arg buffer.
+                if (!shadow_pso_.IsNull() && !shadow_bind_group_.IsNull()) {
+                    s.drawList[i].bind_groups[2] = shadow_bind_group_;
+                }
             }
             uint32_t material_offset = UINT32_MAX;
             if (!mid.IsNull() && mid.index < mat_cap) {
@@ -2504,6 +2577,28 @@ void Engine::EncodeDraws(const FramePacket& pkt) {
 
             s.drawList[i].dynamic_buffer_offsets[0] = material_offset;
             s.drawList[i].dynamic_buffer_offsets[1] = drawtmp_offset;
+        }
+
+        // Shadow draw list: same geometry (index/vertex/drawtmp offset), but
+        // .shader nulled so the recorder uses the pass's shadow_pso_, and the
+        // material/shadow bind groups cleared (depth_only reads only globals
+        // + drawtmp). Built after the forward stamps so drawtmp offsets are
+        // final.
+        if (s.shadow_active) {
+            cairns::Draw* sdl =
+                s.arena.AllocateArray<cairns::Draw>(s.drawList.size());
+            for (size_t i = 0; i < s.drawList.size(); ++i) {
+                cairns::Draw d = s.drawList[i];
+                d.shader = rhi::Handle<rhi::Shader>::Null;
+                d.bind_groups[0] = rhi::Handle<rhi::BindGroup>::Null;
+                d.bind_groups[1] = rhi::Handle<rhi::BindGroup>::Null;
+                d.bind_groups[2] = rhi::Handle<rhi::BindGroup>::Null;
+                sdl[i] = d;
+            }
+            s.shadowDrawList =
+                std::span<cairns::Draw>(sdl, s.drawList.size());
+        } else {
+            s.shadowDrawList = {};
         }
 
         // 3. delta_time UBO.
@@ -2659,6 +2754,75 @@ bool Engine::BuildMeshOpaqueDraws(uint32_t slot) {
             s.pending_view_matrix[v] = view_matrix;
             s.pending_near_z[v] = vp_near;
             s.pending_far_z[v] = vp_far;
+        }
+
+        // Directional shadow matrix (ONE map, from the ACTIVE scene's
+        // cast_shadows light over the scene's world extent). Deterministic
+        // fit: AABB over entity WORLD-TRANSFORM translations + a fixed
+        // margin, fixed fallback box when the scene is empty (per-object
+        // AABB fit is a refinement). Written into every viewport's globals
+        // so the lit fragment can project into shadow space; the shadow pass
+        // uploads it as its own globals' view_proj.
+        s.shadow_active = false;
+        s.light_view_proj = glm::mat4(1.0f);
+        // Resolve the caster scene like the per-viewport light extraction:
+        // viewport 0's bound scene, falling back to the active scene. (The
+        // active scene index can differ from the viewport's bound scene.)
+        cairns::Scene::Cold* shadow_wc = wc_cam;
+        if (viewport_mgr_.active_count > 0) {
+            if (cairns::Viewport::Hot* vph0 =
+                    viewport_mgr_.pool.GetHot(viewport_mgr_.ids[0])) {
+                if (cairns::Scene::Cold* bc =
+                        scene_mgr_.pool.GetCold(vph0->scene)) {
+                    shadow_wc = bc;
+                }
+            }
+        }
+        if (shadow_wc != nullptr) {
+            glm::vec3 sun_dir(0.0f, -1.0f, 0.0f);
+            bool casts = false;
+            {
+                auto lv = shadow_wc->registry.view<cairns::DirectionalLight>();
+                for (entt::entity le : lv) {
+                    const cairns::DirectionalLight& dl =
+                        lv.get<cairns::DirectionalLight>(le);
+                    if (dl.cast_shadows) {
+                        sun_dir = glm::normalize(dl.dir);
+                        casts = true;
+                        break;
+                    }
+                }
+            }
+            if (casts) {
+                glm::vec3 bmin(1.0e30f);
+                glm::vec3 bmax(-1.0e30f);
+                auto wv = shadow_wc->registry.view<const cairns::WorldTransform>();
+                for (entt::entity we : wv) {
+                    const glm::vec3 p =
+                        glm::vec3(wv.get<const cairns::WorldTransform>(we).world[3]);
+                    bmin = glm::min(bmin, p);
+                    bmax = glm::max(bmax, p);
+                }
+                glm::vec3 center(0.0f);
+                float radius = 6.0f;  // deterministic fallback box
+                if (bmin.x <= bmax.x) {
+                    center = 0.5f * (bmin + bmax);
+                    radius = glm::length(bmax - center) + 3.0f;
+                    radius = std::max(radius, 2.0f);
+                }
+                const glm::vec3 up =
+                    std::abs(sun_dir.y) > 0.99f ? glm::vec3(0, 0, 1)
+                                                : glm::vec3(0, 1, 0);
+                const glm::vec3 eye = center - sun_dir * (radius * 2.0f);
+                const glm::mat4 lview = glm::lookAtRH(eye, center, up);
+                const glm::mat4 lproj = glm::orthoRH_ZO(
+                    -radius, radius, -radius, radius, 0.05f, radius * 4.0f);
+                s.light_view_proj = lproj * lview;
+                s.shadow_active = !shadow_pso_.IsNull();
+            }
+        }
+        for (int v = 0; v < viewport_mgr_.active_count; ++v) {
+            s.pending_globals[v].light_view_proj = s.light_view_proj;
         }
 
         // Set each scene's root_transform, run TRS hierarchy propagation

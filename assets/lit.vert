@@ -34,9 +34,14 @@ layout(location = 2) out vec3 outWorldNormal;
 layout(location = 3) flat out vec4 outLightDir;
 layout(location = 4) flat out vec4 outLightColor;
 layout(location = 5) flat out vec4 outAmbient;
+// Shadow coordinate: world pos projected by the light matrix. Computed here
+// because globals (set 0) is vertex-bound only; the fragment does the PCF
+// lookup on the interpolated value.
+layout(location = 6) out vec4 outShadowCoord;
 
 void main() {
-    gl_Position = globals.view_proj * draw_tmp.model_matrix * inPos;
+    vec4 world = draw_tmp.model_matrix * inPos;
+    gl_Position = globals.view_proj * world;
     outTexCoord = inUV;
     outEntityId = draw_tmp.entity_id;
     // Uniform-scale assumption: the model 3x3 rotates+scales the normal;
@@ -45,4 +50,5 @@ void main() {
     outLightDir = globals.light_dir;
     outLightColor = globals.light_color;
     outAmbient = globals.ambient;
+    outShadowCoord = globals.light_view_proj * world;
 }

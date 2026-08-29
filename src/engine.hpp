@@ -153,6 +153,13 @@ public:
         // MaterialGpu per referenced material (offset shared across its
         // draws) -- the Draw struct itself never carries it.
         std::span<cairns::Handle<cairns::Material>> draw_material_ids;
+        // Shadow pass: same geometry as drawList but with .shader nulled +
+        // material/shadow bind groups cleared, so the recorder binds
+        // shadow_pso_ (depth-only) and reads only globals + drawtmp.
+        std::span<cairns::Draw> shadowDrawList;
+        uint32_t shadow_globals_offset = 0;  // globals w/ light VP in view_proj
+        bool shadow_active = false;          // scene has a cast_shadows light
+        glm::mat4 light_view_proj{1.0f};
         // Multi-scene fan-out: every distinct scene any viewport binds is
         // extracted into the single s.proxies union; this records each scene's
         // [mesh) range (at extract) and [draw) range (after the prefix sum) so

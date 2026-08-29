@@ -39,11 +39,27 @@ SCENARIO("subject: lit primitives (directional light, half-lambert)",
         cairns.dispatch("cairns.primitive.createAll", {});
         const e = cairns.dispatch("cairns.entity.new", { name: "sun" });
         cairns.dispatch("cairns.entity.addComponent", {
-            entity: e.entity, type: "DirectionalLight",
+            entity: e.result.entity, type: "DirectionalLight",
             props: { dirX: -0.5, dirY: -1.0, dirZ: -0.3,
                      colorR: 1.0, colorG: 0.95, colorB: 0.85,
                      intensity: 1.0,
                      ambientR: 0.12, ambientG: 0.12, ambientB: 0.15 }
+        });
+        cairns.dispatch("cairns.scene.setMaterialShaderAll", { shader: "lit" });
+    )JS");
+}
+SCENARIO("subject: shadow primitives (directional shadow map + PCF)",
+         "[scenarios][golden][subject]") {
+    cairns::golden::RunJsSubject("shadow_primitives", 512, 512, {}, R"JS(
+        cairns.dispatch("cairns.primitive.createAll", {});
+        const e = cairns.dispatch("cairns.entity.new", { name: "sun" });
+        cairns.dispatch("cairns.entity.addComponent", {
+            entity: e.result.entity, type: "DirectionalLight",
+            props: { dirX: -0.4, dirY: -1.0, dirZ: -0.3,
+                     colorR: 1.0, colorG: 0.96, colorB: 0.88,
+                     intensity: 1.1,
+                     ambientR: 0.10, ambientG: 0.10, ambientB: 0.13,
+                     castShadows: true }
         });
         cairns.dispatch("cairns.scene.setMaterialShaderAll", { shader: "lit" });
     )JS");
