@@ -328,6 +328,7 @@ if (NOT ANDROID AND NOT IOS AND NOT EMSCRIPTEN)
     # cairns_serve is unbundled and SDL_GetBasePath returns the binary's dir.
     set(_cairns_serve_assets
         "unlit.vert.spv" "unlit.frag.spv"
+        "unlit_noid.frag.spv"                    # #222 Phase A.1
         "particle.vert.spv" "particle.frag.spv" "particle.comp.spv"
         "imgui.vert.spv" "imgui.frag.spv"
         "composite_pip.vert.spv" "composite_pip.frag.spv"
@@ -457,6 +458,7 @@ else()
     endmacro()
     copy_helper("unlit.vert.spv")
     copy_helper("unlit.frag.spv")
+    copy_helper("unlit_noid.frag.spv") # #222 Phase A.1
     copy_helper("particle.vert.spv")
     copy_helper("particle.frag.spv")
     copy_helper("particle.comp.spv")

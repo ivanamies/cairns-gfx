@@ -112,5 +112,12 @@ fragment FragmentOut fragmentShader(VertexOut in [[stage_in]], constant Material
     out.id = in.entity_id;
     return out;
 }
-    
+
+// #222 Phase A.1: id-less fragment variant. Selected by RecordFrame when
+// outline_on || pick_pending is false. Spares the per-frag flat-interp
+// load + the R32U store.
+fragment float4 fragmentShader_noid(VertexOut in [[stage_in]], constant MaterialArg& material [[buffer(CUBE_MATERIAL_BUFFER_SLOT)]]) {
+    return material.tex.sample(material.samp, in.textureCoordinate);
+}
+
 } // namespace cube

@@ -1998,11 +1998,18 @@ public:
         // Per-viewport MeshDrawList: same draws, distinct globals_offset.
         // (Same world for both viewports this commit; multi-world content
         // lands in #195.)
+        // #222 Phase A.1: id MRT only when something consumes it (outline
+        // overlay or a pending pick this frame). Default path uses the
+        // no-id PSO and a single-color forward render pass, saving the
+        // R32U store + flat-interp on every visible fragment.
+        const bool id_path = !highlights_.empty() || pick_pending_;
+        const rhi::Handle<rhi::Shader> forward_pso =
+            id_path ? unlit_offscreen_ : unlit_offscreen_noid_;
         std::array<rhi::MeshDrawList, kNumViewports> mls{};
         for (int v = 0; v < active_viewport_count_; ++v) {
             mls[v].draws = pkt.draws;
             mls[v].sorted_draws = pkt.sorted;
-            mls[v].pipeline = unlit_offscreen_;
+            mls[v].pipeline = forward_pso;
             mls[v].globals_offset = s.globals_offset[v];
             mls[v].resident_textures = pkt.resident_textures;
             mls[v].resident_buffers =
@@ -2026,7 +2033,12 @@ public:
         const int n_live = std::max(1, active_viewport_count_);
         const uint32_t vp_w = fb_w / static_cast<uint32_t>(n_live);
         const uint32_t vp_h = fb_h;
-        EnsureIdTargets(vp_w, vp_h);
+        // #222 Phase A.1: id targets only allocated when this frame writes
+        // them (outline overlay or pending pick). The lazy alloc inside
+        // EnsureIdTargets is cheap to skip when no one consumes it.
+        if (!highlights_.empty() || pick_pending_) {
+            EnsureIdTargets(vp_w, vp_h);
+        }
         EnsureHighlightsTex();
 
         // #221 Skinning P5: pre-skin compute pass. Added BEFORE particle_sim
@@ -2235,22 +2247,26 @@ public:
                     dd.format = rhi::Format::kD32F;
                     dd.usage = rhi::kTexUsageDepthTarget | rhi::kTexUsageSampled;
                     depth_off[vp_idx] = b.CreateDepthTarget(dd);
-                    // #207 R32U id buffer (MRT). Persistent (engine-owned via
-                    // id_target_[vp]) so end-of-frame pick can copyImageToBuffer
-                    // a 1x1 region after the render thread drains. Importing
-                    // skips the transient pool aliasing race that would
-                    // otherwise reuse the texture before readback.
-                    rhi::GraphTextureDesc id_desc{};
-                    id_desc.width = vp_w;
-                    id_desc.height = vp_h;
-                    id_desc.format = rhi::Format::kR32Uint;
-                    id_desc.usage = rhi::kTexUsageColorTarget |
-                                     rhi::kTexUsageSampled |
-                                     rhi::kTexUsageTransferSrc;
-                    id_off[vp_idx] = b.ImportTexture(id_target_[vp_idx], id_desc);
                     b.AddColorOutput("color", color_off[vp_idx], rhi::LoadOp::kClear, clear);
-                    const float id_clear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-                    b.AddColorOutput("id", id_off[vp_idx], rhi::LoadOp::kClear, id_clear);
+                    if (id_path) {
+                        // #207 R32U id buffer (MRT). Persistent (engine-owned via
+                        // id_target_[vp]) so end-of-frame pick can copyImageToBuffer
+                        // a 1x1 region after the render thread drains. Importing
+                        // skips the transient pool aliasing race that would
+                        // otherwise reuse the texture before readback.
+                        // #222 Phase A.1: only attached when outline or pick
+                        // wants it -- frees the per-frag R32U store otherwise.
+                        rhi::GraphTextureDesc id_desc{};
+                        id_desc.width = vp_w;
+                        id_desc.height = vp_h;
+                        id_desc.format = rhi::Format::kR32Uint;
+                        id_desc.usage = rhi::kTexUsageColorTarget |
+                                         rhi::kTexUsageSampled |
+                                         rhi::kTexUsageTransferSrc;
+                        id_off[vp_idx] = b.ImportTexture(id_target_[vp_idx], id_desc);
+                        const float id_clear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                        b.AddColorOutput("id", id_off[vp_idx], rhi::LoadOp::kClear, id_clear);
+                    }
                     b.AddDepthOutput("fwd_depth", depth_off[vp_idx], rhi::LoadOp::kClear, 1.0f);
                 },
                 [&, vp_idx](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
@@ -2529,6 +2545,22 @@ public:
             unlit_offscreen_ = rhi_.pipelines.CreateGraphicsPipeline(
                 rhi_.resources, rhi_.frames, ofd);
             if (unlit_offscreen_.IsNull()) {
+                std::exit(0);
+            }
+
+            // #222 Phase A.1: id-less variant. Single color attachment, no
+            // R32U write in the fragment shader. Selected by RecordFrame
+            // when no consumer wants the id channel this frame.
+            rhi::GraphicsPipelineDesc nid = desc;
+            nid.logical_shader = "unlit_offscreen_noid";
+            nid.sample_count = 1;
+            nid.swap_chain = nullptr;
+            nid.color_formats[0] = rhi::Format::kBgra8Unorm;
+            nid.color_count = 1;
+            nid.debug_name = "unlit_offscreen_noid";
+            unlit_offscreen_noid_ = rhi_.pipelines.CreateGraphicsPipeline(
+                rhi_.resources, rhi_.frames, nid);
+            if (unlit_offscreen_noid_.IsNull()) {
                 std::exit(0);
             }
 
@@ -3375,6 +3407,9 @@ private:
     // shaders
     ShaderHandle unlit_ = ShaderHandle::Null;
     ShaderHandle unlit_offscreen_ = ShaderHandle::Null;
+    // #222 Phase A.1: id-less variant; selected when no consumer wants the
+    // R32U id attachment this frame.
+    ShaderHandle unlit_offscreen_noid_ = ShaderHandle::Null;
     ShaderHandle composite_pip_ = ShaderHandle::Null;
     ShaderHandle depthviz_ = ShaderHandle::Null;
     ShaderHandle outline_pip_ = ShaderHandle::Null;

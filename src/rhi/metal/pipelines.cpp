@@ -127,6 +127,12 @@ MetalShaderInfo resolve_metal_shader(const char* logical) {
         std::strcmp(logical, "unlit_offscreen") == 0) {
         return {"unlit.metal", "cube::vertexShader", "cube::fragmentShader", nullptr};
     }
+    // #222 Phase A.1: id-less offscreen variant. Same metal file, different
+    // fragment entry point (cube::fragmentShader_noid).
+    if (std::strcmp(logical, "unlit_offscreen_noid") == 0) {
+        return {"unlit.metal", "cube::vertexShader",
+                "cube::fragmentShader_noid", nullptr};
+    }
     if (std::strcmp(logical, "imgui") == 0) {
         return {"imgui.metal", "imguicairns::imgui_vertex",
                 "imguicairns::imgui_fragment", nullptr};

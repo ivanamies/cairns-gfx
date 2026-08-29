@@ -234,8 +234,13 @@ kernel void anim_eval(uint3 gid [[thread_position_in_grid]],
         return;
     }
     // #222 Phase 0.4: hoist 4x4 cofactor-inverse of mesh_world to thread 0
-    // + threadgroup memory. Was 64 redundant inverses per workgroup.
-    threadgroup float4x4 s_mesh_world_inv;
+    // + threadgroup memory. Was 64 redundant inverses per workgroup. MSL
+    // function-scope threadgroup vars can't default-construct float4x4 -
+    // store 4 columns separately and rebuild on read.
+    threadgroup float4 s_mw_inv_c0;
+    threadgroup float4 s_mw_inv_c1;
+    threadgroup float4 s_mw_inv_c2;
+    threadgroup float4 s_mw_inv_c3;
     if (tid == 0u) {
         float4x4 mw =
             world_scratch[rec.world_scratch_base + uint(sh.mesh_node)];
@@ -257,28 +262,30 @@ kernel void anim_eval(uint3 gid [[thread_position_in_grid]],
         float b11 = a22*a33 - a23*a32;
         float det = b00*b11 - b01*b10 + b02*b09 + b03*b08 - b04*b07 + b05*b06;
         float inv_det = (det != 0.0) ? 1.0 / det : 0.0;
-        s_mesh_world_inv[0] =
+        s_mw_inv_c0 =
             float4( a11*b11 - a12*b10 + a13*b09,
                     -a10*b11 + a12*b08 - a13*b07,
                      a10*b10 - a11*b08 + a13*b06,
                     -a10*b09 + a11*b07 - a12*b06) * inv_det;
-        s_mesh_world_inv[1] =
+        s_mw_inv_c1 =
             float4(-a01*b11 + a02*b10 - a03*b09,
                      a00*b11 - a02*b08 + a03*b07,
                     -a00*b10 + a01*b08 - a03*b06,
                      a00*b09 - a01*b07 + a02*b06) * inv_det;
-        s_mesh_world_inv[2] =
+        s_mw_inv_c2 =
             float4( a31*b05 - a32*b04 + a33*b03,
                     -a30*b05 + a32*b02 - a33*b01,
                      a30*b04 - a31*b02 + a33*b00,
                     -a30*b03 + a31*b01 - a32*b00) * inv_det;
-        s_mesh_world_inv[3] =
+        s_mw_inv_c3 =
             float4(-a21*b05 + a22*b04 - a23*b03,
                      a20*b05 - a22*b02 + a23*b01,
                     -a20*b04 + a21*b02 - a23*b00,
                      a20*b03 - a21*b01 + a22*b00) * inv_det;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
+    const float4x4 mesh_world_inv = float4x4(s_mw_inv_c0, s_mw_inv_c1,
+                                              s_mw_inv_c2, s_mw_inv_c3);
 
     for (uint j = tid; j < sh.joint_count; j += 64u) {
         int jn = joint_nodes[sh.joint_nodes_off + j];
@@ -288,6 +295,6 @@ kernel void anim_eval(uint3 gid [[thread_position_in_grid]],
         }
         float4x4 jw = world_scratch[rec.world_scratch_base + uint(jn)];
         float4x4 ib = inverse_binds[sh.inverse_binds_off + j];
-        palette_out[rec.palette_out_base + j] = s_mesh_world_inv * jw * ib;
+        palette_out[rec.palette_out_base + j] = mesh_world_inv * jw * ib;
     }
 }
