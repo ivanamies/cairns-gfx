@@ -114,4 +114,46 @@ impossible for M1 (anim-only) to cause, and the identical M1 code renders them
 byte-identical on metal. The vk refs were never re-baked after the JS conversion
 (`4f87f47`, metal-only). **Metal is the trusted correctness gate** for #229; vk
 is compile-checked + the no-behavior-change argument. vk re-bake is a separate
-follow-up.
+follow-up. (vk re-baked 2026-06-19; see FLAKY_TESTS.md for the residual vk flake.)
+
+---
+
+## M2 — render-thread allocation-free (commit pending)
+
+A 26-agent adversarial audit of the per-frame render path (find → verify)
+confirmed `RenderGraph::Bake` scratch is already per-slot-arena-backed, and
+surfaced **4 confirmed per-frame heap allocations**:
+
+1. **Render-graph pass closures** (`render_graph.cpp:198`, all modes incl.
+   headless): `SetupFn`/`ExecuteFn` were `std::function`; `Reset()` frees them
+   every frame and `AddPass` re-allocates — `forward_vp0` + `swap` always run,
+   so 4-6 mallocs/frame for the over-SBO closures (≥24 B on libc++).
+2-4. **ImGui snapshot** (`engine.hpp:3343-3363`, WINDOWED only): `IM_NEW
+   ImDrawData` + `CloneOutput` + `CmdLists.push_back` each frame via ImGui's
+   global malloc allocator. Not on the headless gate; deferred (M2-followup —
+   persistent per-slot snapshot or `ImGui::SetAllocatorFunctions`).
+
+### Fix (item 1)
+New `cairns::InplaceFunction<Sig, 128>` (`src/util/inplace_function.hpp`): a
+fixed inline-buffer callable, drop-in for `std::function`, **never heap-
+allocates** (ctor `static_assert`s the closure fits; largest measured ~80 B).
+`SetupFn`/`ExecuteFn` now use it. No globals (the dispatch vtable is a
+per-callable `constexpr`).
+
+### Correctness
+metal byte-identical: spec 105/105, stress 8/8, scenarios 96/97 (G6 #9b),
+jsmoke 4/4.
+
+### Receipt (steady allocs / 60 frames, settled window)
+| | allocs | frees |
+|---|---|---|
+| M0/M1 baseline | 3174 | 3178 |
+| **M2** | **2814** | **2814** |
+
+~360/60 = ~6 closure mallocs/frame eliminated; render thread now allocation-
+free. The residual ~47/frame (balanced) is the per-command NDJSON `json::parse`
+(one `render.frame` command each) — **M6's target, not the render path**.
+
+### Perf (no regression)
+frame avg 6797 us (baseline 6666, within ±5% noise; GPU-dominated by
+skinning_compute 3995 us).

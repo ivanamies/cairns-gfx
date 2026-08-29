@@ -4,6 +4,7 @@
 #include "rhi/command_recorder.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/swap_resolve_target.hpp"
+#include "util/inplace_function.hpp"  // #229 M2: no per-frame std::function malloc
 
 #include <array>
 #include <cstdint>
@@ -61,8 +62,12 @@ private:
     const std::vector<Handle<Buffer>>* buffers_ = nullptr;
 };
 
-using SetupFn = std::function<void(class PassBuilder&)>;
-using ExecuteFn = std::function<void(CommandRecorder&, const PassResources&)>;
+// #229 M2: InplaceFunction (fixed inline buffer) instead of std::function so
+// the per-frame pass rebuild never heap-allocates the closures. 128 B fits all
+// current pass closures (largest measured ~80 B); the ctor static_asserts fit.
+using SetupFn = cairns::InplaceFunction<void(class PassBuilder&)>;
+using ExecuteFn =
+    cairns::InplaceFunction<void(CommandRecorder&, const PassResources&)>;
 
 class PassBuilder {
 public:

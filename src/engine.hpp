@@ -3052,6 +3052,14 @@ public:
             }
             CAIRNS_PRINT_ERR("[STEADY] frame=%u entities=%zu prefabs=%zu\n",
                               frame_, ec, prefab_ids_.size());
+#if CAIRNS_ALLOC_TRACE
+            // Allocs over the trailing 60-frame steady window. First print is
+            // the window since boot; read the later windows. Includes the
+            // command-dispatch path (per-frame NDJSON parse) -- isolate
+            // render-thread allocs via the M2 audit, not this total.
+            cairns::alloc_count::PrintDelta("[STEADY-60]", alloc_steady_prev_);
+            alloc_steady_prev_ = cairns::alloc_count::Now();
+#endif
         }
 #if CAIRNS_VULKAN
         if (rhi_.frames.plat.recreate_pending_.load(std::memory_order_acquire)) {
@@ -5830,6 +5838,11 @@ private:
     bool nested_graph_mode_ = false;
     // A.7: stamped at end of BuildMeshOpaqueDraws every frame.
     FrameStats last_frame_stats_{};
+#if CAIRNS_ALLOC_TRACE
+    // #229 prev snapshot for the [STEADY-60] alloc receipt. A member, NOT a
+    // function-local static -- global mutable state is banned. Trace only.
+    cairns::alloc_count::Snapshot alloc_steady_prev_{};
+#endif
     // A.9: G6 opt-in; render imgui into the golden capture.
     bool imgui_in_golden_ = false;
     // Diagnostic: pin every draw to 2 triangles. Draw count + submission
