@@ -124,6 +124,11 @@ public:
     void BeginRenderPass(Resources& res, SwapChain& sc, const RenderPassDesc& desc);
     void DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list);
     void DrawPoints(Resources& res, Allocator& alloc, const PointDraw& draw);
+    // Fullscreen triangle that binds `tex_count` sampled textures (set 0) + one
+    // shared sampler and draws 3 verts. No vertex buffers.
+    void DrawFullscreen(Resources& res, Handle<Shader> pipeline,
+                        const Handle<Texture>* textures, uint32_t tex_count,
+                        Handle<Sampler> sampler);
     void SetViewport(float x, float y, float w, float h);
     void SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h);
     void EndRenderPass();
@@ -139,6 +144,8 @@ public:
     VkDescriptorSet drawtmp_set_ = VK_NULL_HANDLE;
     VkDescriptorSet compute_set_ = VK_NULL_HANDLE;
     VkDescriptorSet point_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet composite_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet imgui_set_ = VK_NULL_HANDLE;
     OffscreenTargetCache* offscreen_ = nullptr;  // owned by Frames
 #elif CAIRNS_METAL
     MTL::CommandBuffer* cmd_ = nullptr;

@@ -124,6 +124,18 @@ MetalShaderInfo resolve_metal_shader(const char* logical) {
     if (std::strcmp(logical, "unlit") == 0) {
         return {"unlit.metal", "cube::vertexShader", "cube::fragmentShader", nullptr};
     }
+    if (std::strcmp(logical, "depth_only") == 0) {
+        return {"depth_only.metal", "depthonly::depth_only_vertex",
+                "depthonly::depth_only_fragment", nullptr};
+    }
+    if (std::strcmp(logical, "composite") == 0) {
+        return {"composite.metal", "composite::composite_vertex",
+                "composite::composite_fragment", nullptr};
+    }
+    if (std::strcmp(logical, "imgui") == 0) {
+        return {"imgui.metal", "imguicairns::imgui_vertex", "imguicairns::imgui_fragment",
+                nullptr};
+    }
     // "particle"
     return {"particle.metal", "particle_vertex", "particle_fragment", "particle_compute"};
 }

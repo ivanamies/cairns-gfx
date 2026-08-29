@@ -163,6 +163,17 @@ void CommandRecorder::DrawPoints(Resources& res, Allocator& alloc, const PointDr
                                NS::UInteger(pd.vertex_count));
 }
 
+void CommandRecorder::DrawFullscreen(Resources& res, Handle<Shader> pipeline,
+                                     const Handle<Texture>* textures, uint32_t tex_count,
+                                     Handle<Sampler> sampler) {
+    enc_->setRenderPipelineState(res.GetHot(pipeline)->api_pso);
+    for (uint32_t i = 0; i < tex_count; ++i) {
+        enc_->setFragmentTexture(res.GetHot(textures[i])->api_view, i);
+    }
+    enc_->setFragmentSamplerState(res.GetHot(sampler)->api_sampler, 0);
+    enc_->drawPrimitives(MTL::PrimitiveTypeTriangle, NS::UInteger(0), NS::UInteger(3));
+}
+
 void CommandRecorder::SetViewport(float x, float y, float w, float h) {
     MTL::Viewport vp{};
     vp.originX = x;

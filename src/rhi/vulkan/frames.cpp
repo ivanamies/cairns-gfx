@@ -257,19 +257,53 @@ bool Frames::Init(Device& device) {
             !make_dyn_ubo_layout(&drawtmp_set_layout_)) {
             return false;
         }
+        {  // composite: 2 combined image samplers (color + depth), fragment.
+            VkDescriptorSetLayoutBinding b[2]{};
+            for (uint32_t i = 0; i < 2; ++i) {
+                b[i].binding = i;
+                b[i].descriptorCount = 1;
+                b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            }
+            VkDescriptorSetLayoutCreateInfo li{};
+            li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            li.bindingCount = 2;
+            li.pBindings = b;
+            if (vkCreateDescriptorSetLayout(dev, &li, nullptr,
+                                            &composite_set_layout_) != VK_SUCCESS) {
+                return false;
+            }
+        }
+        {  // imgui: 1 combined image sampler (font atlas), fragment.
+            VkDescriptorSetLayoutBinding b{};
+            b.binding = 0;
+            b.descriptorCount = 1;
+            b.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            b.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            VkDescriptorSetLayoutCreateInfo li{};
+            li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            li.bindingCount = 1;
+            li.pBindings = &b;
+            if (vkCreateDescriptorSetLayout(dev, &li, nullptr,
+                                            &imgui_set_layout_) != VK_SUCCESS) {
+                return false;
+            }
+        }
 
-        VkDescriptorPoolSize sizes[3]{};
+        VkDescriptorPoolSize sizes[4]{};
         sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = n;
         sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         sizes[1].descriptorCount = 2 * n;
         sizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         sizes[2].descriptorCount = 2 * n;
+        sizes[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        sizes[3].descriptorCount = 3 * n;  // composite (2) + imgui (1) per frame
         VkDescriptorPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pci.poolSizeCount = 3;
+        pci.poolSizeCount = 4;
         pci.pPoolSizes = sizes;
-        pci.maxSets = 4 * n;
+        pci.maxSets = 6 * n;
         if (vkCreateDescriptorPool(dev, &pci, nullptr, &descriptor_pool_) !=
             VK_SUCCESS) {
             return false;
@@ -289,7 +323,9 @@ bool Frames::Init(Device& device) {
         if (!alloc_sets(point_layout_, point_sets_) ||
             !alloc_sets(compute_layout_, compute_sets_) ||
             !alloc_sets(globals_set_layout_, globals_sets_) ||
-            !alloc_sets(drawtmp_set_layout_, drawtmp_sets_)) {
+            !alloc_sets(drawtmp_set_layout_, drawtmp_sets_) ||
+            !alloc_sets(composite_set_layout_, composite_sets_) ||
+            !alloc_sets(imgui_set_layout_, imgui_sets_)) {
             return false;
         }
     }
@@ -328,6 +364,12 @@ void Frames::Deinit() {
     }
     if (point_layout_) {
         vkDestroyDescriptorSetLayout(dev, point_layout_, nullptr);
+    }
+    if (composite_set_layout_) {
+        vkDestroyDescriptorSetLayout(dev, composite_set_layout_, nullptr);
+    }
+    if (imgui_set_layout_) {
+        vkDestroyDescriptorSetLayout(dev, imgui_set_layout_, nullptr);
     }
     offscreen_cache_.Deinit();
     inited_ = false;
@@ -377,6 +419,8 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
     fc.cmd.drawtmp_set_ = drawtmp_sets_[cf];
     fc.cmd.compute_set_ = compute_sets_[cf];
     fc.cmd.point_set_ = point_sets_[cf];
+    fc.cmd.composite_set_ = composite_sets_[cf];
+    fc.cmd.imgui_set_ = imgui_sets_[cf];
     offscreen_cache_.device = dev;
     fc.cmd.offscreen_ = &offscreen_cache_;
     return fc;

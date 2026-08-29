@@ -401,6 +401,7 @@ public:
             }
         }
         last_ticks_ = now_ticks;
+        (void)delta_time;
 
         cairns::Timer t_build("build_draws", 1);
         if ( !BuildMeshOpaqueDraws()) {
@@ -418,24 +419,6 @@ public:
         }
 
         cairns::Timer t_record("record", 2);
-        uint32_t dt_off = 0;
-        float* dt_ptr = static_cast<float*>(
-            rhi_.alloc.BumpAllocate(sizeof(float), rhi_.alloc.UboAlign(),
-                                    rhi::Memory::kDynamic, &dt_off));
-        assert(dt_ptr && "bump alloc failed: delta time");
-        *dt_ptr = delta_time;
-
-        rhi::BoundBuffer cbufs[3] = {
-            {0, rhi_.alloc.BumpMasterBuffer(rhi::Memory::kDynamic), dt_off},
-            {1, particle_ssbo_[particle_parity_], 0},
-            {2, particle_ssbo_[1 - particle_parity_], 0},
-        };
-        rhi::ComputeDispatch cd{};
-        cd.kernel = particle_kernel_;
-        cd.buffers = std::span<const rhi::BoundBuffer>(cbufs, 3);
-        cd.groups_x = kParticleCount / 256;
-        cd.local_x = 256;
-        fc.cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
 
         rhi::MeshDrawList ml{};
         ml.draws = std::span<const cairns::Draw>(drawList_.data(), drawList_.size());
@@ -448,40 +431,70 @@ public:
         ml.resident_buffers =
             std::span<const rhi::Handle<rhi::Buffer>>(&mesh_master_handle_, 1);
 
-        rhi::PointDraw pd{};
-        pd.pipeline = particle_render_shader_;
-        pd.vertex_buffer = particle_ssbo_[1 - particle_parity_];
-        pd.vertex_offset = 0;
-        pd.vertex_count = kParticleCount;
-
         const float clear[4] = {41.0f / 255.0f, 42.0f / 255.0f, 48.0f / 255.0f, 1.0f};
+        const uint32_t fb_w = swapchain_.Width();
+        const uint32_t fb_h = swapchain_.Height();
 
         graph_.Reset();
-        rhi::GraphBuffer sim_out;
+        rhi::GraphTexture depth_tex;
+        rhi::GraphTexture color_tex;
+        rhi::GraphTexture fwd_depth;
         rhi::GraphTexture swap_tex;
         graph_.AddPass(
-            "particle_sim", rhi::PassType::kCompute,
+            "depth_prepass", rhi::PassType::kGraphics,
             [&](rhi::PassBuilder& b) {
-                rhi::GraphBufferDesc bd{};
-                bd.usage = rhi::kUsageStorage;
-                sim_out = b.ImportBuffer(particle_ssbo_[particle_parity_], bd);
-                b.WriteBuffer(sim_out);
+                rhi::GraphTextureDesc dd{};
+                dd.width = fb_w;
+                dd.height = fb_h;
+                dd.format = rhi::Format::kD32F;
+                dd.usage = rhi::kTexUsageDepthTarget | rhi::kTexUsageSampled;
+                depth_tex = b.CreateDepthTarget(dd);
+                b.AddDepthOutput("depth", depth_tex, rhi::LoadOp::kClear, 1.0f);
             },
             [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
-                cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
+                rhi::MeshDrawList dl = ml;
+                dl.pipeline = depth_only_;
+                cmd.DrawMeshes(rhi_.resources, rhi_.alloc, dl);
             });
         graph_.AddPass(
             "forward", rhi::PassType::kGraphics,
             [&](rhi::PassBuilder& b) {
-                rhi::GraphTextureDesc td{};
-                td.width = swapchain_.Width();
-                td.height = swapchain_.Height();
-                swap_tex = b.ImportTexture(rhi::Handle<rhi::Texture>::Null, td);
-                b.AddColorOutput("swapchain", swap_tex, rhi::LoadOp::kClear, clear);
+                rhi::GraphTextureDesc cd{};
+                cd.width = fb_w;
+                cd.height = fb_h;
+                cd.format = rhi::Format::kBgra8Unorm;
+                cd.usage = rhi::kTexUsageColorTarget | rhi::kTexUsageSampled;
+                color_tex = b.CreateColorTarget(cd);
+                rhi::GraphTextureDesc dd{};
+                dd.width = fb_w;
+                dd.height = fb_h;
+                dd.format = rhi::Format::kD32F;
+                dd.usage = rhi::kTexUsageDepthTarget;
+                fwd_depth = b.CreateDepthTarget(dd);
+                b.AddColorOutput("color", color_tex, rhi::LoadOp::kClear, clear);
+                b.AddDepthOutput("fwd_depth", fwd_depth, rhi::LoadOp::kClear, 1.0f);
             },
             [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
-                cmd.DrawMeshes(rhi_.resources, rhi_.alloc, ml);
-                cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
+                rhi::MeshDrawList dl = ml;
+                dl.pipeline = unlit_offscreen_;
+                cmd.DrawMeshes(rhi_.resources, rhi_.alloc, dl);
+            });
+        graph_.AddPass(
+            "composite", rhi::PassType::kGraphics,
+            [&](rhi::PassBuilder& b) {
+                rhi::GraphTextureDesc td{};
+                td.width = fb_w;
+                td.height = fb_h;
+                swap_tex = b.ImportTexture(rhi::Handle<rhi::Texture>::Null, td);
+                b.AddColorOutput("swapchain", swap_tex, rhi::LoadOp::kClear, clear);
+                b.AddAttachmentInput(color_tex);
+                b.AddAttachmentInput(depth_tex);
+            },
+            [&](rhi::CommandRecorder& cmd, const rhi::PassResources& res) {
+                const rhi::Handle<rhi::Texture> texs[2] = {res.Resolve(color_tex),
+                                                           res.Resolve(depth_tex)};
+                cmd.DrawFullscreen(rhi_.resources, composite_, texs, 2,
+                                   composite_sampler_);
             });
         graph_.SetOutput(swap_tex);
         if (!graph_.Bake() || !graph_.Execute(fc, swapchain_)) {
@@ -550,6 +563,59 @@ public:
             if (unlit_.IsNull()) {
                 std::exit(0);
             }
+
+            // depth-only prepass: offscreen, single-sample, no color attachment.
+            rhi::GraphicsPipelineDesc dpd = desc;
+            dpd.logical_shader = "depth_only";
+            dpd.color_format = rhi::Format::kUndefined;
+            dpd.depth_format = rhi::Format::kD32F;
+            dpd.depth_test = true;
+            dpd.depth_write = true;
+            dpd.depth_compare = rhi::CompareOp::kLess;
+            dpd.sample_count = 1;
+            dpd.debug_name = "depth_only";
+            dpd.swap_chain = nullptr;
+            depth_only_ =
+                rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources, rhi_.frames, dpd);
+
+            // forward color: offscreen, single-sample (composited later).
+            rhi::GraphicsPipelineDesc ofd = desc;
+            ofd.logical_shader = "unlit";
+            ofd.color_format = rhi::Format::kBgra8Unorm;
+            ofd.depth_format = rhi::Format::kD32F;
+            ofd.sample_count = 1;
+            ofd.debug_name = "unlit_offscreen";
+            ofd.swap_chain = nullptr;
+            unlit_offscreen_ =
+                rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources, rhi_.frames, ofd);
+
+            // composite: fullscreen tri to the swapchain (MSAA), samples color+depth.
+            rhi::GraphicsPipelineDesc cpd{};
+            cpd.logical_shader = "composite";
+            cpd.shader_dir = shader_dir.c_str();
+            cpd.topology = rhi::PrimitiveTopology::kTriangleList;
+            cpd.cull = rhi::CullMode::kNone;
+            cpd.depth_test = false;
+            cpd.depth_write = false;
+            cpd.color_format = rhi::Format::kBgra8Unorm;
+            cpd.depth_format = rhi::Format::kD32F;
+            cpd.sample_count = sampleCount;
+            cpd.debug_name = "composite";
+            cpd.swap_chain = &swapchain_;
+            composite_ =
+                rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources, rhi_.frames, cpd);
+
+            if (depth_only_.IsNull() || unlit_offscreen_.IsNull() ||
+                composite_.IsNull()) {
+                std::exit(0);
+            }
+
+            rhi::SamplerDesc sd{};
+            sd.min_filter = rhi::Filter::kLinear;
+            sd.mag_filter = rhi::Filter::kLinear;
+            sd.mip_filter = rhi::Filter::kLinear;
+            sd.address_mode = rhi::AddressMode::kClampToEdge;
+            composite_sampler_ = rhi_.resources.CreateSampler(sd);
         }
 
         return true;
@@ -689,6 +755,10 @@ private:
     cairns::rhi::SwapChain swapchain_;
     // shaders
     ShaderHandle unlit_ = ShaderHandle::Null;
+    ShaderHandle depth_only_ = ShaderHandle::Null;
+    ShaderHandle unlit_offscreen_ = ShaderHandle::Null;
+    ShaderHandle composite_ = ShaderHandle::Null;
+    rhi::Handle<rhi::Sampler> composite_sampler_ = rhi::Handle<rhi::Sampler>::Null;
     // particles
     static constexpr uint32_t kParticleCount = 512;
     rhi::Handle<rhi::Kernel> particle_kernel_;

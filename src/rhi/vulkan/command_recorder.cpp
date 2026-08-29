@@ -428,6 +428,33 @@ void CommandRecorder::DrawPoints(Resources& res, Allocator& alloc, const PointDr
     vkCmdDraw(cb, pd.vertex_count, 1, 0, 0);
 }
 
+void CommandRecorder::DrawFullscreen(Resources& res, Handle<Shader> pipeline,
+                                     const Handle<Texture>* textures, uint32_t tex_count,
+                                     Handle<Sampler> sampler) {
+    Shader::Hot* sh = res.GetHot(pipeline);
+    VkSampler samp = reinterpret_cast<VkSampler>(res.GetHot(sampler)->api_sampler);
+    std::vector<VkDescriptorImageInfo> infos(tex_count);
+    std::vector<VkWriteDescriptorSet> writes(tex_count);
+    for (uint32_t i = 0; i < tex_count; ++i) {
+        infos[i].sampler = samp;
+        infos[i].imageView =
+            reinterpret_cast<VkImageView>(res.GetHot(textures[i])->api_view);
+        infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = composite_set_;
+        writes[i].dstBinding = i;
+        writes[i].dstArrayElement = 0;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].pImageInfo = &infos[i];
+    }
+    vkUpdateDescriptorSets(device_, tex_count, writes.data(), 0, nullptr);
+    vkCmdBindPipeline(gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->vk_pipeline);
+    vkCmdBindDescriptorSets(gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->vk_layout, 0, 1,
+                            &composite_set_, 0, nullptr);
+    vkCmdDraw(gfx_, 3, 1, 0, 0);
+}
+
 void CommandRecorder::SetViewport(float x, float y, float w, float h) {
     // Negative height to keep the Metal-convention Y-flip (see BeginRenderPass).
     VkViewport vp{};

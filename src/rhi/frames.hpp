@@ -73,10 +73,14 @@ public:
     VkDescriptorSetLayout drawtmp_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout compute_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout point_layout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout composite_set_layout_ = VK_NULL_HANDLE;  // 2 sampled tex
+    VkDescriptorSetLayout imgui_set_layout_ = VK_NULL_HANDLE;      // 1 font sampler
     std::vector<VkDescriptorSet> globals_sets_;
     std::vector<VkDescriptorSet> drawtmp_sets_;
     std::vector<VkDescriptorSet> compute_sets_;
     std::vector<VkDescriptorSet> point_sets_;
+    std::vector<VkDescriptorSet> composite_sets_;
+    std::vector<VkDescriptorSet> imgui_sets_;
     OffscreenTargetCache offscreen_cache_;
 #elif CAIRNS_METAL
     MTL::Device* device_ = nullptr;             // mirrored from Device
