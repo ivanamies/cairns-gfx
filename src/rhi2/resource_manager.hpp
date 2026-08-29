@@ -28,6 +28,15 @@
 #include <vulkan/vulkan.h>
 #endif  // CAIRNS_VULKAN
 
+#if CAIRNS_METAL
+namespace MTL {
+class Device;
+class CommandQueue;
+class Buffer;
+class Heap;
+}  // namespace MTL
+#endif  // CAIRNS_METAL
+
 namespace cairns::rhi2 {
 
 class ResourceManager;
@@ -366,6 +375,11 @@ struct BackendInitParams {
     VkCommandPool command_pool = VK_NULL_HANDLE;
     bool enable_bda = false;
 };
+#elif CAIRNS_METAL
+struct BackendInitParams {
+    MTL::Device* device = nullptr;
+    MTL::CommandQueue* queue = nullptr;
+};
 #else
 struct BackendInitParams;
 #endif  // CAIRNS_VULKAN
@@ -418,6 +432,12 @@ public:
     VkBuffer GetVkBuffer(Handle<Buffer> h, uint32_t* out_offset);
     uint8_t* MappedPtr(Handle<Buffer> h);
 #endif  // CAIRNS_VULKAN
+
+#if CAIRNS_METAL
+    MTL::Buffer* GetMtlBuffer(Handle<Buffer> h, uint32_t* out_offset);
+    uint8_t* MappedPtr(Handle<Buffer> h);
+    MTL::Heap* GetMtlHeap(Handle<Buffer> h);
+#endif  // CAIRNS_METAL
 
 private:
     struct Impl;

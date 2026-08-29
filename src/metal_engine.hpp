@@ -29,6 +29,7 @@
 #include "util/draw_key.hpp"
 #include "util/timer.hpp"
 #include "util/unique_ptr.hpp"
+#include "rhi2/resource_manager.hpp"
 
 namespace {
 
@@ -106,27 +107,44 @@ bool LoadTextureGpu([[maybe_unused]] Device& device, GpuAllocatorHeap& alloc_tra
     return true;
 }
 
-bool LoadMeshGpu(Device& device, GpuAllocator& alloc, ResourceManager<Buffer>& mgr, Mesh& mesh) {
-    auto process = [&](Handle<Buffer> h, const void* srcData, size_t srcSize) -> bool {
+bool LoadMeshGpu(ResourceManager<Buffer>& mgr, Mesh& mesh,
+                 rhi2::ResourceManager& rm) {
+    auto process = [&](Handle<Buffer> h, const void* srcData,
+                       size_t srcSize) -> bool {
+        if (srcSize == 0) {
+            return true;
+        }
+        rhi2::BufferDesc d;
+        d.byte_size = static_cast<uint32_t>(srcSize);
+        d.usage = rhi2::kUsageVertex | rhi2::kUsageIndex;
+        d.memory = rhi2::Memory::kDefault;
+        d.initial_data = rhi2::Span<const uint8_t>(
+            static_cast<const uint8_t*>(srcData), srcSize);
+        rhi2::Handle<rhi2::Buffer> rhi2_h = rm.CreateBuffer(d);
+        if (rhi2_h.IsNull()) {
+            return false;
+        }
+        uint32_t off = 0;
+        MTL::Buffer* master = rm.GetMtlBuffer(rhi2_h, &off);
         ResourceObject<Buffer>& hot = *mgr.GetObj(h);
-        ResourceDescriptor<Buffer>& cold = *mgr.GetDesc(h);
-        if (srcSize == 0) return true; // Valid empty buffer
-
-        const int64_t align = device.GetGpuAlignUboOffset();
-        hot.mem = alloc.Alloc(cold.GetBytes(), align);
-        hot.buffer = alloc.GetBuffer();
-
-        if (hot.mem == OffsetAllocator::BadAllocation) return false;
-
-        uint8_t* dst = alloc.GetCpuAddress(hot.mem.offset);
-        std::memcpy(dst, srcData, srcSize);
+        hot.buffer = master;
+        hot.mem = {};
+        hot.mem.offset = off;
         return true;
     };
 
-    if (!process(mesh.posHandle, mesh.cpuPositions.data(), mesh.cpuPositions.size() * sizeof(glm::vec4))) return false;
-    if (!process(mesh.attrHandle, mesh.cpuAttrs.data(), mesh.cpuAttrs.size() * sizeof(VertexAttribute))) return false;
-    if (!process(mesh.indexHandle, mesh.cpuIndices.data(), mesh.cpuIndices.size() * sizeof(uint32_t))) return false;
-
+    if (!process(mesh.posHandle, mesh.cpuPositions.data(),
+                 mesh.cpuPositions.size() * sizeof(glm::vec4))) {
+        return false;
+    }
+    if (!process(mesh.attrHandle, mesh.cpuAttrs.data(),
+                 mesh.cpuAttrs.size() * sizeof(VertexAttribute))) {
+        return false;
+    }
+    if (!process(mesh.indexHandle, mesh.cpuIndices.data(),
+                 mesh.cpuIndices.size() * sizeof(uint32_t))) {
+        return false;
+    }
     return true;
 }
 
@@ -171,9 +189,11 @@ bool LoadSamplerGpu(Device& device, ResourceManager<Sampler>& sampler_mgr, Handl
 }
 
 bool LoadSceneGpu(Device& device,
-                 GpuAllocator& alloc_unified, GpuAllocatorHeap& alloc_transient_heap,
+                 [[maybe_unused]] GpuAllocator& alloc_unified, GpuAllocatorHeap& alloc_transient_heap,
                  Scene& scene,
-                 ResourceManager<Buffer>& bufMgr, ResourceManager<Texture>& texMgr, ResourceManager<Sampler>& sampler_mgr)
+                 ResourceManager<Buffer>& bufMgr, ResourceManager<Texture>& texMgr,
+                 ResourceManager<Sampler>& sampler_mgr,
+                 rhi2::ResourceManager& rm)
 {
     // 1. Load Samplers
     for ( const auto& h : scene.samplerHandles ) {
@@ -181,10 +201,10 @@ bool LoadSceneGpu(Device& device,
             return false;
         }
     }
-    
+
     for ( size_t i = 0; i < scene.meshes.size(); ++i ) {
         auto& mesh = scene.meshes[i];
-        if ( !LoadMeshGpu(device, alloc_unified, bufMgr, mesh) ) {
+        if ( !LoadMeshGpu(bufMgr, mesh, rm) ) {
             return false;
         }
     }
@@ -420,6 +440,14 @@ public:
         if ( !initCommandQueue() ) {
             return false;
         }
+        {
+            rhi2::BackendInitParams rhi2_p;
+            rhi2_p.device = device.get();
+            rhi2_p.queue = metalCommandQueue;
+            if (!rm_.Init(rhi2_p)) {
+                return false;
+            }
+        }
         if ( !initSwapChain(window)) {
             return false;
         }
@@ -449,7 +477,7 @@ public:
                 }
                 cairns::PrepareSceneResources(device, scene, *bufferManager_, *texManager_, *samplerManager_, *materialManager_);
                 
-                if (!cairns::rhi::LoadSceneGpu(device, *allocTransientLinear2_, *allocTransientHeap_, scene, *bufferManager_, *texManager_, *samplerManager_)) {
+                if (!cairns::rhi::LoadSceneGpu(device, *allocTransientLinear2_, *allocTransientHeap_, scene, *bufferManager_, *texManager_, *samplerManager_, rm_)) {
                     return false;
                 }
                 
@@ -468,6 +496,10 @@ public:
             blit->endEncoding();
             cmd->commit();
             cmd->waitUntilCompleted();
+        }
+        if (!scenes_.empty() && !scenes_[0].meshes.empty()) {
+            mesh_master_buf_ =
+                bufferManager_->GetObj(scenes_[0].meshes[0].posHandle)->buffer;
         }
         if ( !initDepthAndMSAATextures() ) {
             return false;
@@ -797,13 +829,13 @@ public:
             // use resource call for all textures in argument table
             encoder->useHeap(allocTransientHeap_->GetHeap());
             // use resource call for all vertex attributes in argument table
-            encoder->useResource(allocTransientLinear2_->GetBuffer(), MTL::ResourceUsageRead, MTL::RenderStageVertex);
+            encoder->useResource(mesh_master_buf_, MTL::ResourceUsageRead, MTL::RenderStageVertex);
             
             // set up position vertex buffer in vertex shader
             // all vertex buffer positions live in allocTransientLinear2_
             // todo @iamies don't hard code this.
             // ... also, did this just consume one of your buffer binding slots?
-            encoder->setVertexBuffer(allocTransientLinear2_->GetBuffer(), 0, 0 /* hard coded? */);
+            encoder->setVertexBuffer(mesh_master_buf_, 0, 0);
             // set up render pass globals bind group in vertex shader
             encoder->setVertexBuffer(allocTransientLinear1_->GetBuffer(), 0, cairns::kRenderPassGlobalBindSlot);
             // set up material buffer bind group in vertex shader
@@ -847,7 +879,6 @@ public:
                     const uint32_t vertex_offset = draw.vertex_offset;
                     const BufHandle index = draw.index_buffer;
                     MTL::Buffer* const index_buffer = bufferManager_->GetObj(index)->buffer;
-                    assert(index_buffer == allocTransientLinear2_->GetBuffer());
                     encoder->drawIndexedPrimitives(MTL::PrimitiveTypeTriangle,
                                                    index_count,
                                                    MTL::IndexTypeUInt32,
@@ -1115,6 +1146,9 @@ private:
     std::vector<std::pair<cairns::DrawKey,uint32_t>,cairns::Allocator<std::pair<cairns::DrawKey,uint32_t>>> drawListSorted_;
     std::vector<cairns::Draw,cairns::Allocator<cairns::Draw>> drawList_;
     
+    rhi2::ResourceManager rm_;
+    MTL::Buffer* mesh_master_buf_ = nullptr;
+
     std::unique_ptr<cairns::rhi::GpuAllocator> allocTransientLinear1_;
     std::unique_ptr<cairns::rhi::GpuAllocator> allocTransientLinear2_;
     std::unique_ptr<cairns::rhi::GpuAllocatorHeap> allocTransientHeap_;
