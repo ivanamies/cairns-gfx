@@ -2,6 +2,7 @@
 
 #include "rhi/resource_impl.hpp"
 #include "rhi/gpu_allocator.hpp"
+#include "rhi2/resource_manager.hpp"
 
 #include <fastgltf/glm_element_traits.hpp>
 #include <fastgltf/core.hpp>
@@ -45,9 +46,9 @@ struct Mesh {
     std::string name;
     
     // GPU Handles
-    rhi::Handle<rhi::Buffer> posHandle = rhi::Handle<rhi::Buffer>::Null;
-    rhi::Handle<rhi::Buffer> attrHandle = rhi::Handle<rhi::Buffer>::Null; // Bindless attributes (UV, Norm, etc)
-    rhi::Handle<rhi::Buffer> indexHandle = rhi::Handle<rhi::Buffer>::Null;
+    rhi2::Handle<rhi2::Buffer> posHandle;
+    rhi2::Handle<rhi2::Buffer> attrHandle; // Bindless attributes (UV, Norm, etc)
+    rhi2::Handle<rhi2::Buffer> indexHandle;
     
     // Sub-sections of this mesh
     std::vector<Primitive> primitives;
@@ -358,52 +359,13 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene) {
     return true;
 }
 
-inline void PrepareSceneResources(rhi::Device& device, Scene& scene, rhi::ResourceManager<rhi::Buffer>& buf_mgr, rhi::ResourceManager<rhi::Texture>& tex_mgr, rhi::ResourceManager<rhi::Sampler>& sampler_mgr, std::vector<LoadedMaterial>& materials) {
+inline void PrepareSceneResources(Scene& scene, rhi::ResourceManager<rhi::Texture>& tex_mgr, rhi::ResourceManager<rhi::Sampler>& sampler_mgr, std::vector<LoadedMaterial>& materials) {
     // Textures
     for (const auto& texDescIn : scene.loaded_textures) {
         rhi::Handle<rhi::Texture> h = tex_mgr.New();
         rhi::ResourceDescriptor<rhi::Texture>* d = tex_mgr.GetDesc(h);
         *d = texDescIn;
         scene.textureHandles.push_back(h);
-    }
-    
-    // Meshes (Consolidated Buffers)
-    for (auto& mesh : scene.meshes) {
-        mesh.posHandle = buf_mgr.New();
-        mesh.attrHandle = buf_mgr.New();
-        mesh.indexHandle = buf_mgr.New();
-        
-        const int64_t align = device.GetGpuAlignUboOffset();
-        
-        auto* d_pos = buf_mgr.GetDesc(mesh.posHandle);
-        d_pos->src_size_bytes = mesh.cpuPositions.size() * sizeof(glm::vec4);
-        d_pos->aligned_size_bytes = d_pos->src_size_bytes;
-        d_pos->num_vertices = mesh.cpuPositions.size();
-        d_pos->usage = rhi::ResourceDescriptor<rhi::Buffer>::Usage::kPosition;
-        make_aligned(d_pos->aligned_size_bytes, align);
-
-        auto* d_attr = buf_mgr.GetDesc(mesh.attrHandle);
-        d_attr->src_size_bytes = mesh.cpuAttrs.size() * sizeof(VertexAttribute);
-        d_attr->aligned_size_bytes = d_attr->src_size_bytes;
-        d_attr->num_vertices = mesh.cpuAttrs.size();
-        d_attr->usage = rhi::ResourceDescriptor<rhi::Buffer>::Usage::kOtherAttr;
-        make_aligned(d_attr->aligned_size_bytes, align);
-        
-        auto* d_idx = buf_mgr.GetDesc(mesh.indexHandle);
-        d_idx->src_size_bytes = mesh.cpuIndices.size() * sizeof(uint32_t);
-        d_idx->aligned_size_bytes = d_idx->src_size_bytes;
-        d_idx->num_indices = mesh.cpuIndices.size();
-        if constexpr ( is_vulkan() ) {
-            assert(false && "vulkan todo");
-        }
-        else if constexpr ( is_metal() ) {
-            d_idx->format = static_cast<int64_t>(MTL::IndexTypeUInt32);
-        }
-        else {
-            assert(false);
-        }
-        d_idx->usage = rhi::ResourceDescriptor<rhi::Buffer>::Usage::kIndex;
-        make_aligned(d_idx->aligned_size_bytes, align);
     }
     
     // Samplers

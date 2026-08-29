@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <string_view>
+#include <unordered_map>
 #include <filesystem>
 #include <thread>
 #include <fstream>
@@ -118,9 +119,8 @@ bool LoadTextureGpu(ResourceManager<Texture>& manager, Handle<Texture> handle,
     return true;
 }
 
-bool LoadMeshGpu(ResourceManager<Buffer>& mgr, Mesh& mesh,
-                 rhi2::ResourceManager& rm) {
-    auto process = [&](Handle<Buffer> h, const void* srcData,
+bool LoadMeshGpu(Mesh& mesh, rhi2::ResourceManager& rm) {
+    auto process = [&](rhi2::Handle<rhi2::Buffer>& h, const void* srcData,
                        size_t srcSize) -> bool {
         if (srcSize == 0) {
             return true;
@@ -131,17 +131,8 @@ bool LoadMeshGpu(ResourceManager<Buffer>& mgr, Mesh& mesh,
         d.memory = rhi2::Memory::kDefault;
         d.initial_data = rhi2::Span<const uint8_t>(
             static_cast<const uint8_t*>(srcData), srcSize);
-        rhi2::Handle<rhi2::Buffer> rhi2_h = rm.CreateBuffer(d);
-        if (rhi2_h.IsNull()) {
-            return false;
-        }
-        uint32_t off = 0;
-        MTL::Buffer* master = rm.GetMtlBuffer(rhi2_h, &off);
-        ResourceObject<Buffer>& hot = *mgr.GetObj(h);
-        hot.buffer = master;
-        hot.mem = {};
-        hot.mem.offset = off;
-        return true;
+        h = rm.CreateBuffer(d);
+        return !h.IsNull();
     };
 
     if (!process(mesh.posHandle, mesh.cpuPositions.data(),
@@ -195,7 +186,7 @@ bool LoadSamplerGpu(ResourceManager<Sampler>& sampler_mgr, Handle<Sampler> h,
 }
 
 bool LoadSceneGpu(Scene& scene,
-                  ResourceManager<Buffer>& bufMgr, ResourceManager<Texture>& texMgr,
+                  ResourceManager<Texture>& texMgr,
                   ResourceManager<Sampler>& sampler_mgr,
                   rhi2::ResourceManager& rm)
 {
@@ -206,7 +197,7 @@ bool LoadSceneGpu(Scene& scene,
     }
     for ( size_t i = 0; i < scene.meshes.size(); ++i ) {
         auto& mesh = scene.meshes[i];
-        if ( !LoadMeshGpu(bufMgr, mesh, rm) ) {
+        if ( !LoadMeshGpu(mesh, rm) ) {
             return false;
         }
     }
@@ -258,7 +249,7 @@ class Engine {
 public:
     
     using TexHandle = cairns::rhi::Handle<cairns::rhi::Texture>;
-    using BufHandle = cairns::rhi::Handle<cairns::rhi::Buffer>;
+    using BufHandle = rhi2::Handle<rhi2::Buffer>;
     using DynBufId = uint32_t;
     using ShaderHandle = rhi2::Handle<rhi2::Shader>;
     using MatId = uint32_t;
@@ -339,7 +330,6 @@ public:
         using namespace cairns::rhi;
         texManager_ = cairns::make_unique<ResourceManager<Texture>>(hot_arena_, hot_arena_, 1024);
         renderPassTexManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Texture>>(hot_arena_, hot_arena_, 2);
-        bufferManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Buffer>>(hot_arena_, hot_arena_, 1024);
         // 4 because we're only pretending to be a real UGC engine at this point
         samplerManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Sampler>>(hot_arena_, hot_arena_, 256);
         return true;
@@ -399,18 +389,19 @@ public:
                 if (!cairns::LoadSceneFromGltf(filepath, scene)) {
                     return false;
                 }
-                cairns::PrepareSceneResources(device, scene, *bufferManager_, *texManager_, *samplerManager_, materials_);
-                
-                if (!cairns::rhi::LoadSceneGpu(scene, *bufferManager_, *texManager_, *samplerManager_, rm_)) {
+                cairns::PrepareSceneResources(scene, *texManager_, *samplerManager_, materials_);
+
+                if (!cairns::rhi::LoadSceneGpu(scene, *texManager_, *samplerManager_, rm_)) {
                     return false;
                 }
-                
+
                 scene.CleanupTmps();
             }
         }
         if (!scenes_.empty() && !scenes_[0].meshes.empty()) {
+            uint32_t off = 0;
             mesh_master_buf_ =
-                bufferManager_->GetObj(scenes_[0].meshes[0].posHandle)->buffer;
+                rm_.GetMtlBuffer(scenes_[0].meshes[0].posHandle, &off);
         }
         if ( !initDepthAndMSAATextures() ) {
             return false;
@@ -581,7 +572,7 @@ public:
                     
                     const uint32_t gpu_tex_id = tex_handle.get_id();
                     const uint32_t gpu_sampler_id = sampler_id_map_[sampler_handle.get_id()];
-                    const uint32_t gpu_attr_idx = mesh_attr_id_map_[mesh.attrHandle.get_id()];
+                    const uint32_t gpu_attr_idx = mesh_attr_id_map_[mesh.attrHandle.index];
                     
                     //                    cairns::Timer timer7("timer7", 7);
                     const BindGroupId bg_material = getBindGroup();
@@ -632,7 +623,9 @@ public:
                     draw.bind_groups[cairns::kShaderSpecificBindSlot-1] = cairns::kInvalidBindGroupId;
                     draw.dynamic_buffers = tmp_handle;
                     draw.index_buffer = index;
-                    draw.index_offset = bufferManager_->GetObj(index)->mem.offset + (prim.firstIndex * sizeof(uint32_t));
+                    uint32_t index_base_off = 0;
+                    rm_.GetMtlBuffer(index, &index_base_off);
+                    draw.index_offset = index_base_off + (prim.firstIndex * sizeof(uint32_t));
                     draw.vertex_offset = prim.vertexOffset;
                     draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot] = pos;
                     draw.instance_offset = 0;
@@ -746,9 +739,9 @@ public:
                 const cairns::Draw& draw = drawList_[drawListSorted_[draw_idx].second];
                 { // set position buffer offset
                     const BufHandle pos = draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot];
-                    auto& pos_obj = *bufferManager_->GetObj(pos);
-                    const cairns::OffsetAllocator::Allocation pos_mem = pos_obj.mem;
-                    encoder->setVertexBufferOffset(pos_mem.offset, 0 /*hard coded for some reason*/);
+                    uint32_t pos_off = 0;
+                    rm_.GetMtlBuffer(pos, &pos_off);
+                    encoder->setVertexBufferOffset(pos_off, 0 /*hard coded for some reason*/);
                 }
                 { // set up material
                     const BindGroupId mat_bg = draw.bind_groups[cairns::kMaterialBindSlot-1];
@@ -769,7 +762,8 @@ public:
                     const uint32_t index_offset = draw.index_offset;
                     const uint32_t vertex_offset = draw.vertex_offset;
                     const BufHandle index = draw.index_buffer;
-                    MTL::Buffer* const index_buffer = bufferManager_->GetObj(index)->buffer;
+                    uint32_t index_master_off = 0;
+                    MTL::Buffer* const index_buffer = rm_.GetMtlBuffer(index, &index_master_off);
                     encoder->drawIndexedPrimitives(MTL::PrimitiveTypeTriangle,
                                                    index_count,
                                                    MTL::IndexTypeUInt32,
@@ -917,7 +911,7 @@ public:
 
             arg_encoder->setArgumentBuffer(arg_buf, arg_off);
 
-            mesh_attr_id_map_.resize(bufferManager_->GetCapacity(), 0);
+            mesh_attr_id_map_.clear();
             sampler_id_map_.resize(samplerManager_->GetCapacity(), 0);
 
             uint32_t num_tex = 0;
@@ -938,11 +932,12 @@ public:
                 }
                 for (size_t j = 0; j < scene.meshes.size(); ++j) {
                     auto h = scene.meshes[j].attrHandle;
-                    auto* bobj = bufferManager_->GetObj(h);
-                    if (bobj && bobj->buffer) {
-                        arg_encoder->setBuffer(bobj->buffer, bobj->mem.offset,
+                    if (!h.IsNull()) {
+                        uint32_t attr_off = 0;
+                        MTL::Buffer* attr_buf = rm_.GetMtlBuffer(h, &attr_off);
+                        arg_encoder->setBuffer(attr_buf, attr_off,
                             cairns::rhi::GpuSceneRegistry::kMeshesSlotOffset + num_attr);
-                        mesh_attr_id_map_[h.get_id()] = num_attr;
+                        mesh_attr_id_map_[h.index] = num_attr;
                         ++num_attr;
                     }
                 }
@@ -1003,7 +998,6 @@ private:
     std::vector<glm::mat4> debugSceneXforms_;
     
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Texture>> texManager_;
-    cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Buffer>> bufferManager_;
     cairns::FrameTransientCache<cairns::DynamicBuffersAssoc> dynBufs_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Sampler>> samplerManager_;
     std::vector<cairns::LoadedMaterial> materials_;
@@ -1017,7 +1011,7 @@ private:
     rhi2::ResourceManager rm_;
     MTL::Buffer* mesh_master_buf_ = nullptr;
     rhi2::Handle<rhi2::BindGroup> bindless_bg_handle_;
-    std::vector<uint32_t> mesh_attr_id_map_;
+    std::unordered_map<uint32_t, uint32_t> mesh_attr_id_map_;
     std::vector<uint32_t> sampler_id_map_;
 
     std::unique_ptr<cairns::rhi::GpuAllocatorHeap> allocTransientHeap_;

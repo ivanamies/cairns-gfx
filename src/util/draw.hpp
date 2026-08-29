@@ -25,11 +25,11 @@ struct Draw {
     std::array<uint32_t,3> bind_groups = {};
     // slot 4: "We use the last slot in Vulkan and WebGPU for dynamic offset bound buffers. This is important for bump allocated temporary data, such as uniform buffers." I would put r/w SSBOs here too.
     uint32_t dynamic_buffers = 0;
-    rhi::Handle<rhi::Buffer> index_buffer = rhi::Handle<rhi::Buffer>::Null;
+    rhi2::Handle<rhi2::Buffer> index_buffer;
     // slot 1: position
     static constexpr uint32_t kVertexBufferPosSlot = 0;
     // slot 2: ??
-    std::array<rhi::Handle<rhi::Buffer>,3> vertex_buffers = {};
+    std::array<rhi2::Handle<rhi2::Buffer>,3> vertex_buffers = {};
     uint32_t index_offset = 0;
     uint32_t vertex_offset = 0;
     uint32_t instance_offset = 0;
