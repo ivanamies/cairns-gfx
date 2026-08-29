@@ -113,7 +113,10 @@ inline void ComputeNodeWorldMatrices(const std::vector<Node>& nodes,
 // substring match against common animation names; falls back to clip 0
 // when no match. Returns -1 only when clips is empty. The user-curated
 // rule: prefer "walk", then "run", then first.
-inline int SelectWalkingClip(const std::vector<Clip>& clips) {
+// #229 P3: allocator-templated so it accepts both std-allocator and
+// block-backed (ChunkStdAllocator) clip vectors.
+template <typename Alloc>
+inline int SelectWalkingClip(const std::vector<Clip, Alloc>& clips) {
     if (clips.empty()) {
         return -1;
     }

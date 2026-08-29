@@ -443,10 +443,16 @@ vectors → block) · P6 (entt → `ChunkStdAllocator`) · P7-MVP (SIM determini
 metal every phase; VK green except the **pre-existing** imgui-overlay font-atlas
 flake (verified: fails without P3 too); 500-actor serve boot loads from the block.
 
+**P3 done** (2026-06-21): Prefab::Hot (3) + Prefab::Cold (19) nested vectors retyped
+to `ChunkStdAllocator`, re-seated in `LoadPrefabFromGltf` via a generic `reseat`
+lambda. Read-site fixes: reload snapshots use cross-allocator `.assign()`;
+`SelectWalkingClip` is allocator-templated. Metal 97/97; 500-actor skinned boot
+clean (anim/skin gpu_* tables block-backed + consumed). **Follow-on:** Node::children
+/name, Skin/Clip inner vectors, and strings (names/glb_paths_) stay on malloc —
+string-interning pass.
+
 **Remaining:**
-- **P3 (rest)** Prefab::Cold/Hot tables + Node/Skin/Clip nested vectors + string
-  interning → block (behavior-neutral `ChunkStdAllocator` route, as Mesh::Cold).
-- **P5** fastgltf temporary PMR (after P3 destinations are block-backed).
+- **P5** fastgltf temporary PMR (P3 destinations now block-backed).
 - **P7 finish:** RENDER (kDynamic) hash, first-divergence dump, `tests/test_state_hash.cpp`,
   the counting-`new` Q2 verifier. Plus the `JsState`/`CommandRegistry` de-singleton
   (P0c deferred) before the run-to-run *test* (the run-to-run *hash* already verified).

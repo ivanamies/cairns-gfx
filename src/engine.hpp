@@ -1217,10 +1217,12 @@ public:
             if (!oldH || !oldC) {
                 return false;
             }
-            old_meshes = oldH->meshes;
-            old_materials = oldH->materials;
-            old_textures = oldC->textureHandles;
-            old_samplers = oldC->samplerHandles;
+            // #229 P3: pool vectors are now block-backed (ChunkStdAllocator);
+            // copy element-wise into the std-allocator snapshot locals.
+            old_meshes.assign(oldH->meshes.begin(), oldH->meshes.end());
+            old_materials.assign(oldH->materials.begin(), oldH->materials.end());
+            old_textures.assign(oldC->textureHandles.begin(), oldC->textureHandles.end());
+            old_samplers.assign(oldC->samplerHandles.begin(), oldC->samplerHandles.end());
         }
         std::array<std::filesystem::path, 1> single_path{path};
         LoadPrefabBatchResult r = RuntimeLoadBatch(single_path);

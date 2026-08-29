@@ -310,37 +310,43 @@ struct Prefab {
     struct Hot {
         // #220 Step 2: was std::vector<Mesh>. Mesh data is engine-owned
         // via cairns::ResourceManager<Mesh>; Scene only holds the handles.
-        std::vector<cairns::Handle<Mesh>> meshes;
-        std::vector<int32_t> rootNodes;
+        // #229 P3: nested pool vectors re-seated onto cpu_block_ in
+        // LoadPrefabFromGltf (block-backed = under the 1 GB cap + hash-reachable).
+        std::vector<cairns::Handle<Mesh>, cairns::ChunkStdAllocator<cairns::Handle<Mesh>>> meshes;
+        std::vector<int32_t, cairns::ChunkStdAllocator<int32_t>> rootNodes;
         // Renamed from materialIds (legacy uint32_t name). Each element
         // is a Handle<Material> into Engine::materials_.
-        std::vector<cairns::Handle<Material>> materials;
+        std::vector<cairns::Handle<Material>, cairns::ChunkStdAllocator<cairns::Handle<Material>>> materials;
 
         // #221 Phase 5b: index into engine's flat scene_headers array.
         // UINT32_MAX = scene not registered with anim_eval (no skin/clip).
         uint32_t gpu_prefab_header_idx = UINT32_MAX;
     };
     struct Cold {
-        std::vector<Node> nodes;
-        std::vector<AnimatedTRS> bind_pose;
+        // #229 P3: outer arrays re-seated onto cpu_block_ in LoadPrefabFromGltf.
+        // nodes/skins/clips element types still carry their own nested heap
+        // members (Node::children/name, Skin/Clip vectors, names) -- those inner
+        // vectors stay on malloc as a documented follow-on (string interning).
+        std::vector<Node, cairns::ChunkStdAllocator<Node>> nodes;
+        std::vector<AnimatedTRS, cairns::ChunkStdAllocator<AnimatedTRS>> bind_pose;
         // #222 Phase H.6 finish: per-scene texture/sampler registry. Only
         // read at material setup (PreparePrefabResources) + resident_textures
         // population (Engine::resident_textures_ built once post-upload).
         // Demoted from Hot since no per-frame reader exists.
-        std::vector<rhi::Handle<rhi::Texture>> textureHandles;
-        std::vector<rhi::Handle<rhi::Sampler>> samplerHandles;
+        std::vector<rhi::Handle<rhi::Texture>, cairns::ChunkStdAllocator<rhi::Handle<rhi::Texture>>> textureHandles;
+        std::vector<rhi::Handle<rhi::Sampler>, cairns::ChunkStdAllocator<rhi::Handle<rhi::Sampler>>> samplerHandles;
         // #221 Phase 5b: per-scene flat tables for GPU palette eval.
         // Populated at load by LoadPrefabFromGltf and consumed by
         // engine's anim-table upload sweep.
-        std::vector<int32_t> gpu_parent;
-        std::vector<int32_t> gpu_topo;
-        std::vector<GpuTRS> gpu_bind_pose;
-        std::vector<GpuChannel> gpu_channels;
-        std::vector<GpuSampler> gpu_samplers;
-        std::vector<float> gpu_times;
-        std::vector<glm::vec4> gpu_values;
-        std::vector<int32_t> gpu_joint_nodes;
-        std::vector<glm::mat4> gpu_inverse_binds;
+        std::vector<int32_t, cairns::ChunkStdAllocator<int32_t>> gpu_parent;
+        std::vector<int32_t, cairns::ChunkStdAllocator<int32_t>> gpu_topo;
+        std::vector<GpuTRS, cairns::ChunkStdAllocator<GpuTRS>> gpu_bind_pose;
+        std::vector<GpuChannel, cairns::ChunkStdAllocator<GpuChannel>> gpu_channels;
+        std::vector<GpuSampler, cairns::ChunkStdAllocator<GpuSampler>> gpu_samplers;
+        std::vector<float, cairns::ChunkStdAllocator<float>> gpu_times;
+        std::vector<glm::vec4, cairns::ChunkStdAllocator<glm::vec4>> gpu_values;
+        std::vector<int32_t, cairns::ChunkStdAllocator<int32_t>> gpu_joint_nodes;
+        std::vector<glm::mat4, cairns::ChunkStdAllocator<glm::mat4>> gpu_inverse_binds;
         int32_t gpu_mesh_node = -1;
         float gpu_clip_duration = 0.0f;
         // #221 Skinning Phase 1: glTF skins + clips for this scene. Per
@@ -348,13 +354,13 @@ struct Prefab {
         // the existing shape (proper Tier-1 bump migration is a separate
         // sweep). Clips are kept long-lived (not in CleanupTmps) since
         // animation playback needs them past load.
-        std::vector<Skin> skins;
-        std::vector<Clip> clips;
+        std::vector<Skin, cairns::ChunkStdAllocator<Skin>> skins;
+        std::vector<Clip, cairns::ChunkStdAllocator<Clip>> clips;
         // Load-time temporaries cleared post-upload via CleanupTmps.
-        std::vector<LoadedSampler> loaded_samplers;
-        std::vector<LoadedTexture> loaded_textures;
-        std::vector<uint32_t> materialToTextureIndex;
-        std::vector<uint32_t> materialToSamplerIndex;
+        std::vector<LoadedSampler, cairns::ChunkStdAllocator<LoadedSampler>> loaded_samplers;
+        std::vector<LoadedTexture, cairns::ChunkStdAllocator<LoadedTexture>> loaded_textures;
+        std::vector<uint32_t, cairns::ChunkStdAllocator<uint32_t>> materialToTextureIndex;
+        std::vector<uint32_t, cairns::ChunkStdAllocator<uint32_t>> materialToSamplerIndex;
 
         void CleanupTmps() {
             for ( size_t i = 0; i < loaded_textures.size(); ++i ) {
@@ -536,6 +542,36 @@ inline bool LoadPrefabFromGltf(const std::filesystem::path& path,
                                Prefab::Hot& hot, Prefab::Cold& cold,
                                cairns::ResourceManager<Mesh>& meshes_pool,
                                cairns::ChunkAllocator& block) {
+    // #229 P3: re-seat the prefab's nested pool vectors onto cpu_block_ before
+    // any fill (POCMA move-assign adopts the block; vectors are empty fresh from
+    // Acquire). Node/Skin/Clip element inner heap stays on malloc (follow-on).
+    auto reseat = [&block](auto& v) {
+        using V = std::decay_t<decltype(v)>;
+        v = V(typename V::allocator_type(block));
+    };
+    reseat(hot.meshes);
+    reseat(hot.rootNodes);
+    reseat(hot.materials);
+    reseat(cold.nodes);
+    reseat(cold.bind_pose);
+    reseat(cold.textureHandles);
+    reseat(cold.samplerHandles);
+    reseat(cold.gpu_parent);
+    reseat(cold.gpu_topo);
+    reseat(cold.gpu_bind_pose);
+    reseat(cold.gpu_channels);
+    reseat(cold.gpu_samplers);
+    reseat(cold.gpu_times);
+    reseat(cold.gpu_values);
+    reseat(cold.gpu_joint_nodes);
+    reseat(cold.gpu_inverse_binds);
+    reseat(cold.skins);
+    reseat(cold.clips);
+    reseat(cold.loaded_samplers);
+    reseat(cold.loaded_textures);
+    reseat(cold.materialToTextureIndex);
+    reseat(cold.materialToSamplerIndex);
+
     size_t byte_count = 0;
     void* file_data = SDL_LoadFile(path.string().c_str(), &byte_count);
     if (!file_data) return false;
