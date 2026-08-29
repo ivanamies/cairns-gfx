@@ -50,6 +50,15 @@ ImguiContextGuard& EnsureImguiContextImpl() {
 void EnsureImguiContext() { (void)EnsureImguiContextImpl(); }
 
 const char* PlatformKey() {
+    // CAIRNS_PLATFORM_KEY env var always wins -- lets the harness pin a
+    // specific key (e.g. "android-vk-emu" on AVD vs "android-vk" on a real
+    // device) without relying on quirky property reads.
+    if (const char* override_ = std::getenv("CAIRNS_PLATFORM_KEY")) {
+        if (override_[0]) {
+            static std::string s = override_;
+            return s.c_str();
+        }
+    }
 #if defined(__ANDROID__)
     return "android-vk";
 #elif defined(__APPLE__)

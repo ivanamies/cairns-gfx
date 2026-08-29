@@ -35,22 +35,10 @@
 
 namespace {
 
-constexpr const char* kPlatformKey =
-#if defined(__ANDROID__)
-    "android-vk";
-#elif defined(__APPLE__) && CAIRNS_GFX_BACKEND_METAL
-#  if TARGET_OS_SIMULATOR
-    "ios-sim-metal";
-#  elif TARGET_OS_IOS
-    "ios-metal";
-#  else
-    "macos-metal";
-#  endif
-#elif defined(__APPLE__) && CAIRNS_GFX_BACKEND_VULKAN
-    "macos-vk";
-#else
-    "unknown";
-#endif
+// Use the seam's platform key so a single override (CAIRNS_PLATFORM_KEY env
+// var) covers both ladder + scenarios. Inlining the constexpr selector would
+// duplicate the logic and miss the runtime override.
+inline const char* PlatformKey() { return cairns::test_seams::PlatformKey(); }
 
 struct Rung {
     const char* name;
@@ -91,7 +79,7 @@ TEST_CASE("golden ladder", "[golden][ladder]") {
                  std::size_t{6});
     const Rung& rung = kLadder[idx];
 
-    INFO("rung: " << rung.name << "  platform: " << kPlatformKey);
+    INFO("rung: " << rung.name << "  platform: " << PlatformKey());
 
     if (!cairns::test_seams::AssetsPresent(rung.glbs)) {
         SKIP("assets for rung '" << rung.name << "' not present in this build");
@@ -136,10 +124,10 @@ TEST_CASE("golden ladder", "[golden][ladder]") {
         REQUIRE(w == kGoldenW);
         REQUIRE(h == kGoldenH);
         const std::string observed = cairns::test_seams::Md5Hex(rgba);
-        const std::string ref = cairns::test_refs::LoadImageRef(rung.name, kPlatformKey, observed);
+        const std::string ref = cairns::test_refs::LoadImageRef(rung.name, PlatformKey(), observed);
         if (ref.empty()) {
             SKIP("no image reference yet for {" << rung.name << ", "
-                                                << kPlatformKey << "} -- bake one");
+                                                << PlatformKey() << "} -- bake one");
         }
         REQUIRE(observed == ref);
     }
