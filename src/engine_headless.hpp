@@ -128,6 +128,29 @@ bool GetEntityCamera(Engine* engine, int scene_index, uint32_t entity,
                      float& fov_y_rad, float& near_z, float& far_z,
                      bool& is_main);
 bool AddParticleEmitter(Engine* engine, int scene_index, uint32_t entity);
+// Empty entity (component carrier). UINT32_MAX on failure.
+uint32_t CreateEmptyEntity(Engine* engine, int scene_index, const char* name);
+// Plain floats (no glm) -- same boundary rule as the scalar camera params.
+struct DirectionalLightParams {
+    float dir_x = 0.0f;
+    float dir_y = -1.0f;
+    float dir_z = 0.0f;
+    float color_r = 1.0f;
+    float color_g = 1.0f;
+    float color_b = 1.0f;
+    float intensity = 1.0f;
+    float ambient_r = 0.05f;
+    float ambient_g = 0.05f;
+    float ambient_b = 0.05f;
+    bool cast_shadows = false;
+};
+bool SetEntityDirectionalLight(Engine* engine, int scene_index,
+                               uint32_t entity,
+                               const DirectionalLightParams& p);
+bool GetEntityDirectionalLight(Engine* engine, int scene_index,
+                               uint32_t entity, DirectionalLightParams& out);
+// cairns.scene.setMaterialShaderAll: every live material's shader family.
+uint32_t SetMaterialShaderAllByName(Engine* engine, const char* shader);
 bool SetEntityRenderable(Engine* engine, int scene_index, uint32_t entity,
                          uint32_t layer_mask, uint32_t flags);
 bool GetEntityRenderable(Engine* engine, int scene_index, uint32_t entity,

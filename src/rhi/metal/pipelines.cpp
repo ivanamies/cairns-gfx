@@ -135,6 +135,14 @@ MetalShaderInfo resolve_metal_shader(const char* logical) {
         return {"unlit.metal", "cube::vertexShader",
                 "cube::fragmentShader_noid", nullptr};
     }
+    if (std::strcmp(logical, "lit_offscreen") == 0) {
+        return {"lit.metal", "lit::vertexShader", "lit::fragmentShader",
+                nullptr};
+    }
+    if (std::strcmp(logical, "lit_offscreen_noid") == 0) {
+        return {"lit.metal", "lit::vertexShader", "lit::fragmentShader_noid",
+                nullptr};
+    }
     if (std::strcmp(logical, "imgui") == 0) {
         return {"imgui.metal", "imguicairns::imgui_vertex",
                 "imguicairns::imgui_fragment", nullptr};

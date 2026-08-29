@@ -106,6 +106,12 @@ ShaderInfo Classify(const char* logical) {
     if (std::strcmp(logical, "unlit_offscreen_noid") == 0) {
         return {Kind::kUnlit, "unlit", 0};
     }
+    if (std::strcmp(logical, "lit_offscreen") == 0) {
+        return {Kind::kUnlit, "lit_offscreen", 0};
+    }
+    if (std::strcmp(logical, "lit_offscreen_noid") == 0) {
+        return {Kind::kUnlit, "lit_offscreen_noid", 0};
+    }
     if (std::strcmp(logical, "imgui") == 0) {
         return {Kind::kImgui, "imgui", 0};
     }

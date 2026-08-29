@@ -732,6 +732,8 @@ public:
                 return reg.all_of<cairns::Renderable>(e);
             case cairns::ComponentType::kTransform:
                 return reg.all_of<cairns::Transform>(e);
+            case cairns::ComponentType::kDirectionalLight:
+                return reg.all_of<cairns::DirectionalLight>(e);
             default:
                 return false;
         }
@@ -759,6 +761,9 @@ public:
                 break;
             case cairns::ComponentType::kRenderable:
                 reg.remove<cairns::Renderable>(e);
+                break;
+            case cairns::ComponentType::kDirectionalLight:
+                reg.remove<cairns::DirectionalLight>(e);
                 break;
             default:
                 return false;  // Transform is not removable (draw needs it)
@@ -811,6 +816,60 @@ public:
         far_z = c.far_z;
         is_main = c.is_main;
         return true;
+    }
+    // Empty entity (no Transform/Renderable): carrier for scene-scoped
+    // components -- lights, effect stacks. Returns the entt id, or
+    // UINT32_MAX on a bad scene index.
+    uint32_t CreateEmptyEntity(int scene_index, const char* name) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return UINT32_MAX;
+        }
+        const entt::entity e = wc->registry.create();
+        if (name != nullptr && name[0] != '\0') {
+            wc->registry.emplace<cairns::Name>(e, cairns::Name{name});
+        }
+        return static_cast<uint32_t>(e);
+    }
+    bool SetEntityDirectionalLight(int scene_index, uint32_t entity_int,
+                                   const cairns::DirectionalLight& light) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!reg.valid(e)) {
+            return false;
+        }
+        reg.emplace_or_replace<cairns::DirectionalLight>(e, light);
+        return true;
+    }
+    bool GetEntityDirectionalLight(int scene_index, uint32_t entity_int,
+                                   cairns::DirectionalLight& out) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!reg.valid(e) || !reg.all_of<cairns::DirectionalLight>(e)) {
+            return false;
+        }
+        out = reg.get<cairns::DirectionalLight>(e);
+        return true;
+    }
+    // Data mutation, not a mode: flips every live material's shader family
+    // (test/effect convenience; per-material authoring comes with material
+    // ops). Returns the count touched.
+    uint32_t SetMaterialShaderAll(cairns::ShaderKey key) {
+        uint32_t n = 0;
+        prefab_store_.materials.ForEachLive(
+            [&](cairns::Material::Hot&, cairns::Material::Cold& cold) {
+                cold.shader_key = key;
+                ++n;
+            });
+        return n;
     }
     bool AddParticleEmitter(int scene_index, uint32_t entity_int) {
         cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
@@ -1710,6 +1769,10 @@ private:
     // Id-less variant; selected when no consumer wants the R32U id
     // attachment this frame.
     ShaderHandle unlit_offscreen_noid_ = ShaderHandle::Null;
+    // Lit (half-lambert directional) variants; EncodeDraws stamps them
+    // per-draw when the draw's material shader_key == kLit.
+    ShaderHandle lit_offscreen_ = ShaderHandle::Null;
+    ShaderHandle lit_offscreen_noid_ = ShaderHandle::Null;
     // DynamicBuffers for unlit set 0 (pass globals UBO) + set 2 (per-draw
     // drawtmp UBO). Created post-Frames::Init with backing = kDynamic
     // master. RecordFrame stamps them on MeshDrawList +

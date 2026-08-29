@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 
 namespace cairns {
 
@@ -48,6 +49,28 @@ inline const char* LogicalShaderName(ShaderKey key, uint8_t variant) {
             return "stroke_splat";
     }
     return "unlit_offscreen_noid";
+}
+
+// Wire-name -> key for ops ("lit" in cairns.scene.setMaterialShaderAll).
+// Returns false on an unknown name (caller reports; no silent default).
+inline bool StringToShaderKey(const char* name, ShaderKey* out) {
+    struct Row {
+        const char* name;
+        ShaderKey key;
+    };
+    static constexpr Row kRows[] = {
+        {"lit", ShaderKey::kLit},
+        {"stroke_splat", ShaderKey::kStrokeSprite},
+        {"tam_hatch", ShaderKey::kTamHatch},
+        {"unlit", ShaderKey::kUnlit},
+    };
+    for (const Row& r : kRows) {
+        if (std::strcmp(name, r.name) == 0) {
+            *out = r.key;
+            return true;
+        }
+    }
+    return false;
 }
 
 }  // namespace cairns

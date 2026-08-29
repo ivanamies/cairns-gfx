@@ -285,6 +285,53 @@ bool GetEntityCamera(Engine* engine, int scene_index, uint32_t entity,
 bool AddParticleEmitter(Engine* engine, int scene_index, uint32_t entity) {
     return engine ? engine->AddParticleEmitter(scene_index, entity) : false;
 }
+uint32_t CreateEmptyEntity(Engine* engine, int scene_index,
+                           const char* name) {
+    return engine ? engine->CreateEmptyEntity(scene_index, name) : UINT32_MAX;
+}
+bool SetEntityDirectionalLight(Engine* engine, int scene_index,
+                               uint32_t entity,
+                               const DirectionalLightParams& p) {
+    if (engine == nullptr) {
+        return false;
+    }
+    cairns::DirectionalLight light;
+    light.dir = glm::vec3(p.dir_x, p.dir_y, p.dir_z);
+    light.color = glm::vec3(p.color_r, p.color_g, p.color_b);
+    light.intensity = p.intensity;
+    light.ambient = glm::vec3(p.ambient_r, p.ambient_g, p.ambient_b);
+    light.cast_shadows = p.cast_shadows;
+    return engine->SetEntityDirectionalLight(scene_index, entity, light);
+}
+bool GetEntityDirectionalLight(Engine* engine, int scene_index,
+                               uint32_t entity, DirectionalLightParams& out) {
+    if (engine == nullptr) {
+        return false;
+    }
+    cairns::DirectionalLight light;
+    if (!engine->GetEntityDirectionalLight(scene_index, entity, light)) {
+        return false;
+    }
+    out.dir_x = light.dir.x;
+    out.dir_y = light.dir.y;
+    out.dir_z = light.dir.z;
+    out.color_r = light.color.r;
+    out.color_g = light.color.g;
+    out.color_b = light.color.b;
+    out.intensity = light.intensity;
+    out.ambient_r = light.ambient.r;
+    out.ambient_g = light.ambient.g;
+    out.ambient_b = light.ambient.b;
+    out.cast_shadows = light.cast_shadows;
+    return true;
+}
+uint32_t SetMaterialShaderAllByName(Engine* engine, const char* shader) {
+    cairns::ShaderKey key = cairns::ShaderKey::kUnlit;
+    if (engine == nullptr || !cairns::StringToShaderKey(shader, &key)) {
+        return 0u;
+    }
+    return engine->SetMaterialShaderAll(key);
+}
 bool SetEntityRenderable(Engine* engine, int scene_index, uint32_t entity,
                          uint32_t layer_mask, uint32_t flags) {
     return engine ? engine->SetEntityRenderable(scene_index, entity, layer_mask,

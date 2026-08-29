@@ -68,6 +68,35 @@ json GetCamera(cairns::Engine* e, int s, uint32_t ent) {
             {"farZ", fz},
             {"isMain", main}};
 }
+json AddDirectionalLight(cairns::Engine* e, int s, uint32_t ent,
+                         const json& props) {
+    cairns::headless::DirectionalLightParams p;
+    p.dir_x = props.value("dirX", 0.0f);
+    p.dir_y = props.value("dirY", -1.0f);
+    p.dir_z = props.value("dirZ", 0.0f);
+    p.color_r = props.value("colorR", 1.0f);
+    p.color_g = props.value("colorG", 1.0f);
+    p.color_b = props.value("colorB", 1.0f);
+    p.intensity = props.value("intensity", 1.0f);
+    p.ambient_r = props.value("ambientR", 0.05f);
+    p.ambient_g = props.value("ambientG", 0.05f);
+    p.ambient_b = props.value("ambientB", 0.05f);
+    p.cast_shadows = props.value("castShadows", false);
+    return {{"ok",
+             cairns::headless::SetEntityDirectionalLight(e, s, ent, p)}};
+}
+json GetDirectionalLight(cairns::Engine* e, int s, uint32_t ent) {
+    cairns::headless::DirectionalLightParams p;
+    if (!cairns::headless::GetEntityDirectionalLight(e, s, ent, p)) {
+        return {{"has", false}};
+    }
+    return {{"has", true},        {"dirX", p.dir_x},
+            {"dirY", p.dir_y},    {"dirZ", p.dir_z},
+            {"colorR", p.color_r}, {"colorG", p.color_g},
+            {"colorB", p.color_b}, {"intensity", p.intensity},
+            {"ambientR", p.ambient_r}, {"ambientG", p.ambient_g},
+            {"ambientB", p.ambient_b}, {"castShadows", p.cast_shadows}};
+}
 json AddEmitter(cairns::Engine* e, int s, uint32_t ent, const json&) {
     return {{"ok", cairns::headless::AddParticleEmitter(e, s, ent)}};
 }
@@ -99,6 +128,8 @@ struct ComponentRow {
 // MUST stay sorted by name (binary search below).
 const ComponentRow kComponentRows[] = {
     {"Camera", cairns::ComponentType::kCamera, AddCamera, GetCamera},
+    {"DirectionalLight", cairns::ComponentType::kDirectionalLight,
+     AddDirectionalLight, GetDirectionalLight},
     {"Name", cairns::ComponentType::kName, AddName, GetName},
     {"ParticleEmitter", cairns::ComponentType::kParticleEmitter, AddEmitter,
      GetEmitter},
@@ -127,6 +158,22 @@ const ComponentRow* FindComponentRow(const std::string& name) {
 }  // namespace
 
 void RegisterEntityOps(CommandRegistry& registry, cairns::Engine& engine) {
+    registry.Register(
+        "cairns.entity.new",
+        json{{"name", ""}, {"scene", -1}},
+        "Create an EMPTY entity (no Transform/Renderable) as a component "
+        "carrier -- lights, effect stacks. Returns {entity}.",
+        [&engine](const json& args) -> json {
+            const std::string name = args.value("name", "");
+            const int scene = args.value("scene", -1);
+            const uint32_t e = cairns::headless::CreateEmptyEntity(
+                &engine, scene, name.c_str());
+            if (e == UINT32_MAX) {
+                throw std::runtime_error("bad scene index");
+            }
+            return {{"entity", e}};
+        });
+
     registry.Register(
         "cairns.entity.destroy",
         json::object(),

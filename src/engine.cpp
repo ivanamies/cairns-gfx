@@ -1084,6 +1084,37 @@ bool Engine::initRenderPipeline() {
                 std::exit(0);
             }
 
+            // Lit variants: same targets/layout + the world-normal attribute
+            // the lit vertex shader consumes (offset 32 in the 64B attr
+            // stream; unlit descriptors stay 2-attr so their PSOs are
+            // byte-identical to before).
+            const rhi::VertexInputAttribute lit_attrs[3] = {
+                {0, cairns::kMeshPosBindSlot, rhi::Format::kRgba32F, 0},
+                {1, cairns::kMeshAttrVertexBindSlot, rhi::Format::kRg32F, 48},
+                {2, cairns::kMeshAttrVertexBindSlot, rhi::Format::kRgba32F,
+                 32},
+            };
+            rhi::GraphicsPipelineDesc lof = ofd;
+            lof.logical_shader = "lit_offscreen";
+            lof.debug_name = "lit_offscreen";
+            lof.vertex_attributes =
+                std::span<const rhi::VertexInputAttribute>(lit_attrs, 3);
+            lit_offscreen_ = rhi_.pipelines.CreateGraphicsPipeline(
+                rhi_.resources, rhi_.frames, lof);
+            if (lit_offscreen_.IsNull()) {
+                std::exit(0);
+            }
+            rhi::GraphicsPipelineDesc lnd = nid;
+            lnd.logical_shader = "lit_offscreen_noid";
+            lnd.debug_name = "lit_offscreen_noid";
+            lnd.vertex_attributes =
+                std::span<const rhi::VertexInputAttribute>(lit_attrs, 3);
+            lit_offscreen_noid_ = rhi_.pipelines.CreateGraphicsPipeline(
+                rhi_.resources, rhi_.frames, lnd);
+            if (lit_offscreen_noid_.IsNull()) {
+                std::exit(0);
+            }
+
             // composite_pip: full-screen tri, samples 1 color tex, writes the
             // swap target. Surfaceless: present_.final_target is 1-sample / no-depth,
             // so the pipeline is compat with a 1-sample / no-depth renderpass.
@@ -2356,8 +2387,21 @@ void Engine::EncodeDraws(const FramePacket& pkt) {
         const uint32_t mat_cap = prefab_store_.materials.Capacity();
         uint32_t* mat_offset_cache = s.arena.AllocateArray<uint32_t>(mat_cap);
         memset(mat_offset_cache, 0xFF, mat_cap * sizeof(uint32_t));
+        // Same id_path RecordFrame uses for the pass PSO -- the per-draw lit
+        // override must match the pass's MRT layout.
+        const bool enc_id_path =
+            !picking_.highlights.empty() || picking_.pending;
         for (size_t i = 0; i < s.drawList.size(); ++i) {
             const cairns::Handle<cairns::Material> mid = s.draw_material_ids[i];
+            const cairns::Material::Cold* mcold =
+                mid.IsNull() ? nullptr : prefab_store_.materials.GetCold(mid);
+            // Variant resolution: a lit material overrides the pass PSO for
+            // its draws (recorders rebind on draw.shader change).
+            if (mcold != nullptr &&
+                mcold->shader_key == cairns::ShaderKey::kLit) {
+                s.drawList[i].shader =
+                    enc_id_path ? lit_offscreen_ : lit_offscreen_noid_;
+            }
             uint32_t material_offset = UINT32_MAX;
             if (!mid.IsNull() && mid.index < mat_cap) {
                 material_offset = mat_offset_cache[mid.index];
@@ -2366,8 +2410,6 @@ void Engine::EncodeDraws(const FramePacket& pkt) {
                         sizeof(cairns::rhi::MaterialGpu), rhi_.alloc.UboAlign(),
                         rhi::Memory::kDynamic, &material_offset);
                     assert(mptr && "bump alloc failed: material");
-                    const cairns::Material::Cold* mcold =
-                        prefab_store_.materials.GetCold(mid);
                     const cairns::rhi::MaterialGpu defaults{};
                     memcpy(mptr, mcold != nullptr ? &mcold->params : &defaults,
                            sizeof(cairns::rhi::MaterialGpu));
@@ -2515,6 +2557,36 @@ bool Engine::BuildMeshOpaqueDraws(uint32_t slot) {
                 .camera_dir = glm::vec4(camera_dir, vp_near),
                 .screen_params = glm::vec4(vp_w, vp_h, 1.0f / vp_w, 1.0f / vp_h)
             };
+            // Directional light: first one in the viewport's bound scene
+            // (fallback: active). Absent => the designated-init above left
+            // the light fields zeroed -- lit materials render ambient-black.
+            {
+                cairns::Scene::Cold* lwc = wc_cam;
+                cairns::Viewport::Hot* vph =
+                    viewport_mgr_.pool.GetHot(viewport_mgr_.ids[v]);
+                if (vph != nullptr) {
+                    if (cairns::Scene::Cold* bc =
+                            scene_mgr_.pool.GetCold(vph->scene)) {
+                        lwc = bc;
+                    }
+                }
+                if (lwc != nullptr) {
+                    auto lights =
+                        lwc->registry.view<cairns::DirectionalLight>();
+                    for (entt::entity le : lights) {
+                        const cairns::DirectionalLight& dl =
+                            lights.get<cairns::DirectionalLight>(le);
+                        const glm::vec3 nd = glm::normalize(dl.dir);
+                        s.pending_globals[v].light_dir =
+                            glm::vec4(nd, dl.cast_shadows ? 1.0f : 0.0f);
+                        s.pending_globals[v].light_color =
+                            glm::vec4(dl.color, dl.intensity);
+                        s.pending_globals[v].ambient =
+                            glm::vec4(dl.ambient, 0.0f);
+                        break;
+                    }
+                }
+            }
             s.pending_view_matrix[v] = view_matrix;
             s.pending_near_z[v] = vp_near;
             s.pending_far_z[v] = vp_far;

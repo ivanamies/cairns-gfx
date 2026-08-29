@@ -5,3 +5,6 @@ glslc imgui.frag -o imgui.frag.spv
 glslc composite_pip.vert -o composite_pip.vert.spv
 glslc composite_pip.frag -o composite_pip.frag.spv
 glslc depthviz.frag -o depthviz.frag.spv
+glslc lit.vert -o lit.vert.spv
+glslc lit.frag -o lit.frag.spv
+glslc lit_noid.frag -o lit_noid.frag.spv

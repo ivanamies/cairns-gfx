@@ -127,4 +127,15 @@ struct CameraComponent {
 // render::EmitterParams here once the kernel consumes them.
 struct ParticleEmitterComponent {};
 
+// Directional light (sun). The first one in a scene drives the lit shading
+// path; absent => lit materials render ambient-black (existence-based, no
+// default light). cast_shadows gates the shadow-map pass.
+struct DirectionalLight {
+    glm::vec3 dir = glm::vec3(0.0f, -1.0f, 0.0f);
+    glm::vec3 color = glm::vec3(1.0f, 1.0f, 1.0f);
+    float intensity = 1.0f;
+    glm::vec3 ambient = glm::vec3(0.05f, 0.05f, 0.05f);
+    bool cast_shadows = false;
+};
+
 }  // namespace cairns

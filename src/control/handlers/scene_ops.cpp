@@ -30,6 +30,20 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         });
 
     registry.Register(
+        "cairns.scene.setMaterialShaderAll",
+        json{{"shader", "lit"}},
+        "Set EVERY live material's shader family "
+        "(unlit | lit | tam_hatch | stroke_splat). Data mutation, not a "
+        "mode; per-material authoring comes with material ops. Returns "
+        "{count} of materials touched (0 = unknown shader name).",
+        [&engine](const json& args) -> json {
+            const std::string shader = args.value("shader", "");
+            const uint32_t n = cairns::headless::SetMaterialShaderAllByName(
+                &engine, shader.c_str());
+            return {{"count", n}};
+        });
+
+    registry.Register(
         "cairns.scene.clear",
         json::object(),
         "Nuke every entity in active_scene_. Returns {cleared:N}. "

@@ -330,6 +330,12 @@ VkShaderFiles resolve_vk_shader(const char* logical) {
     if (std::strcmp(logical, "unlit_offscreen_noid") == 0) {
         return {"unlit.vert.spv", "unlit_noid.frag.spv", nullptr};
     }
+    if (std::strcmp(logical, "lit_offscreen") == 0) {
+        return {"lit.vert.spv", "lit.frag.spv", nullptr};
+    }
+    if (std::strcmp(logical, "lit_offscreen_noid") == 0) {
+        return {"lit.vert.spv", "lit_noid.frag.spv", nullptr};
+    }
     if (std::strcmp(logical, "imgui") == 0) {
         return {"imgui.vert.spv", "imgui.frag.spv", nullptr};
     }
@@ -563,7 +569,8 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     std::vector<VkDescriptorSetLayout> set_layouts;
     VkDescriptorSetLayout imgui_set_layout = VK_NULL_HANDLE;
     if (ls == "unlit" || ls == "unlit_offscreen" ||
-        ls == "unlit_offscreen_noid") {
+        ls == "unlit_offscreen_noid" || ls == "lit_offscreen" ||
+        ls == "lit_offscreen_noid") {
         set_layouts = {plat.globals_set_layout_,      // set 0: globals (once/frame)
                        resources.plat.MaterialSetLayout(),   // set 1: per-material
                        plat.drawtmp_set_layout_};     // set 2: drawtmp (per draw)

@@ -19,6 +19,7 @@ enum class ComponentType : uint32_t {
     kParticleEmitter,
     kRenderable,
     kTransform,
+    kDirectionalLight,
     kInvalid,
 };
 
