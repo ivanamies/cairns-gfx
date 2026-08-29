@@ -279,13 +279,30 @@ draws. WebGPU / WebGL / DX12 have no base-instance (Aaltonen slide 42), so index
 per-instance data off `instance_index`. Consumers: two_die (die.glb ×2) + the
 grid scenarios.
 
-### Untextured champion in the nested golden (bad texture bind)
+### White champion in the nested golden -- NOT a material bind (2026-07 investigation)
 In the golden `nested graph: 20 GLBs resolved color + depth strip`
-(`tests/test_golden_scenarios.cpp`, the `[scenarios]` nested case), one of the 20
-GLBs renders as a flat WHITE untextured silhouette — row 2, col 3 of the 4×5 grid
-(albedo/material not bound for that actor). Deterministic (not a flake). Fix the
-texture/material bind, THEN re-bake `nested.color.*` — don't bake the broken
-render as the golden. Identify the exact GLB (kDebugGlbs grid index) when fixing.
+(`tests/test_golden_scenarios.cpp`, the `[scenarios]` nested case), one GLB renders
+as a near-white silhouette (faint blue tint) -- row 2, col 3 = spawn index 7 =
+**aatrox_prestige_blood_moon.glb** (entity 8, world (0,-1.21)). Deterministic.
+The current `nested.color.*` refs bake this white render (golden still gates
+green). The "bad texture/material bind" hypothesis was DISPROVEN -- every input to
+the fragment shader is verified correct on the GPU:
+  - material bind: set2 non-null, resolves to `cold.color` = tex pool 39 (Body),
+    tex 40 (Sword); forcing `BuildMaterialSet2` to always rebuild changes nothing.
+  - texture data: readback of tex 39 == the real dark-gold Body PNG (mean 107).
+  - UVs: on-GPU attr readback of the skinned alias == the GLB's UVs
+    (v0 = 0.592,0.805); the Body texel there is DARK (13,10,8).
+  - skinning/attr alias: gbv=0, voff=0, distinct per-actor buffers (correct --
+    each GLB loads as its own batch); disabling mips does not fix it.
+So: correct texture bound + correct UVs + a DARK source texel, yet WHITE output.
+That points to a per-draw descriptor/fragment issue for this one actor at the
+20-actor grid density (not reproduced by three_champ), likely needs a metal GPU
+capture to see the actually-bound descriptor. DEFERRED -- non-blocking (golden is
+green), and a fix risks the shared skinned-draw path (all animated goldens).
+Re-bake `nested.color.*` ONLY after a root-caused fix. Also noted en passant: the
+loader (`gltf_loader.hpp` material loop) drops a material's texture when the glTF
+texture lacks a sampler index, which would desync `hot.materials` -- but none of
+these 20 GLBs trigger it, so it is a separate latent bug, not this one.
 
 ---
 
