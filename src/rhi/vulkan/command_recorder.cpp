@@ -72,17 +72,27 @@ static VkAttachmentLoadOp to_vk_load(LoadOp op) {
     return VK_ATTACHMENT_LOAD_OP_CLEAR;
 }
 
+static VkAttachmentStoreOp to_vk_store(StoreOp op) {  // #222 Phase A.2
+    switch (op) {
+        case StoreOp::kStore: return VK_ATTACHMENT_STORE_OP_STORE;
+        case StoreOp::kDontCare: return VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    }
+    return VK_ATTACHMENT_STORE_OP_STORE;
+}
+
 static bool key_eq(const OffscreenTargetCache::RpKey& a,
                    const OffscreenTargetCache::RpKey& b) {
     if (a.color_count != b.color_count ||
         a.depth != b.depth ||
         a.color_load != b.color_load ||
         a.depth_load != b.depth_load ||
+        a.depth_store != b.depth_store ||  // #222 Phase A.2
         a.has_depth != b.has_depth) {
         return false;
     }
     for (uint32_t i = 0; i < a.color_count; ++i) {
         if (a.colors[i] != b.colors[i]) return false;
+        if (a.color_store[i] != b.color_store[i]) return false;  // #222 Phase A.2
     }
     return true;
 }
@@ -103,7 +113,7 @@ static VkRenderPass get_offscreen_rp(OffscreenTargetCache* cache,
         atts[att_count].format = key.colors[i];
         atts[att_count].samples = VK_SAMPLE_COUNT_1_BIT;
         atts[att_count].loadOp = key.color_load;
-        atts[att_count].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        atts[att_count].storeOp = key.color_store[i];  // #222 Phase A.2
         atts[att_count].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         atts[att_count].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         // #207: when load_op=CLEAR the previous contents are discarded, so
@@ -126,7 +136,7 @@ static VkRenderPass get_offscreen_rp(OffscreenTargetCache* cache,
         atts[att_count].format = key.depth;
         atts[att_count].samples = VK_SAMPLE_COUNT_1_BIT;
         atts[att_count].loadOp = key.depth_load;
-        atts[att_count].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        atts[att_count].storeOp = key.depth_store;  // #222 Phase A.2
         atts[att_count].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         atts[att_count].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         atts[att_count].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
@@ -448,6 +458,7 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& t
             color_views[i] = reinterpret_cast<VkImageView>(
                 res.GetHot(desc.color[i].target)->api_view);
             key.colors[i] = to_vk_format(c->format);
+            key.color_store[i] = to_vk_store(desc.color[i].store);  // #222 Phase A.2
             if (i == 0) {
                 key.color_load = to_vk_load(desc.color[i].load);
             }
@@ -460,6 +471,7 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& t
                 res.GetHot(desc.depth.depth)->api_view);
             key.depth = to_vk_format(c->format);
             key.depth_load = to_vk_load(desc.depth.load);
+            key.depth_store = to_vk_store(desc.depth.store);  // #222 Phase A.2
         }
         VkRenderPass rp = get_offscreen_rp(plat.offscreen_, key);
         // Attachment order matches the renderpass: colors[0..N) then depth.

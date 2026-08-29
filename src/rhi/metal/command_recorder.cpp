@@ -167,6 +167,14 @@ static MTL::LoadAction to_mtl_load(LoadOp op) {
     return MTL::LoadActionClear;
 }
 
+static MTL::StoreAction to_mtl_store(StoreOp op) {  // #222 Phase A.2
+    switch (op) {
+        case StoreOp::kStore: return MTL::StoreActionStore;
+        case StoreOp::kDontCare: return MTL::StoreActionDontCare;
+    }
+    return MTL::StoreActionStore;
+}
+
 void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
                                       const RenderPassDesc& desc) {
     if (plat.cmd_ == nullptr) {
@@ -198,7 +206,7 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
             rpd->colorAttachments()->object(static_cast<NS::UInteger>(i));
         ca->setTexture(tex);
         ca->setLoadAction(to_mtl_load(desc.color[i].load));
-        ca->setStoreAction(MTL::StoreActionStore);
+        ca->setStoreAction(to_mtl_store(desc.color[i].store));  // #222 Phase A.2
         ca->setClearColor(MTL::ClearColor(c[0], c[1], c[2], c[3]));
     }
     if (!desc.depth.depth.IsNull()) {
@@ -206,7 +214,7 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
         MTL::RenderPassDepthAttachmentDescriptor* da = rpd->depthAttachment();
         da->setTexture(dtex);
         da->setLoadAction(to_mtl_load(desc.depth.load));
-        da->setStoreAction(MTL::StoreActionStore);
+        da->setStoreAction(to_mtl_store(desc.depth.store));  // #222 Phase A.2
         da->setClearDepth(desc.depth.clear_depth);
     }
     plat.enc_ = plat.cmd_->renderCommandEncoder(rpd);

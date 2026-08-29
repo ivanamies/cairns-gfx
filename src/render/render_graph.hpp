@@ -81,9 +81,11 @@ public:
     void WriteBuffer(GraphBuffer b);
 
     void AddColorOutput(const char* name, GraphTexture t, LoadOp load,
-                        const float clear[4]);
+                        const float clear[4],
+                        StoreOp store = StoreOp::kStore);  // #222 Phase A.2
     void AddDepthOutput(const char* name, GraphTexture t, LoadOp load,
-                        float clear_depth);
+                        float clear_depth,
+                        StoreOp store = StoreOp::kStore);  // #222 Phase A.2
     void AddAttachmentInput(GraphTexture t);
 
 private:
@@ -130,12 +132,14 @@ private:
     struct ColorOutput {
         uint16_t tex = 0xFFFF;
         LoadOp load = LoadOp::kClear;
+        StoreOp store = StoreOp::kStore;  // #222 Phase A.2
         float clear[4] = {0, 0, 0, 1};
     };
 
     struct DepthOutput {
         uint16_t tex = 0xFFFF;
         LoadOp load = LoadOp::kClear;
+        StoreOp store = StoreOp::kStore;  // #222 Phase A.2
         float clear_depth = 1.0f;
     };
 

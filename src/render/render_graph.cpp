@@ -133,7 +133,7 @@ void PassBuilder::WriteBuffer(GraphBuffer b) {
 }
 
 void PassBuilder::AddColorOutput(const char* name, GraphTexture t, LoadOp load,
-                                 const float clear[4]) {
+                                 const float clear[4], StoreOp store) {
     (void)name;
     auto& p = graph_->passes_[pass_];
     if (p.color_outputs_count >= GraphicsPipelineDesc::kMaxColorFormats) {
@@ -143,6 +143,7 @@ void PassBuilder::AddColorOutput(const char* name, GraphTexture t, LoadOp load,
     RenderGraph::ColorOutput& out = p.color_outputs[p.color_outputs_count++];
     out.tex = t.id;
     out.load = load;
+    out.store = store;  // #222 Phase A.2
     out.clear[0] = clear[0];
     out.clear[1] = clear[1];
     out.clear[2] = clear[2];
@@ -152,12 +153,13 @@ void PassBuilder::AddColorOutput(const char* name, GraphTexture t, LoadOp load,
 }
 
 void PassBuilder::AddDepthOutput(const char* name, GraphTexture t, LoadOp load,
-                                 float clear_depth) {
+                                 float clear_depth, StoreOp store) {
     (void)name;
     RenderGraph::PassRecord& p = graph_->passes_[pass_];
     p.has_depth = true;
     p.depth_output.tex = t.id;
     p.depth_output.load = load;
+    p.depth_output.store = store;  // #222 Phase A.2
     p.depth_output.clear_depth = clear_depth;
     PUSH_OR_DIE(p, writes, writes_count, RenderGraph::kMaxPassWrites,
                 "writes", t.id);
@@ -525,12 +527,14 @@ bool RenderGraph::Bake(uint32_t slot) {
             ca.clear[2] = co.clear[2];
             ca.clear[3] = co.clear[3];
             ca.load = co.load;
+            ca.store = co.store;  // #222 Phase A.2
         }
         if (pass.has_depth) {
             pass.baked_depth = DepthAttachment{};
             pass.baked_depth.depth = resolved_tex_[pass.depth_output.tex];
             pass.baked_depth.clear_depth = pass.depth_output.clear_depth;
             pass.baked_depth.load = pass.depth_output.load;
+            pass.baked_depth.store = pass.depth_output.store;  // #222 Phase A.2
         }
         for (uint8_t i = 0; i < pass.attachment_inputs_count; ++i) {
             // attachment_inputs cap == baked_inputs cap, so no need for a

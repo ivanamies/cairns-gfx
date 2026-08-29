@@ -42,6 +42,13 @@ struct OffscreenTargetCache {
         VkFormat depth = VK_FORMAT_UNDEFINED;
         VkAttachmentLoadOp color_load = VK_ATTACHMENT_LOAD_OP_CLEAR;
         VkAttachmentLoadOp depth_load = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        // #222 Phase A.2: store-ops part of the renderpass-compat key.
+        // CRITICAL: without these, two passes that differ only in storeOp
+        // would alias the same VkRenderPass and lose the DONT_CARE elision.
+        VkAttachmentStoreOp color_store[kMaxColors] = {
+            VK_ATTACHMENT_STORE_OP_STORE, VK_ATTACHMENT_STORE_OP_STORE,
+            VK_ATTACHMENT_STORE_OP_STORE, VK_ATTACHMENT_STORE_OP_STORE};
+        VkAttachmentStoreOp depth_store = VK_ATTACHMENT_STORE_OP_STORE;
         uint32_t color_count = 0;
         bool has_depth = false;
     };
