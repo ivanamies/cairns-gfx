@@ -37,31 +37,40 @@ static inline uint64_t timestamp_ns() {
     }
 }
 
-// Shared accumulator storage for all Timer<Slot> instantiations + the
-// report / reset / cross-thread Accum helpers.
-struct TimerStorage {
-    static constexpr uint32_t kMaxSlots = 16;
-    static constexpr uint32_t kGpuSlot = 8;
-    static constexpr uint32_t kDrawableAcquireSlot = 9;
-    static constexpr uint32_t kFramesBeginWaitSlot = 10;
+class Timer {
+ public:
 
+    static constexpr uint32_t kMaxSlots = 16;
     static std::array<uint64_t, kMaxSlots> accum_times_;
     static std::array<uint64_t, kMaxSlots> accum_itrs_;
     static std::array<const char*, kMaxSlots> slot_names_;
-    // Guards accum_times_/accum_itrs_ when the completion handler races
-    // PrintReport/Reset/Timer::End on the main/game thread.
-    static std::mutex mu_;
 
-    // Span: record an already-measured elapsed interval into a slot. For
-    // callers without scope-matched lifetime (e.g. the Metal/Vk command-
-    // buffer completion callback, where the timed interval spans a callback
-    // boundary on a different thread from where it started).
-    static void Span(uint32_t slot, const char* task_name, uint64_t elapsed_us) {
-        std::lock_guard<std::mutex> lk(mu_);
-        slot_names_[slot] = task_name;
-        accum_times_[slot] += elapsed_us;
-        accum_itrs_[slot]++;
+  explicit Timer(const char* task_name, uint32_t slot)
+      : slot_(slot),
+        is_running_(true),
+        start_time_(timestamp_ns()) {
+    slot_names_[slot] = task_name;
+  }
+
+  ~Timer() {
+    if (is_running_) {
+      End();
     }
+  }
+
+  void End() {
+    if (!is_running_) {
+      return;
+    }
+
+    uint64_t end_time = timestamp_ns();
+    uint64_t elapsed_us = (end_time - start_time_)/1000;
+
+      accum_times_[slot_] += elapsed_us;
+      accum_itrs_[slot_]++;
+
+    is_running_ = false;
+  }
 
     static void PrintReport() {
         for ( uint32_t i = 0; i < kMaxSlots; ++i ) {
@@ -75,10 +84,26 @@ struct TimerStorage {
     }
 
     static void Reset() {
-        std::lock_guard<std::mutex> lk(mu_);
         accum_times_ = {};
         accum_itrs_ = {};
     }
+
+  // Prevent copying to ensure one timer per scope/task
+  Timer(const Timer&) = delete;
+  Timer& operator=(const Timer&) = delete;
+
+  // Allow moving if ownership needs to be transferred
+  Timer(Timer&& other) noexcept
+      : slot_(other.slot_),
+        is_running_(other.is_running_),
+        start_time_(other.start_time_) {
+    other.is_running_ = false;
+  }
+
+ private:
+    uint32_t slot_;
+  bool is_running_;
+  uint64_t start_time_;
 };
 
 inline std::array<uint64_t, Timer::kMaxSlots> Timer::accum_times_ = {};

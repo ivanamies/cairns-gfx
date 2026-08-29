@@ -16,7 +16,6 @@
 #include "rhi/resource_manager.hpp"  // kFramesInFlight
 #include "rhi/swap_chain.hpp"
 #include "rhi/command_recorder.hpp"
-#include "util/timer.hpp"
 
 namespace cairns::rhi {
 
@@ -94,55 +93,12 @@ void Frames::SetDumpPath(const std::filesystem::path& path) {
     dump_path_ = path;
 }
 
-FrameContext Frames::Begin(Resources& resources, Allocator& alloc) {
-    {
-        cairns::Timer<cairns::TimerStorage::kFramesBeginWaitSlot> t_bw("frames begin wait");
-        dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(frame_semaphore_),
-                                DISPATCH_TIME_FOREVER);
-    }
+FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc) {
+    dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(frame_semaphore_),
+                            DISPATCH_TIME_FOREVER);
     resources.AdvanceFrame(alloc);  // bump ring reset
 
-    MTL::CommandBuffer* cmd = queue_->commandBuffer();
-    dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(frame_semaphore_);
-    // GPU frame timing: capture start (CPU wall) on commit and report
-    // elapsed at completion. Captures display + queue wait in addition to
-    // actual GPU work; treat as "submit-to-presented latency", which is
-    // what we actually care about for hitting vsync.
-    const uint64_t start_ns = cairns::timestamp_ns();
-    cmd->addCompletedHandler([sem, start_ns](MTL::CommandBuffer*) {
-        const uint64_t end_ns = cairns::timestamp_ns();
-        const uint64_t elapsed_us = (end_ns - start_ns) / 1000;
-        cairns::TimerStorage::Span(cairns::TimerStorage::kGpuSlot, "gpu frame", elapsed_us);
-        dispatch_semaphore_signal(sem);
-    });
-
-    swapchain_acquired_ = false;
-    FrameContext fc;
-    fc.frame_index = 0;
-    fc.swapchain_image_index = 0;
-    fc.cmd.cmd_ = cmd;
-    fc.cmd.enc_ = nullptr;
-    fc.cmd.render_pass_desc_ = render_pass_desc_;
-    fc.cmd.depth_stencil_ = depth_stencil_;
-    fc.cmd.frames_ = this;
-    fc.cmd.res_ = &resources;
-    fc.cmd.alloc_ = &alloc;
-    return fc;
-}
-
-void Frames::AcquireSwapchain(Resources& resources, Allocator& alloc, SwapChain& sc,
-                              CommandRecorder& /*cmd*/) {
-    if (swapchain_acquired_) {
-        return;
-    }
-    // Splits the cost of `nextDrawable` out of the cmd-buffer-complete window
-    // (slot 8 "gpu frame"). On iOS this is often where the display-pacing
-    // wait lives -- not actual GPU work.
-    const uint64_t draw_start_ns = cairns::timestamp_ns();
     sc.NextDrawable();
-    const uint64_t draw_end_ns = cairns::timestamp_ns();
-    cairns::TimerStorage::Span(cairns::TimerStorage::kDrawableAcquireSlot, "drawable acquire",
-                         (draw_end_ns - draw_start_ns) / 1000);
     MTL::Texture* drawable_tex = sc.GetDrawable()->texture();
     Texture::Hot* msaa_hot = resources.GetHot(msaa_handle_);
     if (drawable_tex &&

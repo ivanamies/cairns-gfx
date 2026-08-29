@@ -175,7 +175,11 @@ bool Device::Init(SDL_Window* window) {
         return true;
     }
 
+#ifdef NDEBUG
     validation_enabled_ = false;
+#else
+    validation_enabled_ = true;
+#endif
     if (validation_enabled_ && !check_validation_layer_support()) {
         validation_enabled_ = false;
     }

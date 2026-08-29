@@ -8,13 +8,7 @@
 
 namespace cairns {
 
-// Walk the live entities and produce render proxies. With `filter` empty (the
-// default) iterates the packed live list; with a filter, iterates exactly the
-// supplied handles (the parallel-test subset path). `root_override` lets callers
-// frame against a different root than `world.root_transform`.
-inline void Extract(SceneWorld& world, RenderProxyArrays& out,
-                    std::span<const rhi::Handle<SceneEntity>> filter = {},
-                    const glm::mat4* root_override = nullptr) {
+inline void Extract(const SceneWorld& world, RenderProxyArrays& out) {
     out.Clear();
     // Fixed-size scratch. Observed high-water across 100x33 (hw=59) and 50x66
     // (hw=49) benches; 256 = 4x headroom. 1 KB on the stack, zero heap.
@@ -25,8 +19,8 @@ inline void Extract(SceneWorld& world, RenderProxyArrays& out,
         if (entity.scene_index >= world.scene_count) {
             continue;
         }
-        const Scene& scene = world.scenes[hot->scene_index];
-        const glm::mat4 model_matrix = hot->transform * root;
+        const Scene& scene = world.scenes[entity.scene_index];
+        const glm::mat4 model_matrix = entity.transform * world.root_transform;
 
         top = 0;
         for (size_t j = 0; j < scene.rootNodes.size(); ++j) {
@@ -53,8 +47,8 @@ inline void Extract(SceneWorld& world, RenderProxyArrays& out,
             proxy.first_primitive = static_cast<uint32_t>(out.primitives.size());
             proxy.primitive_count = static_cast<uint32_t>(mesh.primitives.size());
             proxy.skin = kInvalidSkin;
-            proxy.layer_mask = hot->layer_mask;
-            proxy.flags = hot->flags;
+            proxy.layer_mask = entity.layer_mask;
+            proxy.flags = entity.flags;
             for (const Primitive& prim : mesh.primitives) {
                 PrimitiveProxy pp;
                 pp.first_index = prim.firstIndex;

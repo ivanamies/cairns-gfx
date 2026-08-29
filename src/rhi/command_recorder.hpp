@@ -35,13 +35,7 @@ inline constexpr uint32_t kCompositeRingSize = 4;
 
 class Resources;
 class Allocator;
-class Frames;
 struct SwapChain;
-
-// Per-frame ring of fullscreen-sampling descriptor sets: each DrawFullscreen in a
-// frame needs its own set, since a set is referenced by recorded draws but
-// updated in place (reusing one set => all draws sample the last write).
-inline constexpr uint32_t kCompositeRing = 4;
 
 enum class LoadOp : uint8_t { kClear, kLoad, kDontCare };
 enum class StoreOp : uint8_t { kStore, kDontCare };
@@ -154,13 +148,6 @@ public:
     void PassTimerBegin(const char* name);
     void PassTimerEnd();
     void EndRenderPass();
-
-    // Lazy-acquire back-pointers (set by Frames::Begin). The swapchain branch
-    // of BeginRenderPass calls frames_->AcquireSwapchain(*res_, *alloc_, sc, *this)
-    // so the drawable is held for the minimum possible time.
-    Frames* frames_ = nullptr;
-    Resources* res_ = nullptr;
-    Allocator* alloc_ = nullptr;
 
     // Per-frame recording state, populated by Frames::Begin.
 #if CAIRNS_VULKAN

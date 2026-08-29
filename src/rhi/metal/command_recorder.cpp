@@ -7,15 +7,11 @@
 
 #if CAIRNS_METAL
 
-#include <cstring>
 #include <limits>
 
 #include <Metal/Metal.hpp>
 
-#include "imgui.h"
-#include "rhi/allocator.hpp"
 #include "rhi/command_recorder.hpp"
-#include "rhi/frames.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/resources.hpp"
 #include "rhi/allocator.hpp"

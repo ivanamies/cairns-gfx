@@ -272,39 +272,6 @@ bool Frames::Init(Device& device) {
             !make_dyn_ubo_layout(&drawtmp_set_layout_)) {
             return false;
         }
-        {  // composite/fullscreen: 3 combined image samplers, fragment. Shaders
-           // that need fewer (blur/depthviz=1, composite=2) just bind a prefix.
-            VkDescriptorSetLayoutBinding b[3]{};
-            for (uint32_t i = 0; i < 3; ++i) {
-                b[i].binding = i;
-                b[i].descriptorCount = 1;
-                b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-            }
-            VkDescriptorSetLayoutCreateInfo li{};
-            li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            li.bindingCount = 3;
-            li.pBindings = b;
-            if (vkCreateDescriptorSetLayout(dev, &li, nullptr,
-                                            &composite_set_layout_) != VK_SUCCESS) {
-                return false;
-            }
-        }
-        {  // imgui: 1 combined image sampler (font atlas), fragment.
-            VkDescriptorSetLayoutBinding b{};
-            b.binding = 0;
-            b.descriptorCount = 1;
-            b.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            b.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-            VkDescriptorSetLayoutCreateInfo li{};
-            li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            li.bindingCount = 1;
-            li.pBindings = &b;
-            if (vkCreateDescriptorSetLayout(dev, &li, nullptr,
-                                            &imgui_set_layout_) != VK_SUCCESS) {
-                return false;
-            }
-        }
 
         // Composite descriptor set layout: 1 COMBINED_IMAGE_SAMPLER frag (used
         // by both composite_pip and depthviz fullscreen passes).
@@ -365,8 +332,7 @@ bool Frames::Init(Device& device) {
         };
         if (!alloc_sets(point_layout_, point_sets_) ||
             !alloc_sets(globals_set_layout_, globals_sets_) ||
-            !alloc_sets(drawtmp_set_layout_, drawtmp_sets_) ||
-            !alloc_sets(imgui_set_layout_, imgui_sets_)) {
+            !alloc_sets(drawtmp_set_layout_, drawtmp_sets_)) {
             return false;
         }
         compute_sets_.resize(n);
@@ -460,7 +426,7 @@ void Frames::SetDumpPath(const std::filesystem::path& path) {
     dump_path_ = path;
 }
 
-FrameContext Frames::Begin(Resources& resources, Allocator& alloc) {
+FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc) {
     const uint32_t cf = recorder_frame_;
     VkDevice dev = device_;
 
@@ -498,48 +464,6 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc) {
     vkResetCommandBuffer(compute_cmds_[cf], 0);
     resources.AdvanceFrame(alloc);  // bump ring reset
 
-    vkResetFences(dev, 1, &in_flight_[cf]);
-    vkResetCommandBuffer(graphics_cmds_[cf], 0);
-
-    VkCommandBufferBeginInfo bi{};
-    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    vkBeginCommandBuffer(compute_cmds_[cf], &bi);
-    vkBeginCommandBuffer(graphics_cmds_[cf], &bi);
-
-    swapchain_acquired_ = false;
-    last_image_index_ = 0;
-    FrameContext fc;
-    fc.frame_index = cf;
-    fc.swapchain_image_index = 0;
-    fc.cmd.frame_ = cf;
-    fc.cmd.image_index_ = 0;
-    fc.cmd.gfx_ = graphics_cmds_[cf];
-    fc.cmd.comp_ = compute_cmds_[cf];
-    fc.cmd.device_ = dev;
-    fc.cmd.globals_set_ = globals_sets_[cf];
-    fc.cmd.drawtmp_set_ = drawtmp_sets_[cf];
-    fc.cmd.compute_set_ = compute_sets_[cf];
-    fc.cmd.point_set_ = point_sets_[cf];
-    for (uint32_t i = 0; i < kCompositeRing; ++i) {
-        fc.cmd.composite_set_ring_[i] = composite_sets_[cf * kCompositeRing + i];
-    }
-    fc.cmd.composite_set_cursor_ = 0;
-    fc.cmd.imgui_set_ = imgui_sets_[cf];
-    offscreen_cache_.device = dev;
-    fc.cmd.offscreen_ = &offscreen_cache_;
-    fc.cmd.frames_ = this;
-    fc.cmd.res_ = &resources;
-    fc.cmd.alloc_ = &alloc;
-    return fc;
-}
-
-void Frames::AcquireSwapchain(Resources& /*resources*/, Allocator& /*alloc*/, SwapChain& sc,
-                              CommandRecorder& cmd) {
-    if (swapchain_acquired_) {
-        return;
-    }
-    const uint32_t cf = recorder_frame_;
-    VkDevice dev = device_;
     uint32_t image_index = 0;
     VkResult acquire = vkAcquireNextImageKHR(dev, sc.swapChain, UINT64_MAX,
                                              image_available_[cf], VK_NULL_HANDLE,
@@ -628,7 +552,6 @@ void Frames::End(SwapChain& sc, FrameContext& fc) {
     VkSwapchainKHR swapchains[1] = {sc.swapChain};
     pi.swapchainCount = 1;
     pi.pSwapchains = swapchains;
-    fc.swapchain_image_index = last_image_index_;
     pi.pImageIndices = &fc.swapchain_image_index;
     const VkResult present = vkQueuePresentKHR(present_queue_, &pi);
 

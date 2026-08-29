@@ -3,11 +3,9 @@
 #include "util/define.hpp"
 
 #include <cmath>
-#include <condition_variable>
 #include <cstdlib>
 #include <string_view>
 #include <filesystem>
-#include <mutex>
 #include <thread>
 #include <chrono>
 #include <fstream>
@@ -54,7 +52,7 @@
 
 namespace cairns {
 
-inline static constexpr uint32_t kFrameSlabBytes = 4u * 1024u * 1024u;  // per-frame transient (A)
+inline static constexpr uint32_t kHotArenaMemorySize = 1 << 29;
 inline static constexpr uint32_t kUboAlign = 32;
 inline static constexpr uint32_t kMeshPosBindSlot = 0;
 
@@ -107,6 +105,8 @@ public:
     };
 
     Engine() :
+    hot_arena_mem_(malloc(kHotArenaMemorySize)),
+    hot_arena_(hot_arena_mem_, kHotArenaMemorySize),
     scenes_(cairns::Allocator<cairns::Scene>(hot_arena_)),
     root_nodes_stack_cache_(cairns::Allocator<int32_t>(hot_arena_))
     {
@@ -136,17 +136,6 @@ public:
     }
     
     bool initCpuAllocators() {
-        // Allocator B: general chunk allocator backs hot_arena_ + provides slab for A.
-        hot_arena_.Init();
-        // Allocator A: per-frame transient ring. Slab borrowed from B. kFrameSlabBytes
-        // is a starting size -- read frame_arena_.HighWaterAny() in Timer reports to tune.
-        const uint32_t slab_bytes = rhi::kFramesInFlight * kFrameSlabBytes;
-        frame_arena_slab_ = static_cast<uint8_t*>(
-            hot_arena_.Allocate(slab_bytes, 16));
-        if (frame_arena_slab_ == nullptr) {
-            return false;
-        }
-        frame_arena_.Init<rhi::kFramesInFlight>(frame_arena_slab_, kFrameSlabBytes);
         return true;
     }
     
@@ -292,14 +281,13 @@ public:
         if (!scenes_.empty()) {
             world_.scenes = scenes_.data();
             world_.scene_count = scenes_.size();
-            world_.ClearEntities();
-            world_.entities.Reserve(debugSceneXforms_.size());
-            world_.live_entities.reserve(debugSceneXforms_.size());
+            world_.entities.clear();
+            world_.entities.reserve(debugSceneXforms_.size());
             for (size_t i = 0; i < debugSceneXforms_.size(); ++i) {
-                cairns::SceneEntity::Hot e{};
+                cairns::SceneEntity e;
                 e.transform = debugSceneXforms_[i];
                 e.scene_index = static_cast<uint32_t>(i % scenes_.size());
-                world_.AddEntity(e);
+                world_.entities.push_back(e);
             }
         }
         if ( !initRenderPipeline() ) {
@@ -506,7 +494,7 @@ public:
             std::exit(0);  // headless byte-gate: dump frame flushed, now quit
         }
 
-        cairns::Timer<0> t_frame("frame");
+        cairns::Timer t_frame("frame", 0);
 
         // Fiedler fixed-timestep accumulator. clock_ is FixedClock under
         // CAIRNS_DUMP (1 step/frame, alpha=0) or WallClock live. wall_dt is
@@ -724,7 +712,7 @@ public:
         rhi::GraphBuffer sim_out;
         graph_->AddPass(
             "particle_sim", rhi::PassType::kCompute,
-            [&pkt, this](rhi::PassBuilder& b) {
+            [&](rhi::PassBuilder& b) {
                 rhi::GraphBufferDesc bd{};
                 bd.usage = rhi::kUsageStorage;
                 sim_out = b.ImportBuffer(
@@ -776,15 +764,9 @@ public:
                 b.AddColorOutput("color", color_off, rhi::LoadOp::kClear, clear);
                 b.AddDepthOutput("fwd_depth", depth_off, rhi::LoadOp::kClear, 1.0f);
             },
-            [&pkt, this](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
-                rhi::MeshDrawList dl{};
-                dl.draws = std::span<const cairns::Draw>(pkt.draws.data(), pkt.draws.size());
-                dl.sorted_draws = pkt.sorted;
-                dl.pipeline = unlit_offscreen_;
-                dl.globals_offset = pkt.globals_offset;
-                dl.resident_textures = pkt.resident_textures;
-                dl.resident_buffers = pkt.resident_buffers;
-                cmd.DrawMeshes(rhi_.resources, rhi_.alloc, dl);
+            [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
+                cmd.DrawMeshes(rhi_.resources, rhi_.alloc, ml);
+                cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
             });
 
         // pass 3: composite + ui kGraphics. Composite samples color_off full-
@@ -844,7 +826,6 @@ public:
             rhi_.frames.End(swapchain_, fc);
             return;
         }
-        t_rg_exec.End();
         t_record.End();
         rhi_.frames.End(swapchain_, fc);
     }
@@ -1146,21 +1127,14 @@ public:
         rhi_.resources.Deinit();
         rhi_.alloc.Deinit();
         rhi_.device.Deinit();
-        // Return the FrameArena slab to B before its destructor runs.
-        if (frame_arena_slab_ != nullptr) {
-            hot_arena_.Free(frame_arena_slab_);
-            frame_arena_slab_ = nullptr;
-        }
         return true;
     }
     
 private:
     // todo @iamies
     // make an engine dtor and delete this
+    void* hot_arena_mem_;
     cairns::Arena hot_arena_;
-    // Per-frame transient ring (A). Slab borrowed from hot_arena_ (B).
-    uint8_t* frame_arena_slab_ = nullptr;
-    cairns::FrameArena frame_arena_;
     
     ////////// DO NOT MOVE ARENA BELOW THIS LINE. because c++.
     

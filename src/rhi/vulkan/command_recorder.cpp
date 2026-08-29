@@ -8,15 +8,11 @@
 #if CAIRNS_VULKAN
 
 #include <array>
-#include <cstring>
 #include <vector>
 
 #include <vulkan/vulkan.h>
 
-#include "imgui.h"
-#include "rhi/allocator.hpp"
 #include "rhi/command_recorder.hpp"
-#include "rhi/frames.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/resources.hpp"
 #include "rhi/allocator.hpp"

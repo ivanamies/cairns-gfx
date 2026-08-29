@@ -360,14 +360,12 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     blend_attachment.dstAlphaBlendFactor = to_vk_blend_factor(desc.blend.dst_alpha);
     blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
 
-    const bool has_color = desc.color_format != Format::kUndefined;
-    const bool has_depth = desc.depth_format != Format::kUndefined;
     VkPipelineColorBlendStateCreateInfo color_blending{};
     color_blending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     color_blending.logicOpEnable = VK_FALSE;
     color_blending.logicOp = VK_LOGIC_OP_COPY;
-    color_blending.attachmentCount = has_color ? 1 : 0;
-    color_blending.pAttachments = has_color ? &blend_attachment : nullptr;
+    color_blending.attachmentCount = 1;
+    color_blending.pAttachments = &blend_attachment;
 
     VkPipelineDepthStencilStateCreateInfo depth_stencil{};
     depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
