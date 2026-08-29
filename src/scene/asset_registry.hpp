@@ -91,8 +91,22 @@ public:
                                          rhi::Handle<rhi::Buffer> index) {
         const uint64_t key = static_cast<uint64_t>(scene_idx);
         if (AssetId* existing = FindByKey(key)) {
+            // unloadAll restarts the prefab pool at index 0, so this scene_idx
+            // key collides with a DIFFERENT, now-released prefab. Rebind the
+            // dedup'd asset to the freshly-loaded prefab + its GPU buffers --
+            // else cpu_graph points at a released PrefabId (generation bumped)
+            // and ExtractFromScene skips every entity in the scene (draws 0,
+            // the "renders first time, not after a scenario switch" bug). A
+            // genuine same-prefab dedup passes identical args, so this is a
+            // no-op there.
             if (auto* c = pool_.GetCold(*existing)) {
                 ++c->ref_count;
+                c->cpu_graph = scene_id;
+            }
+            if (auto* hot = pool_.GetHot(*existing)) {
+                hot->pos = pos;
+                hot->attr = attr;
+                hot->index = index;
             }
             return *existing;
         }

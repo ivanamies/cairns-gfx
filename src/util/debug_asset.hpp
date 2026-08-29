@@ -11,16 +11,18 @@
 
 namespace cairns {
 
-static constexpr uint32_t kDebugGlbsToParseStart = 3;
+static constexpr uint32_t kDebugGlbsToParseStart = 0;
 static constexpr uint32_t kDebugGlbsToParse = 100;
 
 // Fail-fast: the range MUST fit. If you delete entries and break this,
 // the build dies here -- not at strlen(nullptr) on the deployed device.
 
+// The 100-hero perf roster -- exactly the GLBs in
+// assets/riot/lol_champions/staging/ (the web build preloads that dir, so this
+// list and that dir must stay 1:1). Parsed in full ([0,100)). die.glb /
+// viking_room.glb are NOT here; the one_die/two_die/viking scenarios load them
+// by explicit name from assets/.
 static constexpr std::array kDebugGlbs = {
-    "die.glb",
-    "viking_room.glb",
-    "bistro.glb",
     "aatrox.glb",
     "aatrox_blood_moon.glb",
     "aatrox_drx.glb",

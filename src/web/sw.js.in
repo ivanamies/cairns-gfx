@@ -1,0 +1,47 @@
+// cairns-gfx service worker. Caches the big WASM bundle (cairns_web.{data,wasm,js})
+// via the Cache API so the ~1.2 GB .data is downloaded ONCE, then served locally on
+// every later load (and offline). Why not the obvious options: emscripten's
+// --use-preload-cache stores the whole package as a single IndexedDB value, which
+// silently fails at 1.2 GB (usage stays 0, "CachedPackageNotFound"); Chrome's HTTP
+// disk cache won't hold a single resource this large. The Cache API handles it.
+//
+// CACHE_VERSION is stamped at build time with the .data's content hash (see
+// cmake/stamp_sw.cmake), so a rebuilt bundle gets a new cache key and the stale one
+// is dropped on activate -- no manual version bumping, no stale-asset footgun.
+const CACHE_VERSION = 'cairns-@DATA_HASH@';
+const CACHE_RE = /cairns_web\.(data|wasm|js)$/;
+
+self.addEventListener('install', () => self.skipWaiting());
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil((async () => {
+    for (const key of await caches.keys()) {
+      if (key !== CACHE_VERSION) { await caches.delete(key); }
+    }
+    await self.clients.claim();
+  })());
+});
+
+self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET' || !CACHE_RE.test(event.request.url)) { return; }
+  event.respondWith((async () => {
+    const cache = await caches.open(CACHE_VERSION);
+    let hit = await cache.match(event.request);
+    if (hit) { return hit; }
+    const resp = await fetch(event.request);
+    if (resp && resp.status === 200) {
+      // Cache resp DIRECTLY (no resp.clone() + return resp): teeing the body to
+      // both the page and the cache overflows Chrome's tee buffer at ~1 GB -- the
+      // put resolves but stores an EMPTY body. Consume resp fully into the cache,
+      // then serve the page from the cache entry.
+      try {
+        await cache.put(event.request, resp);
+        hit = await cache.match(event.request);
+        if (hit) { return hit; }
+      } catch (e) {
+        return fetch(event.request);  // resp already consumed; re-fetch to serve
+      }
+    }
+    return resp;
+  })());
+});

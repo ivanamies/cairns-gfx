@@ -446,17 +446,54 @@ if(EMSCRIPTEN AND CAIRNS_GFX_BACKEND_WEBGPU)
         "-sSTACK_SIZE=4MB"
         "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString"
         "-sASSERTIONS=1"
+        # The 50-hero web bundle preloads ~0.9 GB of GLBs into MEMFS (held in the
+        # WASM heap); ALLOW_MEMORY_GROWTH alone caps at 2 GB on wasm32, so lift the
+        # ceiling to the 4 GB wasm32 max for headroom at load.
+        "-sMAXIMUM_MEMORY=4294967296"
+        # NOTE: NOT --use-preload-cache -- emscripten stores the whole package as a
+        # single IndexedDB value, which silently fails at this size. The .data is
+        # instead cached via a service worker (Cache API); see the POST_BUILD sw.js
+        # stamp below + src/web/sw.js.in.
+        # The 100/300-actor perf smokes OOM-kill the browser (100 unique champions
+        # peak ~3.7 GB at load), so keep them out of the WEB build entirely -- web
+        # ships only perf_smoke_50. Native still has them.
+        "--exclude-file=*perf_smoke_100*"
+        "--exclude-file=*perf_smoke_300*"
         "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/src/web/shell.html"
         "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/assets@/")
-    # A few champion GLBs (external staging dir) for the three-heroes scenario,
-    # mapped to the MEMFS root next to die.glb / viking_room.glb.
-    set(_cairns_web_champs ahri akali alistar)
-    foreach(_c ${_cairns_web_champs})
+    # Web bundles ONLY the first 50 of the roster (kDebugGlbs[0..49]) -- the 100-hero
+    # bundle preloaded ~1.2 GB into MEMFS and OOM-killed the browser; 50 is ~0.9 GB.
+    # perf_smoke_50.js loads exactly this set (loadBatch count:50). KEEP IN SYNC with
+    # the first 50 of kDebugGlbs (src/util/debug_asset.hpp).
+    set(_cairns_web_glbs50
+        aatrox aatrox_blood_moon aatrox_drx aatrox_justicar
+        aatrox_lunar_eclipse aatrox_mecha aatrox_odyessy aatrox_prestige_blood_moon
+        aatrox_prestige_blood_moon2 aatrox_prestige_drx aatrox_primordian aatrox_sea_hunter
+        aatrox_victorious ahri ahri_2022_prestige_k_da ahri_academy
+        ahri_after_hours_spirit_blossom_springs ahri_arcade ahri_arcana ahri_challenger
+        ahri_coven ahri_dynasty ahri_elderwood ahri_foxfire
+        ahri_immortalized_legend ahri_k_da ahri_k_da_all_out ahri_midnight
+        ahri_popstar ahri_prestige_k_da ahri_risen_legend ahri_snow_moon
+        ahri_spirit_blossom ahri_spirit_blossom_springs ahri_star_guardian akali
+        akali_2022_prestige_k_da akali_all-star akali_blood_moon akali_coven
+        akali_crime_city_nightmare akali_drx akali_empyrean akali_headhunter
+        akali_infernal akali_k_da akali_k_da_all_out akali_nurse
+        akali_prestige_coven akali_prestige_k_da)
+    foreach(_c ${_cairns_web_glbs50})
         set(_glb "/Users/ivanamies/dev/gfx/assets/riot/lol_champions/staging/${_c}.glb")
         if(EXISTS "${_glb}")
             target_link_options(cairns_web PRIVATE "--preload-file=${_glb}@/${_c}.glb")
         endif()
     endforeach()
+    # Stamp sw.js next to cairns_web.html with the built .data's content hash as
+    # the Cache API version, so a rebuilt bundle auto-invalidates the cache.
+    add_custom_command(TARGET cairns_web POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+            -DSRC=${CMAKE_CURRENT_SOURCE_DIR}/src/web/sw.js.in
+            -DOUT=$<TARGET_FILE_DIR:cairns_web>/sw.js
+            -DDATA=$<TARGET_FILE_DIR:cairns_web>/cairns_web.data
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/stamp_sw.cmake
+        VERBATIM)
 endif()
 
 # =============================================================================

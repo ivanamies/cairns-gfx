@@ -414,7 +414,55 @@ bool Resources::ReadBackTextureRgba(Handle<Texture> h, std::vector<uint8_t>& out
     return true;
 }
 
-bool Resources::ReadBackTextureR32UTexel(Handle<Texture> h, uint32_t x, uint32_t y, uint32_t& out) { (void)h; (void)x; (void)y; (void)out; return false; }
+bool Resources::ReadBackTextureR32UTexel(Handle<Texture> h, uint32_t x,
+                                         uint32_t y, uint32_t& out) {
+    Texture::Cold* cold = textures.GetCold(h);
+    if (!cold || !cold->api_image) { return false; }
+    if (x >= cold->width || y >= cold->height) { return false; }
+    WGPUTexture tex = static_cast<WGPUTexture>(cold->api_image);
+    const uint32_t padded = 256u;  // copyTextureToBuffer bytesPerRow alignment
+
+    WGPUBufferDescriptor bd = {};
+    bd.usage = WGPUBufferUsage_MapRead | WGPUBufferUsage_CopyDst;
+    bd.size = padded;
+    WGPUBuffer buf = wgpuDeviceCreateBuffer(plat.device_, &bd);
+
+    WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(plat.device_, nullptr);
+    WGPUTexelCopyTextureInfo src = {};
+    src.texture = tex;
+    src.aspect = WGPUTextureAspect_All;
+    src.origin.x = x;
+    src.origin.y = y;
+    WGPUTexelCopyBufferInfo dst = {};
+    dst.buffer = buf;
+    dst.layout.bytesPerRow = padded;
+    dst.layout.rowsPerImage = 1;
+    WGPUExtent3D ext = {1, 1, 1};
+    wgpuCommandEncoderCopyTextureToBuffer(enc, &src, &dst, &ext);
+    WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(enc, nullptr);
+    wgpuQueueSubmit(plat.queue_, 1, &cmd);
+
+    bool done = false;
+    WGPUBufferMapCallbackInfo mcb = {};
+    mcb.mode = WGPUCallbackMode_AllowProcessEvents;
+    mcb.callback = [](WGPUMapAsyncStatus, WGPUStringView, void* u1, void*) {
+        *static_cast<bool*>(u1) = true;
+    };
+    mcb.userdata1 = &done;
+    wgpuBufferMapAsync(buf, WGPUMapMode_Read, 0, bd.size, mcb);
+    // Desktop wgpu-native: DrainGpu blocks until the map resolves. Browser:
+    // DrainGpu is a no-op (no in-process sync readback), so this returns false --
+    // a click-pick in Chrome needs an async path (the highlight SET can still be
+    // populated by dispatch, which drives the outline pass without a readback).
+    for (int i = 0; i < 4000 && !done; ++i) { webgpu::DrainGpu(plat.device_); }
+    const uint8_t* data =
+        static_cast<const uint8_t*>(wgpuBufferGetConstMappedRange(buf, 0, bd.size));
+    if (!data) { wgpuBufferRelease(buf); return false; }
+    out = *reinterpret_cast<const uint32_t*>(data);
+    wgpuBufferUnmap(buf);
+    wgpuBufferRelease(buf);
+    return true;
+}
 bool Resources::ReadBackBuffer(Allocator& a, Handle<Buffer> h, uint32_t bytes, std::vector<uint8_t>& out) {
     if (!bytes) { return false; }
     uint32_t src_off = 0;
@@ -461,7 +509,16 @@ SwapResolveTarget Resources::MakeSurfacelessSwapResolveTarget(Handle<Texture> h,
     return t;
 }
 
-void Resources::AdvanceFrame(Allocator& a) { (void)a; ++plat.frame_index_; }
+void Resources::AdvanceFrame(Allocator& a) {
+    // Mirror metal/vulkan: advancing the frame MUST reset the per-frame bump
+    // ring (alloc.AdvanceFrame -> MemoryAllocator::BeginFrame). Dropping it let
+    // the kDynamic cursor climb ~38KB/frame until BumpAllocate overflowed its
+    // slot, returned nullptr, and (release: assert compiled out) memcpy'd to
+    // address zero -> "corrupted heap" abort at ~frame 450. Goldens stop at
+    // frame 55 so they never tripped it.
+    plat.frame_index_++;
+    a.AdvanceFrame(plat.frame_index_);
+}
 uint32_t Resources::FrameIndex() const { return plat.frame_index_; }
 
 WGPUBuffer ResourcesPlat::GetWgpuBuffer(Allocator& a, Handle<Buffer> h, uint32_t* out_offset) {

@@ -4,31 +4,51 @@
 <meta charset="utf-8">
 <title>cairns-gfx (WebGPU)</title>
 <style>
+  /* No HTML chrome: the scenario picker + HUD are the in-canvas imgui UI, same
+     as the native metal/vk windowed app. Only a tiny load status sits outside. */
   body { margin: 0; background: #1b1d22; color: #cdd2da; font: 14px system-ui, sans-serif; }
-  #bar { text-align: center; padding: 8px; }
-  #bar button { margin: 3px; padding: 6px 12px; background: #2c2f36; color: #cdd2da;
-                border: 1px solid #3a3e46; border-radius: 4px; cursor: pointer; }
-  #bar button:hover { background: #363a42; }
-  #canvas { display: block; margin: 4px auto; background: #000; }
-  #status { text-align: center; opacity: .6; font-size: 12px; }
+  #canvas { display: block; margin: 0 auto; background: #000; }
+  #status { text-align: center; opacity: .6; font-size: 12px; padding: 2px; }
 </style>
 </head>
 <body>
-<div id="bar">
-  <button onclick="scn('triangle')">Triangle</button>
-  <button onclick="scn('one_die')">One Die</button>
-  <button onclick="scn('two_die')">Two Die</button>
-  <button onclick="scn('viking')">Viking Room</button>
-  <button onclick="scn('three_champ')">Three Heroes</button>
-</div>
 <canvas id="canvas" width="1280" height="720"></canvas>
 <div id="status">loading…</div>
 
 <script>
+  // Cache the ~1.2 GB bundle locally via a service worker (Cache API) so it
+  // downloads once instead of every load. First visit fetches it; from the next
+  // load on it is served from cache (and works offline). See src/web/sw.js.in.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js')
+        .catch((e) => console.warn('[sw] registration failed:', e));
+  }
+
+  // Boot-time log buffer: the WASM app crashes ~2 s in (heap abort), faster than
+  // a CDP drain can attach, so every print/err/abort/uncaught is captured into a
+  // JS ring from the very first line. The buffer lives in the JS heap and SURVIVES
+  // the WASM abort, so `window.cairnsDumpLogs()` returns the full history at any
+  // time -- no attach-timing race. CDP: Runtime.evaluate("window.cairnsDumpLogs()").
+  window.__cairns_logs = [];
+  window.__cairns_t0 = (performance && performance.now) ? performance.now() : 0;
+  function __clog(tag, t) {
+    var ms = ((performance && performance.now ? performance.now() : 0) - window.__cairns_t0) | 0;
+    window.__cairns_logs.push('[' + ms + 'ms]' + tag + ' ' + t);
+    if (window.__cairns_logs.length > 200000) { window.__cairns_logs.shift(); }
+  }
+  window.cairnsDumpLogs = function () { return window.__cairns_logs.join('\n'); };
+  window.addEventListener('error', function (e) {
+    __clog('[window.error]', (e.error && e.error.stack) ? e.error.stack : e.message);
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    __clog('[unhandledrejection]', (e.reason && e.reason.stack) ? e.reason.stack : e.reason);
+  });
+
   var Module = {
     canvas: document.getElementById('canvas'),
-    print: function (t) { console.log(t); },
-    printErr: function (t) { console.warn(t); },
+    print: function (t) { __clog('', t); console.log(t); },
+    printErr: function (t) { __clog('[err]', t); console.warn(t); },
+    onAbort: function (what) { __clog('[ABORT]', what); },
     onRuntimeInitialized: function () {
       window.cairns = {
         dispatch: function (op, args) {
@@ -40,37 +60,10 @@
           try { return JSON.parse(s); } catch (e) { return s; }
         }
       };
-      document.getElementById('status').textContent = 'ready';
-      console.log('cairns ready — window.cairns.dispatch(op, args) available');
+      document.getElementById('status').textContent = 'ready — click a scenario in the panel';
+      __clog('', 'cairns ready — window.cairns.dispatch(op, args) available');
     }
   };
-
-  // Reset to a clean scene, then run the selected scenario. Mirrors the native
-  // ScenarioLauncher reset ops.
-  function scn(name) {
-    if (!window.cairns) { return; }
-    cairns.dispatch('cairns.scene.clear');
-    cairns.dispatch('cairns.prefab.unloadAll');
-    cairns.dispatch('cairns.render.tinyTriangle', { on: false });
-    if (name === 'triangle') {
-      cairns.dispatch('cairns.render.tinyTriangle', { on: true });
-    } else if (name === 'one_die') {
-      cairns.dispatch('cairns.viewport.setCamera', { viewport: 0, z: 4 });
-      cairns.dispatch('cairns.scene.spawnFitted',
-                      { glbs: ['die.glb'], instances: 1, animated: false });
-    } else if (name === 'two_die') {
-      cairns.dispatch('cairns.scene.spawnFitted',
-                      { glbs: ['die.glb'], instances: 2, animated: false });
-    } else if (name === 'viking') {
-      cairns.dispatch('cairns.scene.spawnFitted',
-                      { glbs: ['viking_room.glb'], instances: 1, animated: false });
-    } else if (name === 'three_champ') {
-      cairns.dispatch('cairns.scene.spawnFitted',
-                      { glbs: ['ahri.glb', 'akali.glb', 'alistar.glb'],
-                        instances: 3, animated: false });
-    }
-    document.getElementById('status').textContent = name;
-  }
 </script>
 {{{ SCRIPT }}}
 </body>

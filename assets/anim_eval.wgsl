@@ -184,9 +184,13 @@ fn cs_main(@builtin(workgroup_id) wid: vec3<u32>,
   storageBarrier();
   workgroupBarrier();
 
-  // Stage 4: palette build.
-  if (sh.mesh_node < 0 || u32(sh.mesh_node) >= sh.node_count) { return; }
-  if (tid == 0u) {
+  // Stage 4: palette build. sh is uniform across the workgroup (all 64 threads
+  // share wid.x), so this guard is uniform in practice -- but Dawn can't prove a
+  // storage read is uniform, so an early `return` here puts the barrier below in
+  // non-uniform control flow (Chrome rejects the pipeline). Guard the WORK with a
+  // flag instead so every thread reaches the barrier; output is identical.
+  let has_mesh: bool = !(sh.mesh_node < 0 || u32(sh.mesh_node) >= sh.node_count);
+  if (tid == 0u && has_mesh) {
     let mw: mat4x4<f32> =
         world_scratch[rec.world_scratch_base + u32(sh.mesh_node)];
     let a00 = mw[0].x; let a01 = mw[1].x; let a02 = mw[2].x; let a03 = mw[3].x;
@@ -220,24 +224,26 @@ fn cs_main(@builtin(workgroup_id) wid: vec3<u32>,
                              a20*b03 - a21*b01 + a22*b00) * inv_det;
   }
   workgroupBarrier();
-  let mesh_world_inv: mat4x4<f32> =
-      mat4x4<f32>(s_mw_inv_c0, s_mw_inv_c1, s_mw_inv_c2, s_mw_inv_c3);
+  if (has_mesh) {
+    let mesh_world_inv: mat4x4<f32> =
+        mat4x4<f32>(s_mw_inv_c0, s_mw_inv_c1, s_mw_inv_c2, s_mw_inv_c3);
 
-  var j: u32 = tid;
-  loop {
-    if (!(j < sh.joint_count)) { break; }
-    let jn: i32 = ae_i32[sh.joint_nodes_off + j];
-    if (jn < 0 || u32(jn) >= sh.node_count) {
-      palette_out[rec.palette_out_base + j] = mat4x4<f32>(
-        vec4<f32>(1.0,0.0,0.0,0.0), vec4<f32>(0.0,1.0,0.0,0.0),
-        vec4<f32>(0.0,0.0,1.0,0.0), vec4<f32>(0.0,0.0,0.0,1.0));
-    } else {
-      let jw: mat4x4<f32> = world_scratch[rec.world_scratch_base + u32(jn)];
-      let ibo: u32 = sh.inverse_binds_off + j * 4u;
-      let ib: mat4x4<f32> = mat4x4<f32>(ae_vec4[ibo + 0u], ae_vec4[ibo + 1u],
-                                        ae_vec4[ibo + 2u], ae_vec4[ibo + 3u]);
-      palette_out[rec.palette_out_base + j] = mesh_world_inv * jw * ib;
+    var j: u32 = tid;
+    loop {
+      if (!(j < sh.joint_count)) { break; }
+      let jn: i32 = ae_i32[sh.joint_nodes_off + j];
+      if (jn < 0 || u32(jn) >= sh.node_count) {
+        palette_out[rec.palette_out_base + j] = mat4x4<f32>(
+          vec4<f32>(1.0,0.0,0.0,0.0), vec4<f32>(0.0,1.0,0.0,0.0),
+          vec4<f32>(0.0,0.0,1.0,0.0), vec4<f32>(0.0,0.0,0.0,1.0));
+      } else {
+        let jw: mat4x4<f32> = world_scratch[rec.world_scratch_base + u32(jn)];
+        let ibo: u32 = sh.inverse_binds_off + j * 4u;
+        let ib: mat4x4<f32> = mat4x4<f32>(ae_vec4[ibo + 0u], ae_vec4[ibo + 1u],
+                                          ae_vec4[ibo + 2u], ae_vec4[ibo + 3u]);
+        palette_out[rec.palette_out_base + j] = mesh_world_inv * jw * ib;
+      }
+      j = j + 64u;
     }
-    j = j + 64u;
   }
 }

@@ -83,6 +83,7 @@ struct ShaderInfo {
     const char* stem = nullptr;
     int tex_count = 0;
     bool depth_sample = false;  // depthviz samples a Depth32Float target
+    bool id_textures = false;   // outline: binding 0 = color (float), 1+ = R32U
 };
 ShaderInfo Classify(const char* logical) {
     if (!logical) { return {}; }
@@ -94,6 +95,16 @@ ShaderInfo Classify(const char* logical) {
     }
     if (std::strcmp(logical, "depthviz") == 0) {
         return {Kind::kFullscreen, "depthviz", 1, true};
+    }
+    if (std::strcmp(logical, "outline") == 0) {
+        // 3 textures: color (BGRA float) + id (R32U) + highlights (R32U), and a
+        // non-filtering sampler (the R32U pair are read via textureLoad).
+        return {Kind::kFullscreen, "outline", 3, false, true};
+    }
+    if (std::strcmp(logical, "unlit_offscreen") == 0) {
+        // id MRT: {BGRA color, R32U id}. 2-output WGSL (unlit_offscreen.wgsl);
+        // color_count=2 from the desc drives the 2 fragment targets.
+        return {Kind::kUnlit, "unlit_offscreen", 0};
     }
     if (std::strcmp(logical, "unlit_offscreen_noid") == 0) {
         return {Kind::kUnlit, "unlit", 0};
@@ -174,14 +185,25 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(Resources& resources, Frames& f
         for (int i = 0; i < info.tex_count; ++i) {
             entries[i].binding = static_cast<uint32_t>(i);
             entries[i].visibility = WGPUShaderStage_Fragment;
-            entries[i].texture.sampleType =
-                info.depth_sample ? WGPUTextureSampleType_Depth
-                                  : WGPUTextureSampleType_Float;
+            WGPUTextureSampleType st = WGPUTextureSampleType_Float;
+            if (info.depth_sample) {
+                st = WGPUTextureSampleType_Depth;
+            } else if (info.id_textures && i > 0) {
+                st = WGPUTextureSampleType_Uint;  // outline id + highlights = R32U
+            }
+            entries[i].texture.sampleType = st;
             entries[i].texture.viewDimension = WGPUTextureViewDimension_2D;
         }
         entries[info.tex_count].binding = static_cast<uint32_t>(info.tex_count);
         entries[info.tex_count].visibility = WGPUShaderStage_Fragment;
-        entries[info.tex_count].sampler.type = WGPUSamplerBindingType_Filtering;
+        // Depth (depthviz) and R32U-paired (outline) bind groups can only use a
+        // NON-filtering sampler -- Dawn rejects the pipeline otherwise (e.g.
+        // "TextureSampleType::Depth used with a Filtering sampler"). The bound
+        // sampler is Nearest in both cases (depthviz/outline use outline_sampler_).
+        entries[info.tex_count].sampler.type =
+            (info.depth_sample || info.id_textures)
+                ? WGPUSamplerBindingType_NonFiltering
+                : WGPUSamplerBindingType_Filtering;
         WGPUBindGroupLayoutDescriptor bgld = {};
         bgld.entryCount = static_cast<size_t>(info.tex_count) + 1;
         bgld.entries = entries;
@@ -220,10 +242,12 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(Resources& resources, Frames& f
     }
 
     // --- color / depth / multisample --------------------------------------
-    const Format color_fmt =
-        desc.color_count > 0 ? desc.color_formats[0] : desc.color_format;
-    WGPUColorTargetState color = {};
-    color.format = PipeFormat(color_fmt);
+    // MRT: unlit_offscreen writes {BGRA color @0, R32U id @1}; only target 0
+    // blends (integer id targets can't). color_count==0 means a single target
+    // from the legacy color_format field.
+    const uint32_t ncolor = desc.color_count > 0
+                                ? static_cast<uint32_t>(desc.color_count)
+                                : 1u;
     WGPUBlendState blend = {};
     if (desc.blend.enable) {
         blend.color.operation = WGPUBlendOperation_Add;
@@ -232,15 +256,22 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(Resources& resources, Frames& f
         blend.alpha.operation = WGPUBlendOperation_Add;
         blend.alpha.srcFactor = ToWgpuBlend(desc.blend.src_alpha);
         blend.alpha.dstFactor = ToWgpuBlend(desc.blend.dst_alpha);
-        color.blend = &blend;
     }
-    color.writeMask = WGPUColorWriteMask_All;
+    WGPUColorTargetState colors[GraphicsPipelineDesc::kMaxColorFormats] = {};
+    for (uint32_t i = 0; i < ncolor &&
+                         i < GraphicsPipelineDesc::kMaxColorFormats; ++i) {
+        const Format f =
+            desc.color_count > 0 ? desc.color_formats[i] : desc.color_format;
+        colors[i].format = PipeFormat(f);
+        colors[i].writeMask = WGPUColorWriteMask_All;
+        if (i == 0 && desc.blend.enable) { colors[i].blend = &blend; }
+    }
 
     WGPUFragmentState frag = {};
     frag.module = module;
     frag.entryPoint = Sv("fs_main");
-    frag.targetCount = 1;
-    frag.targets = &color;
+    frag.targetCount = ncolor;
+    frag.targets = colors;
 
     WGPUDepthStencilState ds = {};
     const bool has_depth = desc.depth_format != Format::kUndefined;

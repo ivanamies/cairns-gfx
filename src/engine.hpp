@@ -1566,6 +1566,9 @@ public:
     // imgui windows (the scenario launcher) into the HUD frame. Raw fn ptr + ctx
     // so the engine gains no singleton + no per-app coupling; the app does any
     // command dispatch itself, outside the render frame.
+    // Surfaceless web app opts into the imgui HUD + panel (native windowed gets
+    // it free via !surfaceless; cairns_serve leaves it false).
+    void SetImguiEnabled(bool on) { imgui_enabled_ = on; }
     void SetImguiPanel(void (*fn)(void*), void* ctx) {
         imgui_panel_fn_ = fn;
         imgui_panel_ctx_ = ctx;
@@ -3384,8 +3387,12 @@ public:
         // proper runs (CreateContext done by test harness, NewFrame on
         // ImGui itself, font atlas already built).
         const bool surfaceless = !final_target_.IsNull();
+        // Windowed native draws imgui; surfaceless cairns_serve does NOT. The web
+        // app is also surfaceless (renders offscreen then copies to the canvas)
+        // but DOES want the same imgui HUD + scenario panel as native, so it opts
+        // in via SetImguiEnabled -- giving one UI across metal/vk/webgpu.
         const bool draw_imgui =
-            (!golden_ && !surfaceless) ||
+            (!golden_ && (!surfaceless || imgui_enabled_)) ||
             (golden_ && imgui_in_golden_);
         if (draw_imgui) {
             if (!surfaceless) {
@@ -4265,10 +4272,15 @@ public:
                                  static_cast<int32_t>(fb_fh - pip_h),
                                  static_cast<uint32_t>(pip_w),
                                  static_cast<uint32_t>(pip_h));
+                  // Nearest, NOT composite_sampler_ (Linear): a depth texture
+                  // can only be sampled with a non-filtering sampler -- WebGPU/
+                  // Dawn rejects the depthviz pipeline otherwise, and point-
+                  // sampling depth is correct on every backend anyway. Shares the
+                  // Nearest sampler with the outline pass.
                   cmd.DrawFullscreen(
                       rhi_.resources, depthviz_,
                       std::span<const rhi::Handle<rhi::Texture>>(&vp_depth[vi], 1),
-                      composite_sampler_);
+                      outline_sampler_);
                 } else {
                 // #194 composite each LIVE viewport into its layout_rect
                 // region of the swap pane. layout_rect = (x,y,w,h) in NDC
@@ -6057,6 +6069,8 @@ private:
     // #229 app-provided imgui panel (scenario launcher). nullptr = none.
     void (*imgui_panel_fn_)(void*) = nullptr;
     void* imgui_panel_ctx_ = nullptr;
+    // Surfaceless web app opts into imgui (HUD + panel); cairns_serve doesn't.
+    bool imgui_enabled_ = false;
     // A.7: stamped at end of BuildMeshOpaqueDraws every frame.
     FrameStats last_frame_stats_{};
 #if CAIRNS_ALLOC_TRACE

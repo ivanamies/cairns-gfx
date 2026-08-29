@@ -1,1 +1,1 @@
-clanker points: 8
+clanker points: 9

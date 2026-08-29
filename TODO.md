@@ -61,16 +61,55 @@ fine in-browser (W7 move-a-champion works); ANIMATED (skinned) champions hit:
   `maxStorageBufferRange` < 256 MB, so the whole-pool bind always fits. (A further
   refinement — binding only the per-batch output slice instead of `WGPU_WHOLE_SIZE` —
   would drop the requirement back toward the 128 MiB floor; not yet done.)
-- **anim_eval `workgroupBarrier()` is in non-uniform control flow** (Dawn rejects;
-  wgpu-native accepts). The stage-4 early `return` before the barrier + reads from
-  the read_write `headers` SSBO make the barrier non-uniform. Fix: declare the
-  read-only anim SSBOs `var<storage, read>` (uniform reads) AND restructure so all
-  threads reach every barrier (guard the work, don't early-return before a barrier).
-  Spec-correctness win on native too.
+- ~~**anim_eval `workgroupBarrier()` is in non-uniform control flow**~~ — FIXED.
+  Dawn rejected the `anim_eval` pipeline (`[Invalid ComputePipeline "anim_eval"]`)
+  so animated champions never skinned in Chrome (wgpu-native + native goldens
+  accepted it, hiding it). The stage-4 early `return` (on `sh.mesh_node`, read from
+  storage so Dawn can't prove it uniform) put the barrier below it in non-uniform
+  control flow. Fix (assets/anim_eval.wgsl): drop the early `return`, compute a
+  `has_mesh` flag, guard the stage-4 WORK with it so every thread reaches the
+  barrier. `sh` is uniform across the workgroup (shared `wid.x`) so output is
+  identical -- the `three_champ_anim` webgpu golden stays 92/92 bit-identical.
 - **depthviz samples a depth texture with a filtering sampler** — Dawn warns
   ("TextureSampleType::Depth used with a Filtering sampler"). Native is silent.
   Fix: bind a non-filtering sampler for the depthviz pass (point-sample is fine for
   the debug PIP). Only affects nested mode in-browser.
+- ~~**WASM heap aborts at ~frame 450** (`Aborted(... corrupted its heap memory
+  area (address zero)!)` via `checkStackCookie` in `runIter`)~~ — FIXED. ROOT CAUSE:
+  `webgpu/resources.cpp Resources::AdvanceFrame` only did `++plat.frame_index_` and
+  NEVER called `alloc.AdvanceFrame` (metal + vulkan both do) -- so the per-frame
+  `kDynamic` bump-ring cursor was never reset, climbed ~38KB/frame, overflowed its
+  slot, `BumpAllocate` returned nullptr, and (release: `assert` compiled out)
+  `memcpy(nullptr+off)` scribbled address zero. Deterministic at ~frame 450
+  (slot_size / 38KB). Hit EVERY long web session (idle, one_die, viking, champions
+  -- it was never viking-specific); goldens never saw it because they stop at
+  frame 55. Fix = mirror metal/vk: `plat.frame_index_++; a.AdvanceFrame(...)`.
+  Localized via the FLAKE log's monotonically-climbing `goff[0]`; SAFE_HEAP was a
+  dead end (false-positives "alignment fault" in emdawnwebgpu glue at init).
+- ~~**scenario SWITCH renders blank** (first scenario draws; every switch after =
+  draws 0)~~ — FIXED. General bug, ALL backends (reproduced on metal headless +
+  web), == the old "renders first time, not subsequent" symptom. ROOT CAUSE:
+  `AssetRegistry::RegisterExistingScene` (src/scene/asset_registry.hpp) dedups by
+  `scene_idx` (the prefab index). `UnloadAllPrefabs` Releases the prefab pool +
+  clears `per_prefab_asset_` but NEVER clears `assets_`, so after unload the pool
+  restarts at index 0 and the new load's `RegisterExistingScene(scene_idx=0,...)`
+  hits the STALE boot asset for key 0 and only bumped `ref_count` — leaving
+  `cpu_graph` pointing at a Released (generation-bumped) PrefabId. `ExtractFromScene`
+  then `GetHot(cpu_graph)==null` → `continue` skips every entity → 0 proxies → 0
+  draws. Fix = on a dedup hit, rebind `cold->cpu_graph = scene_id` + refresh the Hot
+  pos/attr/index handles to the freshly-loaded prefab (a genuine same-prefab dedup
+  passes identical args → no-op). Goldens (single load, frame 55) never hit the
+  collision; metal+webgpu goldens stay 92/92. Verified browser static↔anim↔die
+  switches all draw. (Latent: `prefab.unloadAll` does NOT call ClearActiveScene
+  despite its doc claiming so — entities persist; the picker works only because it
+  dispatches `scene.clear` first. Worth aligning the doc/impl later.)
+
+imgui parity in the browser is DONE (this commit): the surfaceless web app opts
+into imgui via `Engine::SetImguiEnabled(true)` + the shared `ScenarioLauncher`
+panel (`shell/scenario_launcher.hpp`, also used by native main.cpp); DOM mouse ->
+ImGui IO in web_main.cpp. The HUD overlay + the scenario picker render in Chrome
+and clicking a button loads that scenario -- identical UI to native metal/vk. The
+old HTML button bar in shell.html was removed (it duplicated the imgui panel).
 
 W7 deliverable (CDP-driven `scripts/web_move_champion.mjs`: list → select → move a
 champion, before/after capture) is DONE with static champions.

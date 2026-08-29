@@ -20,9 +20,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
+#include <fstream>
+#include <sstream>
 #include <string>
 
 #include "imgui.h"
+
+#include "shell/scenario_launcher.hpp"
 
 #include "control/boot_run.hpp"
 #include "control/command_registry.hpp"
@@ -49,6 +53,7 @@ struct WebApp {
     uint32_t width = 1280;
     uint32_t height = 720;
     cairns::Engine* engine = nullptr;
+    cairns::ScenarioLauncher launcher;
     bool quit = false;
     bool ready = false;
 };
@@ -60,9 +65,64 @@ WebApp* g_web = nullptr;
 
 WGPUStringView Sv(const char* s) { return WGPUStringView{s, WGPU_STRLEN}; }
 
+// DOM mouse -> ImGui IO. There is no imgui_impl_sdl3 on web, so we feed events
+// directly; the engine's surfaceless branch sets DisplaySize + calls NewFrame,
+// which drains this queue. targetX/Y are canvas CSS px -> scale to the 1280x720
+// framebuffer (DisplaySize) so a resized canvas still hits the right widget.
+void FeedMousePos(WebApp* app, const EmscriptenMouseEvent* e) {
+    double css_w = 0.0;
+    double css_h = 0.0;
+    emscripten_get_element_css_size("#canvas", &css_w, &css_h);
+    const float sx =
+        css_w > 0.0 ? static_cast<float>(app->width) / static_cast<float>(css_w)
+                    : 1.0f;
+    const float sy =
+        css_h > 0.0 ? static_cast<float>(app->height) / static_cast<float>(css_h)
+                    : 1.0f;
+    ImGui::GetIO().AddMousePosEvent(static_cast<float>(e->targetX) * sx,
+                                    static_cast<float>(e->targetY) * sy);
+}
+
+EM_BOOL OnMouseMove(int, const EmscriptenMouseEvent* e, void* u) {
+    FeedMousePos(static_cast<WebApp*>(u), e);
+    return EM_FALSE;  // don't swallow; let the page scroll etc. still work
+}
+
+EM_BOOL OnMouseButton(int type, const EmscriptenMouseEvent* e, void* u) {
+    FeedMousePos(static_cast<WebApp*>(u), e);
+    // DOM button {0=L,1=M,2=R} -> ImGui {0=L,1=R,2=M}.
+    const int btn = (e->button == 0) ? 0 : (e->button == 2) ? 1 : 2;
+    ImGui::GetIO().AddMouseButtonEvent(btn, type == EMSCRIPTEN_EVENT_MOUSEDOWN);
+    return EM_FALSE;
+}
+
 void Frame(void* arg) {
     WebApp* app = static_cast<WebApp*>(arg);
     if (!app->ready || !app->engine) { return; }
+
+    // Scenario picker click: reset (scene + prefabs + render modes + particles)
+    // then eval the chosen scripts/*.js -- same fixed reset + safe pre-frame
+    // point as native main.cpp, so a button does the identical thing in browser.
+    if (app->launcher.pending >= 0) {
+        const int idx = app->launcher.pending;
+        app->launcher.pending = -1;
+        app->launcher.current = idx;
+        auto& reg = cairns::control::CommandRegistry::Instance();
+        reg.Dispatch(cairns::json{{"op", "cairns.scene.clear"}});
+        reg.Dispatch(cairns::json{{"op", "cairns.prefab.unloadAll"}});
+        reg.Dispatch(cairns::json{{"op", "cairns.render.nestedGraph"},
+                                  {"args", {{"on", false}}}});
+        reg.Dispatch(cairns::json{{"op", "cairns.render.tinyTriangle"},
+                                  {"args", {{"on", false}}}});
+        reg.Dispatch(cairns::json{{"op", "cairns.particles.enable"},
+                                  {"args", {{"on", false}}}});
+        std::ifstream f(app->launcher.scripts[idx].path);
+        std::stringstream ss;
+        ss << f.rdbuf();
+        reg.Dispatch(cairns::json{{"op", "cairns.script.eval"},
+                                  {"args", {{"code", ss.str()}}}});
+    }
+
     app->engine->RenderHeadlessFrame();  // renders into the offscreen final_target_
 
     void* ftex = app->engine->FinalTargetNativeTexture();
@@ -83,6 +143,11 @@ void Frame(void* arg) {
     wgpuQueueSubmit(app->queue, 1, &cb);
     wgpuCommandBufferRelease(cb);
     wgpuCommandEncoderRelease(enc);
+    // emdawnwebgpu mints a FRESH refcounted texture handle (+ JS-table slot) on
+    // every wgpuSurfaceGetCurrentTexture; without this release it leaks one per
+    // frame, growing the WASM heap until it scribbles the stack cookie (~frame
+    // 450) -> "corrupted heap (address zero)" abort. Pre-imgui regression.
+    wgpuTextureRelease(st.texture);
     // No wgpuSurfacePresent in the browser: emdawnwebgpu auto-presents the
     // surface's current texture when this rAF callback returns.
 }
@@ -128,7 +193,18 @@ void StartEngine(WebApp* app) {
     cairns::control::RegisterScriptOps(reg);
     // No RunBootScript: run.js is the native 500-actor perf workload (loadBatch
     // 100 + instantiateGrid x5). The browser boots empty; scenarios spawn on a
-    // button click via window.cairns.dispatch.
+    // button click via the imgui launcher (or window.cairns.dispatch).
+
+    // imgui parity with native windowed: the HUD overlay + the scenario picker,
+    // same Engine hooks main.cpp uses. The web app is surfaceless so it must opt
+    // in explicitly (cairns_serve stays imgui-free).
+    app->engine->SetImguiEnabled(true);
+    app->launcher.Enumerate();
+    app->engine->SetImguiPanel(&cairns::DrawScenarioPanel, &app->launcher);
+    emscripten_set_mousemove_callback("#canvas", app, /*useCapture=*/false,
+                                      OnMouseMove);
+    emscripten_set_mousedown_callback("#canvas", app, false, OnMouseButton);
+    emscripten_set_mouseup_callback("#canvas", app, false, OnMouseButton);
 
     app->ready = true;
     std::fprintf(stderr, "[web] engine ready (%ux%u)\n", app->width, app->height);
