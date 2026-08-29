@@ -482,15 +482,6 @@ public:
     // Returns LoadPrefabBatchResult exactly like LoadPrefabBatch.
     LoadPrefabBatchResult RuntimeLoadBatch(
             std::span<const std::filesystem::path> glbs) {
-        // Unity 2-thread pattern: park the render thread before main
-        // thread touches the queue (LoadPrefabBatch does vkQueueSubmit
-        // for staging copies; device.WaitIdle below is itself a
-        // queue-touching call requiring external sync). Without this
-        // drain the validation layer fires
-        // UNASSIGNED-Threading-MultipleThreads-Write on VkQueue.
-        if (render_thread_) {
-            render_thread_->Drain();
-        }
         rhi_.device.WaitIdle();
         LoadPrefabBatchResult r = LoadPrefabBatch(glbs);
         if (r.count > 0) {
@@ -2952,13 +2943,32 @@ public:
         slot_lock.unlock();
         render_thread_->Submit(slot, &s.pkt);
 
-        // Unity 2-thread pattern: render thread owns ALL VkQueue access
-        // including vkQueuePresentKHR. Main thread does NOT poll, wait,
-        // or call Frames::Present -- the entire present_queue_ + present_m_
-        // + present_ready machinery is vestigial and only kept for the
-        // PerSlot fields used by the surfaceless / golden / pick drain
-        // path. Back-pressure on main is via render_thread_->Submit
-        // (depth = kFramesInFlight).
+        present_queue_.push_back(static_cast<int32_t>(slot));
+        {
+            cairns::Timer t_pw("present_wait", 9);
+            while (!present_queue_.empty()) {
+                const int32_t head = present_queue_.front();
+                PerSlot& ps = slots_[head];
+                rhi::FrameContext present_fc{};
+                rhi::SwapResolveTarget present_target{};
+                bool ready = false;
+                {
+                    std::unique_lock<std::mutex> lk(present_m_);
+                    if (ps.present_ready) {
+                        present_fc = ps.present_fc;
+                        present_target = ps.present_target;
+                        ps.present_ready = false;
+                        ready = true;
+                    }
+                }
+                if (!ready) {
+                    break;
+                }
+                present_queue_.pop_front();
+                rhi_.frames.Present(present_target, rhi_.frame_capture,
+                                    present_fc);
+            }
+        }
         prev_present_slot_ = static_cast<int32_t>(slot);
 
         // Under CAIRNS_DUMP, collapse to depth-1 pipelining: wait for the
@@ -3640,9 +3650,6 @@ public:
         if (!graph_->Bake(pkt.slot) || !graph_->Execute(fc, swap_target)) {
             t_record.End();
             rhi_.frames.EndSubmit(swap_target, rhi_.frame_capture, fc);
-            // Unity 2-thread pattern: render thread owns ALL VkQueue access
-            // (submit + present). Main thread never touches the queue.
-            rhi_.frames.Present(swap_target, rhi_.frame_capture, fc);
             {
                 std::lock_guard<std::mutex> lk(present_m_);
                 s.present_fc = fc;
@@ -3669,9 +3676,6 @@ public:
         }
         t_record.End();
         rhi_.frames.EndSubmit(swap_target, rhi_.frame_capture, fc);
-        // Unity 2-thread pattern: render thread owns ALL VkQueue access
-        // (submit + present). Main thread never touches the queue.
-        rhi_.frames.Present(swap_target, rhi_.frame_capture, fc);
         {
             std::lock_guard<std::mutex> lk(present_m_);
             s.present_fc = fc;

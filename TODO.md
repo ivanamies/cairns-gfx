@@ -95,33 +95,6 @@ cost becomes ∝ visible.
 
 ### #253 Phase 4 — half4 skin output (decide post P1/P3)
 
-### dev-drive helper API mismatch (post-#225 rename)
-`scripts/_drive_spawn.js` + `scripts/dev_drive.sh spawn N` still call
-the deprecated `cairns.world.*` op surface
-(`cairns.world.numScenes`, `cairns.world.listEntities`,
-`cairns.world.setTransform`). Post-#225 the canonical names are
-`cairns.scene.*`. `spawnTotal(N)` therefore returns
-`{"error":"no scenes loaded"}` even when prefabs are loaded -- the
-helpers were not updated alongside the #225 rename. Also: helpers
-expect a boot-time auto-loaded scene that #289 (L9) deleted, so
-`spawnTotal` needs an explicit "load prefab(s) first" precondition
-or a fallback that loads a default GLB. Fix:
-- Port `_drive_spawn.js` to `cairns.scene.*` (numScenes -> ?,
-  listEntities -> ?, setTransform -> ?). Verify each op exists in
-  the new vocab (some may have moved into `cairns.prefab.*`).
-- `dev_drive.sh spawn N` should call `cairns.prefab.load` first
-  for a curated set of distinct GLBs (per
-  [[default-9-glbs-workload]] + [[test-glb-variety]]) if no
-  prefabs are resident.
-- Update absolute-vs-relative GLB path handling: `cairns.prefab.load`
-  needs an absolute path or a path resolved against the engine's
-  asset root. Currently the helper passes
-  `third_party/SDL/...` as a relative string and it silently fails
-  (returns `{ok:false}` with no `[LOAD]` log line) because the
-  sdl-min binary's CWD is the .app bundle, not the repo root.
-  Either pre-resolve in JS or fix the loader to resolve against
-  the repo root.
-
 ---
 
 ## WebGPU stand-up ladder

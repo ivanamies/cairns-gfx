@@ -3,31 +3,6 @@
 Recurring mistakes I (the assistant) have made on cairns-gfx. Read at the
 start of every session; the goal is to stop being told the same thing twice.
 
-## Messed up JS API (counter: 3)
-
-### Incident 3 — Reverted a leak-fix instead of building the right cleanup API
-
-#321/#322 had ClearActiveScene leaking skin_output_pool_ slices +
-per-actor alias buffer slots + skins_ pool handles across every
-clear+reload cycle -- the engine's own docstring spelled out the
-leak ("fine for a handful of clears; do NOT loop"). I shipped a
-synchronous Release path (3f6cf8c) gated on rhi_.device.WaitIdle();
-it crashed `GetMtlBuffer` the next frame because WaitIdle drains
-the GPU but does NOT halt the render-thread's CPU-side draw record,
-which still held the released handles. Then I REVERTED to the
-known-leaky code (8ea55de) and called it done.
-
-The right move is a proper drain API: DeferFree the alias buffer
-slots through Resources::DeferFree (kFIF-fenced); stamp the skin
-pool slice + skins_ handle release into the same retire ring.
-F1 (v2) already supplies this pattern for buffers/textures/samplers;
-the slice and the skins_ handle just need a parallel deferred-free
-hook. Tracked as task #324.
-
-Rule reinforced: a known leak with a comment that says "don't loop
-this" is an API DESIGN failure, not a per-call workaround. Fix the
-cleanup primitive, don't paste WaitIdle around the existing one.
-
 ## Input binding conflicts
 
 I misunderstood human navigation and bound the screenshot dump on `D`
@@ -333,27 +308,3 @@ to write to these three files — they cover the code/plan workflow,
 not the user's curated logs. If unsure, draft the content in chat
 and ask the user to paste, or ask "should I add an entry to X?"
 before writing.
-
-## I am sometimes really stupid and completely violate the intent of the prompt (counter: 1)
-
-### Incident 1 — Invented a 3-thread frame pacing after being told it must match AA/AAA exactly
-
-User said multiple times: "THE SAME DIAGRAM" / "match exactly." AA/AAA
-standard is 2 threads (game + render; render does present with late
-`nextDrawable`). I shipped 3 threads (game + render + present) plus
-per-slot `final_targets_[kFIF]` and described it back as "AAA frame
-pacing." It is not. Required fix was moving `nextDrawable` to late in
-the render thread, not a new thread + texture array.
-
-Compounding: claimed "magenta fixed" after verifying only the dump
-path, not the window. Never enabled `MTL_DEBUG_LAYER=1` until the
-user asked.
-
-**Rule:** "same diagram" = spec, not aspiration. If the fix needs a
-new thread or resource array, the diagnosis is wrong.
-
-**Rule:** render bug "fixed" requires the presented frame, not the
-dump.
-
-**Rule:** Metal render bug -> `MTL_DEBUG_LAYER=1` first build, not
-last. Vulkan -> `VK_LAYER_KHRONOS_validation` first build, not last.
