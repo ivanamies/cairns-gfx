@@ -323,8 +323,6 @@ private:
     bool BuildMeshOpaqueDraws() {
         drawList_.clear();
         drawListSorted_.clear();
-        draw_material_offsets_.clear();
-        draw_drawtmp_offsets_.clear();
 
         const char* freeze_rot = std::getenv("CAIRNS_FREEZE_ROT");
         const float angle_degs = freeze_rot
@@ -433,8 +431,8 @@ private:
                     assert(prim.indexCount % 3 == 0);
                     draw.triangle_count = prim.indexCount / 3;
 
-                    draw_material_offsets_.push_back(material_offset);
-                    draw_drawtmp_offsets_.push_back(drawtmp_offset);
+                    draw.dynamic_buffer_offsets[0] = material_offset;
+                    draw.dynamic_buffer_offsets[1] = drawtmp_offset;
                     drawListSorted_.emplace_back(cairns::BuildDrawKey(draw), static_cast<uint32_t>(drawList_.size()));
                     drawList_.push_back(draw);
                 }
@@ -1401,8 +1399,8 @@ private:
 
                 std::array<uint32_t, 3> dyn_offsets = {
                     globals_offset_,
-                    draw_material_offsets_[draw_idx],
-                    draw_drawtmp_offsets_[draw_idx]
+                    draw.dynamic_buffer_offsets[0],
+                    draw.dynamic_buffer_offsets[1]
                 };
                 vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                     unlit->vk_layout, 1, 1, &dynUboSets_[currentFrame],
@@ -2443,8 +2441,6 @@ private:
     uint32_t globals_offset_ = 0;
     std::vector<cairns::Draw> drawList_;
     std::vector<std::pair<cairns::DrawKey, uint32_t>> drawListSorted_;
-    std::vector<uint32_t> draw_material_offsets_;
-    std::vector<uint32_t> draw_drawtmp_offsets_;
 
     VkDescriptorPool descriptorPool;
     std::vector<VkDescriptorSet> descriptorSets;
