@@ -68,6 +68,7 @@ class Device;
 class Allocator;
 class Resources;
 class Bindless;
+class Frames;
 struct Buffer;
 struct Texture;
 struct Sampler;
@@ -537,19 +538,11 @@ public:
     // per-frame command/sync/descriptor state. Device + Allocator must be Init'd
     // first (the engine owns construction order).
     bool InitDevice(Device& device, Allocator& alloc, Resources& res,
-                    Bindless& bindless);
+                    Bindless& bindless, Frames& frames);
     // Neutral swapchain bring-up: fills `sc` using the device objects InitDevice
     // owns (Vulkan: device/surface/queues/pool/samples; Metal: device).
     bool InitSwapChain(SwapChain& sc, SDL_Window* window);
-    // Creates the frame's color/depth render targets + render-pass state. Neutral;
-    // call after scene resources are loaded. On Vulkan these targets already exist
-    // (built in sc.Init), so this is a no-op; on Metal they share the texture pool
-    // with scene textures and must be created here, after them.
-    bool InitFrameTargets(SwapChain& sc);
     void Deinit();
-    // Request a one-shot swapchain dump on the next EndFrame (neutral; both
-    // backends honor it). Cleared after the dump is written.
-    void SetDumpPath(const std::filesystem::path& path);
 
     Handle<Buffer> CreateBuffer(const BufferDesc& desc);
     Handle<Texture> CreateTexture(const TextureDesc& desc);
@@ -575,10 +568,6 @@ public:
     Shader::Hot* GetHot(Handle<Shader> h);
     Kernel::Hot* GetHot(Handle<Kernel> h);
 
-    // Fork C frame lifecycle: owns sync + command-buffer recording for one frame.
-    FrameContext BeginFrame(SwapChain& sc);
-    void EndFrame(FrameContext& fc);
-
     uint32_t GetBufferByteSize(Handle<Buffer> h) const;
     // Byte offset of a buffer within its backing master allocation. Neutral.
     uint32_t BufferBaseOffset(Handle<Buffer> h);
@@ -600,9 +589,6 @@ public:
 #endif  // CAIRNS_METAL
 
 private:
-    // Internal bump-ring advance, called by BeginFrame(SwapChain&). Not public API.
-    void BeginFrame();
-
     struct Impl;
     Impl* impl_ = nullptr;
 };

@@ -29,6 +29,7 @@
 #include "rhi/metal/internal/allocator_impl.hpp"
 #include "rhi/resources.hpp"
 #include "rhi/bindless.hpp"
+#include "rhi/frames.hpp"
 #include "rhi/swap_chain.hpp"
 #include "gpu_scene_registry.hpp"
 
@@ -36,18 +37,10 @@ namespace cairns::rhi {
 
 struct ResourceManager::Impl {
     BackendInitParams params;
-    Allocator* alloc = nullptr;  // borrowed; owns the MemoryAllocator
-    std::filesystem::path dump_path;
-
-    // rhi-owned per-frame render state (was app-registered via MtlRegisterFrame).
-    void* frame_semaphore = nullptr;  // dispatch_semaphore_t
-    MTL::RenderPassDescriptor* render_pass_desc = nullptr;
-    MTL::DepthStencilState* depth_stencil = nullptr;
-    Handle<Texture> msaa_handle = Handle<Texture>::Null;
-    Handle<Texture> depth_handle = Handle<Texture>::Null;
-
+    Allocator* alloc = nullptr;     // borrowed; owns the MemoryAllocator
     Resources* res = nullptr;       // borrowed; owns the 7 pools + frame counter
     Bindless* bindless = nullptr;   // borrowed
+    Frames* frames = nullptr;       // borrowed
 };
 
 namespace {
@@ -80,12 +73,6 @@ void ResourceManager::Deinit() {
     if (!impl_) {
         return;
     }
-    if (impl_->depth_stencil) {
-        impl_->depth_stencil->release();
-    }
-    if (impl_->render_pass_desc) {
-        impl_->render_pass_desc->release();
-    }
     // delete impl_ runs the memory allocator dtor, freeing device heaps. The
     // device/queue release is owned by Device::Deinit, which the engine calls
     // AFTER this (so heaps free against a live device).
@@ -95,7 +82,7 @@ void ResourceManager::Deinit() {
 
 
 bool ResourceManager::InitDevice(Device& dev, Allocator& alloc, Resources& res,
-                                 Bindless& bindless) {
+                                 Bindless& bindless, Frames& frames) {
     impl_ = new Impl();
     // Mirror the device/queue owned by Device; borrow the Allocator + Resources
     // (already Init'd). Device owns device/queue teardown.
@@ -104,58 +91,13 @@ bool ResourceManager::InitDevice(Device& dev, Allocator& alloc, Resources& res,
     impl_->alloc = &alloc;
     impl_->res = &res;
     impl_->bindless = &bindless;
-    impl_->frame_semaphore = dispatch_semaphore_create(kFramesInFlight);
-    {
-        MTL::DepthStencilDescriptor* dsd = MTL::DepthStencilDescriptor::alloc()->init();
-        dsd->setDepthCompareFunction(MTL::CompareFunctionLessEqual);
-        dsd->setDepthWriteEnabled(true);
-        impl_->depth_stencil = impl_->params.device->newDepthStencilState(dsd);
-        dsd->release();
-    }
+    impl_->frames = &frames;
     return true;
 }
 
 bool ResourceManager::InitSwapChain(SwapChain& sc, SDL_Window* window) {
     return sc.Init(impl_->params.device, window);
 }
-
-// Metal MSAA/depth targets share the texture Pool index space with scene
-// textures, and the bindless registry asserts scene-texture handle.index ==
-// bindless slot. So these MUST be created AFTER scene textures (unlike Vulkan,
-// whose depth/MSAA are raw images created in sc.Init). Call post scene load.
-bool ResourceManager::InitFrameTargets(SwapChain& sc) {
-    constexpr uint32_t kSampleCount = 4;
-    const int32_t w = static_cast<int32_t>(sc.Width());
-    const int32_t h = static_cast<int32_t>(sc.Height());
-    {
-        TextureDesc d;
-        d.dimensions = {w, h, 1};
-        d.format = Format::kBgra8Unorm;
-        d.sample_count = kSampleCount;
-        d.usage = kTexUsageColorTarget;
-        d.memory = Memory::kDefault;
-        impl_->msaa_handle = CreateTexture(d);
-        if (impl_->msaa_handle.IsNull()) {
-            return false;
-        }
-    }
-    {
-        TextureDesc d;
-        d.dimensions = {w, h, 1};
-        d.format = Format::kD32F;
-        d.sample_count = kSampleCount;
-        d.usage = kTexUsageDepthTarget;
-        d.memory = Memory::kDefault;
-        impl_->depth_handle = CreateTexture(d);
-        if (impl_->depth_handle.IsNull()) {
-            return false;
-        }
-    }
-    MTL::Texture* msaa = GetHot(impl_->msaa_handle)->api_view;
-    MTL::Texture* depth = GetHot(impl_->depth_handle)->api_view;
-    return InitRenderPassDescriptor(impl_->render_pass_desc, msaa, depth, sc);
-}
-
 
 Handle<Buffer> ResourceManager::CreateBuffer(const BufferDesc& d) {
     return impl_->res->CreateBuffer(d);
@@ -428,11 +370,6 @@ Handle<Kernel> ResourceManager::CreateComputePipeline(
     return h;
 }
 
-void ResourceManager::BeginFrame() {
-    impl_->res->AdvanceFrame();
-}
-
-
 uint32_t ResourceManager::GetBufferByteSize(Handle<Buffer> h) const {
     Buffer::Cold* cold = impl_->res->buffers.GetCold(h);
     if (!cold) {
@@ -458,71 +395,6 @@ MTL::Buffer* ResourceManager::GetBumpMasterBuffer(Memory mem) const {
     return impl_->res->GetBumpMasterBuffer(mem);
 }
 
-void ResourceManager::SetDumpPath(const std::filesystem::path& path) {
-    impl_->dump_path = path;
-}
-
-FrameContext ResourceManager::BeginFrame(SwapChain& sc) {
-    dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(impl_->frame_semaphore),
-                            DISPATCH_TIME_FOREVER);
-    BeginFrame();  // bump ring reset
-
-    sc.NextDrawable();
-    MTL::Texture* msaa = GetHot(impl_->msaa_handle)->api_view;
-    MTL::Texture* depth = GetHot(impl_->depth_handle)->api_view;
-    UpdateRenderPassDescriptor(impl_->render_pass_desc, msaa, depth, sc);
-
-    MTL::CommandBuffer* cmd = impl_->params.queue->commandBuffer();
-    dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(impl_->frame_semaphore);
-    cmd->addCompletedHandler([sem](MTL::CommandBuffer*) { dispatch_semaphore_signal(sem); });
-
-    FrameContext fc;
-    fc.frame_index = 0;
-    fc.swapchain_image_index = 0;
-    fc.cmd.impl_ = new CommandRecorder::Impl{this,           &sc,  cmd, nullptr,
-                                             impl_->render_pass_desc,
-                                             impl_->depth_stencil};
-    return fc;
-}
-
-void ResourceManager::EndFrame(FrameContext& fc) {
-    CommandRecorder::Impl* ri = fc.cmd.impl_;
-    MTL::CommandBuffer* cmd = ri->cmd;
-
-    if (!impl_->dump_path.empty()) {
-        MTL::Texture* drawableTex = ri->sc->GetDrawable()->texture();
-        const NS::UInteger w = drawableTex->width();
-        const NS::UInteger h = drawableTex->height();
-        const NS::UInteger bytesPerRow = w * 4;
-        const NS::UInteger bufSize = bytesPerRow * h;
-        MTL::Buffer* readback = impl_->params.device->newBuffer(bufSize, MTL::ResourceStorageModeShared);
-        MTL::BlitCommandEncoder* blitEnc = cmd->blitCommandEncoder();
-        blitEnc->copyFromTexture(drawableTex, 0, 0, MTL::Origin{0, 0, 0}, MTL::Size{w, h, 1},
-                                 readback, 0, bytesPerRow, 0);
-        blitEnc->endEncoding();
-        cmd->presentDrawable(ri->sc->GetDrawable());
-        cmd->commit();
-        cmd->waitUntilCompleted();
-        std::vector<uint8_t> rgba(bufSize);
-        const uint8_t* bgra = static_cast<const uint8_t*>(readback->contents());
-        for (NS::UInteger i = 0; i < w * h; ++i) {
-            rgba[i * 4 + 0] = bgra[i * 4 + 2];
-            rgba[i * 4 + 1] = bgra[i * 4 + 1];
-            rgba[i * 4 + 2] = bgra[i * 4 + 0];
-            rgba[i * 4 + 3] = bgra[i * 4 + 3];
-        }
-        stbi_write_png(impl_->dump_path.string().c_str(), static_cast<int>(w),
-                       static_cast<int>(h), 4, rgba.data(), static_cast<int>(bytesPerRow));
-        readback->release();
-        impl_->dump_path.clear();
-    } else {
-        cmd->presentDrawable(ri->sc->GetDrawable());
-        cmd->commit();
-    }
-
-    delete ri;
-    fc.cmd.impl_ = nullptr;
-}
 
 }  // namespace cairns::rhi
 

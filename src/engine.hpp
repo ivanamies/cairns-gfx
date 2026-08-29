@@ -35,6 +35,7 @@
 #include "rhi/allocator.hpp"
 #include "rhi/resources.hpp"
 #include "rhi/bindless.hpp"
+#include "rhi/frames.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/command_recorder.hpp"
 
@@ -81,7 +82,7 @@ public:
     }
 
     bool RequestViewportDump(const std::filesystem::path& path) {
-        rm_.SetDumpPath(path);
+        frames_.SetDumpPath(path);
         return true;
     }
     
@@ -124,7 +125,10 @@ public:
         if (!bindless_.Init(device_, resources_)) {
             return false;
         }
-        if (!rm_.InitDevice(device_, alloc_, resources_, bindless_)) {
+        if (!frames_.Init(device_, resources_)) {
+            return false;
+        }
+        if (!rm_.InitDevice(device_, alloc_, resources_, bindless_, frames_)) {
             return false;
         }
         if ( !initSwapChain(window)) {
@@ -202,7 +206,7 @@ public:
         if ( !initRenderPipeline() ) {
             return false;
         }
-        if ( !rm_.InitFrameTargets(swapchain_) ) {
+        if ( !frames_.InitTargets(swapchain_) ) {
             return false;
         }
         if ( !initParticles() ) {
@@ -357,10 +361,10 @@ public:
     bool draw() {
         frame_++;
         if (frame_ == 5) {
-            rm_.SetDumpPath("/tmp/cairns_dump.png");
+            frames_.SetDumpPath("/tmp/cairns_dump.png");
         }
 
-        rhi::FrameContext fc = rm_.BeginFrame(swapchain_);
+        rhi::FrameContext fc = frames_.Begin(swapchain_);
 
         const uint64_t now_ticks = SDL_GetTicks();
         float delta_time = 0.016f;
@@ -436,7 +440,7 @@ public:
         fc.cmd.DrawPoints(pd);
 
         fc.cmd.EndRenderPass();
-        rm_.EndFrame(fc);
+        frames_.End(fc);
         particle_parity_ ^= 1;
         return true;
     }
@@ -617,6 +621,7 @@ public:
     bool deinit() {
         swapchain_.Deinit();
         rm_.Deinit();
+        frames_.Deinit();
         bindless_.Deinit();
         resources_.Deinit();
         alloc_.Deinit();
@@ -650,6 +655,7 @@ private:
     rhi::Allocator alloc_;
     rhi::Resources resources_;
     rhi::Bindless bindless_;
+    rhi::Frames frames_;
     rhi::ResourceManager rm_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
     rhi::Handle<rhi::BindGroup> bindless_bg_;

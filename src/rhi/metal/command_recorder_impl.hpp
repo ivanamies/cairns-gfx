@@ -18,7 +18,7 @@
 namespace cairns::rhi {
 
 struct CommandRecorder::Impl {
-    ResourceManager* rm = nullptr;
+    Resources* res = nullptr;
     SwapChain* sc = nullptr;
     MTL::CommandBuffer* cmd = nullptr;
     MTL::RenderCommandEncoder* enc = nullptr;

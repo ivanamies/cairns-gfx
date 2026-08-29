@@ -16,6 +16,7 @@
 #include "rhi/command_recorder.hpp"
 #include "rhi/vulkan/command_recorder_impl.hpp"
 #include "rhi/resource_manager.hpp"
+#include "rhi/resources.hpp"
 #include "rhi/swap_chain.hpp"
 #include "util/draw.hpp"
 #include "util/material_gpu.hpp"
@@ -24,7 +25,7 @@
 namespace cairns::rhi {
 
 void CommandRecorder::Dispatch(const ComputeDispatch& d) {
-    Kernel::Hot* k = impl_->rm->GetHot(d.kernel);
+    Kernel::Hot* k = impl_->res->GetHot(d.kernel);
     VkDescriptorSet set = impl_->compute_set;
 
     const size_t n = d.buffers.size();
@@ -33,7 +34,7 @@ void CommandRecorder::Dispatch(const ComputeDispatch& d) {
     for (size_t i = 0; i < n; ++i) {
         const BoundBuffer& b = d.buffers[i];
         uint32_t off = 0;
-        VkBuffer buf = impl_->rm->GetVkBuffer(b.buffer, &off);
+        VkBuffer buf = impl_->res->GetVkBuffer(b.buffer, &off);
         const bool is_ubo = (b.slot == 0);
         infos[i].buffer = buf;
         infos[i].offset = off + b.offset;
@@ -95,7 +96,7 @@ void CommandRecorder::DrawMeshes(const MeshDrawList& list) {
     VkCommandBuffer cb = impl_->gfx;
     VkDescriptorSet dyn_set = impl_->dyn_ubo_set;
 
-    VkBuffer bump_buf = impl_->rm->GetVkBumpMasterBuffer(Memory::kDynamic);
+    VkBuffer bump_buf = impl_->res->GetVkBumpMasterBuffer(Memory::kDynamic);
     std::array<VkWriteDescriptorSet, 3> writes{};
     std::array<VkDescriptorBufferInfo, 3> buf_infos{};
     const uint32_t ranges[3] = {static_cast<uint32_t>(sizeof(RenderPassGlobals)),
@@ -115,9 +116,9 @@ void CommandRecorder::DrawMeshes(const MeshDrawList& list) {
     }
     vkUpdateDescriptorSets(impl_->device, 3, writes.data(), 0, nullptr);
 
-    Shader::Hot* unlit = impl_->rm->GetHot(list.pipeline);
+    Shader::Hot* unlit = impl_->res->GetHot(list.pipeline);
     VkDescriptorSet bindless =
-        static_cast<VkDescriptorSet>(impl_->rm->GetHot(list.bindless)->api_descriptor_set);
+        static_cast<VkDescriptorSet>(impl_->res->GetHot(list.bindless)->api_descriptor_set);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_pipeline);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_layout, 0, 1,
                             &bindless, 0, nullptr);
@@ -126,12 +127,12 @@ void CommandRecorder::DrawMeshes(const MeshDrawList& list) {
         const cairns::Draw& draw = list.draws[list.sorted_indices[i]];
         uint32_t pos_off = 0;
         VkBuffer pos_buf =
-            impl_->rm->GetVkBuffer(draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
+            impl_->res->GetVkBuffer(draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
         VkDeviceSize pos_off_dev =
             pos_off + static_cast<VkDeviceSize>(draw.vertex_offset) * 16u;
         vkCmdBindVertexBuffers(cb, 0, 1, &pos_buf, &pos_off_dev);
         uint32_t idx_base = 0;
-        VkBuffer idx_buf = impl_->rm->GetVkBuffer(draw.index_buffer, &idx_base);
+        VkBuffer idx_buf = impl_->res->GetVkBuffer(draw.index_buffer, &idx_base);
         vkCmdBindIndexBuffer(cb, idx_buf, idx_base, VK_INDEX_TYPE_UINT32);
         const uint32_t first_index = (draw.index_offset - idx_base) / sizeof(uint32_t);
         std::array<uint32_t, 3> dyn_offsets = {list.globals_offset,
@@ -149,10 +150,10 @@ void CommandRecorder::DrawMeshes(const MeshDrawList& list) {
 
 void CommandRecorder::DrawPoints(const PointDraw& pd) {
     VkCommandBuffer cb = impl_->gfx;
-    Shader::Hot* p = impl_->rm->GetHot(pd.pipeline);
+    Shader::Hot* p = impl_->res->GetHot(pd.pipeline);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p->vk_pipeline);
     uint32_t ssbo_off = 0;
-    VkBuffer ssbo = impl_->rm->GetVkBuffer(pd.vertex_buffer, &ssbo_off);
+    VkBuffer ssbo = impl_->res->GetVkBuffer(pd.vertex_buffer, &ssbo_off);
     VkDeviceSize off = ssbo_off;
     vkCmdBindVertexBuffers(cb, 0, 1, &ssbo, &off);
     VkDescriptorSet point_set = impl_->point_set;

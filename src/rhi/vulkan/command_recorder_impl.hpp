@@ -18,7 +18,7 @@
 namespace cairns::rhi {
 
 struct CommandRecorder::Impl {
-    ResourceManager* rm = nullptr;
+    Resources* res = nullptr;
     SwapChain* sc = nullptr;
     uint32_t frame = 0;
     uint32_t image_index = 0;
