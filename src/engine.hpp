@@ -40,11 +40,12 @@
 
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
+#include "util/cpu_arena.hpp"
 #include "util/frame_clock.hpp"
 
 namespace cairns {
 
-inline static constexpr uint32_t kHotArenaMemorySize = 1 << 29;
+inline static constexpr uint32_t kFrameSlabBytes = 4u * 1024u * 1024u;  // per-frame transient (A)
 inline static constexpr uint32_t kUboAlign = 32;
 inline static constexpr uint32_t kMeshPosBindSlot = 0;
 
@@ -67,8 +68,6 @@ public:
     using BindGroupId = uint32_t;
     
     Engine() :
-    hot_arena_mem_(malloc(kHotArenaMemorySize)),
-    hot_arena_(hot_arena_mem_, kHotArenaMemorySize),
     scenes_(cairns::Allocator<cairns::Scene>(hot_arena_)),
     root_nodes_stack_cache_(cairns::Allocator<int32_t>(hot_arena_)),
     drawListSorted_(cairns::Allocator<std::pair<cairns::DrawKey,uint32_t>>(hot_arena_)),
@@ -97,6 +96,17 @@ public:
     }
     
     bool initCpuAllocators() {
+        // Allocator B: general chunk allocator backs hot_arena_ + provides slab for A.
+        hot_arena_.Init();
+        // Allocator A: per-frame transient ring. Slab borrowed from B. kFrameSlabBytes
+        // is a starting size -- read frame_arena_.HighWaterAny() in Timer reports to tune.
+        const uint32_t slab_bytes = rhi::kFramesInFlight * kFrameSlabBytes;
+        frame_arena_slab_ = static_cast<uint8_t*>(
+            hot_arena_.Allocate(slab_bytes, 16));
+        if (frame_arena_slab_ == nullptr) {
+            return false;
+        }
+        frame_arena_.Init<rhi::kFramesInFlight>(frame_arena_slab_, kFrameSlabBytes);
         return true;
     }
     
@@ -403,7 +413,7 @@ public:
 
     // Build a draw list for a subset of world entities, depth-sorted for the
     // given camera. Mirrors BuildMeshOpaqueDraws over a filtered SceneWorld.
-    void BuildSubsetDraws(const std::vector<uint32_t>& entity_indices,
+    void BuildSubsetDraws(std::span<const uint32_t> entity_indices,
                           const glm::mat4& view_matrix, const glm::mat4& root,
                           std::vector<cairns::Draw>& out_draws,
                           std::vector<std::pair<cairns::DrawKey, uint32_t>>& out_sorted) {
@@ -514,12 +524,17 @@ public:
         const uint32_t off_b = UploadGlobals(vp_b, eye, near_z, fb_w, fb_h);
         const uint32_t off_c = UploadGlobals(vp_c, eye, near_z, fb_w, fb_h);
 
-        std::vector<uint32_t> e_all;
+        // Smoke wire-up for allocator A: route this transient through the per-frame ring.
+        std::vector<uint32_t, cairns::BumpStdAllocator<uint32_t>> e_all{
+            cairns::BumpStdAllocator<uint32_t>(frame_arena_.Current())};
+        e_all.reserve(world_.entities.size());
         for (uint32_t i = 0; i < world_.entities.size(); ++i) {
             e_all.push_back(i);
         }
-        BuildSubsetDraws({0}, view_a, root, glb1_draws_, glb1_sorted_);
-        BuildSubsetDraws({1}, view_b, root, glb2_draws_, glb2_sorted_);
+        const uint32_t e_glb1[] = {0};
+        const uint32_t e_glb2[] = {1};
+        BuildSubsetDraws(e_glb1, view_a, root, glb1_draws_, glb1_sorted_);
+        BuildSubsetDraws(e_glb2, view_b, root, glb2_draws_, glb2_sorted_);
         BuildSubsetDraws(e_all, view_c, root, all5_draws_, all5_sorted_);
 
         auto make_ml = [&](std::vector<cairns::Draw>& d,
@@ -693,6 +708,7 @@ public:
         cairns::Timer t_frame("frame", 0);
 
         rhi::FrameContext fc = rhi_.frames.Begin(rhi_.resources, rhi_.alloc, swapchain_);
+        frame_arena_.BeginFrame(frame_);
 
         cairns::Timer t_build("build_draws", 1);
         if ( !BuildMeshOpaqueDraws()) {
@@ -1193,8 +1209,10 @@ public:
 private:
     // todo @iamies
     // make an engine dtor and delete this
-    void* hot_arena_mem_;
     cairns::Arena hot_arena_;
+    // Per-frame transient ring (A). Slab borrowed from hot_arena_ (B).
+    uint8_t* frame_arena_slab_ = nullptr;
+    cairns::FrameArena frame_arena_;
     
     ////////// DO NOT MOVE ARENA BELOW THIS LINE. because c++.
     
