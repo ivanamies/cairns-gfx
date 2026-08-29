@@ -188,7 +188,7 @@ AllocResult MemoryAllocator::AllocBuffer(uint32_t bytes, BufferUsage,
     }
 
     const uint32_t block_bytes = (padded > kHeapBlockBytes)
-                                     ? padded
+                                     ? padded + (padded >> 3)
                                      : kHeapBlockBytes;
     uint32_t new_hi = kInvalidBlock;
     if (!CreateBufferBlock(block_bytes, mem, &new_hi)) {
@@ -305,6 +305,10 @@ void* MemoryAllocator::BumpAllocate(uint32_t bytes, uint32_t align, Memory mem,
 uint32_t MemoryAllocator::BumpMasterHeapIndex(Memory mem) const {
     const BumpRing& r = rings_[mem_index(mem)];
     return r.block_indices[r.current_slot];
+}
+
+uint32_t MemoryAllocator::BumpRingBytes(Memory mem) const {
+    return rings_[mem_index(mem)].block_bytes;
 }
 
 uint32_t MemoryAllocator::BumpSaveCursor(Memory mem) const {

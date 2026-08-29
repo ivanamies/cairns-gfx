@@ -124,17 +124,25 @@ HUMAN TODO — kill the pimpl `Impl* impl_` heap indirection (make it compile-ti
   guarded backend headers (Vk*/MTL::*) — keep that contained, or use a fixed-size
   aligned storage buffer if header hygiene matters more than simplicity.
 
-DONE — Aaltonen slide 26 (Pack Meshes). Two parts landed:
+DONE — Aaltonen slide 26 (Pack Meshes), now packed ACROSS all GLBs:
   1. Recorders select each primitive via baseVertex/baseIndex in the draw call and
      change-track the VB/IB binds (bind only when the mesh buffer changes).
-  2. LoadSceneGpu co-allocates the whole scene's verts in lockstep -- one shared pos
-     buffer + one shared attr buffer (vertex-aligned, NOT interleaved) + one shared index
-     buffer; every mesh shares those handles and prims carry a scene-global baseVertex/
-     baseIndex. So all of a scene's draws now resolve to the same buffers and the recorder
-     binds each stream ONCE per scene (was per mesh/draw). Byte-identical on metal.
-  pos+attr now live in ONE physical buffer [positions | attributes] (sections adjacent,
-  not interleaved) for cache locality; the attr stream binds it via a non-owning alias
-  handle at the attr-section offset.
-  Optional later: packing ACROSS scenes (one buffer set for ALL heroes, bind once per
-  frame) would need vertex-quantized 128MB blocks so pos (16B/v) and attr (64B/v) don't
-  desync at block edges. Today we pack per-scene (bind once per scene), which is plenty.
+  2. LoadScenesGpu co-allocates EVERY loaded GLB's verts in lockstep into ONE shared
+     buffer set: one combined [positions | attributes] vertex buffer (sections adjacent,
+     NOT interleaved, attr stream via a non-owning alias handle at the attr-section
+     offset) + one shared index buffer. Every mesh of every scene shares those handles
+     and prims carry an all-GLBs-global baseVertex/baseIndex. So ALL draws in the frame
+     resolve to the same buffers and the recorder binds each stream ONCE PER FRAME
+     (verified: 1 pos VB bind/frame; was once per GLB ~= 50). Byte-identical on metal.
+  The earlier "vertex-quantized 128MB block" worry was wrong: a logical buffer never
+  spans heap blocks -- AllocBuffer mints a dedicated OVERSIZED block when bytes >
+  kHeapBlockBytes (block_bytes = padded + padded>>3 headroom for OffsetAllocator's
+  round-up-to-bin). The combined buffer (259MB @50 GLBs, ~500MB @100) lives in one block;
+  CreateBuffer's initial_data now stages in chunks through the 64MB kUpload ring
+  (BumpRingBytes) instead of one oversized BumpAllocate.
+  Bench (vk Release/no-val, 3300 instances):
+    macOS MoltenVK @100 GLBs (11517 draws): frame ~5.2ms, build_draws ~1.84ms, record ~0.36ms.
+    Android @50 GLBs (Galaxy S22 / SD 8 Gen 1, -O2 -DNDEBUG), warm: frame ~92.3ms,
+      build_draws ~18.2ms, record ~17.0ms (~57ms GPU/present remainder).
+  NOTE: resource aliasing (the hand-rolled attr_alias) is a stopgap -- proper aliasing
+  with tracked lifetimes will come with the render-graph impl.

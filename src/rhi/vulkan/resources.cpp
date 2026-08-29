@@ -420,25 +420,36 @@ Handle<Buffer> Resources::CreateBuffer(Allocator& alloc, const BufferDesc& d) {
                 std::memcpy(dst, d.initial_data.data(), d.initial_data.size());
             }
         } else {
-            uint32_t saved_cursor =
+            const uint32_t saved_cursor =
                 alloc.memory_.BumpSaveCursor(Memory::kUpload);
-            uint32_t src_off = 0;
-            void* staging = alloc.memory_.BumpAllocate(
-                static_cast<uint32_t>(d.initial_data.size()), 16,
-                Memory::kUpload, &src_off);
-            if (staging) {
-                std::memcpy(staging, d.initial_data.data(),
-                            d.initial_data.size());
+            const uint32_t ring_bytes =
+                alloc.memory_.BumpRingBytes(Memory::kUpload);
+            const uint32_t cap = (ring_bytes > saved_cursor + 16u)
+                                     ? (ring_bytes - saved_cursor - 16u)
+                                     : 0u;
+            const size_t total = d.initial_data.size();
+            VkBuffer dst = alloc.memory_.HeapMasterBuffer(r.heap_index);
+            size_t done = 0;
+            while (done < total && cap > 0u) {
+                const uint32_t chunk =
+                    static_cast<uint32_t>(std::min<size_t>(total - done, cap));
+                uint32_t src_off = 0;
+                void* staging = alloc.memory_.BumpAllocate(chunk, 16,
+                                                           Memory::kUpload,
+                                                           &src_off);
+                if (!staging) {
+                    break;
+                }
+                std::memcpy(staging, d.initial_data.data() + done, chunk);
                 uint32_t src_hi =
                     alloc.memory_.BumpMasterHeapIndex(Memory::kUpload);
                 VkBuffer src = alloc.memory_.HeapMasterBuffer(src_hi);
-                VkBuffer dst = alloc.memory_.HeapMasterBuffer(r.heap_index);
-                copy_via_staging(
-                    device_, command_pool_,
-                    queue_, src, src_off, dst, r.offset,
-                    static_cast<uint32_t>(d.initial_data.size()));
+                copy_via_staging(device_, command_pool_, queue_, src, src_off,
+                                 dst, static_cast<uint32_t>(r.offset + done),
+                                 chunk);
+                alloc.memory_.BumpRestoreCursor(Memory::kUpload, saved_cursor);
+                done += chunk;
             }
-            alloc.memory_.BumpRestoreCursor(Memory::kUpload, saved_cursor);
         }
     }
     return h;

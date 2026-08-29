@@ -98,6 +98,7 @@ public:
     void* BumpAllocate(uint32_t bytes, uint32_t align, Memory mem,
                        uint32_t* out_offset = nullptr);
     uint32_t BumpMasterHeapIndex(Memory mem) const;
+    uint32_t BumpRingBytes(Memory mem) const;
     uint32_t BumpSaveCursor(Memory mem) const;
     void BumpRestoreCursor(Memory mem, uint32_t cursor);
 

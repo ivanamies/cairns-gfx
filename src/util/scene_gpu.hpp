@@ -5,23 +5,27 @@
 #include "rhi/resources.hpp"
 
 #include <cstring>
+#include <span>
 #include <vector>
 
 namespace cairns::rhi {
 
-inline bool LoadSceneGpu(Scene& scene, Resources& rm, Allocator& alloc) {
-    // Pack the whole scene's vertices in lockstep: one shared position buffer and
-    // one shared attribute buffer, each holding EVERY mesh's vertices in the same
-    // order (vertex-aligned, not interleaved), plus one shared index buffer. Each
-    // mesh then shares these three handles and selects its primitives via a
-    // scene-global base vertex / base index. Because every mesh resolves to the
-    // same buffers, the change-tracked recorder binds each stream once per scene
-    // (Aaltonen "Pack Meshes": baseVertex/baseIndex in the draw, binds on change).
+inline bool LoadScenesGpu(std::span<Scene> scenes, Resources& rm, Allocator& alloc) {
+    // Pack EVERY loaded GLB's vertices in lockstep into ONE shared buffer set: one
+    // position buffer and one attribute buffer holding all meshes of all scenes in
+    // the same order (vertex-aligned, not interleaved), plus one shared index
+    // buffer. Each mesh shares these three handles and selects its primitives via
+    // an all-GLBs-global base vertex / base index. Because every draw in the frame
+    // resolves to the same buffers, the change-tracked recorder binds each stream
+    // exactly once per frame (Aaltonen "Pack Meshes": baseVertex/baseIndex in the
+    // draw, binds on change).
     size_t total_verts = 0;
     size_t total_indices = 0;
-    for (const Mesh& mesh : scene.meshes) {
-        total_verts += mesh.cpuPositions.size();
-        total_indices += mesh.cpuIndices.size();
+    for (const Scene& scene : scenes) {
+        for (const Mesh& mesh : scene.meshes) {
+            total_verts += mesh.cpuPositions.size();
+            total_indices += mesh.cpuIndices.size();
+        }
     }
     if (total_verts == 0) {
         return true;
@@ -33,15 +37,17 @@ inline bool LoadSceneGpu(Scene& scene, Resources& rm, Allocator& alloc) {
     attr_all.reserve(total_verts);
     std::vector<uint32_t> idx_all;
     idx_all.reserve(total_indices);
-    for (Mesh& mesh : scene.meshes) {
-        const int32_t base_vertex = static_cast<int32_t>(pos_all.size());
-        const uint32_t base_index = static_cast<uint32_t>(idx_all.size());
-        pos_all.insert(pos_all.end(), mesh.cpuPositions.begin(), mesh.cpuPositions.end());
-        attr_all.insert(attr_all.end(), mesh.cpuAttrs.begin(), mesh.cpuAttrs.end());
-        idx_all.insert(idx_all.end(), mesh.cpuIndices.begin(), mesh.cpuIndices.end());
-        for (Primitive& prim : mesh.primitives) {
-            prim.vertexOffset += base_vertex;  // mesh-local -> scene-global
-            prim.firstIndex += base_index;
+    for (Scene& scene : scenes) {
+        for (Mesh& mesh : scene.meshes) {
+            const int32_t base_vertex = static_cast<int32_t>(pos_all.size());
+            const uint32_t base_index = static_cast<uint32_t>(idx_all.size());
+            pos_all.insert(pos_all.end(), mesh.cpuPositions.begin(), mesh.cpuPositions.end());
+            attr_all.insert(attr_all.end(), mesh.cpuAttrs.begin(), mesh.cpuAttrs.end());
+            idx_all.insert(idx_all.end(), mesh.cpuIndices.begin(), mesh.cpuIndices.end());
+            for (Primitive& prim : mesh.primitives) {
+                prim.vertexOffset += base_vertex;  // mesh-local -> all-GLBs-global
+                prim.firstIndex += base_index;
+            }
         }
     }
 
@@ -85,10 +91,12 @@ inline bool LoadSceneGpu(Scene& scene, Resources& rm, Allocator& alloc) {
         ah->offset_in_heap = vh->offset_in_heap + static_cast<uint32_t>(pos_bytes);
     }
 
-    for (Mesh& mesh : scene.meshes) {
-        mesh.posHandle = shared_vtx;
-        mesh.attrHandle = attr_alias;
-        mesh.indexHandle = shared_idx;
+    for (Scene& scene : scenes) {
+        for (Mesh& mesh : scene.meshes) {
+            mesh.posHandle = shared_vtx;
+            mesh.attrHandle = attr_alias;
+            mesh.indexHandle = shared_idx;
+        }
     }
     return true;
 }

@@ -280,7 +280,7 @@ AllocResult MemoryAllocator::AllocBuffer(uint32_t bytes, BufferUsage usage,
     }
 
     uint32_t block_bytes = (padded > kHeapBlockBytes)
-                               ? padded
+                               ? padded + (padded >> 3)
                                : kHeapBlockBytes;
     uint32_t hi = kInvalidBlock;
     if (!CreateBufferBlock(block_bytes, usage, mem, &hi)) {
@@ -376,6 +376,10 @@ void* MemoryAllocator::BumpAllocate(uint32_t bytes, uint32_t align, Memory mem,
     }
     HeapBlock& blk = blocks_[r.block_indices[slot]];
     return static_cast<uint8_t*>(blk.mapped_ptr) + off;
+}
+
+uint32_t MemoryAllocator::BumpRingBytes(Memory mem) const {
+    return rings_[static_cast<size_t>(mem)].block_bytes;
 }
 
 uint32_t MemoryAllocator::BumpSaveCursor(Memory mem) const {
