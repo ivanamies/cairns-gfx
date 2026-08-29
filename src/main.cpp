@@ -16,6 +16,9 @@
 #include "util/define.hpp"
 #include "util/gltf_loader.hpp"
 
+#include "imgui.h"
+#include "imgui_impl_sdl3.h"
+
 #include "engine.hpp"
 
 namespace cairns {
@@ -71,6 +74,14 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     if (!window) {
         return SDL_Fail();
     }
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::StyleColorsDark();
+    if (!ImGui_ImplSDL3_InitForOther(window)) {
+        return SDL_Fail();
+    }
+
     engine = new cairns::Engine;
     if ( !engine->GreaterInit(window)) {
         return SDL_Fail();
@@ -92,7 +103,9 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
 
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event) {
     auto* app = (AppContext*)appstate;
-    
+
+    ImGui_ImplSDL3_ProcessEvent(event);
+
     if (event->type == SDL_EVENT_QUIT) {
         app->app_quit = SDL_APP_SUCCESS;
     }
@@ -139,6 +152,8 @@ void SDL_AppQuit(void* appstate, [[maybe_unused]] SDL_AppResult result) {
         if ( app->engine ) {
             app->engine->deinit();
         }
+        ImGui_ImplSDL3_Shutdown();
+        ImGui::DestroyContext();
         if (app->window) {
             SDL_DestroyWindow(app->window);
         }
