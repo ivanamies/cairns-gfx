@@ -334,6 +334,7 @@ if (NOT ANDROID AND NOT IOS AND NOT EMSCRIPTEN)
         "depthviz.frag.spv"
         "outline.vert.spv" "outline.frag.spv"  # #207
         "skin.comp.spv"                          # #221 Phase 9
+        "anim_eval.comp.spv"                     # #221 Phase 5b
     )
     if (APPLE)
         # Metal needs the .metal source files (compile_metal_library reads
@@ -467,6 +468,7 @@ else()
     copy_helper("outline.vert.spv")  # #207
     copy_helper("outline.frag.spv")
     copy_helper("skin.comp.spv")     # #221 Phase 9
+    copy_helper("anim_eval.comp.spv") # #221 Phase 5b
 endif()
 
 # set some extra configs for each platform
