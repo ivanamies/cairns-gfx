@@ -95,7 +95,7 @@ public:
     void AddPass(const char* name, PassType type, SetupFn setup, ExecuteFn execute);
     void SetOutput(GraphTexture t);
     bool Bake();
-    bool Execute(FrameContext& fc);
+    bool Execute(FrameContext& fc, SwapChain& sc);
 
     Handle<Texture> ResolveTexture(GraphTexture t) const;
     Handle<Buffer> ResolveBuffer(GraphBuffer b) const;

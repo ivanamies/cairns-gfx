@@ -4,11 +4,13 @@
 
 #include "rhi/allocator.hpp"
 #include "rhi/resources.hpp"
+#include "rhi/swap_chain.hpp"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <span>
 
 namespace cairns::rhi {
 
@@ -373,8 +375,32 @@ bool RenderGraph::Bake() {
     return true;
 }
 
-bool RenderGraph::Execute(FrameContext& fc) {
-    (void)fc;
+bool RenderGraph::Execute(FrameContext& fc, SwapChain& sc) {
+    PassResources res(&resolved_tex_, &resolved_buf_);
+    for (uint32_t p : topo_order_) {
+        PassRecord& pass = passes_[p];
+        if (pass.type == PassType::kCompute) {
+            if (pass.execute) {
+                pass.execute(fc.cmd, res);
+            }
+            continue;
+        }
+        RenderPassDesc rp{};
+        rp.color = std::span<const ColorAttachment>(pass.baked_color.data(),
+                                                    pass.baked_color.size());
+        if (pass.has_depth) {
+            rp.depth = pass.baked_depth;
+        }
+        rp.width = sc.Width();
+        rp.height = sc.Height();
+        rp.input_textures = std::span<const Handle<Texture>>(
+            pass.baked_inputs.data(), pass.baked_inputs.size());
+        fc.cmd.BeginRenderPass(sc, rp);
+        if (pass.execute) {
+            pass.execute(fc.cmd, res);
+        }
+        fc.cmd.EndRenderPass();
+    }
     return true;
 }
 
