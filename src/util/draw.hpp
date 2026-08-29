@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rhi/resource_impl.hpp"
+#include "rhi2/resource_manager.hpp"
 
 #include <cstdint>
 
@@ -14,7 +15,7 @@ static constexpr uint32_t kDrawTmpBindSlot = 4;
 // "Hypehype Modern Mobile Rendering Architecture" slide 21-22, page 34-36
 // the draw packet around which all rendering revolves
 struct Draw {
-    rhi::Handle<rhi::Shader> shader = rhi::Handle<rhi::Shader>::Null;
+    rhi2::Handle<rhi2::Shader> shader;
     // "Our draw call API exposes three bind group slots to the user land. Vulkan on Android and WebGPU mandate minimum of four bind group slots."
     // slot 1: "The first group has render pass global bindings (sun light, camera matrices, shadow maps, etc)"
     // slot 2: "the second slot has material bindings" like samplers and textures

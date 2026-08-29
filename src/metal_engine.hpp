@@ -5,6 +5,7 @@
 #if CAIRNS_METAL
 
 #include <cmath>
+#include <cstdlib>
 #include <string_view>
 #include <filesystem>
 #include <thread>
@@ -264,7 +265,7 @@ public:
     using TexHandle = cairns::rhi::Handle<cairns::rhi::Texture>;
     using BufHandle = cairns::rhi::Handle<cairns::rhi::Buffer>;
     using DbufHandle = cairns::rhi::Handle<cairns::rhi::DynamicBuffers>;
-    using ShaderHandle = cairns::rhi::Handle<cairns::rhi::Shader>;
+    using ShaderHandle = rhi2::Handle<rhi2::Shader>;
     using RenderPassHandle = cairns::rhi::Handle<cairns::rhi::RenderPass>;
     using MatHandle = cairns::rhi::Handle<cairns::rhi::Material>;
     using SamplerHandle = cairns::rhi::Handle<cairns::rhi::Sampler>;
@@ -378,7 +379,6 @@ public:
         dynamicBuffersManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::DynamicBuffers>>(hot_arena_, hot_arena_, estUbos);
         // 4 because we're only pretending to be a real UGC engine at this point
         samplerManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Sampler>>(hot_arena_, hot_arena_, 256);
-        shaderManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Shader>>(hot_arena_, hot_arena_, 1);
         renderPassManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::RenderPass>>(hot_arena_, hot_arena_, 1);
         materialBufferManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Buffer>>(hot_arena_, hot_arena_, 1024);
         materialManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Material>>(hot_arena_, hot_arena_, 1024);
@@ -565,7 +565,10 @@ public:
         drawList_.clear();
         drawListSorted_.clear();
         
-        const float angle_degs = SDL_GetTicks() / 1000.0 / 2.0 * 45;
+        const char* freeze_rot = std::getenv("CAIRNS_FREEZE_ROT");
+        const float angle_degs = freeze_rot
+                                     ? static_cast<float>(std::atof(freeze_rot))
+                                     : (SDL_GetTicks() / 1000.0 / 2.0 * 45);
         const float angle_rads = angle_degs * std::numbers::pi / 180.0f;
         const glm::mat4 rot_matrix = glm::rotate(glm::mat4(1.0f), angle_rads, glm::vec3(0, 1.0, 0));
         
@@ -780,8 +783,8 @@ public:
         }
         
         {
-            auto& shader_obj = *shaderManager_->GetObj(unlit_);
-            auto& pso = shader_obj.pso;
+            MTL::RenderPipelineState* pso =
+                static_cast<MTL::RenderPipelineState*>(rm_.GetHot(unlit_)->api_pso);
 
             encoder->setRenderPipelineState(pso);
             encoder->setDepthStencilState(depthStencilState);
@@ -914,10 +917,7 @@ public:
     }
     
     bool initRenderPipeline() {
-        unlit_ = shaderManager_->New();
-        auto& obj = *shaderManager_->GetObj(unlit_);
-        auto& desc = *shaderManager_->GetDesc(unlit_);
-        
+        MTL::Library* metal_default_library = nullptr;
         {
 #if CAIRNS_ANDROID
             std::filesystem::path basePath = "";   // on Android we do not want to use basepath. Instead, assets are available at the root directory.
@@ -929,12 +929,10 @@ public:
             const std::filesystem::path basePath = basePathPtr;
 #endif // CAIRNS_ANDROID
             const auto cubeShaderPath = basePath / "unlit.metal";
-            
-            auto& metal_default_library = shaderManager_->GetDesc(unlit_)->metal_default_library;
+
             metal_default_library = compileMetalShader(device.get(), cubeShaderPath.string().c_str());
         }
-        
-        auto& metal_default_library = desc.metal_default_library;
+
         MTL::Function* vertexShader = metal_default_library->newFunction(NS::String::string("cube::vertexShader", NS::ASCIIStringEncoding));
         assert(vertexShader);
         MTL::Function* fragmentShader = metal_default_library->newFunction(NS::String::string("cube::fragmentShader", NS::ASCIIStringEncoding));
@@ -966,16 +964,17 @@ public:
         }
         
         NS::Error* error = nullptr;
-        
-        auto*& pso = obj.pso;
-        
-        pso = device.get()->newRenderPipelineState(renderPipelineDescriptor, &error);
-        
+
+        MTL::RenderPipelineState* pso =
+            device.get()->newRenderPipelineState(renderPipelineDescriptor, &error);
+
         if (pso == nullptr) {
             std::cout << "Error creating render pipeline state: " << error << std::endl;
             std::exit(0);
         }
-        
+
+        unlit_ = rm_.CreateShader({.api_pso = pso, .debug_name = "unlit"});
+
         { // bindless resources set up via rhi2
             auto* texArg = MTL::ArgumentDescriptor::alloc()->init();
             texArg->setDataType(MTL::DataTypeTexture);
@@ -1101,7 +1100,6 @@ private:
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Material>> materialManager_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Buffer>> materialBufferManager_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Texture>> renderPassTexManager_;
-    cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Shader>> shaderManager_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::RenderPass>> renderPassManager_;
     
     std::vector<BufHandle> renderPassGlobals_;

@@ -24,6 +24,7 @@ struct ResourceManager::Impl {
     Pool<Sampler> samplers;
     Pool<BindGroup> bind_groups;
     Pool<DynamicBuffers> dynamic_buffers;
+    Pool<Shader> shaders;
 
     uint32_t frame_index = 1;
 };
@@ -329,6 +330,18 @@ void ResourceManager::Destroy(Handle<DynamicBuffers> h) {
     impl_->dynamic_buffers.Release(h);
 }
 
+void ResourceManager::Destroy(Handle<Shader> h) {
+    Shader::Hot* hot = impl_->shaders.GetHot(h);
+    if (!hot) {
+        return;
+    }
+    if (hot->api_pso) {
+        static_cast<MTL::RenderPipelineState*>(hot->api_pso)->release();
+        hot->api_pso = nullptr;
+    }
+    impl_->shaders.Release(h);
+}
+
 Buffer::Hot* ResourceManager::GetHot(Handle<Buffer> h) {
     return impl_->buffers.GetHot(h);
 }
@@ -347,6 +360,22 @@ BindGroup::Hot* ResourceManager::GetHot(Handle<BindGroup> h) {
 
 DynamicBuffers::Hot* ResourceManager::GetHot(Handle<DynamicBuffers> h) {
     return impl_->dynamic_buffers.GetHot(h);
+}
+
+Shader::Hot* ResourceManager::GetHot(Handle<Shader> h) {
+    return impl_->shaders.GetHot(h);
+}
+
+Handle<Shader> ResourceManager::CreateShader(const ShaderDesc& d) {
+    if (!d.api_pso) {
+        return Handle<Shader>::Null;
+    }
+    Handle<Shader> h = impl_->shaders.Acquire();
+    Shader::Hot* hot = impl_->shaders.GetHot(h);
+    hot->api_pso = d.api_pso;
+    Shader::Cold* cold = impl_->shaders.GetCold(h);
+    cold->debug_name = d.debug_name;
+    return h;
 }
 
 void* ResourceManager::BumpAllocate(uint32_t bytes, uint32_t align,

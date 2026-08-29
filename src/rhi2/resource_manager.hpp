@@ -45,6 +45,7 @@ struct Texture;
 struct Sampler;
 struct BindGroup;
 struct DynamicBuffers;
+struct Shader;
 
 template <typename T>
 struct Handle {
@@ -366,6 +367,20 @@ struct DynamicBuffers {
     };
 };
 
+struct Shader {
+    struct Hot {
+        void* api_pso = nullptr;  // VkPipeline / MTLRenderPipelineState
+    };
+    struct Cold {
+        const char* debug_name = nullptr;
+    };
+};
+
+struct ShaderDesc {
+    void* api_pso = nullptr;  // engine-compiled; rhi2 takes ownership
+    const char* debug_name = nullptr;
+};
+
 #if CAIRNS_VULKAN
 struct BackendInitParams {
     VkInstance instance = VK_NULL_HANDLE;
@@ -405,18 +420,21 @@ public:
     Handle<Sampler> CreateSampler(const SamplerDesc& desc);
     Handle<BindGroup> CreateBindGroup(const BindGroupDesc& desc);
     Handle<DynamicBuffers> CreateDynamicBuffers(const DynamicBuffersDesc& desc);
+    Handle<Shader> CreateShader(const ShaderDesc& desc);
 
     void Destroy(Handle<Buffer> h);
     void Destroy(Handle<Texture> h);
     void Destroy(Handle<Sampler> h);
     void Destroy(Handle<BindGroup> h);
     void Destroy(Handle<DynamicBuffers> h);
+    void Destroy(Handle<Shader> h);
 
     Buffer::Hot* GetHot(Handle<Buffer> h);
     Texture::Hot* GetHot(Handle<Texture> h);
     Sampler::Hot* GetHot(Handle<Sampler> h);
     BindGroup::Hot* GetHot(Handle<BindGroup> h);
     DynamicBuffers::Hot* GetHot(Handle<DynamicBuffers> h);
+    Shader::Hot* GetHot(Handle<Shader> h);
 
     // Per-frame bump ring (transient data). Returns a CPU-writable pointer that
     // maps directly into the bump ring's master platform buffer.
