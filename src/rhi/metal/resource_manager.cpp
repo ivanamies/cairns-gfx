@@ -644,6 +644,12 @@ uint32_t ResourceManager::GetBufferByteSize(Handle<Buffer> h) const {
 
 MTL::Buffer* ResourceManager::GetMtlBuffer(Handle<Buffer> h,
                                             uint32_t* out_offset) {
+    if (h.generation == 0) {  // bump-master sentinel from BumpMasterBuffer()
+        if (out_offset) {
+            *out_offset = 0;
+        }
+        return impl_->memory.HeapMasterBuffer(h.index);
+    }
     Buffer::Hot* hot = impl_->buffers.GetHot(h);
     if (!hot) {
         if (out_offset) {

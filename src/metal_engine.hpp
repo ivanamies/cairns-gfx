@@ -241,6 +241,20 @@ public:
         if ( !initParticles() ) {
             return false;
         }
+        {
+            rhi::MtlFrameResources fr{};
+            fr.queue = metalCommandQueue;
+            fr.semaphore = frameSemaphore;
+            fr.render_pass_desc = render_pass_descriptor_;
+            fr.depth_stencil = depthStencilState;
+            fr.mesh_master = mesh_master_buf_;
+            fr.device = device_;
+            fr.sc = swapChain_.get();
+            fr.dump_path = &dumpPath_;
+            fr.msaa = &msaaHandle_;
+            fr.depth = &depthHandle_;
+            rm_.MtlRegisterFrame(fr);
+        }
 
         return true;
     }
@@ -479,26 +493,9 @@ public:
         if (frame_ == 5 && dumpPath_.empty()) {
             dumpPath_ = "/tmp/cairns_dump.png";
         }
-        
-        dispatch_semaphore_wait(frameSemaphore, DISPATCH_TIME_FOREVER);
 
-        resetFrameTmps();
-        rm_.BeginFrame();
+        rhi::FrameContext fc = rm_.BeginFrame(*swapChain_);
 
-        if ( resizeFrameBufferRequest_ ) {
-            resizeFrameBuffer(resizeFrameBufferRequest_->width, resizeFrameBufferRequest_->height);
-            resizeFrameBufferRequest_ = std::nullopt;
-        }
-        
-        if (!swapChain_->NextDrawable()) {
-            return false;
-        }
-        updateRenderPassDescriptor();
-        MTL::CommandBuffer* cmdBuf = metalCommandQueue->commandBuffer();
-        cmdBuf->addCompletedHandler([&](MTL::CommandBuffer*) {
-            dispatch_semaphore_signal(frameSemaphore);
-        });
-        
         const uint64_t now_ticks = SDL_GetTicks();
         float delta_time = 0.016f;
 #if !defined(CAIRNS_FREEZE_ROT) || !CAIRNS_FREEZE_ROT
@@ -508,176 +505,62 @@ public:
 #endif
         last_ticks_ = now_ticks;
 
-        cairns::Timer timer0("timer 0", 0);
-
         if ( !BuildMeshOpaqueDraws()) {
             return false;
         }
-
-        { // sort materials next to each other
-            std::sort(drawListSorted_.begin(),drawListSorted_.end());
+        std::sort(drawListSorted_.begin(), drawListSorted_.end());
+        sorted_draw_indices_.clear();
+        for (const auto& [key, idx] : drawListSorted_) {
+            sorted_draw_indices_.push_back(static_cast<uint32_t>(idx));
         }
-
-        timer0.End();
-
-        uint32_t out_off = 0;
-        MTL::Buffer* out_buf = rm_.GetMtlBuffer(particle_ssbo_[1 - particle_parity_], &out_off);
-
-        {
-            MTL::ComputeCommandEncoder* cenc = cmdBuf->computeCommandEncoder();
-            cenc->setComputePipelineState(rm_.GetHot(particle_kernel_)->api_pso);
-            float* dt_ptr = static_cast<float*>(
-                rm_.BumpAllocate(sizeof(float), sizeof(float), rhi::Memory::kDynamic));
-            *dt_ptr = delta_time;
-            MTL::Buffer* dyn_master = rm_.GetBumpMasterBuffer(rhi::Memory::kDynamic);
-            cenc->setBuffer(dyn_master, rm_.BumpOffset(dt_ptr), 0);
-            uint32_t in_off = 0;
-            MTL::Buffer* in_buf = rm_.GetMtlBuffer(particle_ssbo_[particle_parity_], &in_off);
-            cenc->setBuffer(in_buf, in_off, 1);
-            cenc->setBuffer(out_buf, out_off, 2);
-            cenc->dispatchThreadgroups(MTL::Size{kParticleCount / 256, 1, 1},
-                                       MTL::Size{256, 1, 1});
-            cenc->endEncoding();
-        }
-
-        cairns::Timer timer1("timer 1", 1);
-        MTL::RenderCommandEncoder* encoder = nullptr;
-        {
-            encoder = cmdBuf->renderCommandEncoder(render_pass_descriptor_);
-        }
-        
-        {
-            MTL::RenderPipelineState* pso =
-                rm_.GetHot(unlit_)->api_pso;
-
-            encoder->setRenderPipelineState(pso);
-            encoder->setDepthStencilState(depthStencilState);
-            encoder->setFrontFacingWinding(MTL::WindingCounterClockwise);
-            encoder->setCullMode(MTL::CullModeBack);
-
-            {
-                rhi::BindGroup::Hot* bg_hot = rm_.GetHot(bindless_bg_handle_);
-                MTL::Buffer* bg_buf = bg_hot->api_descriptor_set;
-                const uint32_t bg_off = bg_hot->arg_buf_offset;
-                encoder->setVertexBuffer(bg_buf, bg_off,
-                                         cairns::rhi::GpuSceneRegistry::kBindSlot);
-                encoder->setFragmentBuffer(bg_buf, bg_off,
-                                           cairns::rhi::GpuSceneRegistry::kBindSlot);
+        resident_textures_.clear();
+        for (auto& s : scenes_) {
+            for (const auto th : s.textureHandles) {
+                resident_textures_.push_back(th);
             }
-            // use resource call for all textures in argument table
-            for (auto& s : scenes_) {
-                for (const auto th : s.textureHandles) {
-                    MTL::Texture* tex = rm_.GetHot(th)->api_view;
-                    if (tex) {
-                        encoder->useResource(tex, MTL::ResourceUsageRead,
-                                             MTL::RenderStageFragment);
-                    }
-                }
-            }
-            // use resource call for all vertex attributes in argument table
-            encoder->useResource(mesh_master_buf_, MTL::ResourceUsageRead, MTL::RenderStageVertex);
-            
-            encoder->setVertexBuffer(mesh_master_buf_, 0, 0);
-            MTL::Buffer* dyn_master =
-                rm_.GetBumpMasterBuffer(rhi::Memory::kDynamic);
-            // set up render pass globals bind group in vertex shader
-            encoder->setVertexBuffer(dyn_master, 0, cairns::kRenderPassGlobalBindSlot);
-            // set up material buffer bind group in vertex shader
-            encoder->setVertexBuffer(dyn_master, 0, cairns::kMaterialBindSlot);
-            // set up shader specific buffers bind group in vertex shader
-            // none
-            // set up per draw temporaries bind group in vertex shader
-            encoder->setVertexBuffer(dyn_master, 0, cairns::kDrawTmpBindSlot);
-            
-            uint32_t last_mat_off = std::numeric_limits<uint32_t>::max();
-            uint32_t triangles = 0;
-            for ( size_t draw_idx = 0; draw_idx < drawListSorted_.size(); ++draw_idx ) {
-                const cairns::Draw& draw = drawList_[drawListSorted_[draw_idx].second];
-                { // set position buffer offset
-                    const BufHandle pos = draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot];
-                    uint32_t pos_off = 0;
-                    rm_.GetMtlBuffer(pos, &pos_off);
-                    encoder->setVertexBufferOffset(pos_off, 0 /*hard coded for some reason*/);
-                }
-                { // set up material
-                    const uint32_t mat_off = draw.dynamic_buffer_offsets[0];
-                    if ( mat_off != last_mat_off ) {
-                        last_mat_off = mat_off;
-                        encoder->setVertexBufferOffset(mat_off, cairns::kMaterialBindSlot);
-                    }
-                }
-                { // set up draw temporary
-                    encoder->setVertexBufferOffset(draw.dynamic_buffer_offsets[1], cairns::kDrawTmpBindSlot);
-                }
-                {
-                    const uint32_t index_count = draw.triangle_count * 3;
-                    const uint32_t index_offset = draw.index_offset;
-                    const uint32_t vertex_offset = draw.vertex_offset;
-                    const BufHandle index = draw.index_buffer;
-                    uint32_t index_master_off = 0;
-                    MTL::Buffer* const index_buffer = rm_.GetMtlBuffer(index, &index_master_off);
-                    encoder->drawIndexedPrimitives(MTL::PrimitiveTypeTriangle,
-                                                   index_count,
-                                                   MTL::IndexTypeUInt32,
-                                                   index_buffer,
-                                                   index_offset,
-                                                   1,
-                                                   vertex_offset,
-                                                   0);
-                    triangles += draw.triangle_count;
-                }
-            }
-            printf("draws %d triangles %d\n",(int)drawListSorted_.size(),triangles);
         }
 
-        {
-            encoder->setRenderPipelineState(rm_.GetHot(particle_render_pso_)->api_pso);
-            encoder->setVertexBuffer(out_buf, out_off, 0);
-            encoder->drawPrimitives(MTL::PrimitiveTypePoint, NS::UInteger(0), NS::UInteger(kParticleCount));
-        }
+        float* dt_ptr = static_cast<float*>(
+            rm_.BumpAllocate(sizeof(float), sizeof(float), rhi::Memory::kDynamic));
+        *dt_ptr = delta_time;
+        const uint32_t dt_off = rm_.BumpOffset(dt_ptr);
 
-        encoder->endEncoding();
-        timer1.End();
+        rhi::BoundBuffer cbufs[3] = {
+            {0, rm_.BumpMasterBuffer(rhi::Memory::kDynamic), dt_off},
+            {1, particle_ssbo_[particle_parity_], 0},
+            {2, particle_ssbo_[1 - particle_parity_], 0},
+        };
+        rhi::ComputeDispatch cd{};
+        cd.kernel = particle_kernel_;
+        cd.buffers = rhi::Span<const rhi::BoundBuffer>(cbufs, 3);
+        cd.groups_x = kParticleCount / 256;
+        cd.local_x = 256;
+        fc.cmd.Dispatch(cd);
 
-        cairns::Timer::PrintReport(true);
+        rhi::RenderPassDesc rp{};
+        fc.cmd.BeginRenderPass(rp);
 
-        if (!dumpPath_.empty()) {
-            MTL::Texture* drawableTex = swapChain_->GetDrawable()->texture();
-            const NS::UInteger w = drawableTex->width();
-            const NS::UInteger h = drawableTex->height();
-            const NS::UInteger bytesPerRow = w * 4;
-            const NS::UInteger bufSize = bytesPerRow * h;
-            MTL::Buffer* readback = device_->newBuffer(bufSize, MTL::ResourceStorageModeShared);
-            MTL::BlitCommandEncoder* blitEnc = cmdBuf->blitCommandEncoder();
-            blitEnc->copyFromTexture(drawableTex, 0, 0,
-                                     MTL::Origin{0, 0, 0}, MTL::Size{w, h, 1},
-                                     readback, 0, bytesPerRow, 0);
-            blitEnc->endEncoding();
-            cmdBuf->presentDrawable(swapChain_->GetDrawable());
-            cmdBuf->commit();
-            cmdBuf->waitUntilCompleted();
-            std::vector<uint8_t> rgba(bufSize);
-            const uint8_t* bgra = static_cast<const uint8_t*>(readback->contents());
-            for (NS::UInteger i = 0; i < w * h; ++i) {
-                rgba[i*4+0] = bgra[i*4+2];
-                rgba[i*4+1] = bgra[i*4+1];
-                rgba[i*4+2] = bgra[i*4+0];
-                rgba[i*4+3] = bgra[i*4+3];
-            }
-            stbi_write_png(dumpPath_.string().c_str(), static_cast<int>(w), static_cast<int>(h), 4, rgba.data(), static_cast<int>(bytesPerRow));
-            printf("viewport dumped -> %s\n", dumpPath_.string().c_str());
-            readback->release();
-            dumpPath_.clear();
-            particle_parity_ ^= 1;
-            return true;
-        }
+        rhi::MeshDrawList ml{};
+        ml.draws = rhi::Span<const cairns::Draw>(drawList_.data(), drawList_.size());
+        ml.sorted_indices =
+            rhi::Span<const uint32_t>(sorted_draw_indices_.data(), sorted_draw_indices_.size());
+        ml.pipeline = unlit_;
+        ml.bindless = bindless_bg_handle_;
+        ml.globals_offset = 0;
+        ml.resident_textures = rhi::Span<const rhi::Handle<rhi::Texture>>(
+            resident_textures_.data(), resident_textures_.size());
+        fc.cmd.DrawMeshes(ml);
 
+        rhi::PointDraw pd{};
+        pd.pipeline = particle_render_pso_;
+        pd.vertex_buffer = particle_ssbo_[1 - particle_parity_];
+        pd.vertex_offset = 0;
+        pd.vertex_count = kParticleCount;
+        fc.cmd.DrawPoints(pd);
+
+        fc.cmd.EndRenderPass();
+        rm_.EndFrame(fc);
         particle_parity_ ^= 1;
-
-        // 5. Present and Commit
-        cmdBuf->presentDrawable(swapChain_->GetDrawable());
-        cmdBuf->commit();
-
         return true;
     }
     
@@ -865,6 +748,8 @@ private:
 
     std::vector<std::pair<cairns::DrawKey,uint32_t>,cairns::Allocator<std::pair<cairns::DrawKey,uint32_t>>> drawListSorted_;
     std::vector<cairns::Draw,cairns::Allocator<cairns::Draw>> drawList_;
+    std::vector<uint32_t> sorted_draw_indices_;
+    std::vector<rhi::Handle<rhi::Texture>> resident_textures_;
     
     rhi::ResourceManager rm_;
     MTL::Buffer* mesh_master_buf_ = nullptr;
