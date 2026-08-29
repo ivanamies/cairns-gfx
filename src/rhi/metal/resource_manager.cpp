@@ -1,19 +1,19 @@
-// rhi2/metal/resource_manager.cpp
+// rhi/metal/resource_manager.cpp
 
 #include "util/define.hpp"
 
 #if CAIRNS_METAL
 
-#include "rhi2/resource_manager.hpp"
+#include "rhi/resource_manager.hpp"
 
 #include <algorithm>
 #include <cstring>
 
 #include <Metal/Metal.hpp>
 
-#include "rhi2/metal/memory_allocator.hpp"
+#include "rhi/metal/memory_allocator.hpp"
 
-namespace cairns::rhi2 {
+namespace cairns::rhi {
 
 struct ResourceManager::Impl {
     BackendInitParams params;
@@ -463,6 +463,6 @@ Handle<BindGroup> ResourceManager::CreateBindGroupFromMtlBuffer(MTL::Buffer* buf
     return h;
 }
 
-}  // namespace cairns::rhi2
+}  // namespace cairns::rhi
 
 #endif  // CAIRNS_METAL

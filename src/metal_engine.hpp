@@ -30,7 +30,7 @@
 #include "util/frame_transient_cache.hpp"
 #include "util/timer.hpp"
 #include "util/unique_ptr.hpp"
-#include "rhi2/resource_manager.hpp"
+#include "rhi/resource_manager.hpp"
 
 namespace {
 
@@ -90,17 +90,17 @@ struct DrawTmp {
     uint32_t yolo_padding = std::numeric_limits<uint32_t>::max();
 };
 
-bool LoadMeshGpu(Mesh& mesh, rhi2::ResourceManager& rm) {
-    auto process = [&](rhi2::Handle<rhi2::Buffer>& h, const void* srcData,
+bool LoadMeshGpu(Mesh& mesh, rhi::ResourceManager& rm) {
+    auto process = [&](rhi::Handle<rhi::Buffer>& h, const void* srcData,
                        size_t srcSize) -> bool {
         if (srcSize == 0) {
             return true;
         }
-        rhi2::BufferDesc d;
+        rhi::BufferDesc d;
         d.byte_size = static_cast<uint32_t>(srcSize);
-        d.usage = rhi2::kUsageVertex | rhi2::kUsageIndex;
-        d.memory = rhi2::Memory::kDefault;
-        d.initial_data = rhi2::Span<const uint8_t>(
+        d.usage = rhi::kUsageVertex | rhi::kUsageIndex;
+        d.memory = rhi::Memory::kDefault;
+        d.initial_data = rhi::Span<const uint8_t>(
             static_cast<const uint8_t*>(srcData), srcSize);
         h = rm.CreateBuffer(d);
         return !h.IsNull();
@@ -121,7 +121,7 @@ bool LoadMeshGpu(Mesh& mesh, rhi2::ResourceManager& rm) {
     return true;
 }
 
-bool LoadSceneGpu(Scene& scene, rhi2::ResourceManager& rm)
+bool LoadSceneGpu(Scene& scene, rhi::ResourceManager& rm)
 {
     for ( size_t i = 0; i < scene.meshes.size(); ++i ) {
         auto& mesh = scene.meshes[i];
@@ -171,12 +171,12 @@ inline static constexpr uint32_t kMeshPosBindSlot = 0;
 class Engine {
 public:
     
-    using TexHandle = rhi2::Handle<rhi2::Texture>;
-    using BufHandle = rhi2::Handle<rhi2::Buffer>;
+    using TexHandle = rhi::Handle<rhi::Texture>;
+    using BufHandle = rhi::Handle<rhi::Buffer>;
     using DynBufId = uint32_t;
-    using ShaderHandle = rhi2::Handle<rhi2::Shader>;
+    using ShaderHandle = rhi::Handle<rhi::Shader>;
     using MatId = uint32_t;
-    using SamplerHandle = rhi2::Handle<rhi2::Sampler>;
+    using SamplerHandle = rhi::Handle<rhi::Sampler>;
     using BindGroupId = uint32_t;
     
     Engine() :
@@ -271,10 +271,10 @@ public:
             return false;
         }
         {
-            rhi2::BackendInitParams rhi2_p;
-            rhi2_p.device = device_;
-            rhi2_p.queue = metalCommandQueue;
-            if (!rm_.Init(rhi2_p)) {
+            rhi::BackendInitParams rhi_p;
+            rhi_p.device = device_;
+            rhi_p.queue = metalCommandQueue;
+            if (!rm_.Init(rhi_p)) {
                 return false;
             }
         }
@@ -347,24 +347,24 @@ public:
         const int32_t w = static_cast<int32_t>(swapChain_->GetDrawableSize().width);
         const int32_t h = static_cast<int32_t>(swapChain_->GetDrawableSize().height);
         {
-            rhi2::TextureDesc d;
+            rhi::TextureDesc d;
             d.dimensions = {w, h, 1};
-            d.format = rhi2::Format::kBgra8Unorm;
+            d.format = rhi::Format::kBgra8Unorm;
             d.sample_count = static_cast<uint32_t>(sampleCount);
-            d.usage = rhi2::kTexUsageColorTarget;
-            d.memory = rhi2::Memory::kDefault;
+            d.usage = rhi::kTexUsageColorTarget;
+            d.memory = rhi::Memory::kDefault;
             msaaHandle_ = rm_.CreateTexture(d);
             if (msaaHandle_.IsNull()) {
                 return false;
             }
         }
         {
-            rhi2::TextureDesc d;
+            rhi::TextureDesc d;
             d.dimensions = {w, h, 1};
-            d.format = rhi2::Format::kD32F;
+            d.format = rhi::Format::kD32F;
             d.sample_count = static_cast<uint32_t>(sampleCount);
-            d.usage = rhi2::kTexUsageDepthTarget;
-            d.memory = rhi2::Memory::kDefault;
+            d.usage = rhi::kTexUsageDepthTarget;
+            d.memory = rhi::Memory::kDefault;
             depthHandle_ = rm_.CreateTexture(d);
             if (depthHandle_.IsNull()) {
                 return false;
@@ -440,7 +440,7 @@ public:
                 kUboAlign;
             void* gptr = rm_.BumpAllocate(
                 sizeof(cairns::rhi::RenderPassGlobals), dyn_align,
-                rhi2::Memory::kDynamic);
+                rhi::Memory::kDynamic);
             memcpy(gptr, &render_pass_globals, sizeof(render_pass_globals));
         }
         
@@ -475,7 +475,7 @@ public:
                     //                    cairns::Timer timer6("timer6", 6);
                     const uint32_t scene_mat_idx = prim.materialIndex;
                     const MatId mat_id = scene.materialIds[scene_mat_idx];
-                    const rhi2::Handle<rhi2::Texture> tex_handle = materials_[mat_id].color;
+                    const rhi::Handle<rhi::Texture> tex_handle = materials_[mat_id].color;
                     const SamplerHandle sampler_handle = materials_[mat_id].sampler;
                     
                     const uint32_t gpu_tex_id = tex_handle.index;
@@ -494,7 +494,7 @@ public:
                             kUboAlign;
                         void* mptr = rm_.BumpAllocate(
                             sizeof(cairns::rhi::MaterialGpu), dyn_align,
-                            rhi2::Memory::kDynamic);
+                            rhi::Memory::kDynamic);
                         memcpy(mptr, &material_gpu, sizeof(material_gpu));
                         mat_obj.material_offset = rm_.BumpOffset(mptr);
                         mat_obj.material = mat_id;
@@ -515,7 +515,7 @@ public:
                             kUboAlign;
                         void* tptr = rm_.BumpAllocate(
                             sizeof(cairns::rhi::DrawTmp), dyn_align,
-                            rhi2::Memory::kDynamic);
+                            rhi::Memory::kDynamic);
                         memcpy(tptr, &draw_tmp, sizeof(draw_tmp));
                         tmp_obj.offset = rm_.BumpOffset(tptr);
                     }
@@ -607,7 +607,7 @@ public:
             encoder->setCullMode(MTL::CullModeBack);
 
             {
-                rhi2::BindGroup::Hot* bg_hot = rm_.GetHot(bindless_bg_handle_);
+                rhi::BindGroup::Hot* bg_hot = rm_.GetHot(bindless_bg_handle_);
                 MTL::Buffer* bg_buf = bg_hot->api_descriptor_set;
                 const uint32_t bg_off = bg_hot->arg_buf_offset;
                 encoder->setVertexBuffer(bg_buf, bg_off,
@@ -630,7 +630,7 @@ public:
             
             encoder->setVertexBuffer(mesh_master_buf_, 0, 0);
             MTL::Buffer* dyn_master =
-                rm_.GetBumpMasterBuffer(rhi2::Memory::kDynamic);
+                rm_.GetBumpMasterBuffer(rhi::Memory::kDynamic);
             // set up render pass globals bind group in vertex shader
             encoder->setVertexBuffer(dyn_master, 0, cairns::kRenderPassGlobalBindSlot);
             // set up material buffer bind group in vertex shader
@@ -786,7 +786,7 @@ public:
 
         unlit_ = rm_.CreateShader({.api_pso = pso, .debug_name = "unlit"});
 
-        { // bindless resources set up via rhi2
+        { // bindless resources set up via rhi
             auto* texArg = MTL::ArgumentDescriptor::alloc()->init();
             texArg->setDataType(MTL::DataTypeTexture);
             texArg->setIndex(cairns::rhi::GpuSceneRegistry::kTexturesSlotOffset);
@@ -808,11 +808,11 @@ public:
             NS::Array* args = NS::Array::array((NS::Object*[]){ texArg, attrArg, sampArg }, 3);
             MTL::ArgumentEncoder* arg_encoder = device_->newArgumentEncoder(args);
 
-            rhi2::BufferDesc bd;
+            rhi::BufferDesc bd;
             bd.byte_size = static_cast<uint32_t>(arg_encoder->encodedLength());
-            bd.usage = rhi2::kUsageUniform | rhi2::kUsageStorage;
-            bd.memory = rhi2::Memory::kUpload;
-            rhi2::Handle<rhi2::Buffer> arg_buf_h = rm_.CreateBuffer(bd);
+            bd.usage = rhi::kUsageUniform | rhi::kUsageStorage;
+            bd.memory = rhi::Memory::kUpload;
+            rhi::Handle<rhi::Buffer> arg_buf_h = rm_.CreateBuffer(bd);
             uint32_t arg_off = 0;
             MTL::Buffer* arg_buf = rm_.GetMtlBuffer(arg_buf_h, &arg_off);
 
@@ -912,9 +912,9 @@ private:
     std::vector<std::pair<cairns::DrawKey,uint32_t>,cairns::Allocator<std::pair<cairns::DrawKey,uint32_t>>> drawListSorted_;
     std::vector<cairns::Draw,cairns::Allocator<cairns::Draw>> drawList_;
     
-    rhi2::ResourceManager rm_;
+    rhi::ResourceManager rm_;
     MTL::Buffer* mesh_master_buf_ = nullptr;
-    rhi2::Handle<rhi2::BindGroup> bindless_bg_handle_;
+    rhi::Handle<rhi::BindGroup> bindless_bg_handle_;
     std::unordered_map<uint32_t, uint32_t> mesh_attr_id_map_;
     std::unordered_map<uint32_t, uint32_t> sampler_id_map_;
 

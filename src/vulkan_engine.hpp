@@ -48,7 +48,7 @@
 #include <filesystem>
 #include <unordered_map>
 
-#include "rhi2/resource_manager.hpp"
+#include "rhi/resource_manager.hpp"
 
 namespace cairns {
 
@@ -347,12 +347,12 @@ private:
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(physicalDevice, &properties);
 
-        rhi2::SamplerDesc desc{};
+        rhi::SamplerDesc desc{};
         desc.debug_name = "texture_sampler";
-        desc.mag_filter = rhi2::Filter::kLinear;
-        desc.min_filter = rhi2::Filter::kLinear;
-        desc.mip_filter = rhi2::Filter::kLinear;
-        desc.address_mode = rhi2::AddressMode::kRepeat;
+        desc.mag_filter = rhi::Filter::kLinear;
+        desc.min_filter = rhi::Filter::kLinear;
+        desc.mip_filter = rhi::Filter::kLinear;
+        desc.address_mode = rhi::AddressMode::kRepeat;
         desc.max_anisotropy = properties.limits.maxSamplerAnisotropy;
         desc.max_lod = static_cast<float>(mipLevels);
         sampler_ = rm_.CreateSampler(desc);
@@ -386,15 +386,15 @@ private:
         VkDeviceSize imageSize = texWidth * texHeight * 4;
         mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
 
-        rhi2::TextureDesc desc{};
+        rhi::TextureDesc desc{};
         desc.debug_name = "viking_room";
         desc.dimensions = { texWidth, texHeight, 1 };
         desc.mip_levels = mipLevels;
         desc.array_layers = 1;
-        desc.format = rhi2::Format::kRgba8Srgb;
-        desc.usage = rhi2::kTexUsageSampled;
-        desc.memory = rhi2::Memory::kDefault;
-        desc.initial_data = rhi2::Span<const uint8_t>(
+        desc.format = rhi::Format::kRgba8Srgb;
+        desc.usage = rhi::kTexUsageSampled;
+        desc.memory = rhi::Memory::kDefault;
+        desc.initial_data = rhi::Span<const uint8_t>(
             reinterpret_cast<const uint8_t*>(pixels),
             static_cast<size_t>(imageSize));
         texture_ = rm_.CreateTexture(desc);
@@ -603,17 +603,17 @@ private:
         }
 
         VkDeviceSize bufferSize = sizeof(Particle) * PARTICLE_COUNT;
-        rhi2::Span<const uint8_t> init(
+        rhi::Span<const uint8_t> init(
             reinterpret_cast<const uint8_t*>(particles.data()),
             static_cast<size_t>(bufferSize));
 
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-            rhi2::BufferDesc desc{};
+            rhi::BufferDesc desc{};
             desc.debug_name = "ssbo";
             desc.byte_size = static_cast<uint32_t>(bufferSize);
-            desc.usage = rhi2::kUsageStorage | rhi2::kUsageVertex |
-                         rhi2::kUsageTransferDst;
-            desc.memory = rhi2::Memory::kDefault;
+            desc.usage = rhi::kUsageStorage | rhi::kUsageVertex |
+                         rhi::kUsageTransferDst;
+            desc.memory = rhi::Memory::kDefault;
             desc.initial_data = init;
             ssbo_[i] = rm_.CreateBuffer(desc);
             if (ssbo_[i].IsNull()) {
@@ -627,11 +627,11 @@ private:
         {
             VkDeviceSize bufferSize = sizeof(UniformBufferObject);
             for ( size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
-                rhi2::BufferDesc desc{};
+                rhi::BufferDesc desc{};
                 desc.debug_name = "ubo";
                 desc.byte_size = static_cast<uint32_t>(bufferSize);
-                desc.usage = rhi2::kUsageUniform;
-                desc.memory = rhi2::Memory::kUpload;
+                desc.usage = rhi::kUsageUniform;
+                desc.memory = rhi::Memory::kUpload;
                 uniform_buffers_[i] = rm_.CreateBuffer(desc);
                 if (uniform_buffers_[i].IsNull()) {
                     return false;
@@ -642,11 +642,11 @@ private:
         {
             VkDeviceSize bufferSize = sizeof(ParameterUBO);
             for ( size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
-                rhi2::BufferDesc desc{};
+                rhi::BufferDesc desc{};
                 desc.debug_name = "compute_ubo";
                 desc.byte_size = static_cast<uint32_t>(bufferSize);
-                desc.usage = rhi2::kUsageUniform;
-                desc.memory = rhi2::Memory::kUpload;
+                desc.usage = rhi::kUsageUniform;
+                desc.memory = rhi::Memory::kUpload;
                 compute_uniform_buffers_[i] = rm_.CreateBuffer(desc);
                 if (compute_uniform_buffers_[i].IsNull()) {
                     return false;
@@ -734,12 +734,12 @@ private:
 
     bool createIndexBuffer() {
         VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
-        rhi2::BufferDesc desc{};
+        rhi::BufferDesc desc{};
         desc.debug_name = "index";
         desc.byte_size = static_cast<uint32_t>(bufferSize);
-        desc.usage = rhi2::kUsageIndex | rhi2::kUsageTransferDst;
-        desc.memory = rhi2::Memory::kDefault;
-        desc.initial_data = rhi2::Span<const uint8_t>(
+        desc.usage = rhi::kUsageIndex | rhi::kUsageTransferDst;
+        desc.memory = rhi::Memory::kDefault;
+        desc.initial_data = rhi::Span<const uint8_t>(
             reinterpret_cast<const uint8_t*>(indices.data()),
             static_cast<size_t>(bufferSize));
         index_buffer_ = rm_.CreateBuffer(desc);
@@ -989,12 +989,12 @@ private:
 
     bool createVertexBuffer() {
         VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
-        rhi2::BufferDesc desc{};
+        rhi::BufferDesc desc{};
         desc.debug_name = "vertex";
         desc.byte_size = static_cast<uint32_t>(bufferSize);
-        desc.usage = rhi2::kUsageVertex | rhi2::kUsageTransferDst;
-        desc.memory = rhi2::Memory::kDefault;
-        desc.initial_data = rhi2::Span<const uint8_t>(
+        desc.usage = rhi::kUsageVertex | rhi::kUsageTransferDst;
+        desc.memory = rhi::Memory::kDefault;
+        desc.initial_data = rhi::Span<const uint8_t>(
             reinterpret_cast<const uint8_t*>(vertices.data()),
             static_cast<size_t>(bufferSize));
         vertex_buffer_ = rm_.CreateBuffer(desc);
@@ -1224,7 +1224,7 @@ private:
 
     bool initResourceManager() {
         QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice);
-        rhi2::BackendInitParams params{};
+        rhi::BackendInitParams params{};
         params.instance = instance;
         params.physical = physicalDevice;
         params.device = device;
@@ -2555,20 +2555,20 @@ private:
     bool framebufferResized = false;
     uint32_t currentFrame = 0;
 
-    rhi2::ResourceManager rm_;
+    rhi::ResourceManager rm_;
 
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
-    rhi2::Handle<rhi2::Buffer> vertex_buffer_;
-    rhi2::Handle<rhi2::Buffer> index_buffer_;
+    rhi::Handle<rhi::Buffer> vertex_buffer_;
+    rhi::Handle<rhi::Buffer> index_buffer_;
 
-    std::array<rhi2::Handle<rhi2::Buffer>, MAX_FRAMES_IN_FLIGHT> uniform_buffers_;
+    std::array<rhi::Handle<rhi::Buffer>, MAX_FRAMES_IN_FLIGHT> uniform_buffers_;
     std::array<void*, MAX_FRAMES_IN_FLIGHT> uniformBuffersMapped{};
 
-    std::array<rhi2::Handle<rhi2::Buffer>, MAX_FRAMES_IN_FLIGHT> compute_uniform_buffers_;
+    std::array<rhi::Handle<rhi::Buffer>, MAX_FRAMES_IN_FLIGHT> compute_uniform_buffers_;
     std::array<void*, MAX_FRAMES_IN_FLIGHT> computeUniformBuffersMapped{};
 
-    std::array<rhi2::Handle<rhi2::Buffer>, MAX_FRAMES_IN_FLIGHT> ssbo_;
+    std::array<rhi::Handle<rhi::Buffer>, MAX_FRAMES_IN_FLIGHT> ssbo_;
 
     VkDescriptorPool descriptorPool;
     std::vector<VkDescriptorSet> descriptorSets;
@@ -2576,8 +2576,8 @@ private:
     std::vector<VkDescriptorSet> computeDescriptorSets;
 
     uint32_t mipLevels = 0;
-    rhi2::Handle<rhi2::Texture> texture_;
-    rhi2::Handle<rhi2::Sampler> sampler_;
+    rhi::Handle<rhi::Texture> texture_;
+    rhi::Handle<rhi::Sampler> sampler_;
 
     VkImage depthImage;
     VkDeviceMemory depthImageMemory;

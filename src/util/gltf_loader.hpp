@@ -1,7 +1,7 @@
 #pragma once
 
 #include "sampler.hpp"
-#include "rhi2/resource_manager.hpp"
+#include "rhi/resource_manager.hpp"
 #include "util/std_allocator.hpp"
 
 #include <fastgltf/glm_element_traits.hpp>
@@ -46,9 +46,9 @@ struct Mesh {
     std::string name;
     
     // GPU Handles
-    rhi2::Handle<rhi2::Buffer> posHandle;
-    rhi2::Handle<rhi2::Buffer> attrHandle; // Bindless attributes (UV, Norm, etc)
-    rhi2::Handle<rhi2::Buffer> indexHandle;
+    rhi::Handle<rhi::Buffer> posHandle;
+    rhi::Handle<rhi::Buffer> attrHandle; // Bindless attributes (UV, Norm, etc)
+    rhi::Handle<rhi::Buffer> indexHandle;
     
     // Sub-sections of this mesh
     std::vector<Primitive> primitives;
@@ -87,8 +87,8 @@ struct LoadedSampler {
 };
 
 struct LoadedMaterial {
-    rhi2::Handle<rhi2::Texture> color;
-    rhi2::Handle<rhi2::Sampler> sampler;
+    rhi::Handle<rhi::Texture> color;
+    rhi::Handle<rhi::Sampler> sampler;
 };
 
 struct Scene {
@@ -98,8 +98,8 @@ struct Scene {
     meshes(cairns::Allocator<Mesh>(arena_)),
     nodes(cairns::Allocator<Node>(arena_)),
     rootNodes(cairns::Allocator<int32_t>(arena_)),
-    textureHandles(cairns::Allocator<rhi2::Handle<rhi2::Texture>>(arena_)),
-    samplerHandles(cairns::Allocator<rhi2::Handle<rhi2::Sampler>>(arena_)),
+    textureHandles(cairns::Allocator<rhi::Handle<rhi::Texture>>(arena_)),
+    samplerHandles(cairns::Allocator<rhi::Handle<rhi::Sampler>>(arena_)),
     materialIds(cairns::Allocator<uint32_t>(arena_))
     { }
     
@@ -118,8 +118,8 @@ struct Scene {
     /////////////////
     
     // Bindless Registry Data
-    std::vector<rhi2::Handle<rhi2::Texture>, cairns::Allocator<rhi2::Handle<rhi2::Texture>>> textureHandles;
-    std::vector<rhi2::Handle<rhi2::Sampler>, cairns::Allocator<rhi2::Handle<rhi2::Sampler>>> samplerHandles;
+    std::vector<rhi::Handle<rhi::Texture>, cairns::Allocator<rhi::Handle<rhi::Texture>>> textureHandles;
+    std::vector<rhi::Handle<rhi::Sampler>, cairns::Allocator<rhi::Handle<rhi::Sampler>>> samplerHandles;
     std::vector<uint32_t, cairns::Allocator<uint32_t>> materialIds;
 
     void CleanupTmps() {
@@ -354,18 +354,18 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene) {
     return true;
 }
 
-inline void PrepareSceneResources(Scene& scene, rhi2::ResourceManager& rm, std::vector<LoadedMaterial>& materials) {
+inline void PrepareSceneResources(Scene& scene, rhi::ResourceManager& rm, std::vector<LoadedMaterial>& materials) {
     // Textures
     for (const auto& texDescIn : scene.loaded_textures) {
-        rhi2::TextureDesc d;
+        rhi::TextureDesc d;
         d.dimensions = {static_cast<int32_t>(texDescIn.width),
                         static_cast<int32_t>(texDescIn.height), 1};
-        d.format = rhi2::Format::kRgba8Unorm;
+        d.format = rhi::Format::kRgba8Unorm;
         d.mip_levels = static_cast<uint32_t>(texDescIn.levels > 0 ? texDescIn.levels : 1);
         d.array_layers = 1;
-        d.usage = rhi2::kTexUsageSampled | rhi2::kTexUsageTransferDst;
-        d.memory = rhi2::Memory::kDefault;
-        d.initial_data = rhi2::Span<const uint8_t>(
+        d.usage = rhi::kTexUsageSampled | rhi::kTexUsageTransferDst;
+        d.memory = rhi::Memory::kDefault;
+        d.initial_data = rhi::Span<const uint8_t>(
             static_cast<const uint8_t*>(texDescIn.src_image),
             static_cast<size_t>(texDescIn.src_bytes_per_row) *
                 static_cast<size_t>(texDescIn.height));
@@ -375,20 +375,20 @@ inline void PrepareSceneResources(Scene& scene, rhi2::ResourceManager& rm, std::
     // Samplers
     for (const auto& info : scene.loaded_samplers) {
         auto map_filter = [](rhi::SamplerFilter f) {
-            return f == rhi::SamplerFilter::Nearest ? rhi2::Filter::kNearest : rhi2::Filter::kLinear;
+            return f == rhi::SamplerFilter::Nearest ? rhi::Filter::kNearest : rhi::Filter::kLinear;
         };
         auto map_mip = [](rhi::SamplerMipFilter f) {
-            return f == rhi::SamplerMipFilter::Linear ? rhi2::Filter::kLinear : rhi2::Filter::kNearest;
+            return f == rhi::SamplerMipFilter::Linear ? rhi::Filter::kLinear : rhi::Filter::kNearest;
         };
         auto map_addr = [](rhi::SamplerAddressMode m) {
             switch (m) {
-                case rhi::SamplerAddressMode::MirroredRepeat: return rhi2::AddressMode::kMirroredRepeat;
-                case rhi::SamplerAddressMode::ClampToEdge:    return rhi2::AddressMode::kClampToEdge;
-                case rhi::SamplerAddressMode::ClampToBorder:  return rhi2::AddressMode::kClampToBorder;
-                default:                                      return rhi2::AddressMode::kRepeat;
+                case rhi::SamplerAddressMode::MirroredRepeat: return rhi::AddressMode::kMirroredRepeat;
+                case rhi::SamplerAddressMode::ClampToEdge:    return rhi::AddressMode::kClampToEdge;
+                case rhi::SamplerAddressMode::ClampToBorder:  return rhi::AddressMode::kClampToBorder;
+                default:                                      return rhi::AddressMode::kRepeat;
             }
         };
-        rhi2::SamplerDesc d;
+        rhi::SamplerDesc d;
         d.min_filter = map_filter(info.minFilter);
         d.mag_filter = map_filter(info.magFilter);
         d.mip_filter = map_mip(info.mipFilter);

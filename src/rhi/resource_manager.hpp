@@ -1,4 +1,4 @@
-// rhi2/resource_manager.hpp
+// rhi/resource_manager.hpp
 //
 // Public API for the cross-platform GPU resource manager.
 // Implementations live in {metal,vulkan,webgpu}/resource_manager.cpp.
@@ -40,7 +40,7 @@ class RenderPipelineState;
 }  // namespace MTL
 #endif  // CAIRNS_METAL
 
-namespace cairns::rhi2 {
+namespace cairns::rhi {
 
 #if CAIRNS_METAL
 using ApiTextureHandle = MTL::Texture*;
@@ -393,7 +393,7 @@ struct Shader {
 };
 
 struct ShaderDesc {
-    ApiPsoHandle api_pso = nullptr;  // engine-compiled; rhi2 takes ownership
+    ApiPsoHandle api_pso = nullptr;  // engine-compiled; rhi takes ownership
     const char* debug_name = nullptr;
 };
 
@@ -481,4 +481,4 @@ private:
     Impl* impl_ = nullptr;
 };
 
-}  // namespace cairns::rhi2
+}  // namespace cairns::rhi

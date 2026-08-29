@@ -1,6 +1,6 @@
-// rhi2/vulkan/memory_allocator.hpp
+// rhi/vulkan/memory_allocator.hpp
 //
-// PRIVATE to the Vulkan backend. Not exposed through rhi2/resource_manager.hpp.
+// PRIVATE to the Vulkan backend. Not exposed through rhi/resource_manager.hpp.
 //
 // Manages 128 MB heap blocks. Each block is one VkDeviceMemory + one master
 // VkBuffer covering its entire range (or, for image pools, one VkDeviceMemory
@@ -20,10 +20,10 @@
 
 #include <vulkan/vulkan.h>
 
-#include "rhi2/resource_manager.hpp"
+#include "rhi/resource_manager.hpp"
 #include "util/offset_allocator.hpp"
 
-namespace cairns::rhi2::vulkan {
+namespace cairns::rhi::vulkan {
 
 inline constexpr uint32_t kInvalidBlock = 0xFFFFFFFFu;
 inline constexpr size_t kMemoryCount = static_cast<size_t>(Memory::kCount);
@@ -125,6 +125,6 @@ private:
     std::vector<PendingFree> pending_frees_[ResourceManager::kFramesInFlight];
 };
 
-}  // namespace cairns::rhi2::vulkan
+}  // namespace cairns::rhi::vulkan
 
 #endif  // CAIRNS_VULKAN

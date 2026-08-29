@@ -1,19 +1,19 @@
-// rhi2/vulkan/resource_manager.cpp
+// rhi/vulkan/resource_manager.cpp
 //
-// Vulkan implementation of cairns::rhi2::ResourceManager.
+// Vulkan implementation of cairns::rhi::ResourceManager.
 
 #include "util/define.hpp"
 
 #if CAIRNS_VULKAN
 
-#include "rhi2/resource_manager.hpp"
+#include "rhi/resource_manager.hpp"
 
 #include <algorithm>
 #include <cstring>
 
-#include "rhi2/vulkan/memory_allocator.hpp"
+#include "rhi/vulkan/memory_allocator.hpp"
 
-namespace cairns::rhi2 {
+namespace cairns::rhi {
 
 struct ResourceManager::Impl {
     BackendInitParams params;
@@ -628,6 +628,6 @@ uint8_t* ResourceManager::MappedPtr(Handle<Buffer> h) {
     return base + hot->offset_in_heap;
 }
 
-}  // namespace cairns::rhi2
+}  // namespace cairns::rhi
 
 #endif  // CAIRNS_VULKAN

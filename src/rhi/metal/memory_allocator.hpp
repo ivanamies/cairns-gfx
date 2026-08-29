@@ -1,6 +1,6 @@
-// rhi2/metal/memory_allocator.hpp
+// rhi/metal/memory_allocator.hpp
 //
-// PRIVATE to the Metal backend. Not exposed through rhi2/resource_manager.hpp.
+// PRIVATE to the Metal backend. Not exposed through rhi/resource_manager.hpp.
 //
 // Manages 128 MB heap blocks via MTLHeapTypePlacement so the OffsetAllocator
 // drives sub-allocation offsets (same model as the Vulkan backend). Each
@@ -20,7 +20,7 @@
 #include <array>
 #include <vector>
 
-#include "rhi2/resource_manager.hpp"
+#include "rhi/resource_manager.hpp"
 #include "util/offset_allocator.hpp"
 
 namespace MTL {
@@ -30,7 +30,7 @@ class Buffer;
 class Texture;
 }  // namespace MTL
 
-namespace cairns::rhi2::metal {
+namespace cairns::rhi::metal {
 
 inline constexpr uint32_t kInvalidBlock = 0xFFFFFFFFu;
 inline constexpr size_t kMemoryCount = static_cast<size_t>(Memory::kCount);
@@ -124,6 +124,6 @@ private:
     std::vector<PendingFree> pending_frees_[ResourceManager::kFramesInFlight];
 };
 
-}  // namespace cairns::rhi2::metal
+}  // namespace cairns::rhi::metal
 
 #endif  // CAIRNS_METAL

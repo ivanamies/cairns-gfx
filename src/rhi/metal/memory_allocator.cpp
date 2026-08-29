@@ -1,16 +1,16 @@
-// rhi2/metal/memory_allocator.cpp
+// rhi/metal/memory_allocator.cpp
 
 #include "util/define.hpp"
 
 #if CAIRNS_METAL
 
-#include "rhi2/metal/memory_allocator.hpp"
+#include "rhi/metal/memory_allocator.hpp"
 
 #include <Metal/Metal.hpp>
 
 #include <utility>
 
-namespace cairns::rhi2::metal {
+namespace cairns::rhi::metal {
 
 namespace {
 
@@ -347,6 +347,6 @@ void MemoryAllocator::RetireFrame(uint32_t frame_slot) {
     pending.clear();
 }
 
-}  // namespace cairns::rhi2::metal
+}  // namespace cairns::rhi::metal
 
 #endif  // CAIRNS_METAL

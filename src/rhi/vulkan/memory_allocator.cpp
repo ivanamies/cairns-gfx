@@ -1,14 +1,14 @@
-// rhi2/vulkan/memory_allocator.cpp
+// rhi/vulkan/memory_allocator.cpp
 
 #include "util/define.hpp"
 
 #if CAIRNS_VULKAN
 
-#include "rhi2/vulkan/memory_allocator.hpp"
+#include "rhi/vulkan/memory_allocator.hpp"
 
 #include <cstdint>
 
-namespace cairns::rhi2::vulkan {
+namespace cairns::rhi::vulkan {
 
 namespace {
 
@@ -435,6 +435,6 @@ void MemoryAllocator::RetireFrame(uint32_t frame_slot) {
     pending.clear();
 }
 
-}  // namespace cairns::rhi2::vulkan
+}  // namespace cairns::rhi::vulkan
 
 #endif  // CAIRNS_VULKAN
