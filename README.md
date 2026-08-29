@@ -7,6 +7,101 @@ RHI.
 
 ---
 
+## Product spec / north star
+
+> User is sick of everyone else's proprietary and/or copy-left (bad)
+> GUI-driven human-first slow and frail editor engines not immanentizing
+> the glorious eschaton of tool-calling VLM recursive self-improvement.
+> **Editor-engine must be fast, must be extensible, must be HEADLESS,
+> must be AI-first.**
+
+Concretely: the engine binary stays C++ + an embedded QuickJS host (no
+libpython, no GIL, no `pip` deps). Every operation is reachable both
+interactively (SDL3 + ImGui) and headlessly (newline-delimited JSON over
+stdin/stdout). Inference (SDXL, ControlNets, detectors, lifters) lives
+in a separate ComfyUI server — local or remote — that the engine talks
+to over HTTP. Python is a first-class **caller** via a thin pip client
+(`pip install cairns_editor_client`) that subprocesses the editor and
+pipes JSON. The engine doesn't link libpython; users mix our editor
+with Blender's `bpy`, HuggingFace notebooks, and their own scripts in
+whatever language they already speak.
+
+Full headless surface design at
+`~/dev/plans/2026-06-05_gfx_headless-editor-requirements.md`.
+
+### The canonical demo (verification scenario, ratcheted)
+
+There is **one** verification scenario; every new system extends it.
+Don't fork demos per system — each new feature must demo against the
+same scene at the same scale, so a single eyeball + a single perf
+readout walks the entire engine surface in one pass.
+
+**Baseline (resizing + cameras):**
+- Two viewports, side-by-side.
+- **Viewport 0 (left):** 100 GLBs × 32 slices = 3200 entities at small
+  hero scale.
+- **Viewport 1 (right):** 100 GLBs × 1 = 100 entities at normal hero
+  scale.
+- Window resizes cleanly — drag the corner, both viewports follow at
+  half-width each, no leaks, no validation noise.
+- Click viewport 0 → focused. Fly around with WASD or vim hjkl + RMB
+  mouse-look. Q/E for vertical. Shift for speed.
+- Click viewport 1 → focus switches. Fly around that one.
+- Take a screenshot.
+- Read perf from the engine's stderr log: per-pass GPU times
+  (`particle_sim`, `forward_vp0`, `forward_vp1`, `swap`) + CPU times
+  (`frame`, `build_draws`, `record`) + total FPS.
+
+**+ shadows** (after the lighting & shadows plan lands):
+- Same demo as baseline. **And now add shadows.** Per-light shadow map
+  generation passes show up in the log. Verify shadows render
+  correctly on both viewports' content. Verify the lighting eval cost
+  per pixel doesn't blow the per-platform budget (M2 Max metal,
+  MoltenVK, iPhone, S22).
+
+**+ animation** (after the skinning plan lands):
+- Same demo. **And now add animation.** Heroes in both viewports are
+  skinned + posed (one mocap clip applied via the bone-name retarget
+  primitive). `skinning_compute` pass shows up. Verify skin output is
+  visually correct (no broken winding, no UV tears) AND that the
+  per-pass timer for skinning fits the budget. S22 forward time stays
+  in the documented band (see PERFORMANCE.md S22 thermal note).
+
+**+ mesh LOD** (after the LOD plan lands):
+- Same demo. **And now check mesh LOD un-effed the triangle
+  bottleneck on phones.** The geometry-bound forward pass diagnosed
+  at `6386768` (tiny-quad commit) was specifically per-triangle
+  vertex/binner work on Adreno. LOD swap-out at distance must drop
+  per-frame triangle count by ≥4× at the documented camera poses,
+  and S22 forward GPU time must drop proportionally — not flat. This
+  is the ratchet that proves LOD actually solved the problem, not
+  just shipped a system.
+
+### How I (Coding Claude) actually run the demo
+
+I can't click or WASD-fly interactively. I drive the demo headlessly
+via the determinism harness:
+1. `editor --serve` (long-running mode).
+2. JSON commands to spawn two worlds, populate them (3200 small + 100
+   normal-scale), open two viewports.
+3. `viewport.setCamera(0, pose_a)`, `render.viewport(0)`,
+   `io.dumpTexture(...)` — "click VP0 + fly" reduced to a scripted pose.
+4. Repeat with `viewport.setCamera(1, pose_b)` — "click VP1 + fly."
+5. Screenshot = `io.dumpTexture` of the swap chain's final output.
+6. Perf readout = parse stderr `[Timer]` lines (`per-pass` + `frame` +
+   `build_draws` + `record`).
+7. For each ratchet step (+ shadows, + animation, + LOD), the same
+   script gets one extra setup command at the top and the same
+   verification pass at the bottom. The eyeball stays on the same
+   scene; the numbers ratchet.
+
+**Honest delegation**: I verify byte-identity, determinism, and perf
+readouts via the harness. You verify "did clicking + flying actually
+feel right + does it look like the heroes you wanted" by running the
+interactive build. The two checks are complementary, not competing.
+
+---
+
 ## Canonical implementation order
 
 The order each subsystem MUST be brought up in, regardless of branch / fork /
