@@ -32,9 +32,22 @@ representative-of-low-end-mobile bytecode-path numbers but actual hardware
 will differ (memory subsystem, mali-equivalent throughput etc).
 
 ### iOS Simulator (iPhone 16 Pro, Release) — still crashes
-Same `MTLSimDevice::newHeapWithDescriptor:` SIGABRT during `LoadScenesGpu` →
-`CreateBuffer` → `CreateBufferBlock` → `newHeap`. Will retry after batched
-upload (task #143).
+Same `MTLSimDevice::newHeapWithDescriptor:` SIGABRT but **the actual error is
+not OOM** — it's:
+```
+(Metal) -[MTLSimDevice newHeapWithDescriptor:], line 1199:
+   error 'MTLStorageModePrivate is required for heaps'
+```
+The iOS Simulator's Metal stub refuses to create any MTL::Heap that isn't
+`StorageModePrivate`. Our upload bump ring (and readback ring) use
+`StorageModeShared` because the CPU needs to map them — heaps are right out
+on the simulator. Real iPhone is unaffected (full Metal supports Shared heaps).
+
+This is unrelated to batched-upload work — that fix landed at `e67a2bb` (CPU
+peak now bounded to 1 batch × 10 GLBs instead of all-GLBs-at-once) and is
+verified to render clean on macOS Metal Release. iOS-Sim will need a separate
+"shared-mode bump buffer not heap" carve-out before it can run, since the
+simulator can't host the same allocator shape as real hardware.
 
 ### M2 Max — Metal (Release, window 2400×1080)
 ```
