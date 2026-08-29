@@ -2106,13 +2106,16 @@ public:
         // surfaceless mode it builds a SwapResolveTarget pointing at
         // final_target_; in windowed mode it pulls one out of swapchain_.
         // SwapChain and Frames have no notion of "headless" mode.
-        if (cfg.surfaceless) {
-            final_target_w_ = cfg.width;
-            final_target_h_ = cfg.height;
+        has_window_ = !cfg.surfaceless;
+        {
+            const uint32_t ftw = cfg.surfaceless ? cfg.width : swapchain_.Width();
+            const uint32_t fth = cfg.surfaceless ? cfg.height : swapchain_.Height();
+            final_target_w_ = ftw;
+            final_target_h_ = fth;
             rhi::TextureDesc td{};
             td.debug_name = "final_target";
-            td.dimensions = {static_cast<int32_t>(cfg.width),
-                             static_cast<int32_t>(cfg.height), 1};
+            td.dimensions = {static_cast<int32_t>(ftw),
+                             static_cast<int32_t>(fth), 1};
             td.format = rhi::Format::kBgra8Unorm;
             td.usage = rhi::kTexUsageColorTarget | rhi::kTexUsageSampled |
                        rhi::kTexUsageTransferSrc | rhi::kTexUsageTransferDst;
@@ -2228,7 +2231,38 @@ public:
         }
         render_thread_ = std::make_unique<cairns::RenderThread>(
             [this](cairns::FramePacket& pkt) { this->RecordFrame(pkt); });
+        if (has_window_) {
+            present_thread_stop_ = false;
+            present_thread_ = std::make_unique<std::thread>([this] {
+                this->PresentThreadLoop();
+            });
+        }
         return true;
+    }
+
+    void PresentThreadLoop() {
+        while (true) {
+            int32_t slot = -1;
+            {
+                std::unique_lock<std::mutex> lk(present_thread_m_);
+                present_thread_cv_.wait(lk, [&] {
+                    return present_thread_stop_ ||
+                           !present_thread_queue_.empty();
+                });
+                if (present_thread_stop_ &&
+                    present_thread_queue_.empty()) {
+                    return;
+                }
+                slot = present_thread_queue_.front();
+                present_thread_queue_.pop_front();
+            }
+            (void)slot;
+            if (final_target_.IsNull()) {
+                continue;
+            }
+            rhi_.frames.PresentFromFinalTarget(swapchain_, rhi_.alloc,
+                                                rhi_.resources, final_target_);
+        }
     }
 
     bool BuildMeshOpaqueDraws(uint32_t slot) {
@@ -3657,6 +3691,14 @@ public:
                 s.present_ready = true;
             }
             present_cv_.notify_all();
+            if (has_window_ && present_thread_) {
+                {
+                    std::lock_guard<std::mutex> lk(present_thread_m_);
+                    present_thread_queue_.push_back(
+                        static_cast<int32_t>(pkt.slot));
+                }
+                present_thread_cv_.notify_all();
+            }
             return;
         }
         if (frame_ <= 6) {
@@ -3683,6 +3725,14 @@ public:
             s.present_ready = true;
         }
         present_cv_.notify_all();
+        if (has_window_ && present_thread_) {
+            {
+                std::lock_guard<std::mutex> lk(present_thread_m_);
+                present_thread_queue_.push_back(
+                    static_cast<int32_t>(pkt.slot));
+            }
+            present_thread_cv_.notify_all();
+        }
     }
 
     bool initRenderPipeline() {
@@ -4895,6 +4945,15 @@ public:
             render_thread_->Shutdown();
             render_thread_.reset();
         }
+        if (present_thread_) {
+            {
+                std::lock_guard<std::mutex> lk(present_thread_m_);
+                present_thread_stop_ = true;
+            }
+            present_thread_cv_.notify_all();
+            present_thread_->join();
+            present_thread_.reset();
+        }
         swapchain_.Deinit();
         rhi_.pipelines.Deinit(rhi_.resources);
         rhi_.frames.Deinit();
@@ -5192,6 +5251,13 @@ private:
     std::condition_variable present_cv_;
     [[maybe_unused]] int32_t prev_present_slot_ = -1;
     std::deque<int32_t> present_queue_;
+
+    std::unique_ptr<std::thread> present_thread_;
+    std::mutex present_thread_m_;
+    std::condition_variable present_thread_cv_;
+    std::deque<int32_t> present_thread_queue_;
+    bool present_thread_stop_ = false;
+    bool has_window_ = false;
     bool dump_emitted_ = false;
     uint32_t dump_emit_frame_ = 0;
 

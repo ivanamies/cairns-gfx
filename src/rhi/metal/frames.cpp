@@ -191,6 +191,56 @@ void Frames::Present(const SwapResolveTarget& /*target*/,
     // the vk path -- the engine calls this on the main thread regardless.
 }
 
+void Frames::PresentFromFinalTarget(SwapChain& swapchain, Allocator& /*alloc*/,
+                                      Resources& resources,
+                                      Handle<Texture> src_target) {
+    SwapResolveTarget target = swapchain.AcquireForFrame();
+    CA::MetalDrawable* drawable = target.plat.drawable;
+    if (!drawable) {
+        return;
+    }
+    MTL::Texture* dst_tex = drawable->texture();
+    Texture::Hot* src_hot = resources.GetHot(src_target);
+    if (!src_hot || !dst_tex) {
+        return;
+    }
+    MTL::Texture* src_tex = src_hot->api_view;
+    if (!src_tex) {
+        return;
+    }
+    const NS::UInteger src_w = src_tex->width();
+    const NS::UInteger src_h = src_tex->height();
+    const NS::UInteger dst_w = dst_tex->width();
+    const NS::UInteger dst_h = dst_tex->height();
+    const NS::UInteger copy_w = std::min(src_w, dst_w);
+    const NS::UInteger copy_h = std::min(src_h, dst_h);
+    MTL::CommandBuffer* cb = plat.queue_->commandBuffer();
+    MTL::BlitCommandEncoder* blit = cb->blitCommandEncoder();
+    blit->copyFromTexture(src_tex, 0, 0, MTL::Origin{0, 0, 0},
+                           MTL::Size{copy_w, copy_h, 1}, dst_tex, 0, 0,
+                           MTL::Origin{0, 0, 0});
+    blit->endEncoding();
+    std::atomic<double>* gpu_end_slot = &plat.last_gpu_end_s_;
+    cb->addCompletedHandler([gpu_end_slot](MTL::CommandBuffer* cmd) {
+        gpu_end_slot->store(cmd->GPUEndTime(), std::memory_order_release);
+    });
+    drawable->addPresentedHandler(
+        [gpu_end_slot](MTL::Drawable* d) {
+            const double gpu_end_s =
+                gpu_end_slot->load(std::memory_order_acquire);
+            const double presented_s = d->presentedTime();
+            if (gpu_end_s > 0.0 && presented_s >= gpu_end_s) {
+                const uint64_t us = static_cast<uint64_t>(
+                    (presented_s - gpu_end_s) * 1.0e6);
+                cairns::TimerStorage::Span(
+                    cairns::TimerStorage::SlotForPass("present_pacing"),
+                    "present_pacing", us);
+            }
+        });
+    cb->presentDrawable(drawable);
+    cb->commit();
+}
+
 void Frames::EndSubmit(const SwapResolveTarget& target,
                         FrameCapture& frame_capture, FrameContext& fc) {
     CommandRecorder& ri = fc.cmd;
@@ -279,11 +329,6 @@ void Frames::EndSubmit(const SwapResolveTarget& target,
                 });
         }
         term->commit();
-        if (!drawable) {
-            // Render-to-texture: synchronous so a subsequent texture readback
-            // (e.g. io.dumpTexture) sees the dump's pixels.
-            term->waitUntilCompleted();
-        }
     }
 }
 
