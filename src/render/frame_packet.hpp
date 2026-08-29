@@ -38,6 +38,11 @@ struct FramePacket {
     std::span<const std::pair<DrawKey, uint32_t>> sorted;
     std::span<const rhi::Handle<rhi::Texture>> resident_textures;
 
+    // N sim steps the render thread should run this frame (0 if accumulator
+    // didn't cross kFixedDt). parity_out widens to parity_in ^ (N & 1).
+    uint32_t sim_steps_this_frame = 0;
+    float fixed_dt = 1.0f / 60.0f;
+
     uint32_t particle_parity_in = 0;
     uint32_t particle_parity_out = 0;
 

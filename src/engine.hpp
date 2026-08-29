@@ -32,6 +32,7 @@
 #include "util/scene_gpu.hpp"
 #include "util/timer.hpp"
 #include "util/imgui_snapshot.hpp"
+#include "util/frame_clock.hpp"
 #include "util/log.hpp"
 #include "scene/scene_world.hpp"
 #include "render/frame_packet.hpp"
@@ -144,6 +145,14 @@ public:
     }
     
     bool GreaterInit(SDL_Window* window) {
+        // Clock selection: CAIRNS_DUMP => FixedClock (golden); else WallClock.
+        golden_ = (std::getenv("CAIRNS_DUMP") != nullptr);
+        if (golden_) {
+            clock_ = std::make_unique<cairns::FixedClock>(cairns::kFixedDt);
+        } else {
+            clock_ = std::make_unique<cairns::WallClock>();
+        }
+
         // these initializations are wrong.
         // there is a dependency graph
         // alloc gpu mem -> upload cpu to gpu mem -> draw on gpu
@@ -301,10 +310,9 @@ public:
         // EncodeDraws() on the render-thread side post-split. Stable-index
         // writes (resize + index assignment) so the output is independent of
         // walk/execution order.
-        const char* freeze_rot = std::getenv("CAIRNS_FREEZE_ROT");
-        const float angle_degs = freeze_rot
-                                     ? static_cast<float>(std::atof(freeze_rot))
-                                     : (SDL_GetTicks() / 1000.0 / 2.0 * 45);
+        // Rotation reads sim, not wall: render_angle_deg_ is sim_angle_deg_
+        // plus an interpolation in [0, kFixedDt) toward the next sim step.
+        const float angle_degs = render_angle_deg_;
         const float angle_rads = angle_degs * std::numbers::pi / 180.0f;
         const glm::mat4 rot_matrix = glm::rotate(glm::mat4(1.0f), angle_rads, glm::vec3(0, 1.0, 0));
 
@@ -484,14 +492,34 @@ public:
 
         cairns::Timer t_frame("frame", 0);
 
-        const uint64_t now_ticks = SDL_GetTicks();
-        float delta_time = 0.016f;
-        if (!std::getenv("CAIRNS_FREEZE_ROT")) {
-            if (last_ticks_ > 0) {
-                delta_time = static_cast<float>(now_ticks - last_ticks_) / 1000.0f;
-            }
+        // Fiedler fixed-timestep accumulator. clock_ is FixedClock under
+        // CAIRNS_DUMP (1 step/frame, alpha=0) or WallClock live. wall_dt is
+        // clamped to kMaxFrameDt to avoid spiral-of-death on big stalls.
+        const double wall_dt = clock_->Tick();
+        accumulator_ += std::min(wall_dt, cairns::kMaxFrameDt);
+        sim_steps_this_frame_ = 0;
+        while (accumulator_ >= cairns::kFixedDt &&
+               sim_steps_this_frame_ < cairns::kMaxStepsPerFrame) {
+            sim_angle_deg_ += cairns::kRotDegPerSec * static_cast<float>(cairns::kFixedDt);
+            ++sim_frame_;
+            accumulator_ -= cairns::kFixedDt;
+            ++sim_steps_this_frame_;
         }
-        last_ticks_ = now_ticks;
+        const float alpha = static_cast<float>(accumulator_ / cairns::kFixedDt);
+        render_angle_deg_ = sim_angle_deg_ +
+                            alpha * cairns::kRotDegPerSec *
+                                static_cast<float>(cairns::kFixedDt);
+
+        if (frame_ <= 5) {
+            fprintf(stderr,
+                    "[FCLK] frame=%u wall_dt=%.4f acc=%.4f steps=%u alpha=%.3f "
+                    "sim_frame=%llu sim_deg=%.3f\n",
+                    frame_, wall_dt, accumulator_, sim_steps_this_frame_,
+                    alpha, static_cast<unsigned long long>(sim_frame_),
+                    sim_angle_deg_);
+        }
+
+        const float delta_time = static_cast<float>(wall_dt);
 
         cairns::Timer t_build("build_draws", 1);
         if (!BuildMeshOpaqueDraws(slot)) {
@@ -514,6 +542,8 @@ public:
         s.pkt.near_z = s.pending_near_z;
         s.pkt.far_z = s.pending_far_z;
         s.pkt.delta_time = delta_time;
+        s.pkt.sim_steps_this_frame = sim_steps_this_frame_;
+        s.pkt.fixed_dt = static_cast<float>(cairns::kFixedDt);
         // Wait for the previous frame's render-thread-published parity. In
         // steady state Acquire(slot) already established the happens-after,
         // so this rarely actually blocks.
@@ -901,6 +931,8 @@ public:
             imgui_sampler_ = rhi_.resources.CreateSampler(sd);
         }
 
+        // Deterministic particle seed -- matches the golden capture path.
+        std::srand(42);
         std::vector<Particle> particles(kParticleCount);
         for (uint32_t i = 0; i < kParticleCount; ++i) {
             const float r = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
@@ -998,7 +1030,17 @@ private:
     std::condition_variable parity_cv_;
     uint32_t latest_parity_out_ = 0;
     uint64_t latest_parity_frame_ = 0;
-    uint64_t last_ticks_ = 0;
+    [[maybe_unused]] uint64_t last_ticks_ = 0;  // removed in cleanup commit
+    // Fiedler fixed-timestep accumulator state. Game-thread only -- never
+    // touched by the render thread. clock_ is WallClock in live mode,
+    // FixedClock under CAIRNS_DUMP.
+    std::unique_ptr<cairns::FrameClock> clock_;
+    double accumulator_ = 0.0;
+    uint64_t sim_frame_ = 0;
+    float sim_angle_deg_ = 0.0f;
+    float render_angle_deg_ = 0.0f;
+    uint32_t sim_steps_this_frame_ = 0;
+    bool golden_ = false;
     // cpu frame-time history (wall-clock between draw() calls) for the imgui graph
     static constexpr int kCpuMsHistory = 128;
     float cpu_ms_history_[kCpuMsHistory] = {};
