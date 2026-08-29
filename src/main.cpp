@@ -6,13 +6,6 @@
 #include <SDL3_mixer/SDL_mixer.h>
 #include <SDL3_image/SDL_image.h>
 
-#if CAIRNS_VULKAN
-#include <SDL3/SDL_vulkan.h>
-#endif
-#if CAIRNS_METAL
-#include <SDL3/SDL_metal.h>
-#endif
-
 #include <vector>
 #include <string>
 #include <memory>
@@ -28,6 +21,7 @@
 
 #include "engine.hpp"
 #include "rhi/init_config.hpp"
+#include "shell/sdl_rhi_glue.hpp"
 #include "util/task_guard.hpp"
 
 #include <iostream>
@@ -47,9 +41,9 @@ namespace cairns {
 
 struct AppContext {
     SDL_Window* window = nullptr;
-#if CAIRNS_METAL
-    SDL_MetalView metal_view = nullptr;
-#endif
+    // Backend-specific shell handle (metal: SDL_MetalView; vk: nullptr).
+    // Released via cairns::shell::DetachWindow on shutdown.
+    void* shell_handle = nullptr;
 
     // Audio
     SDL_AudioDeviceID audioDevice;
@@ -76,21 +70,6 @@ struct AppContext {
     }
 };
 
-#if CAIRNS_VULKAN
-// Shell-side VkSurfaceKHR creation -- invoked by rhi::Device::Init after the
-// VkInstance is up. user is the SDL_Window*.
-static bool ShellVkCreateSurface(void* user, VkInstance instance,
-                                 VkSurfaceKHR* out_surface) {
-    SDL_Window* window = static_cast<SDL_Window*>(user);
-    return SDL_Vulkan_CreateSurface(window, instance, nullptr, out_surface);
-}
-
-// Shell-side window pixel-size getter for SwapChain resize handling.
-static void ShellVkWindowSize(void* user, int* w, int* h) {
-    SDL_GetWindowSizeInPixels(static_cast<SDL_Window*>(user), w, h);
-}
-#endif
-
 SDL_AppResult SDL_Fail(){
     SDL_LogError(SDL_LOG_CATEGORY_CUSTOM, "Error %s", SDL_GetError());
     return SDL_APP_FAILURE;
@@ -110,15 +89,10 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     SDL_Window* window = nullptr;
     cairns::Engine* engine = nullptr;
 
-#if CAIRNS_METAL
-    constexpr SDL_WindowFlags kBackendWindowFlag = SDL_WINDOW_METAL;
-    const char* kWindowTitle = "SDL + Metal-cpp Sample";
-#elif CAIRNS_VULKAN
-    constexpr SDL_WindowFlags kBackendWindowFlag = SDL_WINDOW_VULKAN;
-    const char* kWindowTitle = "SDL + Vulkan Sample";
-#endif
-    window = SDL_CreateWindow(kWindowTitle, kWindowStartWidth, kWindowStartHeight,
-                              SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | kBackendWindowFlag);
+    window = SDL_CreateWindow(
+        cairns::shell::BackendWindowTitle(), kWindowStartWidth, kWindowStartHeight,
+        SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY |
+            cairns::shell::BackendWindowFlag());
     if (!window) {
         return SDL_Fail();
     }
@@ -136,28 +110,7 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     rhi_cfg.width = kWindowStartWidth;
     rhi_cfg.height = kWindowStartHeight;
 
-#if CAIRNS_VULKAN
-    uint32_t sdl_ext_count = 0;
-    const char* const* sdl_exts = SDL_Vulkan_GetInstanceExtensions(&sdl_ext_count);
-    rhi_cfg.plat.vk_instance_extensions = sdl_exts;
-    rhi_cfg.plat.vk_instance_extension_count = sdl_ext_count;
-    rhi_cfg.plat.vk_create_surface = &ShellVkCreateSurface;
-    rhi_cfg.plat.vk_create_surface_user = window;
-    rhi_cfg.plat.vk_window_size = &ShellVkWindowSize;
-    rhi_cfg.plat.vk_window_size_user = window;
-#endif
-
-#if CAIRNS_METAL
-    SDL_MetalView metal_view = SDL_Metal_CreateView(window);
-    if (!metal_view) {
-        return SDL_Fail();
-    }
-    rhi_cfg.plat.metal_layer =
-        static_cast<CA::MetalLayer*>(SDL_Metal_GetLayer(metal_view));
-    if (!rhi_cfg.plat.metal_layer) {
-        return SDL_Fail();
-    }
-#endif
+    void* shell_handle = cairns::shell::AttachWindow(window, rhi_cfg);
 
     engine = new cairns::Engine;
     if (!engine->GreaterInit(rhi_cfg)) {
@@ -167,9 +120,7 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     // Setup App State
     *appstate = new AppContext{
         .window = window,
-#if CAIRNS_METAL
-        .metal_view = metal_view,
-#endif
+        .shell_handle = shell_handle,
         .audioDevice = 0,
         .track = nullptr,
         .engine = engine,
@@ -328,11 +279,7 @@ void SDL_AppQuit(void* appstate, [[maybe_unused]] SDL_AppResult result) {
         }
         ImGui_ImplSDL3_Shutdown();
         ImGui::DestroyContext();
-#if CAIRNS_METAL
-        if (app->metal_view) {
-            SDL_Metal_DestroyView(app->metal_view);
-        }
-#endif
+        cairns::shell::DetachWindow(app->shell_handle);
         if (app->window) {
             SDL_DestroyWindow(app->window);
         }
