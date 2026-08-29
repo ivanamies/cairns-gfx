@@ -4,6 +4,9 @@
 #include "rhi/resource_manager.hpp"
 #include "rhi/resources.hpp"
 
+#include <cstring>
+#include <vector>
+
 namespace cairns::rhi {
 
 inline bool LoadSceneGpu(Scene& scene, Resources& rm, Allocator& alloc) {
@@ -52,21 +55,39 @@ inline bool LoadSceneGpu(Scene& scene, Resources& rm, Allocator& alloc) {
         out = rm.CreateBuffer(alloc, d);
         return !out.IsNull();
     };
-    Handle<Buffer> shared_pos;
-    Handle<Buffer> shared_attr;
+
+    // One physical vertex buffer: [ positions (N*16) | attributes (N*64) ], the two
+    // sections "next to each other" (not interleaved) for cache locality. The
+    // position stream binds the buffer base; the attribute stream binds the same
+    // buffer via a non-owning alias handle at the attribute-section offset.
+    const size_t pos_bytes = pos_all.size() * sizeof(glm::vec4);
+    const size_t attr_bytes = attr_all.size() * sizeof(VertexAttribute);
+    std::vector<uint8_t> vbytes(pos_bytes + attr_bytes);
+    std::memcpy(vbytes.data(), pos_all.data(), pos_bytes);
+    std::memcpy(vbytes.data() + pos_bytes, attr_all.data(), attr_bytes);
+
+    Handle<Buffer> shared_vtx;
     Handle<Buffer> shared_idx;
-    if (!make(shared_pos, pos_all.data(), pos_all.size() * sizeof(glm::vec4))) {
-        return false;
-    }
-    if (!make(shared_attr, attr_all.data(), attr_all.size() * sizeof(VertexAttribute))) {
+    if (!make(shared_vtx, vbytes.data(), vbytes.size())) {
         return false;
     }
     if (!make(shared_idx, idx_all.data(), idx_all.size() * sizeof(uint32_t))) {
         return false;
     }
+
+    // Non-owning alias into shared_vtx at the attribute section. shared_vtx owns the
+    // allocation; this handle's Cold is left default so it is never freed.
+    Handle<Buffer> attr_alias = rm.buffers.Acquire();
+    {
+        Buffer::Hot* vh = rm.buffers.GetHot(shared_vtx);
+        Buffer::Hot* ah = rm.buffers.GetHot(attr_alias);
+        ah->heap_buffer_index = vh->heap_buffer_index;
+        ah->offset_in_heap = vh->offset_in_heap + static_cast<uint32_t>(pos_bytes);
+    }
+
     for (Mesh& mesh : scene.meshes) {
-        mesh.posHandle = shared_pos;
-        mesh.attrHandle = shared_attr;
+        mesh.posHandle = shared_vtx;
+        mesh.attrHandle = attr_alias;
         mesh.indexHandle = shared_idx;
     }
     return true;

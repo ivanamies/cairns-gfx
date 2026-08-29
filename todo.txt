@@ -132,7 +132,9 @@ DONE — Aaltonen slide 26 (Pack Meshes). Two parts landed:
      buffer; every mesh shares those handles and prims carry a scene-global baseVertex/
      baseIndex. So all of a scene's draws now resolve to the same buffers and the recorder
      binds each stream ONCE per scene (was per mesh/draw). Byte-identical on metal.
-  Optional polish (not required): pos+attr are two lockstep-aligned buffers; physically
-  combining them into one [pos|attr] buffer needs a non-owning alias handle for the attr
-  section. And packing ACROSS scenes (one buffer set for all heroes) would need vertex-
-  quantized 128MB blocks so pos (16B/v) and attr (64B/v) don't desync at block edges.
+  pos+attr now live in ONE physical buffer [positions | attributes] (sections adjacent,
+  not interleaved) for cache locality; the attr stream binds it via a non-owning alias
+  handle at the attr-section offset.
+  Optional later: packing ACROSS scenes (one buffer set for ALL heroes, bind once per
+  frame) would need vertex-quantized 128MB blocks so pos (16B/v) and attr (64B/v) don't
+  desync at block edges. Today we pack per-scene (bind once per scene), which is plenty.
