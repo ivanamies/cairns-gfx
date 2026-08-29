@@ -1,5 +1,9 @@
 #pragma once
 
+#include "util/define.hpp"
+
+#if CAIRNS_VULKAN
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
 #pragma clang diagnostic ignored "-Wunused-variable"
@@ -2587,3 +2591,5 @@ private:
 } // namespace cairns
 
 #pragma clang diagnostic pop
+
+#endif // CAIRNS_VULKAN

@@ -1,5 +1,9 @@
 #pragma once
 
+#include "util/define.hpp"
+
+#if CAIRNS_METAL
+
 #include <cmath>
 #include <string_view>
 #include <filesystem>
@@ -1141,4 +1145,6 @@ private:
 };
 
 } // namespace cairns
+
+#endif // CAIRNS_METAL
 

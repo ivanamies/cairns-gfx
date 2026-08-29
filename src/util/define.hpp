@@ -1,5 +1,7 @@
 #pragma once
 
+#include "util/gfx_config.hpp"
+
 #if defined(__APPLE__) and defined(__aarch64__)
 #define CAIRNS_APPLE 1
 #else // defined(__APPLE__) and defined(__aarch64__)
@@ -24,13 +26,13 @@
     #define CAIRNS_D3D12 0
 #endif
 
-#if CAIRNS_APPLE and (DEBUG_OVERRIDE_IAMIES_USE_METAL == 1)
+#if CAIRNS_APPLE and (CAIRNS_GFX_BACKEND_METAL == 1)
     #define CAIRNS_METAL 1
 #else
     #define CAIRNS_METAL 0
 #endif
 
-#if (DEBUG_OVERRIDE_IAMIES_USE_VULKAN == 1)
+#if (CAIRNS_GFX_BACKEND_VULKAN == 1)
     #define CAIRNS_VULKAN 1
 #else
     #define CAIRNS_VULKAN 0

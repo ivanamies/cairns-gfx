@@ -1,0 +1,8 @@
+#pragma once
+
+// Generated from src/util/gfx_config.hpp.in by CMake. Do not edit by hand.
+// Selects exactly one GPU backend at compile time via the CAIRNS_GFX_BACKEND
+// CMake cache variable.
+
+#define CAIRNS_GFX_BACKEND_METAL  @CAIRNS_GFX_BACKEND_METAL@
+#define CAIRNS_GFX_BACKEND_VULKAN @CAIRNS_GFX_BACKEND_VULKAN@

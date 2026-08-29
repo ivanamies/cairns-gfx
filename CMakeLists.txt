@@ -24,8 +24,24 @@ if(MSVC)
     endif()
 endif()
 
-set(DEBUG_OVERRIDE_IAMIES_USE_METAL 1)
-set(DEBUG_OVERRIDE_IAMIES_USE_VULKAN 1)
+# GPU backend is a true compile-time feature: pick exactly one.
+set(CAIRNS_GFX_BACKEND "metal" CACHE STRING "GPU backend: metal or vulkan")
+set_property(CACHE CAIRNS_GFX_BACKEND PROPERTY STRINGS metal vulkan)
+
+if(CAIRNS_GFX_BACKEND STREQUAL "metal")
+  set(CAIRNS_GFX_BACKEND_METAL 1)
+  set(CAIRNS_GFX_BACKEND_VULKAN 0)
+elseif(CAIRNS_GFX_BACKEND STREQUAL "vulkan")
+  set(CAIRNS_GFX_BACKEND_METAL 0)
+  set(CAIRNS_GFX_BACKEND_VULKAN 1)
+else()
+  message(FATAL_ERROR "CAIRNS_GFX_BACKEND must be 'metal' or 'vulkan', got '${CAIRNS_GFX_BACKEND}'")
+endif()
+
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/util/gfx_config.hpp.in"
+  "${CMAKE_BINARY_DIR}/generated/util/gfx_config.hpp"
+  @ONLY)
 
 # Set the name of the executable
 set(EXECUTABLE_NAME ${PROJECT_NAME})
@@ -49,7 +65,6 @@ target_compile_options(${EXECUTABLE_NAME} PRIVATE
   # -O2
 )
 
-target_compile_definitions(${EXECUTABLE_NAME} PRIVATE DEBUG_OVERRIDE_IAMIES_USE_METAL=${DEBUG_OVERRIDE_IAMIES_USE_METAL} DEBUG_OVERRIDE_IAMIES_USE_VULKAN=${DEBUG_OVERRIDE_IAMIES_USE_VULKAN})
 
 # What is iosLaunchScreen.storyboard? This file describes what Apple's mobile platforms
 # should show the user while the application is starting up. If you don't include one,
@@ -63,7 +78,7 @@ if(APPLE)
     target_sources("${EXECUTABLE_NAME}" PRIVATE "assets/logo.png")
 endif()
 
-if(DEBUG_OVERRIDE_IAMIES_USE_METAL)
+if(CAIRNS_GFX_BACKEND_METAL)
   message("tagiamies using metal")
     # --- START METAL-CPP CONFIGURATION ---
     # Point to the metal-cpp directory in the root of your project
@@ -78,7 +93,7 @@ if(DEBUG_OVERRIDE_IAMIES_USE_METAL)
     target_link_libraries(${EXECUTABLE_NAME} PRIVATE ${METAL_LIB} ${FOUNDATION_LIB} ${QUARTZ_LIB})
     # --- END METAL-CPP CONFIGURATION ---    
 endif()
-if(DEBUG_OVERRIDE_IAMIES_USE_VULKAN)
+if(CAIRNS_GFX_BACKEND_VULKAN)
   if (APPLE)
   message("tagiamies using vulkan too!!")
     find_package(Vulkan REQUIRED)
@@ -88,11 +103,6 @@ if(DEBUG_OVERRIDE_IAMIES_USE_VULKAN)
     target_link_libraries(${EXECUTABLE_NAME} PUBLIC vulkan android log)
   endif()
 endif()
-
-if ( !DEBUG_OVERRIDE_IAMIES_USE_METAL AND !DEBUG_OVERRIDE_IAMIES_USE_METAL ) 
-  message(FATAL_ERROR "You MUST pick one of metal or vulkan, perhaps both")
-endif()
-
 
 # Add your sources to the target
 file(GLOB_RECURSE ALL_SOURCES
@@ -106,8 +116,9 @@ target_sources(${EXECUTABLE_NAME} PRIVATE ${ALL_SOURCES})
 # Set C++ version
 target_compile_features(${EXECUTABLE_NAME} PUBLIC cxx_std_20)
 
-target_include_directories(${EXECUTABLE_NAME} PRIVATE 
+target_include_directories(${EXECUTABLE_NAME} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_BINARY_DIR}/generated"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/glm"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb"
 )

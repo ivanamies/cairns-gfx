@@ -227,25 +227,23 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene) {
             int w, h, c;
             unsigned char* raw = stbi_load_from_memory(bytes, (int)byteLength, &w, &h, &c, 4);
             if (raw) {
-                if constexpr ( is_vulkan() ) {
-                    texDesc.type = static_cast<int64_t>(VK_IMAGE_TYPE_2D);
-                    texDesc.storage = static_cast<int64_t>(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-                    texDesc.usage = static_cast<int64_t>(
-                        VK_IMAGE_USAGE_SAMPLED_BIT |
-                        VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                        VK_IMAGE_USAGE_TRANSFER_SRC_BIT
-                    );
-                    texDesc.format = static_cast<int64_t>(VK_FORMAT_R8G8B8A8_UNORM);
-                }
-                else if constexpr ( is_metal() ) {
-                    texDesc.type = static_cast<int64_t>(MTL::TextureType2D);
-                    texDesc.storage = static_cast<int64_t>(MTL::StorageModeShared);
-                    texDesc.usage = static_cast<int64_t>(MTL::TextureUsageShaderRead);
-                    texDesc.format = static_cast<int64_t>(MTL::PixelFormatRGBA8Unorm);
-                }
-                else {
-                    assert(false && "must pick one of the two APIs");
-                }
+#if CAIRNS_VULKAN
+                texDesc.type = static_cast<int64_t>(VK_IMAGE_TYPE_2D);
+                texDesc.storage = static_cast<int64_t>(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                texDesc.usage = static_cast<int64_t>(
+                    VK_IMAGE_USAGE_SAMPLED_BIT |
+                    VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+                );
+                texDesc.format = static_cast<int64_t>(VK_FORMAT_R8G8B8A8_UNORM);
+#elif CAIRNS_METAL
+                texDesc.type = static_cast<int64_t>(MTL::TextureType2D);
+                texDesc.storage = static_cast<int64_t>(MTL::StorageModeShared);
+                texDesc.usage = static_cast<int64_t>(MTL::TextureUsageShaderRead);
+                texDesc.format = static_cast<int64_t>(MTL::PixelFormatRGBA8Unorm);
+#else
+                assert(false && "must pick one of the two APIs");
+#endif
                 texDesc.sample_count = 1;
                 texDesc.width = w;
                 texDesc.height = h;

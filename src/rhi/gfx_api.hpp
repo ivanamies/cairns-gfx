@@ -30,7 +30,13 @@ enum class GfxApi {
     kD3D12 = 3
 };
 
+#if CAIRNS_METAL
+inline static constexpr GfxApi kGfxApi = GfxApi::kMetal;
+#elif CAIRNS_VULKAN
 inline static constexpr GfxApi kGfxApi = GfxApi::kVulkan;
+#else
+inline static constexpr GfxApi kGfxApi = GfxApi::kHeadless;
+#endif
 
 constexpr bool is_headless() {
     return kGfxApi == GfxApi::kHeadless;

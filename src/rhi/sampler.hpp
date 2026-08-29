@@ -24,6 +24,7 @@ enum class SamplerAddressMode : uint8_t {
     ClampToBorder = 3
 };
 
+#if CAIRNS_METAL
 namespace metal {
 inline MTL::SamplerMinMagFilter MapMinMag(SamplerFilter filter) {
     return (filter == SamplerFilter::Nearest) ?
@@ -41,7 +42,9 @@ inline MTL::SamplerAddressMode MapAddressMode(SamplerAddressMode mode) {
     }
 }
 } // namespace metal
+#endif // CAIRNS_METAL
 
+#if CAIRNS_VULKAN
 namespace vulkan {
 inline VkFilter MapFilter(SamplerFilter filter) {
     return (filter == SamplerFilter::Nearest) ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
@@ -66,6 +69,7 @@ inline VkSamplerMipmapMode MapMipmapMode(SamplerMipFilter mode) {
     return VK_SAMPLER_MIPMAP_MODE_LINEAR;
 }
 } // namespace vulkan
+#endif // CAIRNS_VULKAN
 
 
 struct SamplerInfo {
