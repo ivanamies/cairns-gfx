@@ -70,8 +70,16 @@ struct Node {
     std::vector<int32_t> children;
 };
 
+struct LoadedTexture {
+    int64_t width = 0;
+    int64_t height = 0;
+    int64_t levels = 1;
+    int64_t src_bytes_per_row = 0;
+    unsigned char* src_image = nullptr;
+};
+
 struct LoadedMaterial {
-    rhi::Handle<rhi::Texture> color = rhi::Handle<rhi::Texture>::Null;
+    rhi2::Handle<rhi2::Texture> color;
     rhi::Handle<rhi::Sampler> sampler = rhi::Handle<rhi::Sampler>::Null;
 };
 
@@ -82,7 +90,7 @@ struct Scene {
     meshes(cairns::Allocator<Mesh>(arena_)),
     nodes(cairns::Allocator<Node>(arena_)),
     rootNodes(cairns::Allocator<int32_t>(arena_)),
-    textureHandles(cairns::Allocator<rhi::Handle<rhi::Texture>>(arena_)),
+    textureHandles(cairns::Allocator<rhi2::Handle<rhi2::Texture>>(arena_)),
     samplerHandles(cairns::Allocator<rhi::Handle<rhi::Sampler>>(arena_)),
     materialIds(cairns::Allocator<uint32_t>(arena_))
     { }
@@ -96,13 +104,13 @@ struct Scene {
     /////////////////
     // temporaries //
     std::vector<rhi::ResourceDescriptor<rhi::Sampler>> loaded_samplers;
-    std::vector<rhi::ResourceDescriptor<rhi::Texture>> loaded_textures;
+    std::vector<LoadedTexture> loaded_textures;
     std::vector<uint32_t> materialToTextureIndex;
     std::vector<uint32_t> materialToSamplerIndex;
     /////////////////
     
     // Bindless Registry Data
-    std::vector<rhi::Handle<rhi::Texture>, cairns::Allocator<rhi::Handle<rhi::Texture>>> textureHandles;
+    std::vector<rhi2::Handle<rhi2::Texture>, cairns::Allocator<rhi2::Handle<rhi2::Texture>>> textureHandles;
     std::vector<rhi::Handle<rhi::Sampler>, cairns::Allocator<rhi::Handle<rhi::Sampler>>> samplerHandles;
     std::vector<uint32_t, cairns::Allocator<uint32_t>> materialIds;
 
@@ -207,8 +215,7 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene) {
 
     // 1. Textures
     for (const auto& image : asset.images) {
-        rhi::ResourceDescriptor<rhi::Texture> texDesc;
-        texDesc.undecorated_filename = std::string(image.name);
+        LoadedTexture texDesc;
         const uint8_t* bytes = nullptr; size_t byteLength = 0;
         
         const auto* bufferView = std::get_if<fastgltf::sources::BufferView>(&image.data);
@@ -233,28 +240,8 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene) {
             int w, h, c;
             unsigned char* raw = stbi_load_from_memory(bytes, (int)byteLength, &w, &h, &c, 4);
             if (raw) {
-#if CAIRNS_VULKAN
-                texDesc.type = static_cast<int64_t>(VK_IMAGE_TYPE_2D);
-                texDesc.storage = static_cast<int64_t>(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-                texDesc.usage = static_cast<int64_t>(
-                    VK_IMAGE_USAGE_SAMPLED_BIT |
-                    VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT
-                );
-                texDesc.format = static_cast<int64_t>(VK_FORMAT_R8G8B8A8_UNORM);
-#elif CAIRNS_METAL
-                texDesc.type = static_cast<int64_t>(MTL::TextureType2D);
-                texDesc.storage = static_cast<int64_t>(MTL::StorageModeShared);
-                texDesc.usage = static_cast<int64_t>(MTL::TextureUsageShaderRead);
-                texDesc.format = static_cast<int64_t>(MTL::PixelFormatRGBA8Unorm);
-#else
-                assert(false && "must pick one of the two APIs");
-#endif
-                texDesc.sample_count = 1;
                 texDesc.width = w;
                 texDesc.height = h;
-                texDesc.channels = 4;
-                texDesc.depth = 1;
                 // todo @iamies don't assume all loaded textures must be mip-mapped
                 texDesc.levels = static_cast<uint32_t>(std::floor(std::log2(std::max(w, h)))) + 1;
                 texDesc.src_bytes_per_row = 4 * w;
@@ -359,13 +346,22 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene) {
     return true;
 }
 
-inline void PrepareSceneResources(Scene& scene, rhi::ResourceManager<rhi::Texture>& tex_mgr, rhi::ResourceManager<rhi::Sampler>& sampler_mgr, std::vector<LoadedMaterial>& materials) {
+inline void PrepareSceneResources(Scene& scene, rhi2::ResourceManager& rm, rhi::ResourceManager<rhi::Sampler>& sampler_mgr, std::vector<LoadedMaterial>& materials) {
     // Textures
     for (const auto& texDescIn : scene.loaded_textures) {
-        rhi::Handle<rhi::Texture> h = tex_mgr.New();
-        rhi::ResourceDescriptor<rhi::Texture>* d = tex_mgr.GetDesc(h);
-        *d = texDescIn;
-        scene.textureHandles.push_back(h);
+        rhi2::TextureDesc d;
+        d.dimensions = {static_cast<int32_t>(texDescIn.width),
+                        static_cast<int32_t>(texDescIn.height), 1};
+        d.format = rhi2::Format::kRgba8Unorm;
+        d.mip_levels = static_cast<uint32_t>(texDescIn.levels > 0 ? texDescIn.levels : 1);
+        d.array_layers = 1;
+        d.usage = rhi2::kTexUsageSampled | rhi2::kTexUsageTransferDst;
+        d.memory = rhi2::Memory::kDefault;
+        d.initial_data = rhi2::Span<const uint8_t>(
+            static_cast<const uint8_t*>(texDescIn.src_image),
+            static_cast<size_t>(texDescIn.src_bytes_per_row) *
+                static_cast<size_t>(texDescIn.height));
+        scene.textureHandles.push_back(rm.CreateTexture(d));
     }
     
     // Samplers

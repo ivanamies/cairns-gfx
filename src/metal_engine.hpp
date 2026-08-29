@@ -92,33 +92,6 @@ struct DrawTmp {
     uint32_t yolo_padding = std::numeric_limits<uint32_t>::max();
 };
 
-bool LoadTextureGpu(ResourceManager<Texture>& manager, Handle<Texture> handle,
-                    rhi2::ResourceManager& rm) {
-    ResourceObject<Texture>& hot = *manager.GetObj(handle);
-    ResourceDescriptor<Texture>& cold = *manager.GetDesc(handle);
-    if (!cold.src_image) {
-        return false;
-    }
-    rhi2::TextureDesc d;
-    d.dimensions = {static_cast<int32_t>(cold.width),
-                    static_cast<int32_t>(cold.height), 1};
-    d.format = rhi2::Format::kRgba8Unorm;
-    d.mip_levels = static_cast<uint32_t>(cold.levels > 0 ? cold.levels : 1);
-    d.array_layers = 1;
-    d.usage = rhi2::kTexUsageSampled | rhi2::kTexUsageTransferDst;
-    d.memory = rhi2::Memory::kDefault;
-    d.initial_data = rhi2::Span<const uint8_t>(
-        static_cast<const uint8_t*>(cold.src_image),
-        static_cast<size_t>(cold.src_bytes_per_row) *
-            static_cast<size_t>(cold.height));
-    rhi2::Handle<rhi2::Texture> rhi2_h = rm.CreateTexture(d);
-    if (rhi2_h.IsNull()) {
-        return false;
-    }
-    hot.texture = static_cast<MTL::Texture*>(rm.GetHot(rhi2_h)->api_view);
-    return true;
-}
-
 bool LoadMeshGpu(Mesh& mesh, rhi2::ResourceManager& rm) {
     auto process = [&](rhi2::Handle<rhi2::Buffer>& h, const void* srcData,
                        size_t srcSize) -> bool {
@@ -186,7 +159,6 @@ bool LoadSamplerGpu(ResourceManager<Sampler>& sampler_mgr, Handle<Sampler> h,
 }
 
 bool LoadSceneGpu(Scene& scene,
-                  ResourceManager<Texture>& texMgr,
                   ResourceManager<Sampler>& sampler_mgr,
                   rhi2::ResourceManager& rm)
 {
@@ -198,12 +170,6 @@ bool LoadSceneGpu(Scene& scene,
     for ( size_t i = 0; i < scene.meshes.size(); ++i ) {
         auto& mesh = scene.meshes[i];
         if ( !LoadMeshGpu(mesh, rm) ) {
-            return false;
-        }
-    }
-    for ( size_t i = 0; i < scene.textureHandles.size(); ++i ) {
-        const auto h = scene.textureHandles[i];
-        if (!LoadTextureGpu(texMgr, h, rm)) {
             return false;
         }
     }
@@ -328,7 +294,6 @@ public:
     bool initResourceManagers() {
         using namespace cairns;
         using namespace cairns::rhi;
-        texManager_ = cairns::make_unique<ResourceManager<Texture>>(hot_arena_, hot_arena_, 1024);
         renderPassTexManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Texture>>(hot_arena_, hot_arena_, 2);
         // 4 because we're only pretending to be a real UGC engine at this point
         samplerManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Sampler>>(hot_arena_, hot_arena_, 256);
@@ -389,9 +354,9 @@ public:
                 if (!cairns::LoadSceneFromGltf(filepath, scene)) {
                     return false;
                 }
-                cairns::PrepareSceneResources(scene, *texManager_, *samplerManager_, materials_);
+                cairns::PrepareSceneResources(scene, rm_, *samplerManager_, materials_);
 
-                if (!cairns::rhi::LoadSceneGpu(scene, *texManager_, *samplerManager_, rm_)) {
+                if (!cairns::rhi::LoadSceneGpu(scene, *samplerManager_, rm_)) {
                     return false;
                 }
 
@@ -470,7 +435,7 @@ public:
     }
     
     bool initRenderPassDescriptor() {
-        if ( !cairns::rhi::InitRenderPassDescriptor(render_pass_descriptor_, msaaHandle_, depthHandle_, *texManager_, *swapChain_)) {
+        if ( !cairns::rhi::InitRenderPassDescriptor(render_pass_descriptor_, msaaHandle_, depthHandle_, *renderPassTexManager_, *swapChain_)) {
             return false;
         }
         return true;
@@ -567,10 +532,10 @@ public:
                     //                    cairns::Timer timer6("timer6", 6);
                     const uint32_t scene_mat_idx = prim.materialIndex;
                     const MatId mat_id = scene.materialIds[scene_mat_idx];
-                    const TexHandle tex_handle = materials_[mat_id].color;
+                    const rhi2::Handle<rhi2::Texture> tex_handle = materials_[mat_id].color;
                     const SamplerHandle sampler_handle = materials_[mat_id].sampler;
                     
-                    const uint32_t gpu_tex_id = tex_handle.get_id();
+                    const uint32_t gpu_tex_id = tex_handle.index;
                     const uint32_t gpu_sampler_id = sampler_id_map_[sampler_handle.get_id()];
                     const uint32_t gpu_attr_idx = mesh_attr_id_map_[mesh.attrHandle.index];
                     
@@ -711,7 +676,8 @@ public:
             encoder->useHeap(allocTransientHeap_->GetHeap());
             for (auto& s : scenes_) {
                 for (const auto th : s.textureHandles) {
-                    MTL::Texture* tex = texManager_->GetObj(th)->texture;
+                    MTL::Texture* tex =
+                        static_cast<MTL::Texture*>(rm_.GetHot(th)->api_view);
                     if (tex) {
                         encoder->useResource(tex, MTL::ResourceUsageRead,
                                              MTL::RenderStageFragment);
@@ -922,10 +888,11 @@ public:
                 cairns::Scene& scene = scenes_[i];
                 for (size_t j = 0; j < scene.textureHandles.size(); ++j) {
                     auto h = scene.textureHandles[j];
-                    auto* tobj = texManager_->GetObj(h);
-                    if (tobj && tobj->texture) {
-                        assert(h.get_id() == num_tex);
-                        arg_encoder->setTexture(tobj->texture,
+                    MTL::Texture* tex =
+                        static_cast<MTL::Texture*>(rm_.GetHot(h)->api_view);
+                    if (tex) {
+                        assert(h.index == num_tex);
+                        arg_encoder->setTexture(tex,
                             cairns::rhi::GpuSceneRegistry::kTexturesSlotOffset + num_tex);
                         ++num_tex;
                     }
@@ -997,7 +964,6 @@ private:
     
     std::vector<glm::mat4> debugSceneXforms_;
     
-    cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Texture>> texManager_;
     cairns::FrameTransientCache<cairns::DynamicBuffersAssoc> dynBufs_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Sampler>> samplerManager_;
     std::vector<cairns::LoadedMaterial> materials_;
