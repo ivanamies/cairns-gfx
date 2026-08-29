@@ -17,6 +17,11 @@ inline constexpr uint32_t kMaxPasses = 16;
 // multiple DrawFullscreen calls with different texture bindings without
 // last-bound-wins aliasing (the 997af20 fix).
 inline constexpr uint32_t kCompositeRingSize = 4;
+// #219 Chunk E: hard upper bound on BoundBuffer count per compute Dispatch.
+// Today's only consumer is the particle sim (3 buffers). 8 leaves slack and
+// fits a single VkDescriptorBufferInfo array on the stack so Dispatch's
+// per-call descriptor-write scratch never touches the heap.
+inline constexpr uint32_t kMaxBuffersPerDispatch = 8;
 
 // Persistent (owned by Frames) cache of offscreen VkRenderPass + VkFramebuffer
 // objects keyed by attachment formats/load-ops and image views. Swapchain

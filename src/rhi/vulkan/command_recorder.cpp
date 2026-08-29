@@ -247,8 +247,13 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
     VkDescriptorSet set = plat.compute_sets_[d.step_index];
 
     const size_t n = d.buffers.size();
-    std::vector<VkDescriptorBufferInfo> infos(n);
-    std::vector<VkWriteDescriptorSet> writes(n);
+    // #219 Chunk E: per-Dispatch descriptor-write scratch moved off the heap
+    // onto the stack via fixed-cap arrays. Particle sim binds 3 buffers; cap
+    // 8 leaves headroom for future kernels without ever allocating.
+    assert(n <= kMaxBuffersPerDispatch &&
+           "Dispatch buffer count exceeds kMaxBuffersPerDispatch -- raise cap");
+    std::array<VkDescriptorBufferInfo, kMaxBuffersPerDispatch> infos{};
+    std::array<VkWriteDescriptorSet, kMaxBuffersPerDispatch> writes{};
     for (size_t i = 0; i < n; ++i) {
         const BoundBuffer& b = d.buffers[i];
         uint32_t off = 0;
