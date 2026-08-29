@@ -20,6 +20,13 @@ uint64_t TicksMs() {
             .count());
 }
 
+uint64_t TimestampNs() {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+}
+
 std::string DefaultBasePath() {
     return "/";  // assets preloaded at the MEMFS root (--preload-file assets@/)
 }
@@ -37,6 +44,10 @@ bool ReadAsset(const std::filesystem::path& path, std::string& out) {
     out = ss.str();
     return true;
 }
+
+void ImguiNewFrame() {}  // web: DisplaySize set by the engine, input via DOM
+
+uint32_t WorkerThreadCount() { return 0; }  // W6a: single-threaded (inline fan-out)
 
 }  // namespace cairns::platform
 

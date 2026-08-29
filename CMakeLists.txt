@@ -132,7 +132,6 @@ add_library(imgui STATIC
     third_party/imgui/imgui_tables.cpp
     third_party/imgui/imgui_widgets.cpp
     third_party/imgui/imgui_demo.cpp
-    third_party/imgui/backends/imgui_impl_sdl3.cpp
 )
 target_include_directories(imgui PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui"
@@ -140,19 +139,31 @@ target_include_directories(imgui PUBLIC
 )
 target_compile_features(imgui PUBLIC cxx_std_20)
 target_compile_options(imgui PRIVATE -fno-exceptions -fno-rtti)
-target_link_libraries(imgui PUBLIC SDL3::SDL3)
+# The SDL platform backend (input) is native-only; the web build feeds ImGuiIO
+# from DOM events, and the GPU renderer is our own RHI either way.
+if(NOT EMSCRIPTEN)
+    target_sources(imgui PRIVATE third_party/imgui/backends/imgui_impl_sdl3.cpp)
+    target_link_libraries(imgui PUBLIC SDL3::SDL3)
+endif()
 
 # QuickJS: vendored copy of quickjs-ng (third_party/QuickJS). Minimal static
 # lib over the core C TUs; we don't pull the vendor's CMakeLists because it
 # also builds qjs/qjsc/wasm/test executables we don't need. quickjs-libc is
 # included so script.eval can use stdlib bindings (console.log etc).
+# quickjs-libc binds OS facilities (environ, signals, popen) absent in the
+# browser; the engine never calls its helpers (no js_std_add_helpers), so it's
+# native-only. The core JS engine (quickjs.c + regexp/unicode/cutils) is enough
+# for script.eval.
 add_library(quickjs STATIC
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/QuickJS/quickjs.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/QuickJS/quickjs-libc.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/QuickJS/cutils.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/QuickJS/libregexp.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/QuickJS/libunicode.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/QuickJS/xsum.c")
+if(NOT EMSCRIPTEN)
+    target_sources(quickjs PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/QuickJS/quickjs-libc.c")
+endif()
 target_include_directories(quickjs PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/QuickJS")
 target_compile_definitions(quickjs PRIVATE
@@ -358,17 +369,22 @@ if(CAIRNS_GFX_BACKEND_WEBGPU)
     endif()
 endif()
 
-# Third-party link surface. SDL is PUBLIC for now (P0a) -- swap_chain.hpp and
-# vulkan/device.cpp still call SDL_*. P0b removes these transitively.
+# Third-party link surface. The SDL stack (asset IO via platform_sdl.cpp, audio,
+# fonts, image codecs) is native-only; the web build uses the std/MEMFS platform
+# impl + stb_image and never links SDL.
 target_link_libraries(cairns_core PUBLIC
-    SDL3_ttf::SDL3_ttf
-    SDL3_mixer::SDL3_mixer
-    SDL3_image::SDL3_image
-    SDL3::SDL3
     fastgltf::fastgltf
     imgui
     cairns_render_thread
 )
+if(NOT EMSCRIPTEN)
+    target_link_libraries(cairns_core PUBLIC
+        SDL3_ttf::SDL3_ttf
+        SDL3_mixer::SDL3_mixer
+        SDL3_image::SDL3_image
+        SDL3::SDL3
+    )
+endif()
 
 # SDL_Image bug: https://github.com/libsdl-org/SDL_image/issues/506
 if (APPLE AND NOT BUILD_SHARED_LIBS)

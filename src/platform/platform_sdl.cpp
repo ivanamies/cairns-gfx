@@ -9,9 +9,25 @@
 
 #include <SDL3/SDL.h>
 
+#include <thread>
+
+#include "imgui.h"
+#include "imgui_impl_sdl3.h"
+
 namespace cairns::platform {
 
 uint64_t TicksMs() { return SDL_GetTicks(); }
+
+uint64_t TimestampNs() {
+    // Apple Silicon / ARM generic timer: count (cntvct_el0) scaled by freq.
+    uint64_t freq;
+    asm volatile("mrs %0, cntfrq_el0" : "=r"(freq));
+    uint64_t count;
+    asm volatile("mrs %0, cntvct_el0" : "=r"(count));
+    if (freq == 1'000'000'000ull) { return count; }
+    return static_cast<uint64_t>(
+        (static_cast<__uint128_t>(count) * 1'000'000'000ull) / freq);
+}
 
 std::string DefaultBasePath() {
 #if CAIRNS_APPLE
@@ -37,6 +53,16 @@ bool ReadAsset(const std::filesystem::path& path, std::string& out) {
     out.assign(static_cast<const char*>(data), n);
     SDL_free(data);
     return true;
+}
+
+void ImguiNewFrame() { ImGui_ImplSDL3_NewFrame(); }
+
+uint32_t WorkerThreadCount() {
+    // Cap at 4 so M-series fan-out stays on P-cores (hardware_concurrency()
+    // counts E-cores too, which ate the win); clamp 0 -> 1.
+    const unsigned hw = std::thread::hardware_concurrency();
+    const unsigned n = hw > 0 ? hw : 1u;
+    return n > 4u ? 4u : n;
 }
 
 }  // namespace cairns::platform

@@ -40,7 +40,9 @@ enum SlotState : uint8_t {
 // happens-before all the worker's slot-S reads. One lock covers it.
 struct RenderThread::Impl {
     std::function<void(FramePacket&)> record_fn;
-    tf::Executor exec;
+    // Null in inline mode: no worker thread, record_fn runs synchronously at
+    // Submit on the calling thread (single-threaded builds, e.g. the browser).
+    std::unique_ptr<tf::Executor> exec;
     tf::Taskflow taskflow;
 
     std::mutex m;
@@ -49,14 +51,17 @@ struct RenderThread::Impl {
     std::array<FramePacket*, RenderThread::kFramesInFlight> published_pkt{};
     bool shutting_down = false;
 
-    explicit Impl(std::function<void(FramePacket&)> fn)
-        : record_fn(std::move(fn)), exec(1) {
+    Impl(std::function<void(FramePacket&)> fn, bool background)
+        : record_fn(std::move(fn)) {
         for (uint32_t i = 0; i < RenderThread::kFramesInFlight; ++i) {
             slot_state[i] = kIdle;
             published_pkt[i] = nullptr;
         }
-        taskflow.emplace([this]() { WorkerLoop(); });
-        exec.run(taskflow);
+        if (background) {
+            exec = std::make_unique<tf::Executor>(1);
+            taskflow.emplace([this]() { WorkerLoop(); });
+            exec->run(taskflow);
+        }
     }
 
     void WorkerLoop() {
@@ -101,14 +106,21 @@ struct RenderThread::Impl {
     }
 };
 
-RenderThread::RenderThread(std::function<void(FramePacket&)> record_fn)
-    : impl_(std::make_unique<Impl>(std::move(record_fn))) {}
+RenderThread::RenderThread(std::function<void(FramePacket&)> record_fn,
+                           bool background)
+    : impl_(std::make_unique<Impl>(std::move(record_fn), background)) {}
 
 RenderThread::~RenderThread() {
     Shutdown();
 }
 
 void RenderThread::Acquire(uint32_t slot) {
+    // Inline: no consumer thread, so the slot is free as soon as the prior
+    // Submit returned (it ran record_fn synchronously). No wait.
+    if (!impl_->exec) {
+        impl_->slot_state[slot] = kProducerWriting;
+        return;
+    }
     std::unique_lock<std::mutex> lk(impl_->m);
     impl_->cv.wait(lk, [&] {
         return impl_->shutting_down || impl_->slot_state[slot] == kIdle;
@@ -120,6 +132,13 @@ void RenderThread::Acquire(uint32_t slot) {
 }
 
 void RenderThread::Submit(uint32_t slot, FramePacket* pkt) {
+    if (!impl_->exec) {
+        if (pkt && impl_->record_fn) {
+            impl_->record_fn(*pkt);
+        }
+        impl_->slot_state[slot] = kIdle;
+        return;
+    }
     {
         std::lock_guard<std::mutex> lk(impl_->m);
         impl_->published_pkt[slot] = pkt;
@@ -129,6 +148,9 @@ void RenderThread::Submit(uint32_t slot, FramePacket* pkt) {
 }
 
 void RenderThread::Drain() {
+    if (!impl_->exec) {
+        return;  // inline: nothing is ever in flight
+    }
     std::unique_lock<std::mutex> lk(impl_->m);
     impl_->cv.wait(lk, [&] {
         for (uint32_t i = 0; i < kFramesInFlight; ++i) {
@@ -141,7 +163,7 @@ void RenderThread::Drain() {
 }
 
 void RenderThread::Shutdown() {
-    if (!impl_) {
+    if (!impl_ || !impl_->exec) {
         return;
     }
     {
@@ -152,7 +174,7 @@ void RenderThread::Shutdown() {
         impl_->shutting_down = true;
     }
     impl_->cv.notify_all();
-    impl_->exec.wait_for_all();
+    impl_->exec->wait_for_all();
 }
 
 }  // namespace cairns

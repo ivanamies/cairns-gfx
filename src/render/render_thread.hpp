@@ -36,8 +36,11 @@ public:
     // #222 Phase T.1: re-export of cairns::rhi::kFramesInFlight.
     static constexpr uint32_t kFramesInFlight = cairns::rhi::kFramesInFlight;
 
-    // record_fn is called by the worker thread for each published packet.
-    explicit RenderThread(std::function<void(FramePacket&)> record_fn);
+    // record_fn records each published packet. background=true runs it on a
+    // dedicated worker thread (native, double-buffered); background=false runs
+    // it inline at Submit on the calling thread (single-threaded, e.g. the
+    // browser where Web Worker pthreads + WebGPU are deferred to W6b).
+    RenderThread(std::function<void(FramePacket&)> record_fn, bool background);
     ~RenderThread();
 
     RenderThread(const RenderThread&) = delete;

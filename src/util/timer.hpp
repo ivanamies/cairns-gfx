@@ -10,31 +10,12 @@
 #include <string>
 #include <string_view>
 
+#include "platform/platform.hpp"
 #include "util/log.hpp"
 
 namespace cairns {
 
-static inline uint64_t hw_counter_freq() {
-    uint64_t val;
-    asm volatile("mrs %0, cntfrq_el0" : "=r"(val));
-    return val;
-}
-
-static inline uint64_t hw_counter() {
-    uint64_t val;
-    asm volatile("mrs %0, cntvct_el0" : "=r"(val));
-    return val;
-}
-
-static inline uint64_t timestamp_ns() {
-    const uint64_t freq = hw_counter_freq();
-    const uint64_t count = hw_counter();
-    if ( freq == 1'000'000'000 ) {
-        return count;
-    }
-    return static_cast<uint64_t>(
-        (static_cast<__uint128_t>(count) * 1'000'000'000u) / freq);
-}
+static inline uint64_t timestamp_ns() { return platform::TimestampNs(); }
 
 class Timer {
  public:

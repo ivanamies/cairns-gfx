@@ -83,7 +83,8 @@ void Frame(void* arg) {
     wgpuQueueSubmit(app->queue, 1, &cb);
     wgpuCommandBufferRelease(cb);
     wgpuCommandEncoderRelease(enc);
-    wgpuSurfacePresent(app->surface);
+    // No wgpuSurfacePresent in the browser: emdawnwebgpu auto-presents the
+    // surface's current texture when this rAF callback returns.
 }
 
 void StartEngine(WebApp* app) {

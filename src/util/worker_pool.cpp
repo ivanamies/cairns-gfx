@@ -14,8 +14,15 @@
 namespace cairns {
 
 struct WorkerPool::Impl {
-    tf::Executor exec;
-    explicit Impl(uint32_t n) : exec(n > 0 ? n : 1u) {}
+    // Null => inline (single-threaded): the calling thread runs the whole
+    // fan-out. Used where worker threads aren't wanted yet (the browser: WebGPU
+    // + Web Worker pthreads is fragile, so W6a stays single-threaded).
+    std::unique_ptr<tf::Executor> exec;
+    explicit Impl(uint32_t n) {
+        if (n > 0) {
+            exec = std::make_unique<tf::Executor>(n);
+        }
+    }
 };
 
 WorkerPool::WorkerPool(uint32_t n_workers)
@@ -24,7 +31,9 @@ WorkerPool::WorkerPool(uint32_t n_workers)
 WorkerPool::~WorkerPool() = default;
 
 uint32_t WorkerPool::num_workers() const {
-    return static_cast<uint32_t>(impl_->exec.num_workers());
+    // Inline mode still presents one logical worker (the caller) so callers that
+    // partition by num_workers() run the whole range on this thread.
+    return impl_->exec ? static_cast<uint32_t>(impl_->exec->num_workers()) : 1u;
 }
 
 void WorkerPool::RunIndices(uint32_t n_tasks,
@@ -32,8 +41,10 @@ void WorkerPool::RunIndices(uint32_t n_tasks,
     if (n_tasks == 0) {
         return;
     }
-    if (n_tasks == 1) {
-        body(0);
+    if (!impl_->exec || n_tasks == 1) {
+        for (uint32_t i = 0; i < n_tasks; ++i) {
+            body(i);
+        }
         return;
     }
     // mutex + cv join. The workers (1..n_tasks-1) each decrement a count
@@ -44,7 +55,7 @@ void WorkerPool::RunIndices(uint32_t n_tasks,
     std::condition_variable cv;
     uint32_t remaining = n_tasks - 1;
     for (uint32_t i = 1; i < n_tasks; ++i) {
-        impl_->exec.silent_async([&, i]() {
+        impl_->exec->silent_async([&, i]() {
             body(i);
             std::lock_guard<std::mutex> lk(m);
             --remaining;

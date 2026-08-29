@@ -72,7 +72,8 @@
 #include "rhi/command_recorder.hpp"
 #include "util/task_guard.hpp"
 #include "imgui.h"
-#include "imgui_impl_sdl3.h"
+
+#include "platform/platform.hpp"
 
 namespace cairns {
 
@@ -2225,17 +2226,11 @@ public:
     bool GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
         engine_cfg_ = ecfg;
 
-        // #221 build_draws worker pool. Cap at 4 so M-series fan-out stays
-        // on P-cores (M2 Max has 8P + 4E; hardware_concurrency() returns 12,
-        // which pushed half the workers onto E-cores and ate the win).
-        // hardware_concurrency() may return 0 if the OS can't report it --
-        // clamp to 1 so the fan-out degenerates to a single-threaded pass.
-        const unsigned hw = std::thread::hardware_concurrency();
-        unsigned n = hw > 0 ? hw : 1u;
-        if (n > 4u) {
-            n = 4u;
-        }
-        build_pool_ = std::make_unique<cairns::WorkerPool>(n);
+        // #221 build_draws worker pool. The thread count is a platform concern
+        // (native caps at 4 P-cores; the browser returns 0 -> the pool runs the
+        // fan-out inline). W6a keeps the browser single-threaded; -pthread is W6b.
+        build_pool_ = std::make_unique<cairns::WorkerPool>(
+            cairns::platform::WorkerThreadCount());
         // Clock selection: a dump_path OR an explicit use_fixed_clock => the
         // engine runs with FixedClock + readback enabled (golden_=true). Only
         // a non-empty dump_path also turns on the dump-frame-then-exit(0)
@@ -2688,8 +2683,13 @@ public:
             CAIRNS_PRINT("GreaterInit: initParticles failed\n");
             return false;
         }
+        // A background render worker on native; inline (record at Submit on the
+        // calling thread) when the platform runs single-threaded (the browser,
+        // W6a -- same signal as the build pool: 0 worker threads => fully inline).
+        const bool background_render = cairns::platform::WorkerThreadCount() > 0;
         render_thread_ = std::make_unique<cairns::RenderThread>(
-            [this](cairns::FramePacket& pkt) { this->RecordFrame(pkt); });
+            [this](cairns::FramePacket& pkt) { this->RecordFrame(pkt); },
+            background_render);
         return true;
     }
 
@@ -3376,7 +3376,7 @@ public:
             (golden_ && imgui_in_golden_);
         if (draw_imgui) {
             if (!surfaceless) {
-                ImGui_ImplSDL3_NewFrame();
+                cairns::platform::ImguiNewFrame();
             } else {
                 // surfaceless skips ImGui_ImplSDL3_NewFrame, which sets
                 // DisplaySize; NewFrame asserts on the default (-1,-1).
