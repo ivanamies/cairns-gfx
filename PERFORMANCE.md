@@ -5,6 +5,93 @@ Newest first.
 
 ---
 
+## `c90a43b` (2026-06-04) — EnTT scene layer landed (P0–P8 done; iOS Debug refreshed)
+
+Full P0–P8 sequence of the EnTT scene-layer plan is in. Engine drives
+the active world through `ResourceManager<World>` + `entt::registry`;
+old `SceneEntity`/`SceneWorld` deleted; `PropagateTransforms` ready
+(no-op pre-Transform authoring); a second world is open alongside the
+active one (isolation gate green); skin wiring is deferred per audit.
+
+Workload: `100 GLBs × 33 slices = 3300 entities`, 11517 draws. Release.
+Steady-state medians over multiple 120-frame windows.
+
+### macOS Metal Release — M2 Max, 1280×720
+| Pass            | avg     |
+|-----------------|---------|
+| `frame`         |  2.79 ms |
+| `build_draws`   |  2.17 ms |
+| `record`        |  1.43 ms |
+| `particle_sim`  |  0.011 ms (GPU) |
+| `forward`       | 10.3 ms (GPU, offscreen) |
+| `swap`          |  0.31 ms (GPU, composite + PIP + ImGui) |
+| GPU total       | ~10.6 ms |
+
+`build_draws` dropped vs `042ebec` (2.84 → 2.17 ms) — EnTT view
+iteration is leaner than the `std::vector<SceneEntity>` walk + manual
+`scene_index` lookup that the old `Extract` did. `forward` /
+`record` /` swap` all within prior thermals.
+
+### macOS Vulkan (MoltenVK) Release — M2 Max, 1280×720
+| Pass            | avg     |
+|-----------------|---------|
+| `frame`         |  3.20 ms |
+| `build_draws`   |  2.55 ms |
+| `record`        |  0.72 ms |
+| `particle_sim`  |  0.013 ms |
+| `forward`       |  9.07 ms |
+| `swap`          |  0.036 ms |
+| GPU total       | ~9.12 ms |
+
+Same MoltenVK-faster-than-native-Metal pattern from `042ebec` holds:
+slimmer recorder path (`record` 0.72 vs 1.43 ms), tighter MSAA-resolve
+on the swap pass.
+
+### Samsung S22 Vulkan Release — on-device, 2115×1008
+| Pass            | avg     |
+|-----------------|---------|
+| `frame`         |  8.10 ms |
+| `build_draws`   |  7.12 ms |
+| `record`        | 10.72 ms |
+| `particle_sim`  |  n/a (Android Vulkan timestamps disabled, see f2625d1) |
+| `forward`       | 56.5 ms (GPU) |
+| `swap`          |  0.43 ms (GPU) |
+| GPU total       | ~57.0 ms |
+
+S22 today settled at the "cold" end of the thermally-noisy range
+documented at `042ebec` — `forward` 56.5 ms, well below the
+steady-state ~120 ms observed in some warmer sessions. **Apply the
+same thermal caveat**: a single reading on this device names a point
+in the [~57, ~120] ms band, not a fixed steady-state. The pattern of
+the EnTT path being within thermal noise of the post-render-graph
+baseline holds.
+
+### iOS — Debug build refreshed (not run)
+
+`cmake -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCAIRNS_GFX_BACKEND=metal -B
+build/ios` configures clean. `xcodebuild -sdk iphoneos -destination
+'generic/platform=iOS' build CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO`
+links cleanly (** BUILD SUCCEEDED **). Deploying to a physical device
+needs a signing identity I don't have access to in this session, so
+no on-device readout yet. Simulator build hits an architecture-define
+mismatch: `define.hpp` keys `CAIRNS_APPLE` off `__APPLE__ &&
+__aarch64__`, which is false for x86_64-iphonesimulator → `CAIRNS_METAL=0`
+→ `SwapChain` has no body → render_graph.cpp can't see members. Two
+ways to fix when next needed: (a) drop the `__aarch64__` requirement
+in `define.hpp`, or (b) force `ARCHS=arm64` for simulator builds.
+
+### Observations vs. `042ebec`
+- `build_draws` is ~25% faster (M2 Max metal) on the EnTT path. The
+  EnTT view's contiguous storage + tight component handling beats the
+  legacy `std::vector<SceneEntity>::iterator` + `scenes_[scene_index]`
+  indirection. Same effect on MoltenVK (smaller margin).
+- `forward` / `swap` unchanged within thermals on all three platforms.
+- Per-platform `gpu_frame` total (sum of `particle_sim` + `forward` +
+  `swap`) is the same as `042ebec` within noise; the scene-layer
+  rewrite is forward-time-neutral, as designed.
+
+---
+
 ## `042ebec` (2026-06-04) — RecordFrame routed through render graph (forward → swap)
 
 Frame is now graph-routed: `particle_sim` (kCompute) → `forward` (offscreen
