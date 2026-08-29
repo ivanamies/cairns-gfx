@@ -308,3 +308,28 @@ to write to these three files — they cover the code/plan workflow,
 not the user's curated logs. If unsure, draft the content in chat
 and ask the user to paste, or ask "should I add an entry to X?"
 before writing.
+
+## Cited an optimization for the wrong GPU family (counter: 1)
+
+### Incident 1 — Phase S.1 LDS palette in skin.comp (`b5495c4`)
+
+Plan: `~/dev/plans/2026-06-10_gfx_skinning-compute-optimization.md`.
+
+Landed LDS palette (`shared mat4 s_palette[256]`, 16 KB). Aaltonen +
+Naughty Dog ship this — on **GCN**. Cairns targets Apple TBDR (dev)
++ Adreno (S22) + WebGPU. Different hardware families.
+
+Receipts (PERFORMANCE.md `b5495c4`):
+- M2 Max metal: skinning_compute 5.0 ms → 11.7 ms (2.3× regression).
+- S22 Adreno 730: animation broken, no valid perf number.
+- Metal mirror needed "4 rows per joint, rebuild on read" gymnastics
+  because `threadgroup float4x4` won't default-ctor. Architecture
+  was telling us no; we shipped anyway.
+- Byte-gate N=9 cannot see LDS pressure. Validation gap.
+
+**Rules:**
+- Cite optimizations by GPU family, not "industry standard." GCN ≠
+  Apple TBDR ≠ Adreno ≠ WebGPU pluralistic.
+- Perf-test at target scale on target hardware before landing.
+- Backend port gymnastics = architecture mismatch signal, not a
+  TODO comment.

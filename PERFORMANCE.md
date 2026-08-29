@@ -25,6 +25,15 @@ Bisect threshold: skinning_compute < 8 ms = good, ≥ 8 ms = bad.
 
 First bad commit: `b5495c4`. `shared mat4 s_palette[256]` (16 KB threadgroup memory per workgroup); metal mirror stores palette as 4-rows-per-joint with rebuild-on-read.
 
+### Samsung S22 vk Release (Adreno 730), 1280×720, CAIRNS_N=500 default workload
+
+| commit | description | frame | skinning_compute | forward_vp0 | build_draws | record | present_wait | acquire_wait | swap | skin_eval |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `9737baa` | phase A.1 conditional id MRT (good) | 42.04 ms | 30.46 ms | 11.13 ms | 12.77 ms | 12.76 ms | 28.07 ms | 25.42 ms | 0.44 ms | 0.22 ms |
+| `b5495c4` | phase S.1 LDS palette in skin.comp (first BAD) | — | — | — | — | — | — | — | — | — |
+
+`b5495c4` row not captured on S22: all animations are broken at this commit on Adreno (skin output unusable), so the perf number isn't a valid comparison.
+
 ---
 
 ## `577938e` (2026-06-15) — known-good baseline, 500 actors / 100 distinct GLBs
