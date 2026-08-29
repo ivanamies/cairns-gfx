@@ -47,6 +47,16 @@ struct ResourceManager::Impl {
     VkSampleCountFlagBits msaa_samples = VK_SAMPLE_COUNT_1_BIT;
     bool validation_enabled = false;
 
+    // Per-frame command buffers + sync, owned by InitDevice.
+    uint32_t frames_in_flight = 0;
+    std::vector<VkCommandBuffer> graphics_cmds;
+    std::vector<VkCommandBuffer> compute_cmds;
+    std::vector<VkSemaphore> image_available;
+    std::vector<VkSemaphore> render_finished;
+    std::vector<VkSemaphore> compute_finished;
+    std::vector<VkFence> in_flight;
+    std::vector<VkFence> compute_in_flight;
+
     Pool<Buffer> buffers;
     Pool<Texture> textures;
     Pool<Sampler> samplers;
@@ -588,6 +598,13 @@ void ResourceManager::Deinit() {
     if (impl_->bindless_layout) {
         vkDestroyDescriptorSetLayout(dev, impl_->bindless_layout, nullptr);
     }
+    for (uint32_t i = 0; i < impl_->frames_in_flight; ++i) {
+        vkDestroySemaphore(dev, impl_->image_available[i], nullptr);
+        vkDestroySemaphore(dev, impl_->render_finished[i], nullptr);
+        vkDestroySemaphore(dev, impl_->compute_finished[i], nullptr);
+        vkDestroyFence(dev, impl_->in_flight[i], nullptr);
+        vkDestroyFence(dev, impl_->compute_in_flight[i], nullptr);
+    }
     const VkInstance inst = impl_->instance;
     const VkDebugUtilsMessengerEXT dbg = impl_->debug_messenger;
     const VkSurfaceKHR surf = impl_->surface;
@@ -792,6 +809,49 @@ bool ResourceManager::InitDevice(SDL_Window* window) {
         1u, static_cast<uint32_t>(props.limits.minUniformBufferOffsetAlignment));
     impl_->storage_align = std::max(
         1u, static_cast<uint32_t>(props.limits.minStorageBufferOffsetAlignment));
+
+    {  // per-frame command buffers + sync
+        const uint32_t n = kFramesInFlight;
+        impl_->frames_in_flight = n;
+        impl_->graphics_cmds.resize(n);
+        impl_->compute_cmds.resize(n);
+        VkCommandBufferAllocateInfo cai{};
+        cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cai.commandPool = impl_->params.command_pool;
+        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = n;
+        if (vkAllocateCommandBuffers(impl_->params.device, &cai,
+                                     impl_->graphics_cmds.data()) != VK_SUCCESS ||
+            vkAllocateCommandBuffers(impl_->params.device, &cai,
+                                     impl_->compute_cmds.data()) != VK_SUCCESS) {
+            return false;
+        }
+
+        impl_->image_available.resize(n);
+        impl_->render_finished.resize(n);
+        impl_->compute_finished.resize(n);
+        impl_->in_flight.resize(n);
+        impl_->compute_in_flight.resize(n);
+        VkSemaphoreCreateInfo sci{};
+        sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        VkFenceCreateInfo fci{};
+        fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+        for (uint32_t i = 0; i < n; ++i) {
+            if (vkCreateSemaphore(impl_->params.device, &sci, nullptr,
+                                  &impl_->image_available[i]) != VK_SUCCESS ||
+                vkCreateSemaphore(impl_->params.device, &sci, nullptr,
+                                  &impl_->render_finished[i]) != VK_SUCCESS ||
+                vkCreateSemaphore(impl_->params.device, &sci, nullptr,
+                                  &impl_->compute_finished[i]) != VK_SUCCESS ||
+                vkCreateFence(impl_->params.device, &fci, nullptr,
+                              &impl_->in_flight[i]) != VK_SUCCESS ||
+                vkCreateFence(impl_->params.device, &fci, nullptr,
+                              &impl_->compute_in_flight[i]) != VK_SUCCESS) {
+                return false;
+            }
+        }
+    }
     return true;
 }
 
@@ -1832,29 +1892,30 @@ FrameContext ResourceManager::BeginFrame(SwapChain& sc) {
     const uint32_t cf = impl_->recorder_frame;
     VkDevice dev = impl_->params.device;
 
-    vkWaitForFences(dev, 1, &fr.compute_in_flight[cf], VK_TRUE, UINT64_MAX);
-    vkResetFences(dev, 1, &fr.compute_in_flight[cf]);
-    vkResetCommandBuffer(fr.compute_cmds[cf], 0);
+    vkWaitForFences(dev, 1, &impl_->compute_in_flight[cf], VK_TRUE, UINT64_MAX);
+    vkResetFences(dev, 1, &impl_->compute_in_flight[cf]);
+    vkResetCommandBuffer(impl_->compute_cmds[cf], 0);
 
-    vkWaitForFences(dev, 1, &fr.in_flight[cf], VK_TRUE, UINT64_MAX);
+    vkWaitForFences(dev, 1, &impl_->in_flight[cf], VK_TRUE, UINT64_MAX);
     BeginFrame();  // bump ring reset
 
     uint32_t image_index = 0;
-    vkAcquireNextImageKHR(dev, sc.swapChain, UINT64_MAX, fr.image_available[cf],
+    vkAcquireNextImageKHR(dev, sc.swapChain, UINT64_MAX, impl_->image_available[cf],
                           VK_NULL_HANDLE, &image_index);
-    vkResetFences(dev, 1, &fr.in_flight[cf]);
-    vkResetCommandBuffer(fr.graphics_cmds[cf], 0);
+    vkResetFences(dev, 1, &impl_->in_flight[cf]);
+    vkResetCommandBuffer(impl_->graphics_cmds[cf], 0);
 
     VkCommandBufferBeginInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    vkBeginCommandBuffer(fr.compute_cmds[cf], &bi);
-    vkBeginCommandBuffer(fr.graphics_cmds[cf], &bi);
+    vkBeginCommandBuffer(impl_->compute_cmds[cf], &bi);
+    vkBeginCommandBuffer(impl_->graphics_cmds[cf], &bi);
 
     FrameContext fc;
     fc.frame_index = cf;
     fc.swapchain_image_index = image_index;
     fc.cmd.impl_ = new CommandRecorder::Impl{this, &sc, fr, cf, image_index,
-                                             fr.graphics_cmds[cf], fr.compute_cmds[cf], dev};
+                                             impl_->graphics_cmds[cf],
+                                             impl_->compute_cmds[cf], dev};
     return fc;
 }
 
@@ -1867,38 +1928,39 @@ void ResourceManager::EndFrame(FrameContext& fc) {
     VkSubmitInfo csi{};
     csi.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     csi.commandBufferCount = 1;
-    csi.pCommandBuffers = &fr.compute_cmds[cf];
+    csi.pCommandBuffers = &impl_->compute_cmds[cf];
     csi.signalSemaphoreCount = 1;
-    csi.pSignalSemaphores = &fr.compute_finished[cf];
-    vkQueueSubmit(fr.compute_queue, 1, &csi, fr.compute_in_flight[cf]);
+    csi.pSignalSemaphores = &impl_->compute_finished[cf];
+    vkQueueSubmit(impl_->compute_queue, 1, &csi, impl_->compute_in_flight[cf]);
 
     vkEndCommandBuffer(ri->gfx);
     VkSubmitInfo gsi{};
     gsi.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    VkSemaphore wait_sems[2] = {fr.compute_finished[cf], fr.image_available[cf]};
+    VkSemaphore wait_sems[2] = {impl_->compute_finished[cf],
+                                impl_->image_available[cf]};
     VkPipelineStageFlags wait_stages[2] = {VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
                                            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
     gsi.waitSemaphoreCount = 2;
     gsi.pWaitSemaphores = wait_sems;
     gsi.pWaitDstStageMask = wait_stages;
     gsi.commandBufferCount = 1;
-    gsi.pCommandBuffers = &fr.graphics_cmds[cf];
+    gsi.pCommandBuffers = &impl_->graphics_cmds[cf];
     gsi.signalSemaphoreCount = 1;
-    gsi.pSignalSemaphores = &fr.render_finished[cf];
-    vkQueueSubmit(fr.graphics_queue, 1, &gsi, fr.in_flight[cf]);
+    gsi.pSignalSemaphores = &impl_->render_finished[cf];
+    vkQueueSubmit(impl_->graphics_queue, 1, &gsi, impl_->in_flight[cf]);
 
     VkPresentInfoKHR pi{};
     pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     pi.waitSemaphoreCount = 1;
-    pi.pWaitSemaphores = &fr.render_finished[cf];
+    pi.pWaitSemaphores = &impl_->render_finished[cf];
     VkSwapchainKHR swapchains[1] = {ri->sc->swapChain};
     pi.swapchainCount = 1;
     pi.pSwapchains = swapchains;
     pi.pImageIndices = &fc.swapchain_image_index;
-    vkQueuePresentKHR(fr.present_queue, &pi);
+    vkQueuePresentKHR(impl_->present_queue, &pi);
 
     if (fr.dump_path && !fr.dump_path->empty()) {
-        vkQueueWaitIdle(fr.present_queue);
+        vkQueueWaitIdle(impl_->present_queue);
         dump_swapchain_image(impl_->params.device, impl_->params.physical,
                              impl_->params.command_pool, impl_->params.queue,
                              ri->sc->swapChainImages[fc.swapchain_image_index],
@@ -1909,7 +1971,7 @@ void ResourceManager::EndFrame(FrameContext& fc) {
         fr.dump_path->clear();
     }
 
-    impl_->recorder_frame = (cf + 1) % fr.frames_in_flight;
+    impl_->recorder_frame = (cf + 1) % impl_->frames_in_flight;
     delete ri;
     fc.cmd.impl_ = nullptr;
 }

@@ -474,22 +474,8 @@ private:
         if (!createShaderStorageBuffers()) return false;
         if (!createDescriptorPool()) return false;
         if (!createDescriptorSets()) return false;
-        if (!createCommandBuffers()) return false;
-        if (!createComputeCommandBuffers()) return false;
-        if (!createSyncObjects()) return false;
         {
             rhi::VkFrameResources fr{};
-            fr.graphics_queue = graphicsQueue;
-            fr.compute_queue = computeQueue;
-            fr.present_queue = presentQueue;
-            fr.frames_in_flight = MAX_FRAMES_IN_FLIGHT;
-            fr.graphics_cmds = commandBuffers.data();
-            fr.compute_cmds = computeCommandBuffers.data();
-            fr.image_available = imageAvailableSemaphores.data();
-            fr.render_finished = renderFinishedSemaphores.data();
-            fr.compute_finished = computeFinishedSemaphores.data();
-            fr.in_flight = inFlightFences.data();
-            fr.compute_in_flight = computeInFlightFences.data();
             fr.dyn_ubo_sets = dynUboSets_.data();
             fr.compute_sets = computeDescriptorSets.data();
             fr.point_sets = descriptorSets2.data();
@@ -2187,17 +2173,7 @@ private:
             vkDestroyPipelineLayout(device, h->vk_layout, nullptr);
         }
 
-        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
-            vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
-            vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
-            vkDestroyFence(device, inFlightFences[i], nullptr);
-        }
-
-        for ( size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
-            vkDestroySemaphore(device, computeFinishedSemaphores[i], nullptr);
-            vkDestroyFence(device, computeInFlightFences[i], nullptr);
-        }
-        rm_.Deinit();  // also destroys command pool, device, surface, instance
+        rm_.Deinit();  // also destroys sync objects, command pool, device, surface, instance
     }
 
     bool createInstance() {
