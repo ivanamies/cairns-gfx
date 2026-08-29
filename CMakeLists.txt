@@ -297,7 +297,6 @@ list(FILTER CAIRNS_CORE_SOURCES EXCLUDE REGEX "/src/control/")
 list(REMOVE_ITEM CAIRNS_CORE_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/serve_main.cpp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/web/web_main.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/render/render_thread.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/util/worker_pool.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/control/command_registry.cpp"
@@ -415,6 +414,12 @@ else()
     add_executable(${EXECUTABLE_NAME})
 endif()
 
+# On emscripten the browser target is cairns_web (below), built from the SAME
+# main.cpp; sdl-min would just emit a redundant .html, so keep it out of ALL.
+if(EMSCRIPTEN)
+    set_target_properties(${EXECUTABLE_NAME} PROPERTIES EXCLUDE_FROM_ALL TRUE)
+endif()
+
 target_sources(${EXECUTABLE_NAME} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp"
 )
@@ -431,12 +436,13 @@ if(EMSCRIPTEN)
 endif()
 
 # =============================================================================
-# cairns_web -- the browser entry (WebGPU via emdawnwebgpu, no SDL). Renders the
-# scenarios into the offscreen final_target_ and copies it to the <canvas>; the
-# scene is driven from JS via window.cairns.dispatch -> the CommandRegistry.
+# cairns_web -- the browser entry: the SAME src/main.cpp SDL shell as native
+# (SDL canvas window + ImGui_ImplSDL3 + SDL main callbacks) with WebGPU via
+# emdawnwebgpu. Renders into the offscreen final_target_, copies it to the
+# <canvas> (Frames::Present); also driven from JS via window.cairns.dispatch.
 # =============================================================================
 if(EMSCRIPTEN AND CAIRNS_GFX_BACKEND_WEBGPU)
-    add_executable(cairns_web "${CMAKE_CURRENT_SOURCE_DIR}/src/web/web_main.cpp")
+    add_executable(cairns_web "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
     target_link_libraries(cairns_web PRIVATE cairns_core cairns_control wgpu_web)
     target_compile_definitions(cairns_web PRIVATE CAIRNS_WEBGPU=1)
     set_target_properties(cairns_web PROPERTIES SUFFIX ".html")

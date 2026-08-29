@@ -1998,11 +1998,12 @@ bool Engine::draw() {
             (!golden_ && (!surfaceless || imgui_enabled_)) ||
             (golden_ && imgui_in_golden_);
         if (draw_imgui) {
-            if (!surfaceless) {
+            // SDL-backed shells (windowed native + web) let ImGui_ImplSDL3 own
+            // DisplaySize + input; backend-less hosts (cairns_serve, goldens) set
+            // DisplaySize manually (NewFrame asserts on the default -1,-1).
+            if (ImGui::GetIO().BackendPlatformUserData != nullptr) {
                 cairns::platform::ImguiNewFrame();
             } else {
-                // surfaceless skips ImGui_ImplSDL3_NewFrame, which sets
-                // DisplaySize; NewFrame asserts on the default (-1,-1).
                 ImGuiIO& io = ImGui::GetIO();
                 io.DisplaySize = ImVec2(static_cast<float>(FrameWidth()),
                                         static_cast<float>(FrameHeight()));

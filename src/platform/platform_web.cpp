@@ -11,25 +11,17 @@
 
 #include <SDL3/SDL.h>
 
-#include <chrono>
+#include "imgui.h"
+#include "imgui_impl_sdl3.h"
+
 #include <cstdio>
 #include <cstdlib>
 
 namespace cairns::platform {
 
-uint64_t TicksMs() {
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count());
-}
+uint64_t TicksMs() { return SDL_GetTicks(); }
 
-uint64_t TimestampNs() {
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count());
-}
+uint64_t TimestampNs() { return SDL_GetTicksNS(); }
 
 std::string DefaultBasePath() {
     return "/";  // assets preloaded at the MEMFS root (--preload-file assets@/)
@@ -78,7 +70,7 @@ bool ReadAsset(const std::filesystem::path& path, std::string& out) {
     return true;
 }
 
-void ImguiNewFrame() {}  // web: DisplaySize set by the engine, input via DOM
+void ImguiNewFrame() { ImGui_ImplSDL3_NewFrame(); }  // SDL drives DisplaySize + input
 
 uint32_t WorkerThreadCount() { return 0; }  // W6a: single-threaded (inline fan-out)
 

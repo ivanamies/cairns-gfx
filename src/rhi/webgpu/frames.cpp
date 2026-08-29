@@ -25,6 +25,10 @@ Frames::~Frames() {}
 bool Frames::Init(Device& device, Pipelines& pipelines) {
     plat.device_ = device.plat.device;
     plat.queue_ = device.plat.queue;
+    // null in headless (cairns_serve) -> Present no-ops; the shell's glue sets
+    // these for windowed + web, activating present-by-copy.
+    plat.surface_ = device.plat.surface;
+    plat.surface_format_ = device.plat.surface_format;
     (void)pipelines;
     inited_ = true;
     return true;

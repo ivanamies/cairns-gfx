@@ -2,9 +2,15 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_init.h>
+#ifndef __EMSCRIPTEN__
 #include <SDL3_ttf/SDL_ttf.h>
 #include <SDL3_mixer/SDL_mixer.h>
 #include <SDL3_image/SDL_image.h>
+#else
+#include <emscripten.h>
+#include <cstdlib>
+#include <cstring>
+#endif
 
 #include <vector>
 #include <string>
@@ -55,9 +61,11 @@ struct AppContext {
     // Released via cairns::shell::DetachWindow on shutdown.
     void* shell_handle = nullptr;
 
-    // Audio
+#ifndef __EMSCRIPTEN__
+    // Audio (native only; the web build has no audio path).
     SDL_AudioDeviceID audioDevice;
     MIX_Track* track = nullptr;
+#endif
 
     cairns::Engine* engine = nullptr;
 
@@ -68,9 +76,12 @@ struct AppContext {
     // against it; the agent drain + scenario launcher dispatch through it.
     cairns::control::CommandRegistry registry;
 
+#ifndef __EMSCRIPTEN__
     // Live agent transport: a stdin reader thread + drain on each
-    // SDL_AppIterate. Disabled unless CAIRNS_AGENT_STDIN=1.
+    // SDL_AppIterate. Disabled unless CAIRNS_AGENT_STDIN=1. Native-only -- a
+    // browser has no stdin; the web build is driven via window.cairns.dispatch.
     cairns::control::AgentStdinDrain agent_drain;
+#endif
     bool agent_quit = false;
 
     // #229 imgui scenario picker (boots blank; user clicks to run a scripts/*.js).
@@ -95,6 +106,36 @@ SDL_AppResult SDL_Fail(){
     return SDL_APP_FAILURE;
 }
 
+#ifdef __EMSCRIPTEN__
+// window.cairns.dispatch bridge. The registry lives in the heap-owned AppContext;
+// this file-scope pointer is set once SDL_AppInit builds it. Emscripten's C-ABI
+// export forces a single reachable pointer -- framework-forced, not a singleton.
+namespace {
+cairns::control::CommandRegistry* g_web_registry = nullptr;
+}  // namespace
+
+extern "C" {
+
+EMSCRIPTEN_KEEPALIVE
+char* cairns_dispatch(const char* op, const char* args_json) {
+    cairns::json req;
+    req["op"] = op ? op : "";
+    if (args_json && args_json[0]) {
+        req["args"] = cairns::json::parse(args_json, nullptr, false);
+    }
+    const cairns::json resp = g_web_registry->Dispatch(req);
+    const std::string s = resp.dump();
+    char* out = static_cast<char*>(std::malloc(s.size() + 1));
+    std::memcpy(out, s.c_str(), s.size() + 1);
+    return out;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void cairns_free(char* p) { std::free(p); }
+
+}  // extern "C"
+#endif  // __EMSCRIPTEN__
+
 SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
 
 #ifdef __ANDROID__
@@ -110,17 +151,26 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
 
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
 
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)){
+    SDL_InitFlags init_flags = SDL_INIT_VIDEO;
+#ifndef __EMSCRIPTEN__
+    init_flags |= SDL_INIT_AUDIO;
+#endif
+    if (!SDL_Init(init_flags)) {
         return SDL_Fail();
     }
 
     SDL_Window* window = nullptr;
     cairns::Engine* engine = nullptr;
 
+    // Web: fixed 1280x720, no HIGH_PIXEL_DENSITY -- the canvas is 1:1 with the
+    // final_target + surface; a dpr-scaled canvas would fight the copy-present.
+    SDL_WindowFlags win_flags = cairns::shell::BackendWindowFlag();
+#ifndef __EMSCRIPTEN__
+    win_flags |= SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#endif
     window = SDL_CreateWindow(
         cairns::shell::BackendWindowTitle(), kWindowStartWidth, kWindowStartHeight,
-        SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY |
-            cairns::shell::BackendWindowFlag());
+        win_flags);
     if (!window) {
         return SDL_Fail();
     }
@@ -149,13 +199,19 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     // #229 blank boot: no particles until a scenario asks for them (the perf
     // smokes do). The launcher reset also disables them between scenarios.
     engine->EnableParticles(false);
+    // Surfaceless webgpu (web) renders offscreen then copies to the canvas, so it
+    // must opt into imgui explicitly (windowed metal/vk get it via !surfaceless;
+    // cairns_serve stays imgui-free). Harmless on native.
+    engine->SetImguiEnabled(true);
 
     // Setup App State
     *appstate = new AppContext{
         .window = window,
         .shell_handle = shell_handle,
+#ifndef __EMSCRIPTEN__
         .audioDevice = 0,
         .track = nullptr,
+#endif
         .engine = engine,
     };
 
@@ -174,18 +230,24 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     // Script ops LAST so tools.list inside script.eval reflects every
     // other op already registered. Mirrors serve_main's ordering.
     cairns::control::RegisterScriptOps(registry, app_ctx->script_host);
+#ifdef __EMSCRIPTEN__
+    // Wire the window.cairns.dispatch bridge to this app's registry.
+    g_web_registry = &registry;
+#endif
     // #229: boot BLANK -- no run.js auto-load. Everything starts empty except
     // the perf HUD + the scenario picker; the user clicks to run a scripts/*.js
     // (perf_smoke.js is the old 500-actor benchmark). Enumerate the scripts and
     // hand the engine the imgui panel hook.
     app_ctx->launcher.Enumerate();
     engine->SetImguiPanel(&cairns::DrawScenarioPanel, &app_ctx->launcher);
+#ifndef __EMSCRIPTEN__
     app_ctx->agent_drain.Start(cairns::shell::AgentStdinEnabledFromEnv());
     if (app_ctx->agent_drain.Enabled()) {
         std::fprintf(stderr,
                      "[Agent] stdin transport on -- send NDJSON to drive "
                      "this window.\n");
     }
+#endif
 
     SDL_ShowWindow(window);
     SDL_Log("cairns Application started successfully!");
@@ -304,7 +366,9 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     // Drain any pending agent commands BEFORE the frame so the agent's
     // mutations land on this frame's render. Responses go to stdout; logs
     // / [Timer] / [FLAKE] stay on stderr per the protocol contract.
+#ifndef __EMSCRIPTEN__
     app->agent_drain.Drain(app->registry, stdout);
+#endif
     if (app->agent_quit) {
         app->app_quit = SDL_APP_SUCCESS;
     }
@@ -370,7 +434,9 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 void SDL_AppQuit(void* appstate, [[maybe_unused]] SDL_AppResult result) {
     auto* app = (AppContext*)appstate;
     if (app) {
+#ifndef __EMSCRIPTEN__
         app->agent_drain.Stop();
+#endif
         if ( app->engine ) {
             app->engine->deinit();
         }
