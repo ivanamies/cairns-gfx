@@ -89,9 +89,7 @@ struct DrawTmp {
     uint32_t yolo_padding = std::numeric_limits<uint32_t>::max();
 };
 
-bool LoadTextureGpu([[maybe_unused]] Device& device,
-                    [[maybe_unused]] GpuAllocatorHeap& alloc_transient_heap,
-                    ResourceManager<Texture>& manager, Handle<Texture> handle,
+bool LoadTextureGpu(ResourceManager<Texture>& manager, Handle<Texture> handle,
                     rhi2::ResourceManager& rm) {
     ResourceObject<Texture>& hot = *manager.GetObj(handle);
     ResourceDescriptor<Texture>& cold = *manager.GetDesc(handle);
@@ -159,8 +157,8 @@ bool LoadMeshGpu(ResourceManager<Buffer>& mgr, Mesh& mesh,
     return true;
 }
 
-bool LoadSamplerGpu([[maybe_unused]] Device& device, ResourceManager<Sampler>& sampler_mgr,
-                    Handle<Sampler> h, rhi2::ResourceManager& rm) {
+bool LoadSamplerGpu(ResourceManager<Sampler>& sampler_mgr, Handle<Sampler> h,
+                    rhi2::ResourceManager& rm) {
     auto& info = *sampler_mgr.GetDesc(h);
     auto& obj = *sampler_mgr.GetObj(h);
 
@@ -194,34 +192,28 @@ bool LoadSamplerGpu([[maybe_unused]] Device& device, ResourceManager<Sampler>& s
     return true;
 }
 
-bool LoadSceneGpu(Device& device,
-                 [[maybe_unused]] GpuAllocator& alloc_unified, GpuAllocatorHeap& alloc_transient_heap,
-                 Scene& scene,
-                 ResourceManager<Buffer>& bufMgr, ResourceManager<Texture>& texMgr,
-                 ResourceManager<Sampler>& sampler_mgr,
-                 rhi2::ResourceManager& rm)
+bool LoadSceneGpu(Scene& scene,
+                  ResourceManager<Buffer>& bufMgr, ResourceManager<Texture>& texMgr,
+                  ResourceManager<Sampler>& sampler_mgr,
+                  rhi2::ResourceManager& rm)
 {
-    // 1. Load Samplers
     for ( const auto& h : scene.samplerHandles ) {
-        if ( !LoadSamplerGpu(device, sampler_mgr, h, rm)) {
+        if ( !LoadSamplerGpu(sampler_mgr, h, rm)) {
             return false;
         }
     }
-
     for ( size_t i = 0; i < scene.meshes.size(); ++i ) {
         auto& mesh = scene.meshes[i];
         if ( !LoadMeshGpu(bufMgr, mesh, rm) ) {
             return false;
         }
     }
-    
     for ( size_t i = 0; i < scene.textureHandles.size(); ++i ) {
         const auto h = scene.textureHandles[i];
-        if (!LoadTextureGpu(device, alloc_transient_heap, texMgr, h, rm)) {
+        if (!LoadTextureGpu(texMgr, h, rm)) {
             return false;
         }
     }
-
     return true;
 }
 
@@ -262,9 +254,7 @@ bool UpdateRenderPassDescriptor(Handle<RenderPass> render_pass, Handle<Texture> 
 namespace cairns {
 
 inline static constexpr uint32_t kHotArenaMemorySize = 1 << 29;
-inline static constexpr uint32_t kTransientLinearMemorySize = 1 << 25; // 32 mb
-inline static constexpr uint32_t kPermanentLinearMemorySize = 1 << 29; // 512 mb
-inline static constexpr uint32_t kPermanentHeapMemorySize = 1 << 30; // 1 gb
+inline static constexpr uint32_t kPermanentHeapMemorySize = 1 << 30;
 inline static constexpr uint32_t kMaxDrawTmpsPerFrame = 16384;
 inline static constexpr uint32_t kMaxMaterialBuffersPerFrame = 16384;
 
@@ -292,12 +282,8 @@ public:
     }
     
     bool initGpuAllocators() {
-        // give it some extra padding just in case
-        allocTransientLinear1_ = std::make_unique<cairns::rhi::GpuAllocator>("alloc transient linear", device, cairns::rhi::GpuAllocator::Category::kCat1, kTransientLinearMemorySize);
-        allocTransientLinear2_ = std::make_unique<cairns::rhi::GpuAllocator>("alloc transient linear 2", device, cairns::rhi::GpuAllocator::Category::kCat1, kPermanentLinearMemorySize);
         allocTransientHeap_ = std::make_unique<cairns::rhi::GpuAllocatorHeap>("alloc transient heap", device, MTL::StorageModeShared, kPermanentHeapMemorySize);
-        const bool success = allocTransientLinear1_->Valid() && allocTransientLinear2_->Valid() && allocTransientHeap_->Valid();
-        return success;
+        return allocTransientHeap_->Valid();
     }
     
     bool initBufferManagers() {
@@ -460,7 +446,7 @@ public:
                 }
                 cairns::PrepareSceneResources(device, scene, *bufferManager_, *texManager_, *samplerManager_, *materialManager_);
                 
-                if (!cairns::rhi::LoadSceneGpu(device, *allocTransientLinear2_, *allocTransientHeap_, scene, *bufferManager_, *texManager_, *samplerManager_, rm_)) {
+                if (!cairns::rhi::LoadSceneGpu(scene, *bufferManager_, *texManager_, *samplerManager_, rm_)) {
                     return false;
                 }
                 
@@ -825,10 +811,6 @@ public:
             // use resource call for all vertex attributes in argument table
             encoder->useResource(mesh_master_buf_, MTL::ResourceUsageRead, MTL::RenderStageVertex);
             
-            // set up position vertex buffer in vertex shader
-            // all vertex buffer positions live in allocTransientLinear2_
-            // todo @iamies don't hard code this.
-            // ... also, did this just consume one of your buffer binding slots?
             encoder->setVertexBuffer(mesh_master_buf_, 0, 0);
             MTL::Buffer* dyn_master =
                 rm_.GetBumpMasterBuffer(rhi2::Memory::kDynamic);
@@ -994,10 +976,6 @@ public:
             std::exit(0);
         }
         
-        cairns::rhi::GpuSceneRegistry& gpu_scene_registry = obj.gpu_scene_registry;
-        gpu_scene_registry.attr_id.resize(bufferManager_->GetCapacity());
-        gpu_scene_registry.sampler_id.resize(samplerManager_->GetCapacity());
-        
         { // bindless resources set up via rhi2
             auto* texArg = MTL::ArgumentDescriptor::alloc()->init();
             texArg->setDataType(MTL::DataTypeTexture);
@@ -1148,8 +1126,6 @@ private:
     std::vector<uint32_t> mesh_attr_id_map_;
     std::vector<uint32_t> sampler_id_map_;
 
-    std::unique_ptr<cairns::rhi::GpuAllocator> allocTransientLinear1_;
-    std::unique_ptr<cairns::rhi::GpuAllocator> allocTransientLinear2_;
     std::unique_ptr<cairns::rhi::GpuAllocatorHeap> allocTransientHeap_;
     
     //    std::vector<std::vector<std::function<void(void)>>> deletionRequests_;
