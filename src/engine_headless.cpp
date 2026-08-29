@@ -237,6 +237,15 @@ LoadBatchExport RuntimeLoadGlbs(Engine* engine,
     return out;
 }
 
+bool EditorChromeEnabled(Engine* engine) {
+    return engine ? engine->EditorChromeEnabled() : true;
+}
+void SetEditorChromeEnabled(Engine* engine, bool on) {
+    if (engine) {
+        engine->SetEditorChromeEnabled(on);
+    }
+}
+
 uint32_t DebugSnapshotPrefabHandles(Engine* engine) {
     return engine ? engine->DebugSnapshotPrefabHandles() : 0u;
 }

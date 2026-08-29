@@ -724,6 +724,10 @@ public:
     const cairns::ValidationReport& LastValidationReport() const {
         return last_validation_report_;
     }
+    // #224 L8: editor-chrome toggle for cairns.editor.chrome op.
+    bool EditorChromeEnabled() const { return editor_chrome_enabled_; }
+    void SetEditorChromeEnabled(bool on) { editor_chrome_enabled_ = on; }
+
     // #224 L6: snapshot/assert helpers exposed to the NDJSON debug ops.
     uint32_t DebugSnapshotPrefabHandles() {
         last_handle_snapshot_ = SnapshotPrefabHandles();
@@ -2997,7 +3001,17 @@ public:
         // produces visible silhouettes. We only insert the pass when the
         // engine carries highlights, so the no-op cost is zero by default.
         std::array<rhi::GraphTexture, kNumViewports> outline_off{};
-        const bool outline_on = !highlights_.empty();
+        // #224 L8: editor-chrome separation. The selection outline IS
+        // editor chrome -- meta-UI that marks "this entity is selected
+        // *in the editor*", drawn on top of the scene. Stylized
+        // highlight (rim light / toon / ink) is IN-CANVAS ART, lives
+        // in the material path, and is unaffected by this gate. The
+        // remixer canvas calls cairns.editor.chrome({on:false}) before
+        // a capture or scroll so the selection outline drops out but
+        // the stylized look survives. selection STATE (highlights_) is
+        // preserved -- only the outline-pass DRAWING is suppressed.
+        const bool outline_on =
+            editor_chrome_enabled_ && !highlights_.empty();
         if (outline_on) {
             for (int v = 0; v < active_viewport_count_; ++v) {
                 const int vp_idx = v;
@@ -4230,6 +4244,10 @@ private:
     //   ResolvedSharedSkin(mhot) == per_batch_shared_skin_[mhot.batch_id]
     std::vector<rhi::Handle<rhi::Buffer>> per_batch_shared_skin_;
     // #224 L3: the instrument. Populated each LoadPrefabBatch call.
+    // #224 L8: editor-chrome toggle (selection outline pass gate).
+    // Default on; remixer/canvas flips to false to suppress meta-UI
+    // before captures. Stylized highlight (materials) untouched.
+    bool editor_chrome_enabled_ = true;
     cairns::LoadTrace        last_load_trace_{};
     cairns::LoaderCounters   loader_counters_{};
     cairns::ValidationReport last_validation_report_{};

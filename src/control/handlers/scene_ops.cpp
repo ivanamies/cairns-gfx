@@ -197,6 +197,21 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
                     {"prefab", prefab}};
         });
 
+    // ── #224 L8: editor-chrome (selection outline) toggle ──
+    registry.Register(
+        "cairns.editor.chrome",
+        json::object(),
+        "Toggle editor chrome (the selection outline pass). "
+        "Args: {on:bool}. When off, the selection STATE is preserved "
+        "(highlights_ + revision counter) but the outline is NOT drawn. "
+        "Stylized highlight (materials-era; rim/ink/toon) is in-canvas "
+        "art and unaffected by this flag. Default: on.",
+        [&engine](const json& args) -> json {
+            const bool on = args.value("on", true);
+            cairns::headless::SetEditorChromeEnabled(&engine, on);
+            return {{"on", cairns::headless::EditorChromeEnabled(&engine)}};
+        });
+
     // ── #224 L6: APPEND-only debug pair ──
     registry.Register(
         "cairns.debug.snapshotPrefabHandles",

@@ -39,6 +39,27 @@ pass for `Editor.compose`. Each is real rendering plumbing that moves
 pixels, needs its own goldens, and must NOT share commits with the
 rename.
 
+### Two-sort screenshot + test strategy (chrome on / chrome off)
+The editor canvas has two pixel surfaces and the test matrix must
+cover BOTH:
+1. **Full editor screenshot** — what the user actually sees: scene +
+   editor chrome (selection outlines, gizmos, dock UI, status overlays).
+   Tests the editor experience end-to-end. Screenshot via the editor's
+   final composite + chrome layer.
+2. **Per-viewport canvas screenshot** — just the rendered scene content
+   inside one viewport pane: no selection outlines, no editor cruft.
+   Tests the in-canvas art (materials, stylized highlight) in isolation.
+   This is what the remixer captures + scrolls + composites; it MUST be
+   chrome-free or selection cruft leaks into final art.
+
+Implementation: `cairns.io.dumpTexture {target:"window"}` is the full
+editor; need a `target:"viewport:N"` mode that grabs JUST the viewport's
+color target with `cairns.editor.chrome({on:false})` applied scope-locally
+(so a chrome-on session can capture a chrome-off frame without flipping
+global state). Both screenshot kinds need byte-gate golden coverage so
+a chrome-leak regression on either surface fails the dev build.
+Locks the §6 separation from #224.
+
 ### #270 Fix broken animations on Samsung S22 (vk release)
 Driven by `scripts/dev_drive.sh` post-#269 spawn flow. Spawn one prefab
 at a time until `[SKIN-FAIL]` fires; the log already names the failing

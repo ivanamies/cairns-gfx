@@ -122,6 +122,10 @@ std::vector<uint32_t> InstantiateGridFitted(Engine* engine,
                                               uint32_t first_prefab_idx,
                                               uint32_t prefab_count);
 
+// #224 L8: editor-chrome (selection outline) toggle.
+bool EditorChromeEnabled(Engine* engine);
+void SetEditorChromeEnabled(Engine* engine, bool on);
+
 // #224 L6: APPEND-only debug pair.
 uint32_t DebugSnapshotPrefabHandles(Engine* engine);
 uint32_t DebugAssertAppendOnly(Engine* engine);
