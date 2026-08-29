@@ -6,8 +6,11 @@
 
 #include "control/command_registry.hpp"
 #include "control/handlers/studio_js.hpp"
+#include "util/chunk_allocator.hpp"  // #229 M7: QuickJS heap backing
 #include "util/json.hpp"
+#include "util/memory_budget.hpp"
 
+#include <cstddef>
 #include <cstdio>
 
 extern "C" {
@@ -18,10 +21,49 @@ namespace cairns::control {
 
 namespace {
 
+// #229 M7: route QuickJS's allocator to a fixed ChunkAllocator reservation
+// (MemoryBudget::js_heap_bytes, 256 MB). A size-class free-list is the right
+// tool for QuickJS's millions of tiny allocations -- NOT the offset allocator,
+// which is for the GPU range domain. Bounds the JS heap by construction; cells
+// recycle within the reservation across context reloads (no OS churn). `opaque`
+// is the per-runtime ChunkAllocator passed to JS_NewRuntime2.
+void* JsHeapCalloc(void* opaque, size_t count, size_t size) {
+    if (size != 0 && count > (static_cast<size_t>(-1) / size)) {
+        return nullptr;  // overflow guard, matches libc calloc
+    }
+    const size_t bytes = count * size;
+    void* p = static_cast<cairns::ChunkAllocator*>(opaque)->Allocate(
+        static_cast<uint32_t>(bytes));
+    if (p != nullptr) {
+        std::memset(p, 0, bytes);
+    }
+    return p;
+}
+void* JsHeapMalloc(void* opaque, size_t size) {
+    return static_cast<cairns::ChunkAllocator*>(opaque)->Allocate(
+        static_cast<uint32_t>(size));
+}
+void JsHeapFree(void* opaque, void* ptr) {
+    static_cast<cairns::ChunkAllocator*>(opaque)->Free(ptr);
+}
+void* JsHeapRealloc(void* opaque, void* ptr, size_t size) {
+    return static_cast<cairns::ChunkAllocator*>(opaque)->Reallocate(
+        ptr, static_cast<uint32_t>(size));
+}
+size_t JsHeapUsableSize(const void* ptr) {
+    return static_cast<size_t>(cairns::ChunkAllocator::UsableSize(ptr));
+}
+const JSMallocFunctions kJsMallocFuncs = {
+    JsHeapCalloc, JsHeapMalloc, JsHeapFree, JsHeapRealloc, JsHeapUsableSize,
+};
+
 // Per-context state: a pointer to the registry + the JSRuntime/JSContext
 // owned by RegisterScriptOps's lambda capture (lives for the registry's
 // lifetime via a unique_ptr stored as a static here).
 struct JsState {
+    // #229 M7: declared FIRST so it destructs LAST -- after the dtor body's
+    // JS_FreeRuntime has returned every JS allocation to it (outstanding == 0).
+    cairns::ChunkAllocator js_heap_;
     JSRuntime* rt = nullptr;
     JSContext* ctx = nullptr;
     CommandRegistry* registry = nullptr;
@@ -49,7 +91,15 @@ struct JsState {
 JsState& EnsureJs(CommandRegistry* reg) {
     static JsState s;
     if (!s.rt) {
-        s.rt = JS_NewRuntime();
+        // #229 M7: bound the QuickJS heap to a fixed ChunkAllocator reservation.
+        const uint64_t js_bytes = cairns::MemoryBudget::Default().js_heap_bytes;
+        s.js_heap_.InitReserved(js_bytes);
+        s.rt = JS_NewRuntime2(&kJsMallocFuncs, &s.js_heap_);
+        if (s.rt) {
+            // Belt-and-braces: QuickJS self-limits (graceful JS OOM) before the
+            // ChunkAllocator's hard cap returns null.
+            JS_SetMemoryLimit(s.rt, static_cast<size_t>(js_bytes));
+        }
     }
     if (reg) {
         s.registry = reg;

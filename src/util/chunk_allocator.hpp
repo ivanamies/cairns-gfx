@@ -165,6 +165,46 @@ public:
 #endif
     }
 
+    // #229 M7: realloc for the QuickJS allocator. Reuses the existing cell when
+    // the new size still fits its (power-of-two) capacity -- the common JS
+    // realloc -- otherwise allocates, copies, frees. null ptr => Allocate;
+    // size 0 => Free + null.
+    void* Reallocate(void* p, uint32_t new_bytes, uint32_t align = kDefaultAlign) {
+        if (p == nullptr) {
+            return Allocate(new_bytes, align);
+        }
+        if (new_bytes == 0) {
+            Free(p);
+            return nullptr;
+        }
+        const Header* h =
+            reinterpret_cast<const Header*>(static_cast<uint8_t*>(p) - kHeaderBytes);
+        const uint64_t cell_cap = h->cell_bytes;  // header + usable
+        if (static_cast<uint64_t>(new_bytes) + kHeaderBytes <= cell_cap) {
+            return p;  // fits the existing cell -- no move
+        }
+        void* np = Allocate(new_bytes, align);
+        if (np == nullptr) {
+            return nullptr;
+        }
+        const uint64_t old_user = cell_cap - kHeaderBytes;
+        const uint64_t copy = old_user < new_bytes ? old_user : new_bytes;
+        std::memcpy(np, p, static_cast<size_t>(copy));
+        Free(p);
+        return np;
+    }
+
+    // #229 M7: usable bytes behind a pointer we handed out, read from its
+    // header. QuickJS's js_malloc_usable_size hook (ptr-only, no allocator).
+    static uint64_t UsableSize(const void* p) {
+        if (p == nullptr) {
+            return 0;
+        }
+        const Header* h = reinterpret_cast<const Header*>(
+            static_cast<const uint8_t*>(p) - kHeaderBytes);
+        return h->cell_bytes - kHeaderBytes;
+    }
+
     // FreeRegion: bulk free everything tagged with `region`. Hooked for future
     // per-asset unload; not exercised in this pass. Asserting-stub keeps
     // accidental use from silently leaking.

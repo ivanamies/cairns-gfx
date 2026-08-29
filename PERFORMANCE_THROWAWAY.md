@@ -238,3 +238,27 @@ is a real metal+vulkan change with the same waste/Android-OOM concern unless
 paired with streaming residency. Not rushed at the tail of this session (GPU
 memory management = exactly the "small disaster" risk). The skin pool — the
 dominant fixed GPU reservation — is already up-front and now budget-sourced.
+
+---
+
+## M7 — QuickJS per-context heap (commit pending)
+
+QuickJS now allocates from a **fixed `ChunkAllocator` reservation** (256 MB,
+`MemoryBudget::js_heap_bytes`) instead of libc malloc: `JS_NewRuntime2` with
+custom `JSMallocFunctions` whose `opaque` is the per-runtime `ChunkAllocator`;
+added `ChunkAllocator::Reallocate` + static `UsableSize` for the JS realloc /
+usable-size hooks; `JS_SetMemoryLimit` as a graceful pre-cap. A size-class
+free-list is the right tool for QuickJS's millions of tiny allocs (NOT the
+offset allocator — that's the GPU range domain). **This also ACTIVATES M0b's
+`ChunkAllocator` — it's no longer dormant; QuickJS is a real user.**
+
+Bounds the JS heap by construction (only ever 256 MB, fail-loud past it) and
+recycles cells within the reservation across `script.reload` fresh-context
+swaps (no OS churn). Verified: jsmoke 4/4, all JS-driven `[scenarios]` pass
+(1 fail = G6 #9b flake), stress 8/8, spec 108/108, **serve boot smoke clean**
+(run.js's 100-GLB JS boot runs end-to-end on the new heap), metal+vk compile.
+
+_Receipt note:_ not visible in `[ALLOC-RECEIPT]` — that counts C++ `operator
+new`; QuickJS is C `malloc`. The win is the **bounded** heap, not a delta in the
+C++ counter. Per-context wholesale-region reclaim (vs. free-list recycle) is a
+later refinement.
