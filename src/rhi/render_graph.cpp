@@ -92,6 +92,14 @@ void PassBuilder::ReadWrite(GraphTexture t) {
     graph_->passes_[pass_].writes.push_back(t.id);
 }
 
+void PassBuilder::ReadBuffer(GraphBuffer b) {
+    graph_->passes_[pass_].buf_reads.push_back(b.id);
+}
+
+void PassBuilder::WriteBuffer(GraphBuffer b) {
+    graph_->passes_[pass_].buf_writes.push_back(b.id);
+}
+
 void PassBuilder::AddColorOutput(const char* name, GraphTexture t, LoadOp load,
                                  const float clear[4]) {
     (void)name;
@@ -194,25 +202,46 @@ bool RenderGraph::Bake() {
     const bool log = std::getenv("CAIRNS_RG_LOG") != nullptr;
 
     std::vector<std::vector<uint32_t>> tex_writers(textures_.size());
+    std::vector<std::vector<uint32_t>> buf_writers(buffers_.size());
     for (uint32_t p = 0; p < n_pass; ++p) {
         for (uint16_t w : passes_[p].writes) {
             tex_writers[w].push_back(p);
         }
+        for (uint16_t w : passes_[p].buf_writes) {
+            buf_writers[w].push_back(p);
+        }
     }
 
-    // Step 1: reachability prune from the output (keep all if no output set).
+    // Step 1: reachability prune. Roots = passes that write the output OR write any
+    // imported resource (external side effect, e.g. the persistent particle SSBO).
     std::vector<uint8_t> alive(n_pass, 0);
     std::vector<uint32_t> work;
+    auto mark = [&](uint32_t p) {
+        if (!alive[p]) {
+            alive[p] = 1;
+            work.push_back(p);
+        }
+    };
     if (!output_.IsNull() && output_.id < textures_.size()) {
         for (uint32_t p : tex_writers[output_.id]) {
-            if (!alive[p]) {
-                alive[p] = 1;
-                work.push_back(p);
+            mark(p);
+        }
+    }
+    for (uint32_t p = 0; p < n_pass; ++p) {
+        for (uint16_t w : passes_[p].writes) {
+            if (textures_[w].kind == ResKind::kImported) {
+                mark(p);
             }
         }
-    } else {
+        for (uint16_t w : passes_[p].buf_writes) {
+            if (buffers_[w].kind == ResKind::kImported) {
+                mark(p);
+            }
+        }
+    }
+    if (output_.IsNull()) {
         for (uint32_t p = 0; p < n_pass; ++p) {
-            alive[p] = 1;
+            mark(p);
         }
     }
     while (!work.empty()) {
@@ -220,10 +249,12 @@ bool RenderGraph::Bake() {
         work.pop_back();
         for (uint16_t r : passes_[p].reads) {
             for (uint32_t producer : tex_writers[r]) {
-                if (!alive[producer]) {
-                    alive[producer] = 1;
-                    work.push_back(producer);
-                }
+                mark(producer);
+            }
+        }
+        for (uint16_t r : passes_[p].buf_reads) {
+            for (uint32_t producer : buf_writers[r]) {
+                mark(producer);
             }
         }
     }
@@ -237,6 +268,15 @@ bool RenderGraph::Bake() {
         }
         for (uint16_t r : passes_[q].reads) {
             for (uint32_t p : tex_writers[r]) {
+                if (p == q || !alive[p]) {
+                    continue;
+                }
+                edges[p].push_back(q);
+                indeg[q]++;
+            }
+        }
+        for (uint16_t r : passes_[q].buf_reads) {
+            for (uint32_t p : buf_writers[r]) {
                 if (p == q || !alive[p]) {
                     continue;
                 }

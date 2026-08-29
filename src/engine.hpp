@@ -430,18 +430,6 @@ public:
         cd.local_x = 256;
         fc.cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
 
-        rhi::ColorAttachment col[1]{};
-        col[0].clear[0] = 41.0f / 255.0f;
-        col[0].clear[1] = 42.0f / 255.0f;
-        col[0].clear[2] = 48.0f / 255.0f;
-        col[0].clear[3] = 1.0f;
-        rhi::RenderPassDesc rp{};
-        rp.color = std::span<const rhi::ColorAttachment>(col, 1);
-        rp.depth.clear_depth = 1.0f;
-        rp.width = swapchain_.Width();
-        rp.height = swapchain_.Height();
-        fc.cmd.BeginRenderPass(swapchain_, rp);
-
         rhi::MeshDrawList ml{};
         ml.draws = std::span<const cairns::Draw>(drawList_.data(), drawList_.size());
         ml.sorted_draws = std::span<const std::pair<cairns::DrawKey, uint32_t>>(
@@ -452,16 +440,46 @@ public:
             resident_textures_.data(), resident_textures_.size());
         ml.resident_buffers =
             std::span<const rhi::Handle<rhi::Buffer>>(&mesh_master_handle_, 1);
-        fc.cmd.DrawMeshes(rhi_.resources, rhi_.alloc, ml);
 
         rhi::PointDraw pd{};
         pd.pipeline = particle_render_shader_;
         pd.vertex_buffer = particle_ssbo_[1 - particle_parity_];
         pd.vertex_offset = 0;
         pd.vertex_count = kParticleCount;
-        fc.cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
 
-        fc.cmd.EndRenderPass();
+        const float clear[4] = {41.0f / 255.0f, 42.0f / 255.0f, 48.0f / 255.0f, 1.0f};
+
+        graph_.Reset();
+        rhi::GraphBuffer sim_out;
+        rhi::GraphTexture swap_tex;
+        graph_.AddPass(
+            "particle_sim", rhi::PassType::kCompute,
+            [&](rhi::PassBuilder& b) {
+                rhi::GraphBufferDesc bd{};
+                bd.usage = rhi::kUsageStorage;
+                sim_out = b.ImportBuffer(particle_ssbo_[particle_parity_], bd);
+                b.WriteBuffer(sim_out);
+            },
+            [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
+                cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
+            });
+        graph_.AddPass(
+            "forward", rhi::PassType::kGraphics,
+            [&](rhi::PassBuilder& b) {
+                rhi::GraphTextureDesc td{};
+                td.width = swapchain_.Width();
+                td.height = swapchain_.Height();
+                swap_tex = b.ImportTexture(rhi::Handle<rhi::Texture>::Null, td);
+                b.AddColorOutput("swapchain", swap_tex, rhi::LoadOp::kClear, clear);
+            },
+            [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
+                cmd.DrawMeshes(rhi_.resources, rhi_.alloc, ml);
+                cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
+            });
+        graph_.SetOutput(swap_tex);
+        if (!graph_.Bake() || !graph_.Execute(fc, swapchain_)) {
+            return false;
+        }
         t_record.End();
         rhi_.frames.End(swapchain_, fc);
         particle_parity_ ^= 1;
@@ -659,6 +677,7 @@ private:
 
     rhi::Rhi rhi_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
+    rhi::RenderGraph graph_{rhi_.resources, rhi_.alloc};
 
     cairns::rhi::SwapChain swapchain_;
     // shaders

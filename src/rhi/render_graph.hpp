@@ -74,6 +74,8 @@ public:
     void Read(GraphTexture t);
     void Write(GraphTexture t);
     void ReadWrite(GraphTexture t);
+    void ReadBuffer(GraphBuffer b);
+    void WriteBuffer(GraphBuffer b);
 
     void AddColorOutput(const char* name, GraphTexture t, LoadOp load,
                         const float clear[4]);
@@ -136,6 +138,8 @@ private:
         ExecuteFn execute;
         std::vector<uint16_t> reads;
         std::vector<uint16_t> writes;
+        std::vector<uint16_t> buf_reads;
+        std::vector<uint16_t> buf_writes;
         std::vector<uint16_t> attachment_inputs;
         std::vector<ColorOutput> color_outputs;
         bool has_depth = false;
