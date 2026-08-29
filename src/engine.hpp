@@ -2285,16 +2285,17 @@ public:
         per_batch_shared_skin_.reserve(64);
 
         // #229 M0b: Reserve the persistent ResourceManager pools onto cpu_block_
-        // (size==capacity -> span-hashable; counted in the 1 GB budget). Caps are
-        // generous upper bounds for the 100-GLB workload; exceeding one grows via
-        // the block (relocates -- the content hash stays clean). viewports_ is
-        // acquired before the block exists (InitInitialViewport, see GreaterInit
-        // order) so it keeps the malloc fallback.
+        // (size==capacity -> span-hashable; counted in the budget). Caps are
+        // upper bounds for the 600-GLB residency ceiling; exceeding one aborts
+        // in Acquire (chunk-backed, never grows). InitInitialViewport now runs
+        // AFTER this (GreaterInit order) so viewports_ is chunk-backed too.
         prefabs_.Reserve(cpu_block_, static_cast<uint16_t>(kPrefabResidencyCap));
         meshes_.Reserve(cpu_block_, 8192);
         materials_.Reserve(cpu_block_, 8192);
         skins_.Reserve(cpu_block_, 4096);
         scenes_.Reserve(cpu_block_, static_cast<uint16_t>(kMaxScenes));
+        viewports_.Reserve(cpu_block_, 16);
+        assets_.Pool().Reserve(cpu_block_, 1024);
         return true;
     }
     
@@ -2316,26 +2317,6 @@ public:
         tiny_quad_test_ = engine_cfg_.tiny_quad;
         particles_enabled_ = engine_cfg_.particles_enabled;
 
-        // #220 Step 4: viewport pool must be set up BEFORE the cam_pose
-        // override walks it. InitInitialViewport acquires vp0 and primes
-        // its layout / active_viewport_ / name table.
-        InitInitialViewport();
-
-        // Pin every viewport's fly controller to the override pose so byte-
-        // gate dumps are deterministic. Pre-P1 reference pose is
-        // (0,0,0,0,0). Diverging viewports for multi-pose byte-gates is the
-        // P3 follow-up.
-        if (engine_cfg_.cam_pose.has_value()) {
-            const EngineConfig::CamPose& p = *engine_cfg_.cam_pose;
-            for (int vi = 0; vi < active_viewport_count_; ++vi) {
-                cairns::FlyController& fc =
-                    viewports_.GetCold(viewport_ids_[vi])->fly;
-                fc.position = glm::vec3(p.x, p.y, p.z);
-                fc.yaw = p.yaw;
-                fc.pitch = p.pitch;
-            }
-            cam_pose_override_ = true;
-        }
         if (golden_) {
             clock_ = std::make_unique<cairns::FixedClock>(cairns::kFixedDt);
         } else {
@@ -2359,6 +2340,29 @@ public:
             CAIRNS_PRINT("GreaterInit: initResourceManagers failed\n");
             return false;
         }
+
+        // #220 Step 4: viewport pool must be set up BEFORE the cam_pose
+        // override walks it. InitInitialViewport acquires vp0 and primes its
+        // layout / active_viewport_ / name table. Runs AFTER initResourceManagers
+        // so viewports_ is already Reserve'd onto cpu_block_ (chunk-backed).
+        InitInitialViewport();
+
+        // Pin every viewport's fly controller to the override pose so byte-
+        // gate dumps are deterministic. Pre-P1 reference pose is
+        // (0,0,0,0,0). Diverging viewports for multi-pose byte-gates is the
+        // P3 follow-up.
+        if (engine_cfg_.cam_pose.has_value()) {
+            const EngineConfig::CamPose& p = *engine_cfg_.cam_pose;
+            for (int vi = 0; vi < active_viewport_count_; ++vi) {
+                cairns::FlyController& fc =
+                    viewports_.GetCold(viewport_ids_[vi])->fly;
+                fc.position = glm::vec3(p.x, p.y, p.z);
+                fc.yaw = p.yaw;
+                fc.pitch = p.pitch;
+            }
+            cam_pose_override_ = true;
+        }
+
         if (!rhi_.device.Init(cfg)) {
             CAIRNS_PRINT("GreaterInit: device.Init failed\n");
             return false;
@@ -2406,7 +2410,7 @@ public:
             CAIRNS_PRINT("GreaterInit: alloc.Init failed\n");
             return false;
         }
-        if (!rhi_.resources.Init(rhi_.device)) {
+        if (!rhi_.resources.Init(rhi_.device, cpu_block_)) {
             CAIRNS_PRINT("GreaterInit: resources.Init failed\n");
             return false;
         }

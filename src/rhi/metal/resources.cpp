@@ -87,10 +87,11 @@ MTL::SamplerAddressMode to_mtl_address_mode(AddressMode m) {
 
 Resources::~Resources() { Deinit(); }
 
-bool Resources::Init(Device& device) {
+bool Resources::Init(Device& device, cairns::ChunkAllocator& chunk) {
     if (inited_) {
         return true;
     }
+    ReservePools(chunk);
     plat.device_ = device.plat.device_;
     plat.queue_ = device.plat.queue_;
     plat.resources_ = this;

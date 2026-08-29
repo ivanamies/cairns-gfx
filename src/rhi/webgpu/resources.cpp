@@ -85,7 +85,8 @@ WGPUAddressMode ToWgpuAddress(AddressMode m) {
 
 Resources::~Resources() {}
 
-bool Resources::Init(Device& device) {
+bool Resources::Init(Device& device, cairns::ChunkAllocator& chunk) {
+    ReservePools(chunk);
     plat.device_ = device.plat.device;
     plat.queue_ = device.plat.queue;
     plat.resources_ = this;

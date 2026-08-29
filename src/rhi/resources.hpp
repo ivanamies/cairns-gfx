@@ -46,7 +46,7 @@ public:
     Resources(const Resources&) = delete;
     Resources& operator=(const Resources&) = delete;
 
-    [[nodiscard]] bool Init(Device& device);
+    [[nodiscard]] bool Init(Device& device, cairns::ChunkAllocator& chunk);
     void Deinit();
 
     Handle<Buffer> CreateBuffer(Allocator& alloc, const BufferDesc& desc);
@@ -82,6 +82,20 @@ public:
     ResourceManager<DynamicBuffers> dynamic_buffers;
     ResourceManager<Shader> shaders;
     ResourceManager<Kernel> kernels;
+
+    // Chunk-backed fixed-capacity pools (no malloc, no realloc). Caps cover the
+    // 600-GLB residency ceiling (kPrefabResidencyCap) at measured per-GLB ratios
+    // with >=2x margin; over-cap aborts in ResourceManager::Acquire. Called from
+    // each backend's Init.
+    void ReservePools(cairns::ChunkAllocator& chunk) {
+        buffers.Reserve(chunk, 8192);
+        textures.Reserve(chunk, 4096);
+        samplers.Reserve(chunk, 2048);
+        bind_groups.Reserve(chunk, 8192);
+        dynamic_buffers.Reserve(chunk, 512);
+        shaders.Reserve(chunk, 128);
+        kernels.Reserve(chunk, 64);
+    }
 
     void Destroy(Allocator& alloc, Handle<Buffer> h);
     void Destroy(Allocator& alloc, Handle<Texture> h);

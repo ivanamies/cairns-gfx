@@ -274,10 +274,11 @@ bool generate_mipmaps(VkDevice device, VkCommandPool pool, VkQueue queue,
 
 Resources::~Resources() { Deinit(); }
 
-bool Resources::Init(Device& device) {
+bool Resources::Init(Device& device, cairns::ChunkAllocator& chunk) {
     if (inited_) {
         return true;
     }
+    ReservePools(chunk);
     plat.device_ = device.plat.device_;
     plat.command_pool_ = device.plat.command_pool_;
     plat.queue_ = device.plat.graphics_queue_;

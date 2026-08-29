@@ -38,6 +38,19 @@ struct Widget {
 using WidgetId = cairns::Handle<Widget>;
 using WidgetPool = cairns::ResourceManager<Widget>;
 
+// Pools are chunk-backed + fixed-capacity now: Reserve is mandatory and the
+// storage never relocates. Bundle a ChunkAllocator with a Reserve'd pool so
+// each scenario gets stable storage. Declaration order matters -- the pool is
+// destroyed before the block, so its arrays deallocate back to a live block.
+struct ReservedPool {
+    cairns::ChunkAllocator block;
+    WidgetPool pool;
+    explicit ReservedPool(uint16_t cap = 128) {
+        block.InitReserved(1u << 20);  // 1 MiB; the tiny Widget pool fits easily
+        pool.Reserve(block, cap);
+    }
+};
+
 }  // namespace
 
 SCENARIO("a default-constructed handle is null", "[spec][core][handle]") {
@@ -54,7 +67,8 @@ SCENARIO("a default-constructed handle is null", "[spec][core][handle]") {
 
 SCENARIO("acquiring a slot yields a live, resolvable handle", "[spec][core][handle]") {
     GIVEN("an empty pool") {
-        WidgetPool pool;
+        ReservedPool rp;
+        WidgetPool& pool = rp.pool;
         WHEN("one slot is acquired") {
             WidgetId h = pool.Acquire();
             THEN("the handle is non-null and resolves to fresh, zeroed storage") {
@@ -76,7 +90,8 @@ SCENARIO("acquiring a slot yields a live, resolvable handle", "[spec][core][hand
 
 SCENARIO("releasing a handle makes it stale and fail-safe", "[spec][core][handle]") {
     GIVEN("a pool with one acquired, written slot") {
-        WidgetPool pool;
+        ReservedPool rp;
+        WidgetPool& pool = rp.pool;
         WidgetId h = pool.Acquire();
         pool.GetHot(h)->tag = 7;
 
@@ -97,7 +112,8 @@ SCENARIO("releasing a handle makes it stale and fail-safe", "[spec][core][handle
 SCENARIO("a recycled index comes back zero-initialized (#228 aatrox reload)",
          "[spec][core][handle][regression]") {
     GIVEN("a slot that was written, then released") {
-        WidgetPool pool;
+        ReservedPool rp;
+        WidgetPool& pool = rp.pool;
         WidgetId first = pool.Acquire();
         pool.GetHot(first)->tag = 0xBEEF;
         pool.GetCold(first)->provenance = 0xBEEF;
@@ -123,7 +139,8 @@ SCENARIO("a recycled index comes back zero-initialized (#228 aatrox reload)",
 SCENARIO("indices are assigned densely and recycled LIFO-ish",
          "[spec][core][handle]") {
     GIVEN("three live slots") {
-        WidgetPool pool;
+        ReservedPool rp;
+        WidgetPool& pool = rp.pool;
         WidgetId a = pool.Acquire();
         WidgetId b = pool.Acquire();
         WidgetId c = pool.Acquire();
@@ -145,7 +162,8 @@ SCENARIO("indices are assigned densely and recycled LIFO-ish",
 
 SCENARIO("ForEachLive visits exactly the live slots", "[spec][core][handle]") {
     GIVEN("four slots with the second released") {
-        WidgetPool pool;
+        ReservedPool rp;
+        WidgetPool& pool = rp.pool;
         WidgetId ids[4];
         for (int i = 0; i < 4; ++i) {
             ids[i] = pool.Acquire();
@@ -168,21 +186,27 @@ SCENARIO("ForEachLive visits exactly the live slots", "[spec][core][handle]") {
     }
 }
 
-SCENARIO("GetHot returns a transient view, re-resolved after Acquire (#222)",
+SCENARIO("GetHot pointers stay put across Acquire -- fixed storage (#222)",
          "[spec][core][handle][regression]") {
-    GIVEN("a live, written handle") {
-        WidgetPool pool;
+    GIVEN("a live, written handle in a chunk-backed pool") {
+        ReservedPool rp;
+        WidgetPool& pool = rp.pool;
         WidgetId keep = pool.Acquire();
         pool.GetHot(keep)->tag = 99;
+        Widget::Hot* before = pool.GetHot(keep);
 
-        WHEN("many subsequent acquisitions force underlying growth") {
+        WHEN("many subsequent slots are acquired (no realloc -- fixed cap)") {
             for (int i = 0; i < 64; ++i) {
                 (void)pool.Acquire();
             }
-            THEN("the original handle still resolves to its own data") {
-                auto* hot = pool.GetHot(keep);
-                REQUIRE(hot != nullptr);
-                REQUIRE(hot->tag == 99);
+            THEN("the original pointer is unmoved and still holds its data") {
+                // #222 inverted: storage is fixed-capacity chunk-backed, so a
+                // Hot* no longer dangles across Acquire (it used to, when the
+                // vector reallocated). Still DON'T store it -- a Release +
+                // re-Acquire of this slot would alias a new occupant.
+                Widget::Hot* after = pool.GetHot(keep);
+                REQUIRE(after == before);
+                REQUIRE(after->tag == 99);
             }
         }
     }
