@@ -10,15 +10,15 @@
 
 namespace cairns::rhi {
 
+// Batched upload: stage K scenes' worth of vertex/index data at a time, free
+// the CPU temporaries between batches, then run the next batch. This bounds
+// the CPU working set at ~K * per_glb_bytes (instead of all-glbs at once) and
+// gives the upload bump ring a chance to recycle. The final on-GPU layout is
+// unchanged: ONE shared vertex buffer [positions | attributes] + ONE shared
+// index buffer, with primitives' vertexOffset / firstIndex patched to global.
 inline bool LoadScenesGpu(std::span<Scene> scenes, Resources& rm, Allocator& alloc) {
-    // Pack EVERY loaded GLB's vertices in lockstep into ONE shared buffer set: one
-    // position buffer and one attribute buffer holding all meshes of all scenes in
-    // the same order (vertex-aligned, not interleaved), plus one shared index
-    // buffer. Each mesh shares these three handles and selects its primitives via
-    // an all-GLBs-global base vertex / base index. Because every draw in the frame
-    // resolves to the same buffers, the change-tracked recorder binds each stream
-    // exactly once per frame (Aaltonen "Pack Meshes": baseVertex/baseIndex in the
-    // draw, binds on change).
+    static constexpr size_t kBatchSize = 10;
+
     size_t total_verts = 0;
     size_t total_indices = 0;
     for (const Scene& scene : scenes) {
@@ -31,58 +31,95 @@ inline bool LoadScenesGpu(std::span<Scene> scenes, Resources& rm, Allocator& all
         return true;
     }
 
-    std::vector<glm::vec4> pos_all;
-    pos_all.reserve(total_verts);
-    std::vector<VertexAttribute> attr_all;
-    attr_all.reserve(total_verts);
-    std::vector<uint32_t> idx_all;
-    idx_all.reserve(total_indices);
+    const size_t pos_bytes = total_verts * sizeof(glm::vec4);
+    const size_t attr_bytes = total_verts * sizeof(VertexAttribute);
+    const size_t idx_bytes = total_indices * sizeof(uint32_t);
+
+    BufferDesc vd{};
+    vd.byte_size = static_cast<uint32_t>(pos_bytes + attr_bytes);
+    vd.usage = kUsageVertex | kUsageIndex;
+    vd.memory = Memory::kDefault;
+    Handle<Buffer> shared_vtx = rm.CreateBuffer(alloc, vd);
+    if (shared_vtx.IsNull()) {
+        return false;
+    }
+
+    BufferDesc id{};
+    id.byte_size = static_cast<uint32_t>(idx_bytes);
+    id.usage = kUsageVertex | kUsageIndex;
+    id.memory = Memory::kDefault;
+    Handle<Buffer> shared_idx = rm.CreateBuffer(alloc, id);
+    if (shared_idx.IsNull()) {
+        return false;
+    }
+
+    // Patch primitive offsets to all-GLBs-global ahead of upload so per-batch
+    // state stays simple. Walk in the same order as the upload loop.
+    size_t running_vert = 0;
+    size_t running_idx = 0;
     for (Scene& scene : scenes) {
         for (Mesh& mesh : scene.meshes) {
-            const int32_t base_vertex = static_cast<int32_t>(pos_all.size());
-            const uint32_t base_index = static_cast<uint32_t>(idx_all.size());
-            pos_all.insert(pos_all.end(), mesh.cpuPositions.begin(), mesh.cpuPositions.end());
-            attr_all.insert(attr_all.end(), mesh.cpuAttrs.begin(), mesh.cpuAttrs.end());
-            idx_all.insert(idx_all.end(), mesh.cpuIndices.begin(), mesh.cpuIndices.end());
+            const int32_t base_vertex = static_cast<int32_t>(running_vert);
+            const uint32_t base_index = static_cast<uint32_t>(running_idx);
             for (Primitive& prim : mesh.primitives) {
-                prim.vertexOffset += base_vertex;  // mesh-local -> all-GLBs-global
+                prim.vertexOffset += base_vertex;
                 prim.firstIndex += base_index;
             }
+            running_vert += mesh.cpuPositions.size();
+            running_idx += mesh.cpuIndices.size();
         }
     }
 
-    auto make = [&](Handle<Buffer>& out, const void* data, size_t bytes) -> bool {
-        BufferDesc d;
-        d.byte_size = static_cast<uint32_t>(bytes);
-        d.usage = kUsageVertex | kUsageIndex;
-        d.memory = Memory::kDefault;
-        d.initial_data = std::span<const uint8_t>(
-            static_cast<const uint8_t*>(data), bytes);
-        out = rm.CreateBuffer(alloc, d);
-        return !out.IsNull();
-    };
+    // Upload in batches of kBatchSize scenes. Local vectors fall out of scope
+    // at the end of each iteration -> CPU temps released between batches.
+    size_t cur_vert_off_bytes = 0;
+    size_t cur_attr_off_bytes = 0;
+    size_t cur_idx_off_bytes = 0;
+    for (size_t batch_start = 0; batch_start < scenes.size();
+         batch_start += kBatchSize) {
+        const size_t batch_end =
+            std::min(batch_start + kBatchSize, scenes.size());
 
-    // One physical vertex buffer: [ positions (N*16) | attributes (N*64) ], the two
-    // sections "next to each other" (not interleaved) for cache locality. The
-    // position stream binds the buffer base; the attribute stream binds the same
-    // buffer via a non-owning alias handle at the attribute-section offset.
-    const size_t pos_bytes = pos_all.size() * sizeof(glm::vec4);
-    const size_t attr_bytes = attr_all.size() * sizeof(VertexAttribute);
-    std::vector<uint8_t> vbytes(pos_bytes + attr_bytes);
-    std::memcpy(vbytes.data(), pos_all.data(), pos_bytes);
-    std::memcpy(vbytes.data() + pos_bytes, attr_all.data(), attr_bytes);
+        std::vector<glm::vec4> pos_batch;
+        std::vector<VertexAttribute> attr_batch;
+        std::vector<uint32_t> idx_batch;
+        for (size_t s = batch_start; s < batch_end; ++s) {
+            for (const Mesh& mesh : scenes[s].meshes) {
+                pos_batch.insert(pos_batch.end(), mesh.cpuPositions.begin(),
+                                 mesh.cpuPositions.end());
+                attr_batch.insert(attr_batch.end(), mesh.cpuAttrs.begin(),
+                                  mesh.cpuAttrs.end());
+                idx_batch.insert(idx_batch.end(), mesh.cpuIndices.begin(),
+                                 mesh.cpuIndices.end());
+            }
+        }
 
-    Handle<Buffer> shared_vtx;
-    Handle<Buffer> shared_idx;
-    if (!make(shared_vtx, vbytes.data(), vbytes.size())) {
-        return false;
+        const size_t pos_batch_bytes = pos_batch.size() * sizeof(glm::vec4);
+        const size_t attr_batch_bytes =
+            attr_batch.size() * sizeof(VertexAttribute);
+        const size_t idx_batch_bytes = idx_batch.size() * sizeof(uint32_t);
+
+        rm.UploadBuffer(alloc, shared_vtx,
+                        static_cast<uint32_t>(cur_vert_off_bytes),
+                        std::span<const uint8_t>(
+                            reinterpret_cast<const uint8_t*>(pos_batch.data()),
+                            pos_batch_bytes));
+        rm.UploadBuffer(alloc, shared_vtx,
+                        static_cast<uint32_t>(pos_bytes + cur_attr_off_bytes),
+                        std::span<const uint8_t>(
+                            reinterpret_cast<const uint8_t*>(attr_batch.data()),
+                            attr_batch_bytes));
+        rm.UploadBuffer(alloc, shared_idx,
+                        static_cast<uint32_t>(cur_idx_off_bytes),
+                        std::span<const uint8_t>(
+                            reinterpret_cast<const uint8_t*>(idx_batch.data()),
+                            idx_batch_bytes));
+
+        cur_vert_off_bytes += pos_batch_bytes;
+        cur_attr_off_bytes += attr_batch_bytes;
+        cur_idx_off_bytes += idx_batch_bytes;
     }
-    if (!make(shared_idx, idx_all.data(), idx_all.size() * sizeof(uint32_t))) {
-        return false;
-    }
 
-    // Non-owning alias into shared_vtx at the attribute section. shared_vtx owns the
-    // allocation; this handle's Cold is left default so it is never freed.
     Handle<Buffer> attr_alias = rm.buffers.Acquire();
     {
         Buffer::Hot* vh = rm.buffers.GetHot(shared_vtx);
