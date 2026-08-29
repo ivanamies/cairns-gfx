@@ -11,8 +11,9 @@ mkdir -p tmp
 
 drive=tmp/_headless_drive.ndjson
 # #269: spawn shape matches verify_headless.sh. Keep these in sync.
+spawn_op=$(python3 -c 'import json,sys;print(json.dumps({"op":"cairns.script.eval","args":{"code":open(sys.argv[1]).read()}}))' scripts/_headless_spawn.js)
 {
-  echo '{"op":"cairns.script.eval","args":{"code":"for(let i=0;i<9;i++){let r=i/3|0,c=i%3;cairns.dispatch(\"cairns.world.spawnHero\",{scene_idx:i,x:-1.3333333+1.3333333*c,y:-1.3333333+1.3333333*r,z:-3,scale:0.00433333,time_phase:i*0.137})}"}}'
+  printf '%s\n' "$spawn_op"
   for i in $(seq 1 60); do echo '{"op":"cairns.render.frame"}'; done
   echo '{"op":"cairns.io.dumpTexture","args":{"name":"final","path":"tmp/_headless_dump.png"}}'
   echo '{"op":"cairns.quit"}'
