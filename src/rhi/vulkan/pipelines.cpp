@@ -374,6 +374,15 @@ VkShaderFiles resolve_vk_shader(const char* logical) {
     if (std::strcmp(logical, "bloom_combine") == 0) {
         return {"composite_pip.vert.spv", "bloom_combine.frag.spv", nullptr};
     }
+    if (std::strcmp(logical, "wc_blur") == 0) {
+        return {"composite_pip.vert.spv", "wc_blur.frag.spv", nullptr};
+    }
+    if (std::strcmp(logical, "wc_edge") == 0) {
+        return {"composite_pip.vert.spv", "wc_edge.frag.spv", nullptr};
+    }
+    if (std::strcmp(logical, "wc_composite") == 0) {
+        return {"composite_pip.vert.spv", "wc_composite.frag.spv", nullptr};
+    }
     if (std::strcmp(logical, "skin") == 0) {
         // Skin compute kernel (no vert/frag).
         return {nullptr, nullptr, "skin.comp.spv"};
@@ -610,7 +619,8 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     } else if (ls == "kuwahara_tensor" || ls == "kuwahara_tfm" ||
                ls == "kuwahara_filter" || ls == "bloom_bright" ||
                ls == "bloom_down" || ls == "bloom_up" ||
-               ls == "bloom_combine") {
+               ls == "bloom_combine" || ls == "wc_blur" ||
+               ls == "wc_edge" || ls == "wc_composite") {
         // Post-effect family: composite textures at set 0 + the dyn-UBO
         // params block at set 1 (same shape as globals, so the layout is
         // reusable; DrawFullscreenParams binds it with the frame's offset).

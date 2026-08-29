@@ -192,6 +192,18 @@ MetalShaderInfo resolve_metal_shader(const char* logical) {
         return {"bloom.metal", "bloom::fullscreen_vertex",
                 "bloom::combine_fragment", nullptr};
     }
+    if (std::strcmp(logical, "wc_blur") == 0) {
+        return {"wc.metal", "wc::fullscreen_vertex", "wc::blur_fragment",
+                nullptr};
+    }
+    if (std::strcmp(logical, "wc_edge") == 0) {
+        return {"wc.metal", "wc::fullscreen_vertex", "wc::edge_fragment",
+                nullptr};
+    }
+    if (std::strcmp(logical, "wc_composite") == 0) {
+        return {"wc.metal", "wc::fullscreen_vertex", "wc::composite_fragment",
+                nullptr};
+    }
     if (std::strcmp(logical, "skin") == 0) {
         // Skin compute kernel (no vert/frag).
         return {"skin.metal", nullptr, nullptr, "skin_compute"};

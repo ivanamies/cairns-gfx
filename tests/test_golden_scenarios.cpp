@@ -99,6 +99,22 @@ SCENARIO("subject: bloom (bright/down/up/combine ladder)",
         });
     )JS");
 }
+SCENARIO("subject: watercolor (wash + edge darkening + granulation)",
+         "[scenarios][golden][subject]") {
+    cairns::golden::RunJsSubject("watercolor", 512, 512, {"viking_room.glb"},
+                                 R"JS(
+        cairns.dispatch("cairns.viewport.setCamera", { viewport: 0, z: 5 });
+        cairns.dispatch("cairns.scene.spawnFitted",
+                        { glbs: ["viking_room.glb"], instances: 1,
+                          animated: false });
+        const e = cairns.dispatch("cairns.entity.new", { name: "watercolor" });
+        cairns.dispatch("cairns.entity.addComponent", {
+            entity: e.result.entity, type: "PostEffect",
+            props: { type: 2, order: 0,
+                     p0: [2.0, 6, 6, 0.6], p1: [4, 8, 0.4, 0] }
+        });
+    )JS");
+}
 SCENARIO("subject: one die (single static textured mesh)",
          "[scenarios][golden][subject]") {
     cairns::golden::RunJsSubject("one_die", 512, 512, {"die.glb"}, R"JS(

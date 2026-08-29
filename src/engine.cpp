@@ -6,6 +6,8 @@
 
 #include "engine.hpp"
 
+#include "util/texture_loader.hpp"
+
 
 namespace cairns {
 
@@ -1298,6 +1300,32 @@ bool Engine::initRenderPipeline() {
                 bloom_combine_pip_ = ShaderHandle::Null;
             }
 
+            // Watercolor triplet: all BGRA (wash/edge/composite are LDR).
+            rhi::GraphicsPipelineDesc wbd = opd;
+            wbd.logical_shader = "wc_blur";
+            wbd.debug_name = "wc_blur";
+            wc_blur_pip_ = rhi_.pipelines.CreateGraphicsPipeline(
+                rhi_.resources, rhi_.frames, wbd);
+            rhi::GraphicsPipelineDesc wed = opd;
+            wed.logical_shader = "wc_edge";
+            wed.debug_name = "wc_edge";
+            wc_edge_pip_ = rhi_.pipelines.CreateGraphicsPipeline(
+                rhi_.resources, rhi_.frames, wed);
+            rhi::GraphicsPipelineDesc wcd = opd;
+            wcd.logical_shader = "wc_composite";
+            wcd.debug_name = "wc_composite";
+            wc_composite_pip_ = rhi_.pipelines.CreateGraphicsPipeline(
+                rhi_.resources, rhi_.frames, wcd);
+            if (wc_blur_pip_.IsNull() || wc_edge_pip_.IsNull() ||
+                wc_composite_pip_.IsNull()) {
+                CAIRNS_PRINT_ERR(
+                    "[postfx] watercolor PSOs unavailable -- watercolor "
+                    "disabled on this backend\n");
+                wc_blur_pip_ = ShaderHandle::Null;
+                wc_edge_pip_ = ShaderHandle::Null;
+                wc_composite_pip_ = ShaderHandle::Null;
+            }
+
             if (composite_pip_.IsNull() || depthviz_.IsNull() ||
                 outline_pip_.IsNull()) {
                 std::exit(0);
@@ -1876,6 +1904,20 @@ void Engine::RecordFrame(FramePacket& pkt) {
         std::array<std::array<std::array<rhi::GraphTexture, 3>,
                               PerSlot::kMaxPostEffects>,
                    kNumViewports> fx_bloom_up{};
+        // Watercolor: blur ping/pong + edge map.
+        std::array<std::array<rhi::GraphTexture, PerSlot::kMaxPostEffects>,
+                   kNumViewports> fx_wc_a{};
+        std::array<std::array<rhi::GraphTexture, PerSlot::kMaxPostEffects>,
+                   kNumViewports> fx_wc_b{};
+        std::array<std::array<rhi::GraphTexture, PerSlot::kMaxPostEffects>,
+                   kNumViewports> fx_wc_edge{};
+        rhi::Handle<rhi::Texture> wc_pn_tex;
+        for (const EffectTexture& et : effect_textures_) {
+            if (et.name != nullptr &&
+                std::strcmp(et.name, "wc_paper_noise") == 0) {
+                wc_pn_tex = et.tex;
+            }
+        }
         // Declared at pass-build scope (NOT inside the if): the execute
         // lambdas capture this by reference and run at graph Execute.
         // screen carries the SOURCE dims (texel size for neighborhood
@@ -1885,7 +1927,9 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                uint32_t fx_idx,
                                uint32_t src_w, uint32_t src_h,
                                uint32_t dst_w, uint32_t dst_h,
+                               const glm::vec4& p2,
                                rhi::Handle<rhi::Shader> pso,
+                               rhi::Handle<rhi::Sampler> sampler,
                                std::span<const rhi::Handle<rhi::Texture>>
                                    texs) {
             PostFxParamsGpu pp{};
@@ -1895,6 +1939,7 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                   static_cast<float>(src_h));
             pp.p0 = s.post_effects[fx_idx].p0;
             pp.p1 = s.post_effects[fx_idx].p1;
+            pp.p2 = p2;
             uint32_t off = 0;
             void* ptr = rhi_.alloc.BumpAllocate(
                 sizeof(pp), 256, rhi::Memory::kDynamic, &off);
@@ -1906,8 +1951,7 @@ void Engine::RecordFrame(FramePacket& pkt) {
                             static_cast<float>(dst_h));
             cmd.SetScissor(0, 0, dst_w, dst_h);
             cmd.DrawFullscreenParams(rhi_.resources, rhi_.alloc, pso,
-                                     texs, composite_sampler_,
-                                     dyn_postfx_, off);
+                                     texs, sampler, dyn_postfx_, off);
         };
         if (s.post_effect_count > 0) {
             for (int v = 0; v < viewport_mgr_.active_count; ++v) {
@@ -1957,7 +2001,8 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                 const rhi::Handle<rhi::Texture> srcs[1] = {
                                     res.Resolve(cur)};
                                 push_params(cmd, fx_idx, vp_w, vp_h, dw, dh,
-                                            bloom_bright_pip_,
+                                            glm::vec4(0.0f), bloom_bright_pip_,
+                                        composite_sampler_,
                                             std::span<const rhi::Handle<
                                                 rhi::Texture>>(srcs, 1));
                             });
@@ -1987,7 +2032,8 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                                                  [fx_idx]
                                                                  [li - 1])};
                                     push_params(cmd, fx_idx, sw, sh, dw, dh,
-                                                bloom_down_pip_,
+                                                glm::vec4(0.0f), bloom_down_pip_,
+                                        composite_sampler_,
                                                 std::span<const rhi::Handle<
                                                     rhi::Texture>>(srcs, 1));
                                 });
@@ -2036,7 +2082,8 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                                                  [fx_idx]
                                                                  [skip_lvl])};
                                     push_params(cmd, fx_idx, sw, sh, dw, dh,
-                                                bloom_up_pip_,
+                                                glm::vec4(0.0f), bloom_up_pip_,
+                                        composite_sampler_,
                                                 std::span<const rhi::Handle<
                                                     rhi::Texture>>(srcs, 2));
                                 });
@@ -2070,9 +2117,137 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                     res.Resolve(
                                         fx_bloom_up[vp_idx][fx_idx][2])};
                                 push_params(cmd, fx_idx, vp_w, vp_h, vp_w,
-                                            vp_h, bloom_combine_pip_,
+                                            vp_h, glm::vec4(0.0f), bloom_combine_pip_,
+                                        composite_sampler_,
                                             std::span<const rhi::Handle<
                                                 rhi::Texture>>(srcs, 2));
+                            });
+                        cur = fx_out[vp_idx][fx_idx];
+                        chain_out[vp_idx] = cur;
+                        chain_ran[vp_idx] = true;
+                        continue;
+                    }
+                    if (s.post_effects[f].type ==
+                            cairns::PostEffectType::kWatercolor &&
+                        !wc_composite_pip_.IsNull() && !wc_pn_tex.IsNull()) {
+                        auto wc_target = [&](rhi::PassBuilder& b) {
+                            rhi::GraphTextureDesc td{};
+                            td.width = vp_w;
+                            td.height = vp_h;
+                            td.format = rhi::Format::kBgra8Unorm;
+                            td.usage = rhi::kTexUsageColorTarget |
+                                       rhi::kTexUsageSampled;
+                            return b.CreateColorTarget(td);
+                        };
+                        const float fc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                        graph_->AddPass(
+                            (vp_idx == 0) ? "wc_blur_h_vp0" : "wc_blur_h_vp1",
+                            rhi::PassType::kGraphics,
+                            [&, vp_idx, fx_idx, cur](rhi::PassBuilder& b) {
+                                fx_wc_a[vp_idx][fx_idx] = wc_target(b);
+                                b.AddAttachmentInput(cur);
+                                b.AddColorOutput("wc_blur_h",
+                                                 fx_wc_a[vp_idx][fx_idx],
+                                                 rhi::LoadOp::kClear, fc);
+                            },
+                            [&, fx_idx, cur](rhi::CommandRecorder& cmd,
+                                             const rhi::PassResources& res) {
+                                const rhi::Handle<rhi::Texture> srcs[1] = {
+                                    res.Resolve(cur)};
+                                push_params(cmd, fx_idx, vp_w, vp_h, vp_w,
+                                            vp_h,
+                                            glm::vec4(1.0f, 0.0f, 0.0f, 0.0f),
+                                            wc_blur_pip_, composite_sampler_,
+                                            std::span<const rhi::Handle<
+                                                rhi::Texture>>(srcs, 1));
+                            });
+                        graph_->AddPass(
+                            (vp_idx == 0) ? "wc_blur_v_vp0" : "wc_blur_v_vp1",
+                            rhi::PassType::kGraphics,
+                            [&, vp_idx, fx_idx](rhi::PassBuilder& b) {
+                                fx_wc_b[vp_idx][fx_idx] = wc_target(b);
+                                b.AddAttachmentInput(fx_wc_a[vp_idx][fx_idx]);
+                                b.AddColorOutput("wc_blur_v",
+                                                 fx_wc_b[vp_idx][fx_idx],
+                                                 rhi::LoadOp::kClear, fc);
+                            },
+                            [&, vp_idx, fx_idx](
+                                rhi::CommandRecorder& cmd,
+                                const rhi::PassResources& res) {
+                                const rhi::Handle<rhi::Texture> srcs[1] = {
+                                    res.Resolve(fx_wc_a[vp_idx][fx_idx])};
+                                push_params(cmd, fx_idx, vp_w, vp_h, vp_w,
+                                            vp_h,
+                                            glm::vec4(0.0f, 1.0f, 0.0f, 0.0f),
+                                            wc_blur_pip_, composite_sampler_,
+                                            std::span<const rhi::Handle<
+                                                rhi::Texture>>(srcs, 1));
+                            });
+                        graph_->AddPass(
+                            (vp_idx == 0) ? "wc_edge_vp0" : "wc_edge_vp1",
+                            rhi::PassType::kGraphics,
+                            [&, vp_idx, fx_idx](rhi::PassBuilder& b) {
+                                fx_wc_edge[vp_idx][fx_idx] = wc_target(b);
+                                b.AddAttachmentInput(fx_wc_b[vp_idx][fx_idx]);
+                                b.AddAttachmentInput(depth_off[vp_idx]);
+                                b.AddColorOutput("wc_edge",
+                                                 fx_wc_edge[vp_idx][fx_idx],
+                                                 rhi::LoadOp::kClear, fc);
+                            },
+                            [&, vp_idx, fx_idx,
+                             near_z = s.pending_near_z[vp_idx],
+                             far_z = s.pending_far_z[vp_idx]](
+                                rhi::CommandRecorder& cmd,
+                                const rhi::PassResources& res) {
+                                const rhi::Handle<rhi::Texture> srcs[2] = {
+                                    res.Resolve(fx_wc_b[vp_idx][fx_idx]),
+                                    res.Resolve(depth_off[vp_idx])};
+                                // Nearest sampler: the depth binding rejects
+                                // filtering (matches depthviz/outline).
+                                push_params(cmd, fx_idx, vp_w, vp_h, vp_w,
+                                            vp_h,
+                                            glm::vec4(0.0f, 0.0f, near_z,
+                                                      far_z),
+                                            wc_edge_pip_, outline_sampler_,
+                                            std::span<const rhi::Handle<
+                                                rhi::Texture>>(srcs, 2));
+                            });
+                        graph_->AddPass(
+                            (vp_idx == 0) ? "wc_composite_vp0"
+                                          : "wc_composite_vp1",
+                            rhi::PassType::kGraphics,
+                            [&, vp_idx, fx_idx](rhi::PassBuilder& b) {
+                                fx_out[vp_idx][fx_idx] = wc_target(b);
+                                b.AddAttachmentInput(fx_wc_b[vp_idx][fx_idx]);
+                                b.AddAttachmentInput(
+                                    fx_wc_edge[vp_idx][fx_idx]);
+                                // Import the persistent paper/noise pack so
+                                // its layout transition is graph-emitted.
+                                rhi::GraphTextureDesc pd{};
+                                pd.width = 512;
+                                pd.height = 512;
+                                pd.format = rhi::Format::kRgba8Unorm;
+                                pd.usage = rhi::kTexUsageSampled;
+                                rhi::GraphTexture pg =
+                                    b.ImportTexture(wc_pn_tex, pd);
+                                b.AddAttachmentInput(pg);
+                                b.AddColorOutput("wc_composite",
+                                                 fx_out[vp_idx][fx_idx],
+                                                 rhi::LoadOp::kClear, fc);
+                            },
+                            [&, vp_idx, fx_idx](
+                                rhi::CommandRecorder& cmd,
+                                const rhi::PassResources& res) {
+                                const rhi::Handle<rhi::Texture> srcs[3] = {
+                                    res.Resolve(fx_wc_b[vp_idx][fx_idx]),
+                                    res.Resolve(fx_wc_edge[vp_idx][fx_idx]),
+                                    wc_pn_tex};
+                                push_params(cmd, fx_idx, vp_w, vp_h, vp_w,
+                                            vp_h, glm::vec4(0.0f),
+                                            wc_composite_pip_,
+                                            composite_sampler_,
+                                            std::span<const rhi::Handle<
+                                                rhi::Texture>>(srcs, 3));
                             });
                         cur = fx_out[vp_idx][fx_idx];
                         chain_out[vp_idx] = cur;
@@ -2082,7 +2257,7 @@ void Engine::RecordFrame(FramePacket& pkt) {
                     if (s.post_effects[f].type !=
                             cairns::PostEffectType::kKuwahara ||
                         kuwahara_filter_pip_.IsNull()) {
-                        continue;  // other types land with M5+.
+                        continue;  // other types land with M6+.
                     }
                     graph_->AddPass(
                         (vp_idx == 0) ? "kuwahara_tensor_vp0"
@@ -2107,7 +2282,8 @@ void Engine::RecordFrame(FramePacket& pkt) {
                             const rhi::Handle<rhi::Texture> srcs[1] = {
                                 res.Resolve(cur)};
                             push_params(cmd, fx_idx, vp_w, vp_h, vp_w, vp_h,
-                                        kuwahara_tensor_pip_,
+                                        glm::vec4(0.0f), kuwahara_tensor_pip_,
+                                        composite_sampler_,
                                         std::span<const rhi::Handle<
                                             rhi::Texture>>(srcs, 1));
                         });
@@ -2134,7 +2310,8 @@ void Engine::RecordFrame(FramePacket& pkt) {
                             const rhi::Handle<rhi::Texture> srcs[1] = {
                                 res.Resolve(fx_tensor[vp_idx][fx_idx])};
                             push_params(cmd, fx_idx, vp_w, vp_h, vp_w, vp_h,
-                                        kuwahara_tfm_pip_,
+                                        glm::vec4(0.0f), kuwahara_tfm_pip_,
+                                        composite_sampler_,
                                         std::span<const rhi::Handle<
                                             rhi::Texture>>(srcs, 1));
                         });
@@ -2164,7 +2341,8 @@ void Engine::RecordFrame(FramePacket& pkt) {
                                 res.Resolve(cur),
                                 res.Resolve(fx_tfm[vp_idx][fx_idx])};
                             push_params(cmd, fx_idx, vp_w, vp_h, vp_w, vp_h,
-                                        kuwahara_filter_pip_,
+                                        glm::vec4(0.0f), kuwahara_filter_pip_,
+                                        composite_sampler_,
                                         std::span<const rhi::Handle<
                                             rhi::Texture>>(srcs, 2));
                         });
@@ -3878,6 +4056,24 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
         if ( !initRenderPipeline() ) {
             CAIRNS_PRINT("GreaterInit: initRenderPipeline failed\n");
             return false;
+        }
+        {
+            // Effect textures (watercolor paper/noise pack). Best-effort:
+            // a missing file leaves the entry Null and the effect disabled.
+            const std::string base = cairns::GetBasePathSafe();
+            const std::string wc_path = base + "wc_paper_noise.png";
+            // TransferDst: webgpu uploads initial_data via WriteTexture and
+            // validates the flag (metal/vk staging paths don't care).
+            rhi::Handle<rhi::Texture> wc_tex = cairns::LoadTextureWithMips(
+                rhi_.resources, rhi_.alloc, wc_path.c_str(),
+                static_cast<rhi::TextureUsage>(rhi::kTexUsageSampled |
+                                               rhi::kTexUsageTransferDst));
+            if (wc_tex.IsNull()) {
+                CAIRNS_PRINT_ERR(
+                    "[postfx] wc_paper_noise.png missing -- watercolor "
+                    "disabled\n");
+            }
+            effect_textures_.push_back({"wc_paper_noise", wc_tex});
         }
         const uint32_t init_w = cfg.surfaceless ? cfg.width : present_.swapchain.Width();
         const uint32_t init_h = cfg.surfaceless ? cfg.height : present_.swapchain.Height();

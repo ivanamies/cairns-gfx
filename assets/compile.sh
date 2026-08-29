@@ -15,3 +15,6 @@ glslc bloom_bright.frag -o bloom_bright.frag.spv
 glslc bloom_down.frag -o bloom_down.frag.spv
 glslc bloom_up.frag -o bloom_up.frag.spv
 glslc bloom_combine.frag -o bloom_combine.frag.spv
+glslc wc_blur.frag -o wc_blur.frag.spv
+glslc wc_edge.frag -o wc_edge.frag.spv
+glslc wc_composite.frag -o wc_composite.frag.spv

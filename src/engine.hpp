@@ -1853,6 +1853,11 @@ private:
     ShaderHandle bloom_down_pip_ = ShaderHandle::Null;
     ShaderHandle bloom_up_pip_ = ShaderHandle::Null;
     ShaderHandle bloom_combine_pip_ = ShaderHandle::Null;
+    // Watercolor triplet (blur runs twice: h then v). Same rule; also
+    // requires the wc_paper_noise effect texture.
+    ShaderHandle wc_blur_pip_ = ShaderHandle::Null;
+    ShaderHandle wc_edge_pip_ = ShaderHandle::Null;
+    ShaderHandle wc_composite_pip_ = ShaderHandle::Null;
     // Post-effect params: per-FIF dyn-UBO set over the kDynamic master
     // (dyn_globals_ shape, 64B blocks); DrawFullscreenParams binds it.
     rhi::Handle<rhi::DynamicBuffers> dyn_postfx_;

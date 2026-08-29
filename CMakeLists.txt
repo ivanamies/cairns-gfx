@@ -507,6 +507,7 @@ if (NOT ANDROID AND NOT IOS AND NOT EMSCRIPTEN)
     # cairns_serve is unbundled and SDL_GetBasePath returns the binary's dir.
     set(_cairns_serve_assets
         "run.js"                                 # mandatory boot script
+        "wc_paper_noise.png"
         "unlit.vert.spv" "unlit.frag.spv"
         "unlit_noid.frag.spv"
         "particle.vert.spv" "particle.frag.spv" "particle.comp.spv"
@@ -518,6 +519,7 @@ if (NOT ANDROID AND NOT IOS AND NOT EMSCRIPTEN)
         "kuwahara_filter.frag.spv"
         "bloom_bright.frag.spv" "bloom_down.frag.spv"
         "bloom_up.frag.spv" "bloom_combine.frag.spv"
+        "wc_blur.frag.spv" "wc_edge.frag.spv" "wc_composite.frag.spv"
         "skin.comp.spv"
         "anim_eval.comp.spv"
     )
@@ -602,6 +604,7 @@ if (APPLE)
     add_resource("${input_root}/the_entertainer.ogg")
     add_resource("${input_root}/gs_tiger.svg")
     add_resource("${input_root}/mc_grass.jpeg")
+    add_resource("${input_root}/wc_paper_noise.png")
 
     # 2. Add Shaders (*.metal) as RAW TEXT
     file(GLOB SHADER_FILES "${input_root}/*.metal")
@@ -683,6 +686,7 @@ else()
     copy_helper("depthviz.frag.spv")
     copy_helper("outline.vert.spv")
     copy_helper("outline.frag.spv")
+    copy_helper("wc_paper_noise.png")
     copy_helper("kuwahara_tensor.frag.spv")
     copy_helper("kuwahara_tfm.frag.spv")
     copy_helper("kuwahara_filter.frag.spv")
@@ -690,6 +694,9 @@ else()
     copy_helper("bloom_down.frag.spv")
     copy_helper("bloom_up.frag.spv")
     copy_helper("bloom_combine.frag.spv")
+    copy_helper("wc_blur.frag.spv")
+    copy_helper("wc_edge.frag.spv")
+    copy_helper("wc_composite.frag.spv")
     copy_helper("skin.comp.spv")
     copy_helper("anim_eval.comp.spv")
     # Scenario picker scripts -> assets/scripts. SDL_EnumerateDirectory finds

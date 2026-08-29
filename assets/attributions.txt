@@ -14,3 +14,7 @@ See version 3 of the GNU Affero General Public License for more details.
 EnTT (skypjack/entt) v3.16.0, MIT License.
 https://github.com/skypjack/entt
 
+
+wc_paper_noise.png: generated in-repo by scripts/make_wc_paper_noise.py
+(deterministic periodic value noise; RGB = watercolor wobble field,
+A = paper grain). No external source.

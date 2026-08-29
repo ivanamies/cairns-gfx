@@ -83,7 +83,9 @@ struct ShaderInfo {
     Kind kind = Kind::kStub;
     const char* stem = nullptr;
     int tex_count = 0;
-    bool depth_sample = false;  // depthviz samples a Depth32Float target
+    // Bitmask: binding i samples a Depth32Float target (bit i). bool-true
+    // (depthviz's single texture) still reads as mask 1.
+    uint8_t depth_mask = 0;
     bool id_textures = false;   // outline: binding 0 = color (float), 1+ = R32U
     // Post-effect passes: the fullscreen group gains a dynamic-offset 64-byte
     // uniform at binding tex_count+1 (DrawFullscreenParams supplies it).
@@ -117,6 +119,17 @@ ShaderInfo Classify(const char* logical) {
     if (std::strcmp(logical, "bloom_combine") == 0) {
         // binding 0 = scene color, 1 = bloom, sampler @2.
         return {Kind::kFullscreen, "bloom_combine", 2, false, false, true};
+    }
+    if (std::strcmp(logical, "wc_blur") == 0) {
+        return {Kind::kFullscreen, "wc_blur", 1, 0, false, true};
+    }
+    if (std::strcmp(logical, "wc_edge") == 0) {
+        // binding 0 = blurred color, 1 = DEPTH, sampler @2 (non-filtering).
+        return {Kind::kFullscreen, "wc_edge", 2, 0b10, false, true};
+    }
+    if (std::strcmp(logical, "wc_composite") == 0) {
+        // binding 0 = wash, 1 = edge, 2 = paper/noise pack, sampler @3.
+        return {Kind::kFullscreen, "wc_composite", 3, 0, false, true};
     }
     if (std::strcmp(logical, "depthviz") == 0) {
         return {Kind::kFullscreen, "depthviz", 1, true};
@@ -223,7 +236,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(Resources& resources, Frames& f
             entries[i].binding = static_cast<uint32_t>(i);
             entries[i].visibility = WGPUShaderStage_Fragment;
             WGPUTextureSampleType st = WGPUTextureSampleType_Float;
-            if (info.depth_sample) {
+            if ((info.depth_mask >> i) & 1) {
                 st = WGPUTextureSampleType_Depth;
             } else if (info.id_textures && i > 0) {
                 st = WGPUTextureSampleType_Uint;  // outline id + highlights = R32U
@@ -238,7 +251,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(Resources& resources, Frames& f
         // "TextureSampleType::Depth used with a Filtering sampler"). The bound
         // sampler is Nearest in both cases (depthviz/outline use outline_sampler_).
         entries[info.tex_count].sampler.type =
-            (info.depth_sample || info.id_textures)
+            (info.depth_mask != 0 || info.id_textures)
                 ? WGPUSamplerBindingType_NonFiltering
                 : WGPUSamplerBindingType_Filtering;
         size_t entry_count = static_cast<size_t>(info.tex_count) + 1;

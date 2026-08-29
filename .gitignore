@@ -6,6 +6,8 @@ imgui.ini
 # media assets (incl. third-party) — kept local, not tracked
 assets/*.glb
 assets/*.png
+# generated-in-repo effect textures (scripts/make_*.py) ARE tracked
+!assets/wc_paper_noise.png
 assets/*.jpeg
 assets/*.jpg
 assets/*.ogg
