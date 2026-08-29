@@ -235,7 +235,6 @@ private:
         if (!createDepthResources()) return false;
         if (!createFramebuffers()) return false;
         if (!createTextureImage()) return false;
-        if (!createTextureImageView()) return false;
         if (!createTextureSampler()) return false;
         if (!loadModel()) return false;
         if (!createVertexBuffer()) return false;
@@ -386,37 +385,29 @@ private:
         return true;
     }
 
-    bool createTextureImageView() {
-        if (!createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels, textureImageView)) return false;
-        return true;
-    }
-
     bool createTextureImage() {
         int texWidth, texHeight, texChannels;
         stbi_uc* pixels = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-        VkDeviceSize imageSize = texWidth * texHeight * 4;
         if ( !pixels ) {
             return false;
         }
-        VkBuffer stagingBuffer;
-        VkDeviceMemory stagingBufferMemory;
-        createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
-        void* data;
-        vkMapMemory(device, stagingBufferMemory, 0, imageSize, 0, &data);
-        memcpy(data, pixels, static_cast<size_t>(imageSize));
-        vkUnmapMemory(device, stagingBufferMemory);
-        stbi_image_free(pixels);
-
+        VkDeviceSize imageSize = texWidth * texHeight * 4;
         mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
 
-        createImage(texWidth, texHeight, mipLevels, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
-        transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels);
-        copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
-        generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
-
-        vkDestroyBuffer(device, stagingBuffer, nullptr);
-        vkFreeMemory(device, stagingBufferMemory, nullptr);
-        return true;
+        rhi2::TextureDesc desc{};
+        desc.debug_name = "viking_room";
+        desc.dimensions = { texWidth, texHeight, 1 };
+        desc.mip_levels = mipLevels;
+        desc.array_layers = 1;
+        desc.format = rhi2::Format::kRgba8Srgb;
+        desc.usage = rhi2::kTexUsageSampled;
+        desc.memory = rhi2::Memory::kDefault;
+        desc.initial_data = rhi2::Span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(pixels),
+            static_cast<size_t>(imageSize));
+        texture_ = rm_.CreateTexture(desc);
+        stbi_image_free(pixels);
+        return !texture_.IsNull();
     }
 
     bool createImage(uint32_t width, uint32_t height, uint32_t mipLevels, VkSampleCountFlagBits numSamples, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory) {
@@ -502,7 +493,7 @@ private:
 
                 VkDescriptorImageInfo imageInfo{};
                 imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                imageInfo.imageView = textureImageView;
+                imageInfo.imageView = static_cast<VkImageView>(rm_.GetHot(texture_)->api_view);
                 imageInfo.sampler = textureSampler;
 
                 std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
@@ -2373,10 +2364,7 @@ private:
         vkDeviceWaitIdle(device);
 
         vkDestroySampler(device, textureSampler, nullptr);
-        vkDestroyImageView(device, textureImageView, nullptr);
-
-        vkDestroyImage(device, textureImage, nullptr);
-        vkFreeMemory(device, textureImageMemory, nullptr);
+        rm_.Destroy(texture_);
 
         cleanupSwapChain();
 
@@ -2595,10 +2583,8 @@ private:
     std::vector<VkDescriptorSet> descriptorSets2;
     std::vector<VkDescriptorSet> computeDescriptorSets;
 
-    uint32_t mipLevels;
-    VkImage textureImage;
-    VkDeviceMemory textureImageMemory;
-    VkImageView textureImageView;
+    uint32_t mipLevels = 0;
+    rhi2::Handle<rhi2::Texture> texture_;
     VkSampler textureSampler;
 
     VkImage depthImage;

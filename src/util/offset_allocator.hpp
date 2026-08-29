@@ -99,9 +99,9 @@ namespace OffsetAllocator
         uint8 m_usedBins[NUM_TOP_BINS];
         NodeIndex m_binIndices[NUM_LEAF_BINS];
                 
-        Node* m_nodes;
-        NodeIndex* m_freeNodes;
-        uint32 m_freeOffset;
+        Node* m_nodes = nullptr;
+        NodeIndex* m_freeNodes = nullptr;
+        uint32 m_freeOffset = 0;
     };
 
 } // namespace OffsetAllocator

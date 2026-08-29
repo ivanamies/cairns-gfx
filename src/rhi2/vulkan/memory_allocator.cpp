@@ -48,6 +48,9 @@ VkBufferUsageFlags to_vk_buffer_usage(BufferUsage u) {
 }  // namespace
 
 MemoryAllocator::~MemoryAllocator() {
+    for (uint32_t slot = 0; slot < ResourceManager::kFramesInFlight; ++slot) {
+        RetireFrame(slot);
+    }
     for (uint32_t i = 0; i < blocks_.size(); ++i) {
         if (blocks_[i].memory != VK_NULL_HANDLE) {
             DestroyBlock(i);
