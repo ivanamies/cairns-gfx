@@ -413,13 +413,8 @@ void CommandRecorder::DispatchAnimEval(
     vkCmdBindDescriptorSets(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE,
                              k->plat.vk_layout, 0, 1, &set, 1, &dyn);
     vkCmdDispatch(plat.comp_, actor_count, 1, 1);
-    VkMemoryBarrier mb{};
-    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    vkCmdPipelineBarrier(plat.comp_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb,
-                         0, nullptr, 0, nullptr);
+    // anim_eval -> skin ordering is graph-driven: the skin pass's
+    // BeginComputePass emits the palette barrier from PipelineEvent state.
 }
 
 void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDispatch& d) {

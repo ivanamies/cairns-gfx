@@ -93,13 +93,10 @@ void CommandRecorder::DispatchSkinBatches(
     }
     MTL::ComputeCommandEncoder* cenc = plat.cmd_->computeCommandEncoder();
     cenc->setComputePipelineState(khot->api_pso);
+    // palette_out is HazardTrackingModeUntracked, so the encoder boundary
+    // alone does not synchronize anim_eval's write -- the graph's palette
+    // barrier lands here as a stashed per-buffer fence wait.
     drain_compute_waits(plat, cenc);
-    // anim_eval writes palette_out_buf_ in a prior encoder; that buffer
-    // is HazardTrackingModeUntracked so the encoder boundary alone does
-    // NOT synchronize the write. Wait on the fence anim_eval signaled.
-    if (plat.compute_fence_ != nullptr) {
-        cenc->waitForFence(plat.compute_fence_);
-    }
     MTL::Buffer* dyn_master =
         res.plat.GetBumpMasterBuffer(alloc, Memory::kDynamic);
     uint32_t pool_master_off = 0;
@@ -158,24 +155,20 @@ void CommandRecorder::DispatchSkinBatches(
         cenc->dispatchThreadgroups(MTL::Size{b.workgroups, b.instance_count, 1u},
                                     MTL::Size{64u, 1u, 1u});
     }
-    // Skin compute writes skin_output_pool_buffer_; subsequent forward render
-    // reads it via pos_stream alias as vertex stream. Heap is untracked, so
-    // updateFence here + waitForFence in BeginRenderPass (beforeStages:Vertex)
-    // is what makes vertex fetch see the kernel writes.
-    if (plat.compute_fence_ == nullptr) {
-        plat.compute_fence_ = plat.cmd_->device()->newFence();
-    }
-    cenc->updateFence(plat.compute_fence_);
+    // Skin compute writes skin_output_pool_buffer_; the forward render reads
+    // it via the pos_stream alias as a vertex stream. Heap is untracked, so
+    // the pool's per-buffer fence (signaled below via the graph's flush
+    // stash, waited in BeginRenderPass at RenderStageVertex) is what makes
+    // vertex fetch see the kernel writes.
     signal_compute_updates(plat, cenc);
     cenc->endEncoding();
 }
 
 // Metal mirror of DispatchAnimEval. One workgroup per actor, 64 threads.
 // setBuffer all 7 buffers (records + the 6 element-type-packed SSBOs) +
-// setThreadgroupMemoryLength for the shared GpuTRS[256]. palette_out
-// lives on an untracked heap, so this encoder signals compute_fence_ and
-// DispatchSkinBatches waits on it -- the encoder boundary alone does not
-// synchronize the write.
+// setThreadgroupMemoryLength for the shared GpuTRS[256]. palette_out lives on
+// an untracked heap; the graph's flush stash signals its per-buffer fence so
+// the skin pass's wait sees the write.
 void CommandRecorder::DispatchAnimEval(
     Resources& res, Allocator& alloc, Handle<Kernel> kernel,
     const AnimEvalArgs& args) {
@@ -190,9 +183,6 @@ void CommandRecorder::DispatchAnimEval(
     Kernel::Hot* khot = res.GetHot(kernel);
     if (!khot) {
         return;
-    }
-    if (plat.compute_fence_ == nullptr) {
-        plat.compute_fence_ = plat.cmd_->device()->newFence();
     }
     MTL::ComputeCommandEncoder* cenc = plat.cmd_->computeCommandEncoder();
     cenc->setComputePipelineState(khot->api_pso);
@@ -217,7 +207,6 @@ void CommandRecorder::DispatchAnimEval(
     cenc->setThreadgroupMemoryLength(256u * 48u, 0);
     cenc->dispatchThreadgroups(MTL::Size{actor_count, 1u, 1u},
                                 MTL::Size{64u, 1u, 1u});
-    cenc->updateFence(plat.compute_fence_);
     signal_compute_updates(plat, cenc);
     cenc->endEncoding();
 }
@@ -338,10 +327,6 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
                 to_mtl_load(desc.color[0].load));
         }
         plat.enc_ = plat.cmd_->renderCommandEncoder(plat.render_pass_desc_);
-        if (plat.compute_fence_ != nullptr) {
-            plat.enc_->waitForFence(plat.compute_fence_,
-                                     MTL::RenderStageVertex);
-        }
         apply_invalidate_fences(plat, res, invalidate);
         return;
     }
@@ -367,10 +352,6 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
         da->setStoreAction(to_mtl_store(desc.depth.store));        da->setClearDepth(desc.depth.clear_depth);
     }
     plat.enc_ = plat.cmd_->renderCommandEncoder(rpd);
-    if (plat.compute_fence_ != nullptr) {
-        plat.enc_->waitForFence(plat.compute_fence_,
-                                 MTL::RenderStageVertex);
-    }
     apply_invalidate_fences(plat, res, invalidate);
     rpd->release();
 }
