@@ -365,8 +365,7 @@ public:
                     draw.bind_groups[cairns::kShaderSpecificBindSlot-1] = cairns::kInvalidBindGroupId;
                     draw.dynamic_buffers = tmp_handle;
                     draw.index_buffer = index;
-                    uint32_t index_base_off = 0;
-                    rm_.GetMtlBuffer(index, &index_base_off);
+                    const uint32_t index_base_off = rm_.BufferBaseOffset(index);
                     draw.index_offset = index_base_off + (prim.firstIndex * sizeof(uint32_t));
                     draw.vertex_offset = prim.vertexOffset;
                     draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot] = pos;

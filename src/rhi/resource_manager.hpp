@@ -631,6 +631,8 @@ public:
     void EndFrame(FrameContext& fc);
 
     uint32_t GetBufferByteSize(Handle<Buffer> h) const;
+    // Byte offset of a buffer within its backing master allocation. Neutral.
+    uint32_t BufferBaseOffset(Handle<Buffer> h);
 
 #if CAIRNS_VULKAN
     // Same-backend native-handle access for Engine2's hand-written draw loop.

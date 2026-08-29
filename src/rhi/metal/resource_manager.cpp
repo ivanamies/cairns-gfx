@@ -719,6 +719,12 @@ uint32_t ResourceManager::GetBufferByteSize(Handle<Buffer> h) const {
     return cold->size_bytes;
 }
 
+uint32_t ResourceManager::BufferBaseOffset(Handle<Buffer> h) {
+    uint32_t off = 0;
+    GetMtlBuffer(h, &off);
+    return off;
+}
+
 MTL::Buffer* ResourceManager::GetMtlBuffer(Handle<Buffer> h,
                                             uint32_t* out_offset) {
     if (h.generation == 0) {  // bump-master sentinel from BumpMasterBuffer()

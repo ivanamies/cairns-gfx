@@ -1839,6 +1839,12 @@ VkBuffer ResourceManager::GetVkBumpMasterBuffer(Memory mem) {
     return impl_->memory.HeapMasterBuffer(hi);
 }
 
+uint32_t ResourceManager::BufferBaseOffset(Handle<Buffer> h) {
+    uint32_t off = 0;
+    GetVkBuffer(h, &off);
+    return off;
+}
+
 VkBuffer ResourceManager::GetVkBuffer(Handle<Buffer> h, uint32_t* out_offset) {
     if (h.generation == 0) {
         if (out_offset) {
