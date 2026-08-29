@@ -1493,6 +1493,15 @@ public:
             }
         }
 
+        // #221 Skinning P5/P8: BuildSkinFrame populates the per-frame skin
+        // payload (palettes, InstanceMeta, SkinBatchGpu list) on the per-
+        // slot arena and publishes spans on s.pkt. Today (no skinned content
+        // + skin_kernel_ Null) it writes empty spans -- the static path
+        // stays bit-for-bit; the call site is wired so a future content
+        // commit (load CesiumMan + attach SkinRef) flips the switch
+        // without touching draw().
+        BuildSkinFrame(slot);
+
         // Fill packet header (the view into per-slot storage).
         s.pkt.frame_idx = frame_;
         s.pkt.slot = slot;
@@ -1773,6 +1782,39 @@ public:
         const uint32_t vp_h = fb_h;
         EnsureIdTargets(vp_w, vp_h);
         EnsureHighlightsTex();
+
+        // #221 Skinning P5: pre-skin compute pass. Added BEFORE particle_sim
+        // so its output ssbo is ready when the forward pass binds stream 0
+        // as a vertex stream (free vertex-fetch sync via the existing
+        // compute -> graphics semaphore @ VERTEX_INPUT on Vulkan; encoder
+        // boundary handles it on Metal). Gated on non-empty batches AND
+        // a valid skin kernel -- absent either, the pass is omitted and
+        // the static path is bit-for-bit unchanged. The graph timer wraps
+        // this pass with the "skinning_compute" Timer slot (README ratchet).
+        if (!pkt.skin_batches.empty() && !skin_kernel_.IsNull() &&
+            !skin_output_pool_buffer_.IsNull()) {
+            graph_->AddPass(
+                "skinning_compute", rhi::PassType::kCompute,
+                [&](rhi::PassBuilder& b) {
+                    rhi::GraphBufferDesc bd{};
+                    bd.usage = rhi::kUsageStorage;
+                    rhi::GraphBuffer pool =
+                        b.ImportBuffer(skin_output_pool_buffer_, bd);
+                    b.WriteBuffer(pool);
+                },
+                [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
+                    // Translate per-frame SkinBatchGpu (element offsets) into
+                    // SkinDispatchBatch (byte offsets) onto the slot arena
+                    // -- TODO: fill once Frames publishes skin_group_b set
+                    // to CommandRecorderPlat + Allocator exposes the
+                    // kDynamic master buffer. Today batches is always empty
+                    // (BuildSkinFrame stub), so we never enter the body.
+                    cmd.DispatchSkinBatches(
+                        rhi_.resources, rhi_.alloc, skin_kernel_,
+                        skin_output_pool_buffer_,
+                        std::span<const rhi::SkinDispatchBatch>{});
+                });
+        }
 
         // pass 1: particle_sim kCompute. import the writer ssbo so prune keeps
         // it (external side effect -- game thread reads particle_parity_out).
@@ -2203,6 +2245,25 @@ public:
         float velocity[2];
         float color[4];
     };
+
+    // #221 Phase 5: per-frame skin pipeline (game-thread side). Walks the
+    // active world for SkinRef entities, samples each actor's clip into a
+    // per-slot palette slab on the arena, buckets visible actors by mesh
+    // (flat-array prefix-sum, NO map per standing rule), emits SkinBatchGpu
+    // rows + flat InstanceMeta + flat palettes, publishes spans on s.pkt.
+    // Today: no SkinRef in the registry => skin_batches empty. Static path
+    // bit-for-bit unchanged.
+    void BuildSkinFrame(uint32_t slot) {
+        PerSlot& s = slots_[slot];
+        // Empty spans by default. When skinned content + the SkinRef
+        // component path land, this populates: palettes (flat mat4 array,
+        // arena-backed), instance_meta (flat uvec2 array, arena-backed),
+        // skin_batches (per-mesh dispatch units).
+        s.pkt.skin_batches = std::span<const cairns::SkinBatchGpu>{};
+        s.pkt.palettes = std::span<const glm::mat4>{};
+        s.pkt.instance_meta = std::span<const glm::uvec2>{};
+        (void)s;
+    }
 
     // #221 Phase 4: best-effort load of skin compute kernel. Failing the
     // load (missing skin.comp.spv / skin.metal) leaves skin_kernel_ Null;
