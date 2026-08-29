@@ -92,10 +92,10 @@ PickResultExport ConsumePickResult(Engine* engine);
 // entt entity id (0 on failure). Frame-thread safe assuming the engine
 // is between Begin()/End() — call from the control thread; the next
 // frame picks up the new entity via the dirty-world rebuild path.
-uint32_t SpawnHero(Engine* engine, uint32_t scene_idx,
+uint32_t InstantiatePrefab(Engine* engine, uint32_t scene_idx,
                     float x, float y, float z, float scale,
                     float time_phase);
-uint32_t NumScenes(Engine* engine);
+uint32_t NumPrefabs(Engine* engine);
 float PrefabExtentMax(Engine* engine, uint32_t scene_idx);
 std::vector<uint32_t> ListActiveWorldEntities(Engine* engine);
 bool SetEntityTransform(Engine* engine, uint32_t entity_int,

@@ -113,9 +113,9 @@ public:
     using DynBufId = uint32_t;
     using ShaderHandle = rhi::Handle<rhi::Shader>;
     // #220 Step 1: MatId is now a generational Handle into Engine::materials_
-    // (cairns::ResourceManager<LoadedMaterial>). Stale slots fail safe at
+    // (cairns::ResourceManager<Material>). Stale slots fail safe at
     // GetHot/GetCold instead of silently aliasing a recycled bind group.
-    using MatId = cairns::Handle<cairns::LoadedMaterial>;
+    using MatId = cairns::Handle<cairns::Material>;
     using SamplerHandle = rhi::Handle<rhi::Sampler>;
     using BindGroupId = uint32_t;
 
@@ -217,7 +217,7 @@ public:
     // Caller supplies the full world transform; rendered immediately
     // next frame. SkinRef is opportunistically attached via
     // TryCreateSkinForScene (so [SKIN-FAIL] logs cover the failure modes).
-    uint32_t SpawnHero(uint32_t scene_idx, const glm::mat4& world,
+    uint32_t InstantiatePrefab(uint32_t scene_idx, const glm::mat4& world,
                         float time_phase) {
         if (scene_idx >= prefab_ids_.size() ||
             scene_idx >= per_prefab_asset_.size()) {
@@ -251,9 +251,9 @@ public:
         return static_cast<uint32_t>(entt::to_integral(e));
     }
 
-    // #269: how many scenes (GLBs) loaded; clients call SpawnHero with
-    // scene_idx in [0, NumScenes()). Lets the NDJSON op validate args.
-    uint32_t NumScenes() const {
+    // #269: how many scenes (GLBs) loaded; clients call InstantiatePrefab with
+    // scene_idx in [0, NumPrefabs()). Lets the NDJSON op validate args.
+    uint32_t NumPrefabs() const {
         return static_cast<uint32_t>(prefab_ids_.size());
     }
 
@@ -285,7 +285,7 @@ public:
     }
 
     // #269: list every live entity in active_scene_'s registry. The
-    // values are entt::to_integral(entity), the same encoding SpawnHero
+    // values are entt::to_integral(entity), the same encoding InstantiatePrefab
     // returns. Caller pairs them with SetEntityTransform to drive a
     // no-flash relayout when the spawn count grows.
     std::vector<uint32_t> ListActiveWorldEntities() {
@@ -1152,7 +1152,7 @@ public:
             const auto idx_handle = m0_hot->indexHandle;
 
             // #269: per_prefab_asset_ promoted to engine member so
-            // SpawnHero can resolve AssetRef post-init without
+            // InstantiatePrefab can resolve AssetRef post-init without
             // reconstructing.
             per_prefab_asset_.clear();
             per_prefab_asset_.reserve(prefab_ids_.size());
@@ -1167,7 +1167,7 @@ public:
             // #269: entity creation moved off engine init. Worlds are
             // empty after Acquire; spawn entities via the
             // cairns.world.spawnHero NDJSON op (cairns_serve) or any
-            // in-process caller of Engine::SpawnHero.
+            // in-process caller of Engine::InstantiatePrefab.
             active_scene_ = scenes_.Acquire();
             if (cairns::Scene::Hot* wh = scenes_.GetHot(active_scene_)) {
                 if (cairns::Scene::Cold* wc =
@@ -1589,7 +1589,7 @@ public:
                     const MatId mat_id = prim.material_id;
 
                     cairns::Draw draw{};
-                    // #220 Step 1: bind group lives in LoadedMaterial::Hot.
+                    // #220 Step 1: bind group lives in Material::Hot.
                     draw.bind_groups[1] = materials_.GetHot(mat_id)->set2;
                     // #222 Phase D.2: route set 2 (per-draw drawtmp UBO).
                     draw.dynamic_buffers = dyn_drawtmp_;
@@ -2758,14 +2758,14 @@ public:
     bool initRenderPipeline() {
         {
             // #220 Step 1: set-2 per-material bind groups now live IN the
-            // material's Hot record (cairns::ResourceManager<LoadedMaterial>).
+            // material's Hot record (cairns::ResourceManager<Material>).
             // Walk every live material; build its BindGroup from Cold's
             // texture+sampler; store into Hot.set2. Replaces the parallel
             // material_bind_groups_ vector that had a fragile size-parity
             // invariant with materials_.
             materials_.ForEachLive(
-                [&](cairns::LoadedMaterial::Hot& hot,
-                    cairns::LoadedMaterial::Cold& cold) {
+                [&](cairns::Material::Hot& hot,
+                    cairns::Material::Cold& cold) {
                     const rhi::TextureBinding tb{0, cold.color};
                     const rhi::SamplerBinding sb{0, cold.sampler};
                     rhi::BindGroupDesc bgd{};
@@ -3780,7 +3780,7 @@ private:
     // path that produced prefab_ids_[N]. Read by the [PICK] log line.
     std::vector<std::filesystem::path> glb_paths_;
     // #269: parallel to prefab_ids_; AssetId registered for each scene.
-    // SpawnHero consumes this to stamp AssetRef on the new entity.
+    // InstantiatePrefab consumes this to stamp AssetRef on the new entity.
     std::vector<cairns::AssetId> per_prefab_asset_;
     // #222 Phase H.6: built once at scene-load + uploadAnimTablesGpu;
     // every frame's resident_textures span points at this vector
@@ -3797,7 +3797,7 @@ private:
     // texture+sampler on Cold. Stale-slot reads fail at GetHot/GetCold
     // instead of silently aliasing a recycled bind group, which the
     // prior parallel material_bind_groups_ vector could not detect.
-    cairns::ResourceManager<cairns::LoadedMaterial> materials_;
+    cairns::ResourceManager<cairns::Material> materials_;
     // material_bind_groups_ DELETED -- set2 now lives in Hot.
 
     // #220 Step 2: handle-pilled mesh pool. Was nested inside each

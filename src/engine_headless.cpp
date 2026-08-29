@@ -167,7 +167,7 @@ PickResultExport ConsumePickResult(Engine* engine) {
     return out;
 }
 
-uint32_t SpawnHero(Engine* engine, uint32_t scene_idx,
+uint32_t InstantiatePrefab(Engine* engine, uint32_t scene_idx,
                     float x, float y, float z, float scale,
                     float time_phase) {
     if (!engine) {
@@ -176,11 +176,11 @@ uint32_t SpawnHero(Engine* engine, uint32_t scene_idx,
     glm::mat4 m(1.0f);
     m = glm::translate(m, glm::vec3(x, y, z));
     m = glm::scale(m, glm::vec3(scale));
-    return engine->SpawnHero(scene_idx, m, time_phase);
+    return engine->InstantiatePrefab(scene_idx, m, time_phase);
 }
 
-uint32_t NumScenes(Engine* engine) {
-    return engine ? engine->NumScenes() : 0;
+uint32_t NumPrefabs(Engine* engine) {
+    return engine ? engine->NumPrefabs() : 0;
 }
 
 float PrefabExtentMax(Engine* engine, uint32_t scene_idx) {

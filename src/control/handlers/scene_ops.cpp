@@ -212,7 +212,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.RegisterAlias("window.resize", "cairns.window.resize");
 
     // #269: real spawn op. Inserts one hero entity in active_scene_
-    // from a pre-loaded scene (scene_idx in [0, NumScenes())). The
+    // from a pre-loaded scene (scene_idx in [0, NumPrefabs())). The
     // auto-spawn grid in Engine::GreaterInit retires once this path
     // replaces the env-driven entity count.
     registry.Register(
@@ -229,7 +229,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
             const float z = args.value("z", -3.0f);
             const float scale = args.value("scale", 0.005f);
             const float time_phase = args.value("time_phase", 0.0f);
-            const uint32_t eid = cairns::headless::SpawnHero(
+            const uint32_t eid = cairns::headless::InstantiatePrefab(
                 &engine, scene_idx, x, y, z, scale, time_phase);
             return {{"entity", eid}, {"scene_idx", scene_idx}};
         });
@@ -239,11 +239,11 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         json::object(),
         "Number of pre-loaded scenes (GLBs). Spawn args clamp to [0, N).",
         [&engine](const json&) -> json {
-            return {{"count", cairns::headless::NumScenes(&engine)}};
+            return {{"count", cairns::headless::NumPrefabs(&engine)}};
         });
 
     // #269: scene-extent query. Returned in WORLD units (the scale a
-    // SpawnHero arg of 1.0 produces). Callers divide a target on-screen
+    // InstantiatePrefab arg of 1.0 produces). Callers divide a target on-screen
     // cell size by this to get per-actor scale, normalizing the visual
     // size of a heterogeneous GLB set.
     registry.Register(

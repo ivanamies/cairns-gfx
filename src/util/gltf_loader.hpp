@@ -274,9 +274,9 @@ struct LoadedSampler {
 // #220 Step 1: Aaltonen Hot/Cold split. Hot is what the recorder reads
 // every draw (the set-2 bind group only); Cold is the material's
 // constituent texture + sampler, read at bind-group-build time. Pooled
-// via cairns::ResourceManager<LoadedMaterial> on Engine; MatId is now
-// Handle<LoadedMaterial> instead of a bare uint32_t index.
-struct LoadedMaterial {
+// via cairns::ResourceManager<Material> on Engine; MatId is now
+// Handle<Material> instead of a bare uint32_t index.
+struct Material {
     struct Hot {
         rhi::Handle<rhi::BindGroup> set2;
     };
@@ -299,8 +299,8 @@ struct Prefab {
         std::vector<cairns::Handle<Mesh>> meshes;
         std::vector<int32_t> rootNodes;
         // Renamed from materialIds (legacy uint32_t name). Each element
-        // is a Handle<LoadedMaterial> into Engine::materials_.
-        std::vector<cairns::Handle<LoadedMaterial>> materials;
+        // is a Handle<Material> into Engine::materials_.
+        std::vector<cairns::Handle<Material>> materials;
 
         // #221 Phase 5b: index into engine's flat scene_headers array.
         // UINT32_MAX = scene not registered with anim_eval (no skin/clip).
@@ -874,7 +874,7 @@ inline bool LoadPrefabFromGltf(const std::filesystem::path& path,
 // from Cold and writes resolved handles into Hot.
 inline void PreparePrefabResources(Prefab::Hot& hot, Prefab::Cold& cold,
                                    rhi::Resources& rm, rhi::Allocator& alloc,
-                                   cairns::ResourceManager<LoadedMaterial>& materials) {
+                                   cairns::ResourceManager<Material>& materials) {
     // Textures
     for (const auto& texDescIn : cold.loaded_textures) {
         rhi::TextureDesc d;
@@ -928,8 +928,8 @@ inline void PreparePrefabResources(Prefab::Hot& hot, Prefab::Cold& cold,
         // #220 Step 1: acquire pool slot, populate Cold. Hot.set2 (the
         // bind group) is filled in later by Engine::initRenderPipeline
         // since it needs rhi_.frames/resources to build the descriptor.
-        const cairns::Handle<LoadedMaterial> mat_id = materials.Acquire();
-        LoadedMaterial::Cold* cold = materials.GetCold(mat_id);
+        const cairns::Handle<Material> mat_id = materials.Acquire();
+        Material::Cold* cold = materials.GetCold(mat_id);
         cold->color = t;
         cold->sampler = s;
         hot.materials.push_back(mat_id);  // #220 Step 3: was materialIds
