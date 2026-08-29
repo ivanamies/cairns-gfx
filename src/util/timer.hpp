@@ -36,20 +36,14 @@ static inline uint64_t timestamp_ns() {
     }
 }
 
-class Timer {
- public:
-
+// Shared accumulator storage for all Timer<Slot> instantiations + the
+// report / reset / cross-thread Accum helpers.
+struct TimerStorage {
     static constexpr uint32_t kMaxSlots = 16;
-    // Reserved slot for GPU frame time written by Metal/Vk command-buffer
-    // completion callbacks (different thread than Timer::End). Note this
-    // measures cmd-buffer-create -> cmd-buffer-complete, which on late-acquire
-    // backends includes the nextDrawable / vkAcquireNextImageKHR wait
-    // inside the encoding window. Use kDrawableAcquireSlot to split that out.
     static constexpr uint32_t kGpuSlot = 8;
     static constexpr uint32_t kDrawableAcquireSlot = 9;
-    // dispatch_semaphore_wait / vkWaitForFences at top of Frames::Begin --
-    // the kFramesInFlight gate blocking on previous GPU completions.
     static constexpr uint32_t kFramesBeginWaitSlot = 10;
+
     static std::array<uint64_t, kMaxSlots> accum_times_;
     static std::array<uint64_t, kMaxSlots> accum_itrs_;
     static std::array<const char*, kMaxSlots> slot_names_;
@@ -57,44 +51,15 @@ class Timer {
     // PrintReport/Reset/Timer::End on the main/game thread.
     static std::mutex mu_;
 
-  explicit Timer(const char* task_name, uint32_t slot)
-      : slot_(slot),
-        is_running_(true),
-        start_time_(timestamp_ns()) {
-    slot_names_[slot] = task_name;
-  }
-
-  ~Timer() {
-    if (is_running_) {
-      End();
-    }
-  }
-
-  void End() {
-    if (!is_running_) {
-      return;
-    }
-
-    uint64_t end_time = timestamp_ns();
-    uint64_t elapsed_us = (end_time - start_time_)/1000;
-
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      accum_times_[slot_] += elapsed_us;
-      accum_itrs_[slot_]++;
-    }
-
-    is_running_ = false;
-  }
-
-    // Accumulator setter for callers that don't have a scoped Timer (e.g. the
-    // Metal/Vk command-buffer completion callback writing GPU frame time
-    // from a queue thread).
-    static void Accum(uint32_t slot, const char* task_name, uint64_t elapsed_us) {
-      std::lock_guard<std::mutex> lk(mu_);
-      slot_names_[slot] = task_name;
-      accum_times_[slot] += elapsed_us;
-      accum_itrs_[slot]++;
+    // Span: record an already-measured elapsed interval into a slot. For
+    // callers without scope-matched lifetime (e.g. the Metal/Vk command-
+    // buffer completion callback, where the timed interval spans a callback
+    // boundary on a different thread from where it started).
+    static void Span(uint32_t slot, const char* task_name, uint64_t elapsed_us) {
+        std::lock_guard<std::mutex> lk(mu_);
+        slot_names_[slot] = task_name;
+        accum_times_[slot] += elapsed_us;
+        accum_itrs_[slot]++;
     }
 
     static void PrintReport() {
@@ -115,30 +80,60 @@ class Timer {
         accum_times_ = {};
         accum_itrs_ = {};
     }
-
-  // Prevent copying to ensure one timer per scope/task
-  Timer(const Timer&) = delete;
-  Timer& operator=(const Timer&) = delete;
-
-  // Allow moving if ownership needs to be transferred
-  Timer(Timer&& other) noexcept
-      : slot_(other.slot_),
-        is_running_(other.is_running_),
-        start_time_(other.start_time_) {
-    other.is_running_ = false;
-  }
-
- private:
-    uint32_t slot_;
-  bool is_running_;
-  uint64_t start_time_;
 };
 
+inline std::array<uint64_t, TimerStorage::kMaxSlots> TimerStorage::accum_times_ = {};
+inline std::array<uint64_t, TimerStorage::kMaxSlots> TimerStorage::accum_itrs_ = {};
+inline std::array<const char*, TimerStorage::kMaxSlots> TimerStorage::slot_names_ = {};
+inline std::mutex TimerStorage::mu_;
 
-// todo @iamies move this out
-inline std::array<uint64_t, Timer::kMaxSlots> Timer::accum_times_ = {};
-inline std::array<uint64_t, Timer::kMaxSlots> Timer::accum_itrs_ = {};
-inline std::array<const char*, Timer::kMaxSlots> Timer::slot_names_ = {};
-inline std::mutex Timer::mu_;
+// Scoped, compile-time-slot RAII timer. Use as:
+//     cairns::Timer<3> t("set up render pass globals");
+//     ... work ...
+//     // dtor (or explicit t.End()) accumulates into slot 3.
+template <uint32_t Slot>
+class Timer {
+public:
+    static_assert(Slot < TimerStorage::kMaxSlots, "Timer slot out of range");
+
+    explicit Timer(const char* task_name)
+        : is_running_(true),
+          start_time_(timestamp_ns()) {
+        TimerStorage::slot_names_[Slot] = task_name;
+    }
+
+    ~Timer() {
+        if (is_running_) {
+            End();
+        }
+    }
+
+    void End() {
+        if (!is_running_) {
+            return;
+        }
+        const uint64_t end_time = timestamp_ns();
+        const uint64_t elapsed_us = (end_time - start_time_) / 1000;
+        {
+            std::lock_guard<std::mutex> lk(TimerStorage::mu_);
+            TimerStorage::accum_times_[Slot] += elapsed_us;
+            TimerStorage::accum_itrs_[Slot]++;
+        }
+        is_running_ = false;
+    }
+
+    Timer(const Timer&) = delete;
+    Timer& operator=(const Timer&) = delete;
+
+    Timer(Timer&& other) noexcept
+        : is_running_(other.is_running_),
+          start_time_(other.start_time_) {
+        other.is_running_ = false;
+    }
+
+private:
+    bool is_running_;
+    uint64_t start_time_;
+};
 
 } // namespace cairns

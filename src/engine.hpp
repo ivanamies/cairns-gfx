@@ -355,7 +355,7 @@ public:
         const glm::mat4 proj_matrix = glm::perspectiveRH_ZO(fov, aspect_ratio, near_z, far_z);
 
         { // set up render pass globals (CPU-side only; render thread bumps + uploads).
-            cairns::Timer t_build("set up render pass globals", 3);
+            cairns::Timer<3> t_build("set up render pass globals");
             const float screen_width = swapchain_.Width();
             const float screen_height = swapchain_.Height();
             glm::mat4 view_proj = proj_matrix * view_matrix;
@@ -376,10 +376,10 @@ public:
             }
         }
 
-        cairns::Timer t_build("build opaque draw list", 4);
+        cairns::Timer<4> t_build("build opaque draw list");
         world_.root_transform = rot_matrix;
         {
-            cairns::Timer t_flatten("scene flatten", 5);
+            cairns::Timer<5> t_flatten("scene flatten");
             cairns::Extract(world_, proxies_);
         }
         for (const cairns::MeshProxy& mp : proxies_.meshes.data) {
@@ -778,7 +778,7 @@ public:
             std::exit(0);
         }
 
-        cairns::Timer t_frame("frame", 0);
+        cairns::Timer<0> t_frame("frame");
 
         const bool parallel = std::getenv("CAIRNS_RG_PARALLEL") != nullptr;
         if (parallel) {
@@ -849,8 +849,8 @@ public:
         t_frame.End();
         if (frame_ % 120 == 0) {
             printf("draws: %zu\n", pkt.draws.size());
-            cairns::Timer::PrintReport();
-            cairns::Timer::Reset();
+            cairns::TimerStorage::PrintReport();
+            cairns::TimerStorage::Reset();
         }
         return true;
     }
@@ -863,7 +863,7 @@ public:
         auto& drawListSorted = drawListSortedSlots_[slot];
         auto& drawListModels = drawListModelsSlots_[slot];
         auto& resident_textures = resident_textures_slots_[slot];
-        cairns::Timer t_build("build_draws", 1);
+        cairns::Timer<1> t_build("build_draws");
         if (!BuildMeshOpaqueDraws(pkt)) {
             return false;
         }
@@ -911,7 +911,7 @@ public:
             pkt.imgui = ImGui::GetDrawData();
         }
 
-        cairns::Timer t_rg_build("render graph build", 6);
+        cairns::Timer<6> t_rg_build("render graph build");
         pkt.graph = &graphs_[pkt.frame_idx % rhi::kFramesInFlight];
         pkt.graph->Reset();
         pkt.graph->AddPass(
@@ -1035,7 +1035,7 @@ public:
     // All BumpAllocate(Memory::kDynamic) lives here -- single allocator on
     // a single thread once the render thread spawns.
     bool RecordFrame(cairns::FramePacket& pkt) {
-        cairns::Timer t_record("record", 2);
+        cairns::Timer<2> t_record("record");
         if (pkt.request_dump) {
             rhi_.frames.SetDumpPath(pkt.dump_path);
         }
@@ -1043,7 +1043,7 @@ public:
         frame_arena_.BeginFrame(pkt.frame_idx);
         EncodeDrawsCpu(pkt);
 
-        cairns::Timer t_rg_exec("render graph execute", 7);
+        cairns::Timer<7> t_rg_exec("render graph execute");
         if (!pkt.graph->Bake() || !pkt.graph->Execute(fc, swapchain_)) {
             return false;
         }

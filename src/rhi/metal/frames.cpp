@@ -95,12 +95,11 @@ void Frames::SetDumpPath(const std::filesystem::path& path) {
 }
 
 FrameContext Frames::Begin(Resources& resources, Allocator& alloc) {
-    const uint64_t bw_start_ns = cairns::timestamp_ns();
-    dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(frame_semaphore_),
-                            DISPATCH_TIME_FOREVER);
-    const uint64_t bw_end_ns = cairns::timestamp_ns();
-    cairns::Timer::Accum(cairns::Timer::kFramesBeginWaitSlot, "frames begin wait",
-                         (bw_end_ns - bw_start_ns) / 1000);
+    {
+        cairns::Timer<cairns::TimerStorage::kFramesBeginWaitSlot> t_bw("frames begin wait");
+        dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(frame_semaphore_),
+                                DISPATCH_TIME_FOREVER);
+    }
     resources.AdvanceFrame(alloc);  // bump ring reset
 
     MTL::CommandBuffer* cmd = queue_->commandBuffer();
@@ -113,7 +112,7 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc) {
     cmd->addCompletedHandler([sem, start_ns](MTL::CommandBuffer*) {
         const uint64_t end_ns = cairns::timestamp_ns();
         const uint64_t elapsed_us = (end_ns - start_ns) / 1000;
-        cairns::Timer::Accum(cairns::Timer::kGpuSlot, "gpu frame", elapsed_us);
+        cairns::TimerStorage::Span(cairns::TimerStorage::kGpuSlot, "gpu frame", elapsed_us);
         dispatch_semaphore_signal(sem);
     });
 
@@ -142,7 +141,7 @@ void Frames::AcquireSwapchain(Resources& resources, Allocator& alloc, SwapChain&
     const uint64_t draw_start_ns = cairns::timestamp_ns();
     sc.NextDrawable();
     const uint64_t draw_end_ns = cairns::timestamp_ns();
-    cairns::Timer::Accum(cairns::Timer::kDrawableAcquireSlot, "drawable acquire",
+    cairns::TimerStorage::Span(cairns::TimerStorage::kDrawableAcquireSlot, "drawable acquire",
                          (draw_end_ns - draw_start_ns) / 1000);
     MTL::Texture* drawable_tex = sc.GetDrawable()->texture();
     Texture::Hot* msaa_hot = resources.GetHot(msaa_handle_);
