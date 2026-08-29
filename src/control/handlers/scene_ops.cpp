@@ -56,6 +56,19 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         });
 
     registry.Register(
+        "cairns.pipeline.reload",
+        json::object({{"name", "<anim_eval|skin|particle>"}}),
+        "#228 R2: hot-reload a compute kernel by logical name. "
+        "KEEP-LAST-GOOD: on failure the existing pipeline stays bound "
+        "and rendering continues. Returns {ok, name}.",
+        [&engine](const json& args) -> json {
+            std::string name = args.value("name", std::string());
+            const bool ok =
+                cairns::headless::ReloadPipelineByName(&engine, name);
+            return {{"ok", ok}, {"name", name}};
+        });
+
+    registry.Register(
         "cairns.prefab.reload",
         json::object({{"path", "<glb path>"}}),
         "#228 R1: reload a Prefab in place behind its stable PrefabId. "

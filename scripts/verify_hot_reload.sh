@@ -60,6 +60,14 @@ run_backend() {
         # R1: reload one of the resident prefabs in place. count stays 6.
         printf '%s\n' '{"op":"cairns.prefab.reload","args":{"path":"aatrox.glb"}}'
         printf '%s\n' '{"op":"cairns.prefab.count"}'
+        # R2: hot-reload each of the three compute pipelines.
+        # KEEP-LAST-GOOD: no visual change since shaders unchanged;
+        # render continues with the new (functionally identical) PSO.
+        for k in anim_eval skin particle; do
+            printf '%s\n' "{\"op\":\"cairns.pipeline.reload\",\"args\":{\"name\":\"${k}\"}}"
+        done
+        # R3: reload the JS context (fresh JSContext, same JSRuntime).
+        printf '%s\n' '{"op":"cairns.script.reload"}'
         for _ in $(seq 1 10); do echo '{"op":"cairns.render.frame"}'; done
         printf '%s\n' "{\"op\":\"cairns.io.dumpTexture\",\"args\":{\"target\":\"final\",\"path\":\"tmp/_hr_${bk}_reloaded.png\"}}"
         printf '%s\n' '{"op":"cairns.scene.clear"}'

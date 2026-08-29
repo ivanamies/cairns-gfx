@@ -116,6 +116,12 @@ uint32_t UnloadAllPrefabs(Engine* engine);
 // the path or the parse failed (existing prefab is left untouched).
 bool ReloadPrefabByPath(Engine* engine, const std::string& path);
 
+// #228 R2: hot-reload a pipeline by logical name (anim_eval / skin /
+// particle). KEEP-LAST-GOOD: on compile/link failure the existing
+// pipeline stays bound -- rendering never goes black from a broken
+// shader. Returns true on swap, false on failure or unknown name.
+bool ReloadPipelineByName(Engine* engine, const std::string& name);
+
 // #224 L3: the instrument.
 LoadTrace LastLoadTrace(Engine* engine);
 LoaderCounters Counters(Engine* engine);

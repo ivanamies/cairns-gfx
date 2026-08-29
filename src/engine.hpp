@@ -1184,6 +1184,87 @@ public:
         return false;
     }
 
+    // #228 R2: shader / pipeline hot-reload with KEEP-LAST-GOOD.
+    // Attempts to build a new pipeline using the same desc the
+    // matching init function uses; on success DeferFrees the old
+    // handle through the F1 ring and swaps the engine member to the
+    // new one. On failure (missing .spv / compile error / null
+    // result) the existing pipeline is LEFT UNTOUCHED so render
+    // continues with the previous PSO -- the hard non-negotiable
+    // from the design: a broken shader must never take rendering
+    // down.
+    //
+    // Supported logical names: "anim_eval", "skin", "particle"
+    // (the three compute kernels). Graphics PSOs (forward_lit,
+    // imgui, unlit, outline) reload via initRenderPipeline's
+    // sub-call, deferred to R2.1.
+    bool ReloadPipelineByName(const std::string& name) {
+        const char* base = SDL_GetBasePath();
+        const std::string shader_dir = base ? base : "";
+        if (name == "anim_eval") {
+            rhi::ComputePipelineDesc desc{};
+            desc.logical_shader = "anim_eval";
+            desc.shader_dir = shader_dir.c_str();
+            desc.debug_name = "anim_eval";
+            desc.layout = rhi::ComputePipelineLayout::kAnimEval;
+            rhi::Handle<rhi::Kernel> next =
+                rhi_.pipelines.CreateComputePipeline(rhi_.resources,
+                                                       rhi_.frames, desc);
+            if (next.IsNull()) {
+                CAIRNS_PRINT_ERR("[R2] anim_eval reload failed -- keeping "
+                                 "last-good\n");
+                return false;
+            }
+            if (!anim_eval_kernel_.IsNull()) {
+                rhi_.resources.DeferFree(anim_eval_kernel_);
+            }
+            anim_eval_kernel_ = next;
+            return true;
+        }
+        if (name == "skin") {
+            rhi::ComputePipelineDesc desc{};
+            desc.logical_shader = "skin";
+            desc.shader_dir = shader_dir.c_str();
+            desc.debug_name = "skin_compute";
+            desc.layout = rhi::ComputePipelineLayout::kSkin;
+            rhi::Handle<rhi::Kernel> next =
+                rhi_.pipelines.CreateComputePipeline(rhi_.resources,
+                                                       rhi_.frames, desc);
+            if (next.IsNull()) {
+                CAIRNS_PRINT_ERR("[R2] skin reload failed -- keeping "
+                                 "last-good\n");
+                return false;
+            }
+            if (!skin_kernel_.IsNull()) {
+                rhi_.resources.DeferFree(skin_kernel_);
+            }
+            skin_kernel_ = next;
+            return true;
+        }
+        if (name == "particle") {
+            rhi::ComputePipelineDesc desc{};
+            desc.logical_shader = "particle";
+            desc.shader_dir = shader_dir.c_str();
+            desc.debug_name = "particle_compute";
+            desc.layout = rhi::ComputePipelineLayout::kParticle;
+            desc.dyn_set_0 = dyn_particle_parity_[0];
+            rhi::Handle<rhi::Kernel> next =
+                rhi_.pipelines.CreateComputePipeline(rhi_.resources,
+                                                       rhi_.frames, desc);
+            if (next.IsNull()) {
+                CAIRNS_PRINT_ERR("[R2] particle reload failed -- keeping "
+                                 "last-good\n");
+                return false;
+            }
+            if (!particle_kernel_.IsNull()) {
+                rhi_.resources.DeferFree(particle_kernel_);
+            }
+            particle_kernel_ = next;
+            return true;
+        }
+        return false;
+    }
+
     // #228 F2: Evict. Manifest 'remove' verb over the WHOLE batch span --
     // drops every currently resident prefab, defer-frees its GPU
     // resources (textures, samplers, meshes' position/index/attr buffers,

@@ -56,6 +56,65 @@ JsState& EnsureJs(CommandRegistry* reg) {
     return s;
 }
 
+// Forward-decl: JsDispatch is defined below.
+JSValue JsDispatch(JSContext* ctx, JSValueConst this_val, int argc,
+                   JSValueConst* argv);
+
+// Bind `cairns.dispatch` on |ctx|'s global + eval studio_js. Used by
+// initial RegisterScriptOps AND by R3's reload after a fresh JSContext
+// is created.
+void BindAndAutoloadStudio(JSContext* ctx) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue cairns_obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, cairns_obj, "dispatch",
+                      JS_NewCFunction(ctx, &JsDispatch, "dispatch", 2));
+    JS_SetPropertyStr(ctx, global, "cairns", cairns_obj);
+    JS_FreeValue(ctx, global);
+
+    const char* src = kStudioJsSource;
+    const size_t src_len = std::strlen(src);
+    JSValue v = JS_Eval(ctx, src, src_len, "<studio.js>",
+                        JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(v)) {
+        JSValue err = JS_GetException(ctx);
+        const char* msg = JS_ToCString(ctx, err);
+        std::fprintf(stderr, "[Studio] autoload FAILED: %s\n",
+                     msg ? msg : "?");
+        if (msg) JS_FreeCString(ctx, msg);
+        JS_FreeValue(ctx, err);
+    }
+    JS_FreeValue(ctx, v);
+}
+
+// #228 R3: drop the current JSContext and start fresh -- new context in
+// the same JSRuntime, re-bind cairns.dispatch, re-eval studio_js. The
+// runtime is preserved so QuickJS's internal heap survives; only the
+// per-context scope is reset. All state in the active script is
+// host-side (cairns.dispatch is a thin command surface), so "state
+// survives the swap" needs no serialization.
+bool ReloadJsContext() {
+    JsState& s = EnsureJs(nullptr);
+    if (!s.rt) {
+        return false;
+    }
+    // Drain microtasks before tearing down the context (same shutdown
+    // safety pattern as the JsState dtor).
+    for (int i = 0; i < 10000; ++i) {
+        JSContext* job_ctx = nullptr;
+        const int r = JS_ExecutePendingJob(s.rt, &job_ctx);
+        if (r <= 0) break;
+    }
+    if (s.ctx) {
+        JS_FreeContext(s.ctx);
+    }
+    s.ctx = JS_NewContext(s.rt);
+    if (!s.ctx) {
+        return false;
+    }
+    BindAndAutoloadStudio(s.ctx);
+    return true;
+}
+
 // JS callable: cairns.dispatch(opName, argsObjectOrUndef) -> resultObject
 // Dispatches through the C++ registry. argsObject is JSON-stringified to
 // reuse the existing json::parse path; result is parsed back.
@@ -111,34 +170,19 @@ JSValue JsDispatch(JSContext* ctx, JSValueConst /*this_val*/, int argc,
 
 void RegisterScriptOps(CommandRegistry& registry) {
     JsState& s = EnsureJs(&registry);
+    BindAndAutoloadStudio(s.ctx);
 
-    // Expose JS API on a `cairns` global: cairns.dispatch(op, args).
-    JSValue global = JS_GetGlobalObject(s.ctx);
-    JSValue cairns_obj = JS_NewObject(s.ctx);
-    JS_SetPropertyStr(s.ctx, cairns_obj, "dispatch",
-                      JS_NewCFunction(s.ctx, &JsDispatch, "dispatch", 2));
-    JS_SetPropertyStr(s.ctx, global, "cairns", cairns_obj);
-    JS_FreeValue(s.ctx, global);
-
-    // Autoload the studio.* surface. Any syntax error in the embedded JS
-    // string fails LOUD here at engine init -- the failure is on stderr +
-    // RegisterScriptOps still returns (so the registry comes up; just
-    // without the studio classes). A working JS run is silent.
-    {
-        const char* src = kStudioJsSource;
-        const size_t src_len = std::strlen(src);
-        JSValue v = JS_Eval(s.ctx, src, src_len, "<studio.js>",
-                            JS_EVAL_TYPE_GLOBAL);
-        if (JS_IsException(v)) {
-            JSValue err = JS_GetException(s.ctx);
-            const char* msg = JS_ToCString(s.ctx, err);
-            std::fprintf(stderr, "[Studio] autoload FAILED: %s\n",
-                         msg ? msg : "?");
-            if (msg) JS_FreeCString(s.ctx, msg);
-            JS_FreeValue(s.ctx, err);
-        }
-        JS_FreeValue(s.ctx, v);
-    }
+    registry.Register(
+        "cairns.script.reload",
+        json::object(),
+        "#228 R3: tear down the current JSContext and spin up a fresh "
+        "one inside the same JSRuntime. Re-binds cairns.dispatch + "
+        "re-evaluates studio_js. State survives because everything "
+        "addressable is host-side (resident prefabs, entities, "
+        "viewports). Returns {ok}.",
+        [](const json&) -> json {
+            return {{"ok", ReloadJsContext()}};
+        });
 
     registry.Register(
         "cairns.script.eval",

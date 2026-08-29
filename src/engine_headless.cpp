@@ -220,6 +220,13 @@ bool ReloadPrefabByPath(Engine* engine, const std::string& path) {
     return engine->ReloadPrefabByPath(std::filesystem::path(path));
 }
 
+bool ReloadPipelineByName(Engine* engine, const std::string& name) {
+    if (!engine) {
+        return false;
+    }
+    return engine->ReloadPipelineByName(name);
+}
+
 LoadTrace LastLoadTrace(Engine* engine) {
     return engine ? engine->LastLoadTrace() : LoadTrace{};
 }
