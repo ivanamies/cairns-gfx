@@ -2,14 +2,12 @@
 //
 // PRIVATE to the Metal backend. Not exposed through rhi/resource_manager.hpp.
 //
-// Manages 128 MB heap blocks via MTLHeapTypePlacement so the OffsetAllocator
-// drives sub-allocation offsets (same model as the Vulkan backend). Each
-// buffer-heap block also exposes a master MTLBuffer covering its full range
-// (the "one platform buffer per heap block" trick). Image blocks place
-// MTLTextures into the heap at sub-allocation offsets.
-//
-// On Apple Silicon (UMA) kUpload / kDynamic / kReadback use StorageModeShared.
-// kTransient maps to StorageModeMemoryless for tile-only render targets.
+// Bump path: ONE MTL::Heap + ONE MTL::Buffer created at Init, never recreated.
+// Memory types (kUpload/kDynamic/kReadback) share regions inside the single
+// master buffer; kFramesInFlight slots are subregions inside each memory-type
+// region. BumpAllocate is pure offset arithmetic. blocks_[0] is the bump
+// heap; blocks_[1+] hold per-resource heaps for AllocBuffer/AllocImage which
+// still need variable-lifetime OffsetAllocator sub-allocation.
 
 #pragma once
 
@@ -50,11 +48,14 @@ struct HeapBlock {
     bool is_image_pool = false;
 };
 
-struct BumpRing {
-    std::array<uint32_t, kFramesInFlight> block_indices{};
-    std::array<uint32_t, kFramesInFlight> cursors{};
+// Bump region layout inside the single master buffer.
+// region_base[m] + slot * slot_size[m] is the slot's start offset; cursors
+// advance inside [0, slot_size[m]).
+struct BumpLayout {
+    std::array<uint32_t, kMemoryCount> region_base{};
+    std::array<uint32_t, kMemoryCount> slot_size{};
+    uint32_t cursors[kMemoryCount][kFramesInFlight]{};
     uint32_t current_slot = 0;
-    uint32_t block_bytes = 0;
 };
 
 struct PendingFree {
@@ -80,8 +81,6 @@ public:
     MemoryAllocator& operator=(const MemoryAllocator&) = delete;
 
     bool Init(MTL::Device* device);
-    // Frees all heaps/blocks. Idempotent; the dtor calls it. Must run while the
-    // MTL::Device is still alive (Allocator::Deinit calls it before device teardown).
     void Deinit();
 
     // Persistent allocations.
@@ -94,7 +93,9 @@ public:
     void FreeImage(uint32_t heap_index, OffsetAllocator::Allocation alloc,
                    MTL::Texture* texture, uint32_t retire_frame);
 
-    // Per-frame bump ring.
+    // Per-frame bump. Offset returned is ABSOLUTE inside the single master
+    // buffer (region_base + slot*slot_size + cursor). BumpMasterHeapIndex
+    // always returns kBumpHeapIndex regardless of mem -- one buffer for all.
     void* BumpAllocate(uint32_t bytes, uint32_t align, Memory mem,
                        uint32_t* out_offset = nullptr);
     uint32_t BumpMasterHeapIndex(Memory mem) const;
@@ -102,7 +103,8 @@ public:
     uint32_t BumpSaveCursor(Memory mem) const;
     void BumpRestoreCursor(Memory mem, uint32_t cursor);
 
-    // Backend access.
+    // Backend access (works for both the bump heap [index 0] and per-resource
+    // heaps [index 1+] uniformly).
     MTL::Buffer* HeapMasterBuffer(uint32_t heap_index) const;
     MTL::Heap* HeapHandle(uint32_t heap_index) const;
     void* HeapMappedPtr(uint32_t heap_index) const;
@@ -112,7 +114,11 @@ public:
     void BeginFrame(uint32_t frame_index);
     void RetireFrame(uint32_t frame_slot);
 
+    // The single bump heap lives at this fixed index in blocks_.
+    static constexpr uint32_t kBumpHeapIndex = 0;
+
 private:
+    bool CreateBumpHeap();
     bool CreateBufferBlock(uint32_t bytes, Memory mem, uint32_t* out_index);
     bool CreateImageBlock(uint32_t bytes, Memory mem, uint32_t* out_index);
     void DestroyBlock(uint32_t heap_index);
@@ -125,7 +131,7 @@ private:
     std::vector<uint32_t> buffer_pools_[kMemoryCount];
     std::vector<uint32_t> image_pools_[kMemoryCount];
 
-    BumpRing rings_[kMemoryCount]{};
+    BumpLayout bump_{};
 
     std::vector<PendingFree> pending_frees_[kFramesInFlight];
 };
