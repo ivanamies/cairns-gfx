@@ -19,8 +19,13 @@ struct SkinParams {
     uint instance_count;
     uint vertex_count;
     uint joint_count;
-    uint _pad0;
+    uint mode;
 };
+
+constant uint kSkinModeFull = 0u;
+constant uint kSkinModeOnePalette = 1u;
+constant uint kSkinModeNoSkinAttrs = 2u;
+constant uint kSkinModePassthrough = 3u;
 
 kernel void skin_compute(uint gid [[thread_position_in_grid]],
                           constant SkinParams& params [[buffer(0)]],
@@ -42,15 +47,33 @@ kernel void skin_compute(uint gid [[thread_position_in_grid]],
     uint palette_off = meta.x;
     uint output_off = meta.y;
 
-    uint4 j = skin_joints_then_weights[2u * vid];
-    uint4 wraw = skin_joints_then_weights[2u * vid + 1u];
-    float4 w = float4(as_type<float>(wraw.x), as_type<float>(wraw.y),
-                      as_type<float>(wraw.z), as_type<float>(wraw.w));
-    float4x4 m = palette[palette_off + j.x] * w.x
-               + palette[palette_off + j.y] * w.y
-               + palette[palette_off + j.z] * w.z
-               + palette[palette_off + j.w] * w.w;
-
     float4 p = mesh_pos[vid];
-    out_pos[output_off + vid] = m * float4(p.xyz, 1.0);
+    float4 out_p;
+
+    if (params.mode == kSkinModePassthrough) {
+        out_p = p;
+    } else {
+        uint4 j;
+        float4 w;
+        if (params.mode == kSkinModeNoSkinAttrs) {
+            j = uint4(0u, 0u, 0u, 0u);
+            w = float4(1.0, 0.0, 0.0, 0.0);
+        } else {
+            j = skin_joints_then_weights[2u * vid];
+            uint4 wraw = skin_joints_then_weights[2u * vid + 1u];
+            w = float4(as_type<float>(wraw.x), as_type<float>(wraw.y),
+                       as_type<float>(wraw.z), as_type<float>(wraw.w));
+        }
+        float4x4 m;
+        if (params.mode == kSkinModeOnePalette) {
+            m = palette[palette_off];
+        } else {
+            m = palette[palette_off + j.x] * w.x
+              + palette[palette_off + j.y] * w.y
+              + palette[palette_off + j.z] * w.z
+              + palette[palette_off + j.w] * w.w;
+        }
+        out_p = m * float4(p.xyz, 1.0);
+    }
+    out_pos[output_off + vid] = out_p;
 }

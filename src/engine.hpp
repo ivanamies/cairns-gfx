@@ -109,6 +109,8 @@ struct EngineConfig {
 
     // CAIRNS_SCALE: per-entity scale override. 0 = engine default.
     float entity_scale = 0.0f;
+
+    uint32_t skin_probe_mode = 0;
 };
 
 class Engine {
@@ -2005,12 +2007,13 @@ public:
                             uint32_t instance_count;
                             uint32_t vertex_count;
                             uint32_t joint_count;
-                            uint32_t pad;
+                            uint32_t mode;
                         };
                         SkinParamsCpu params{};
                         params.instance_count = sbg.instance_count;
                         params.vertex_count = sbg.vertex_count;
                         params.joint_count = 0;
+                        params.mode = engine_cfg_.skin_probe_mode;
                         uint32_t params_off = 0;
                         void* params_ptr = rhi_.alloc.BumpAllocate(
                             sizeof(SkinParamsCpu), ubo_align,

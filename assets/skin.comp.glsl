@@ -24,8 +24,13 @@ layout(set = 0, binding = 0) uniform Params {
     uint instance_count;
     uint vertex_count;
     uint joint_count;
-    uint _pad0;
+    uint mode;
 } params;
+
+const uint kSkinModeFull = 0u;
+const uint kSkinModeOnePalette = 1u;
+const uint kSkinModeNoSkinAttrs = 2u;
+const uint kSkinModePassthrough = 3u;
 
 layout(set = 0, binding = 1) readonly buffer Palettes {
     mat4 palette[];
@@ -79,13 +84,31 @@ void main() {
     uint palette_off = meta.x;
     uint output_off = meta.y;
 
-    uvec4 j = skin_joints_at(vid);
-    vec4 w = skin_weights_at(vid);
-    mat4 m = palette[palette_off + j.x] * w.x
-           + palette[palette_off + j.y] * w.y
-           + palette[palette_off + j.z] * w.z
-           + palette[palette_off + j.w] * w.w;
-
     vec4 p = mesh_pos[vid];
-    out_pos[output_off + vid] = m * vec4(p.xyz, 1.0);
+    vec4 out_p;
+
+    if (params.mode == kSkinModePassthrough) {
+        out_p = p;
+    } else {
+        uvec4 j;
+        vec4 w;
+        if (params.mode == kSkinModeNoSkinAttrs) {
+            j = uvec4(0u, 0u, 0u, 0u);
+            w = vec4(1.0, 0.0, 0.0, 0.0);
+        } else {
+            j = skin_joints_at(vid);
+            w = skin_weights_at(vid);
+        }
+        mat4 m;
+        if (params.mode == kSkinModeOnePalette) {
+            m = palette[palette_off];
+        } else {
+            m = palette[palette_off + j.x] * w.x
+              + palette[palette_off + j.y] * w.y
+              + palette[palette_off + j.z] * w.z
+              + palette[palette_off + j.w] * w.w;
+        }
+        out_p = m * vec4(p.xyz, 1.0);
+    }
+    out_pos[output_off + vid] = out_p;
 }
