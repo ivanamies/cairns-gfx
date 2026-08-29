@@ -124,11 +124,14 @@ HUMAN TODO — kill the pimpl `Impl* impl_` heap indirection (make it compile-ti
   guarded backend headers (Vk*/MTL::*) — keep that contained, or use a fixed-size
   aligned storage buffer if header hygiene matters more than simplicity.
 
-TODO — Aaltonen slide 26 (Pack Meshes): NOT DONE YET.
-  We match slide 25 (bump-alloc + offset-bind; material set-2 bound only on change) and
-  the renderer is now WebGL-1.0/GLES-expressible (bindless tables removed). But we are
-  still at ~5-6 API calls per draw: the recorder binds pos VB + attr VB + index buffer
-  EVERY draw. Slide 26 packs meshes into 128MB heap blocks (we already do this) and gets
-  to 2-3 calls/draw by binding the block buffers ONCE (change-tracked) and passing
-  baseVertex/baseIndex in the draw call instead of per-draw VB/IB binds. CPU perf lever,
-  orthogonal to WebGL correctness. Plan: ~/dev/plans/2026-05-27_gfx_drawcall-reduction-pack-meshes.md
+DONE (mesh-level) — Aaltonen slide 26 (Pack Meshes): the draw-call structure is in.
+  Recorders now select each primitive via baseVertex/baseIndex in the draw call and
+  change-track the VB/IB binds (skip when the mesh buffer is unchanged), so per-draw
+  pos+attr+index binds collapse across same-mesh primitive runs. Byte-identical on metal.
+  REMAINING (full block-level pack, guaranteed 2-3 calls/draw): bind each stream ONCE per
+  frame at the 128MB block base and fold the mesh's region offset into baseVertex. Blocked
+  on co-aligning the pos and attr allocations: a single vkCmdDrawIndexed vertexOffset must
+  address both streams, which needs pos_region_off/16 == attr_region_off/64 (they are
+  separate bump allocations today, so this only holds within a mesh, not across the block).
+  Fix = co-allocate pos+attr in lockstep (or pull verts from one interleaved buffer), then
+  bind-once-per-block. Plan: ~/dev/plans/2026-05-27_gfx_drawcall-reduction-pack-meshes.md
