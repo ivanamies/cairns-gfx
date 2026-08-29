@@ -695,9 +695,24 @@ public:
     bool ParticlesEnabled() { return AnyBoundSceneHasEmitter(); }
     // A.3 single red NDC triangle (no scene): pipeline + clear + one draw.
     void SetTinyTriangle(bool on) { tiny_quad_test_ = on; }
-    // G4: compose color + resolved-depth + extra-camera passes (the viewports
-    // supplying the extra cameras are opened/aimed by the caller in JS).
-    void SetNestedGraphMode(bool on) { nested_graph_mode_ = on; }
+    // G4 / #229 C3: install/clear the canonical composition -- the active
+    // viewport's color fullscreen + its resolved depth in a bottom-right PIP.
+    // (Was the nested_graph_mode_ bool; now data the composite pass iterates.)
+    void SetNestedGraphMode(bool on) {
+        if (on) {
+            const uint32_t vi =
+                static_cast<uint32_t>(viewport_mgr_.active_index);
+            viewport_mgr_.composition[0] = cairns::CompositionView{
+                glm::vec4(0.0f, 0.0f, 1.0f, 1.0f), vi,
+                cairns::CompositionView::Source::kColor};
+            viewport_mgr_.composition[1] = cairns::CompositionView{
+                glm::vec4(0.7f, 0.7f, 0.3f, 0.3f), vi,
+                cairns::CompositionView::Source::kResolvedDepth};
+            viewport_mgr_.composition_count = 2;
+        } else {
+            viewport_mgr_.composition_count = 0;
+        }
+    }
     // #229 C3: particle sim + draw gate -- any active viewport's bound scene
     // (or the active scene) carrying a ParticleEmitterComponent.
     bool AnyBoundSceneHasEmitter() {
@@ -1475,12 +1490,8 @@ private:
     // the HUD draw path reads from this instead of HudFromTimer. Set via
     // SetInjectedHudStats from the golden test harness.
     std::optional<cairns::HudStats> injected_hud_stats_;
-    // Set via SetNestedGraphMode (JS render.nestedGraph op). Currently
-    // informational only -- the engine's render graph composes the right
-    // shape (multiple forward passes, one per active viewport) regardless.
-    // Will gate the resolved-depth path once the ReadBackBuffer salvage
-    // is wired.
-    bool nested_graph_mode_ = false;
+    // #229 C3: nested-graph composition moved to viewport_mgr_.composition
+    // (a CompositionView array the composite pass iterates).
     // #229 app-provided imgui panel (scenario launcher). nullptr = none.
     void (*imgui_panel_fn_)(void*) = nullptr;
     void* imgui_panel_ctx_ = nullptr;

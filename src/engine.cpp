@@ -1713,32 +1713,48 @@ void Engine::RecordFrame(FramePacket& pkt) {
                 }
                 const float fb_fw = static_cast<float>(fb_w);
                 const float fb_fh = static_cast<float>(fb_h);
-                if (nested_graph_mode_) {
-                  // depthviz panel: bottom-right, window aspect (scaled, not squished).
-                  const int vi = viewport_mgr_.active_index;
-                  cmd.SetViewport(0.0f, 0.0f, fb_fw, fb_fh);
-                  cmd.SetScissor(0, 0, fb_w, fb_h);
-                  cmd.DrawFullscreen(
-                      rhi_.resources, composite_pip_,
-                      std::span<const rhi::Handle<rhi::Texture>>(&vp_color[vi], 1),
-                      composite_sampler_);
-                  const float kPip = 0.3f;  // bottom-right, aspect-preserved
-                  const float pip_w = fb_fw * kPip;
-                  const float pip_h = fb_fh * kPip;
-                  cmd.SetViewport(fb_fw - pip_w, fb_fh - pip_h, pip_w, pip_h);
-                  cmd.SetScissor(static_cast<int32_t>(fb_fw - pip_w),
-                                 static_cast<int32_t>(fb_fh - pip_h),
-                                 static_cast<uint32_t>(pip_w),
-                                 static_cast<uint32_t>(pip_h));
-                  // Nearest, NOT composite_sampler_ (Linear): a depth texture
-                  // can only be sampled with a non-filtering sampler -- WebGPU/
-                  // Dawn rejects the depthviz pipeline otherwise, and point-
-                  // sampling depth is correct on every backend anyway. Shares the
-                  // Nearest sampler with the outline pass.
-                  cmd.DrawFullscreen(
-                      rhi_.resources, depthviz_,
-                      std::span<const rhi::Handle<rhi::Texture>>(&vp_depth[vi], 1),
-                      outline_sampler_);
+                if (viewport_mgr_.composition_count > 0) {
+                  // #229 C3: draw exactly the installed composition panes. Each
+                  // pane blits a source viewport's resolved color or depth into
+                  // its NDC rect. The render.nestedGraph op installs the two
+                  // canonical entries (color full + depth PIP); the shape is
+                  // general (any viewport -> any rect).
+                  for (uint8_t ci = 0; ci < viewport_mgr_.composition_count;
+                       ++ci) {
+                    const cairns::CompositionView& cv =
+                        viewport_mgr_.composition[ci];
+                    const uint32_t sv = cv.source_viewport;
+                    if (sv >= static_cast<uint32_t>(
+                                  viewport_mgr_.active_count)) {
+                      continue;
+                    }
+                    const float rx = cv.rect_ndc.x * fb_fw;
+                    const float ry = cv.rect_ndc.y * fb_fh;
+                    const float rw = cv.rect_ndc.z * fb_fw;
+                    const float rh = cv.rect_ndc.w * fb_fh;
+                    cmd.SetViewport(rx, ry, rw, rh);
+                    cmd.SetScissor(static_cast<int32_t>(rx),
+                                   static_cast<int32_t>(ry),
+                                   static_cast<uint32_t>(rw),
+                                   static_cast<uint32_t>(rh));
+                    if (cv.source ==
+                        cairns::CompositionView::Source::kResolvedDepth) {
+                      // Nearest sampler: depth textures reject filtering
+                      // (WebGPU/Dawn); point-sampling depth is correct
+                      // everywhere. Shared with the outline pass.
+                      cmd.DrawFullscreen(
+                          rhi_.resources, depthviz_,
+                          std::span<const rhi::Handle<rhi::Texture>>(
+                              &vp_depth[sv], 1),
+                          outline_sampler_);
+                    } else {
+                      cmd.DrawFullscreen(
+                          rhi_.resources, composite_pip_,
+                          std::span<const rhi::Handle<rhi::Texture>>(
+                              &vp_color[sv], 1),
+                          composite_sampler_);
+                    }
+                  }
                 } else {
                 // #194 composite each LIVE viewport into its layout_rect
                 // region of the swap pane. layout_rect = (x,y,w,h) in NDC
