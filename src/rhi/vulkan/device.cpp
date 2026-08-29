@@ -165,6 +165,32 @@ bool is_device_suitable(VkPhysicalDevice device, VkSurfaceKHR surface) {
            features.samplerAnisotropy;
 }
 
+// Headless variant: no surface, so no present queue, no swapchain. Picks any
+// device with a graphics+compute queue family + samplerAnisotropy.
+QueueFamilies find_queue_families_headless(VkPhysicalDevice device) {
+    QueueFamilies indices;
+    uint32_t count = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &count, nullptr);
+    std::vector<VkQueueFamilyProperties> families(count);
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &count, families.data());
+    for (uint32_t i = 0; i < count; ++i) {
+        if ((families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) &&
+            (families[i].queueFlags & VK_QUEUE_COMPUTE_BIT)) {
+            indices.graphics_compute = i;
+            indices.present = i;  // unused in headless but keeps complete() happy.
+            break;
+        }
+    }
+    return indices;
+}
+
+bool is_device_suitable_headless(VkPhysicalDevice device) {
+    QueueFamilies indices = find_queue_families_headless(device);
+    VkPhysicalDeviceFeatures features;
+    vkGetPhysicalDeviceFeatures(device, &features);
+    return indices.complete() && features.samplerAnisotropy;
+}
+
 }  // namespace
 
 Device::~Device() { Deinit(); }
@@ -174,13 +200,9 @@ bool Device::Init(const InitConfig& cfg) {
         return true;
     }
 
-    // P0b: surfaceless not yet plumbed all the way (Engine still creates a
-    // SwapChain). Treat surfaceless=true as an error here so the SDL shell
-    // path is unaffected; P1 wires the surfaceless mode end-to-end.
-    if (cfg.surfaceless) {
-        return false;
-    }
-    if (!cfg.vk_create_surface) {
+    // Surface-creation callback is required when not surfaceless. In
+    // surfaceless mode there's no swapchain extension, no present queue.
+    if (!cfg.surfaceless && !cfg.vk_create_surface) {
         return false;
     }
 
@@ -239,9 +261,11 @@ bool Device::Init(const InitConfig& cfg) {
         create_debug_messenger(instance_, &ci, &debug_messenger_);
     }
 
-    if (!cfg.vk_create_surface(cfg.vk_create_surface_user, instance_,
-                                &surface_)) {
-        return false;
+    if (!cfg.surfaceless) {
+        if (!cfg.vk_create_surface(cfg.vk_create_surface_user, instance_,
+                                    &surface_)) {
+            return false;
+        }
     }
 
     {  // physical device
@@ -253,7 +277,10 @@ bool Device::Init(const InitConfig& cfg) {
         std::vector<VkPhysicalDevice> devices(count);
         vkEnumeratePhysicalDevices(instance_, &count, devices.data());
         for (VkPhysicalDevice d : devices) {
-            if (is_device_suitable(d, surface_)) {
+            const bool suitable = cfg.surfaceless
+                ? is_device_suitable_headless(d)
+                : is_device_suitable(d, surface_);
+            if (suitable) {
                 physical_ = d;
                 msaa_samples_ = max_usable_sample_count(d);
                 break;
@@ -264,7 +291,9 @@ bool Device::Init(const InitConfig& cfg) {
         }
     }
 
-    QueueFamilies indices = find_queue_families(physical_, surface_);
+    QueueFamilies indices = cfg.surfaceless
+        ? find_queue_families_headless(physical_)
+        : find_queue_families(physical_, surface_);
 
     {  // logical device + queues
         std::set<uint32_t> unique = {indices.graphics_compute.value(),
@@ -316,13 +345,24 @@ bool Device::Init(const InitConfig& cfg) {
         features2.features.samplerAnisotropy = VK_TRUE;
         features2.pNext = &vk12;
 
+        // Headless device skips VK_KHR_SWAPCHAIN (the only required one
+        // besides portability_subset on Apple); portability_subset stays.
+        std::vector<const char*> device_exts;
+        for (const char* e : kDeviceExtensions) {
+            if (cfg.surfaceless &&
+                std::strcmp(e, VK_KHR_SWAPCHAIN_EXTENSION_NAME) == 0) {
+                continue;
+            }
+            device_exts.push_back(e);
+        }
+
         VkDeviceCreateInfo ci{};
         ci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         ci.queueCreateInfoCount = static_cast<uint32_t>(queue_cis.size());
         ci.pQueueCreateInfos = queue_cis.data();
         ci.pNext = &features2;
-        ci.enabledExtensionCount = static_cast<uint32_t>(kDeviceExtensions.size());
-        ci.ppEnabledExtensionNames = kDeviceExtensions.data();
+        ci.enabledExtensionCount = static_cast<uint32_t>(device_exts.size());
+        ci.ppEnabledExtensionNames = device_exts.data();
         if (validation_enabled_) {
             ci.enabledLayerCount = static_cast<uint32_t>(kValidationLayers.size());
             ci.ppEnabledLayerNames = kValidationLayers.data();

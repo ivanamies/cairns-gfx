@@ -197,9 +197,11 @@ public:
             CAIRNS_PRINT("GreaterInit: pipelines.Init failed\n");
             return false;
         }
-        if ( !initSwapChain(cfg)) {
-            CAIRNS_PRINT("GreaterInit: initSwapChain failed\n");
-            return false;
+        if (!cfg.surfaceless) {
+            if ( !initSwapChain(cfg)) {
+                CAIRNS_PRINT("GreaterInit: initSwapChain failed\n");
+                return false;
+            }
         }
         { // init debug assets
             std::vector<std::filesystem::path> glb_paths;
