@@ -69,4 +69,43 @@ struct PipelineEvent {
     uint32_t invalidated_stages = kPipeNone;     // stages already invalidated
 };
 
+// The barrier an access step decided to emit (handle-free so specs can drive
+// the model directly; render_graph::Execute copies it into a ResourceBarrier).
+struct BarrierEmit {
+    uint32_t src_access = kAccessNone;
+    uint32_t src_stage = kPipeNone;
+    uint32_t dst_access = kAccessNone;
+    uint32_t dst_stage = kPipeNone;
+    BarrierLayout old_layout = BarrierLayout::kUndefined;
+    BarrierLayout new_layout = BarrierLayout::kUndefined;
+};
+
+// One Granite invalidate/flush step over a resource's persistent event.
+// Returns true when an invalidate barrier must run before this access -- a
+// pending flush (RAW/WAW) or a layout change -- and fills *out. A read
+// consumes the pending flush; a write becomes the new pending flush.
+inline bool AccessResource(PipelineEvent& pe, uint32_t dst_access,
+                           uint32_t dst_stage, BarrierLayout new_layout,
+                           bool is_write, BarrierEmit* out) {
+    const bool need = (pe.to_flush_access != 0) || (pe.layout != new_layout);
+    if (need) {
+        out->src_access = pe.to_flush_access;
+        out->src_stage = pe.src_stages != 0
+                             ? pe.src_stages
+                             : static_cast<uint32_t>(kPipeAllCommands);
+        out->dst_access = dst_access;
+        out->dst_stage = dst_stage;
+        out->old_layout = pe.layout;
+        out->new_layout = new_layout;
+    }
+    pe.layout = new_layout;
+    if (is_write) {
+        pe.to_flush_access = dst_access;
+        pe.src_stages = dst_stage;
+    } else {
+        pe.to_flush_access = 0;  // the read consumed the pending flush
+    }
+    return need;
+}
+
 }  // namespace cairns::rhi

@@ -89,3 +89,84 @@ SCENARIO("a read/write cycle is reported", "[spec][schedule]") {
     const auto r = SchedulePasses(passes, 10);
     REQUIRE(r.cycle);
 }
+
+// ---- Granite invalidate/flush model (rhi/barrier.hpp AccessResource) -------
+// The per-resource barrier step render_graph::Execute drives; specs drive the
+// pure function over a PipelineEvent directly. These pin the CURRENT model:
+// RAW + WAW + layout transitions. (WAR is unmodeled today -- its spec lands
+// with the fake-flush port.)
+
+#include "rhi/barrier.hpp"
+
+using cairns::rhi::AccessResource;
+using cairns::rhi::BarrierEmit;
+using cairns::rhi::BarrierLayout;
+using cairns::rhi::PipelineEvent;
+
+SCENARIO("first use transitions from undefined", "[spec][graph_barrier]") {
+    PipelineEvent pe{};
+    BarrierEmit e{};
+    const bool need = AccessResource(pe, cairns::rhi::kAccessShaderRead,
+                                     cairns::rhi::kPipeFragment,
+                                     BarrierLayout::kShaderRead,
+                                     /*is_write=*/false, &e);
+    REQUIRE(need);
+    REQUIRE(e.old_layout == BarrierLayout::kUndefined);
+    REQUIRE(e.new_layout == BarrierLayout::kShaderRead);
+    REQUIRE(e.src_access == cairns::rhi::kAccessNone);
+    // No known producer: the conservative all-commands fallback.
+    REQUIRE(e.src_stage == cairns::rhi::kPipeAllCommands);
+}
+
+SCENARIO("RAW: a read after a write waits on the pending flush",
+         "[spec][graph_barrier]") {
+    PipelineEvent pe{};
+    BarrierEmit e{};
+    AccessResource(pe, cairns::rhi::kAccessColorWrite,
+                   cairns::rhi::kPipeColorOutput,
+                   BarrierLayout::kColorAttachment, /*is_write=*/true, &e);
+    const bool need = AccessResource(pe, cairns::rhi::kAccessShaderRead,
+                                     cairns::rhi::kPipeFragment,
+                                     BarrierLayout::kShaderRead,
+                                     /*is_write=*/false, &e);
+    REQUIRE(need);
+    REQUIRE(e.src_access == cairns::rhi::kAccessColorWrite);
+    REQUIRE(e.src_stage == cairns::rhi::kPipeColorOutput);
+    REQUIRE(e.dst_access == cairns::rhi::kAccessShaderRead);
+    // The read consumed the flush.
+    REQUIRE(pe.to_flush_access == cairns::rhi::kAccessNone);
+}
+
+SCENARIO("WAW: back-to-back writes emit even with no layout change",
+         "[spec][graph_barrier]") {
+    PipelineEvent pe{};
+    BarrierEmit e{};
+    AccessResource(pe, cairns::rhi::kAccessColorWrite,
+                   cairns::rhi::kPipeColorOutput,
+                   BarrierLayout::kColorAttachment, /*is_write=*/true, &e);
+    const bool need = AccessResource(pe, cairns::rhi::kAccessColorWrite,
+                                     cairns::rhi::kPipeColorOutput,
+                                     BarrierLayout::kColorAttachment,
+                                     /*is_write=*/true, &e);
+    REQUIRE(need);
+    REQUIRE(e.src_access == cairns::rhi::kAccessColorWrite);
+    REQUIRE(e.old_layout == BarrierLayout::kColorAttachment);
+    REQUIRE(pe.to_flush_access == cairns::rhi::kAccessColorWrite);
+}
+
+SCENARIO("a second same-layout read after the flush is consumed is free",
+         "[spec][graph_barrier]") {
+    PipelineEvent pe{};
+    BarrierEmit e{};
+    AccessResource(pe, cairns::rhi::kAccessColorWrite,
+                   cairns::rhi::kPipeColorOutput,
+                   BarrierLayout::kColorAttachment, /*is_write=*/true, &e);
+    AccessResource(pe, cairns::rhi::kAccessShaderRead,
+                   cairns::rhi::kPipeFragment, BarrierLayout::kShaderRead,
+                   /*is_write=*/false, &e);
+    const bool need = AccessResource(pe, cairns::rhi::kAccessShaderRead,
+                                     cairns::rhi::kPipeFragment,
+                                     BarrierLayout::kShaderRead,
+                                     /*is_write=*/false, &e);
+    REQUIRE_FALSE(need);
+}

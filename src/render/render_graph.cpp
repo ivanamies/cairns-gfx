@@ -610,31 +610,22 @@ bool RenderGraph::Execute(FrameContext& fc, const SwapResolveTarget& target) {
             if (cold == nullptr) {
                 return;
             }
-            PipelineEvent& pe = cold->sync;
-            const bool need =
-                (pe.to_flush_access != 0) || (pe.layout != new_layout);
+            BarrierEmit e{};
+            const bool need = AccessResource(cold->sync, dst_access, dst_stage,
+                                             new_layout, is_write, &e);
             if (need && inv_n < 24) {
                 ResourceBarrier b{};
                 b.texture = h;
-                b.src_access = pe.to_flush_access;
-                b.src_stage = pe.src_stages != 0
-                                  ? pe.src_stages
-                                  : static_cast<uint32_t>(kPipeAllCommands);
-                b.dst_access = dst_access;
-                b.dst_stage = dst_stage;
-                b.old_layout = pe.layout;
-                b.new_layout = new_layout;
+                b.src_access = e.src_access;
+                b.src_stage = e.src_stage;
+                b.dst_access = e.dst_access;
+                b.dst_stage = e.dst_stage;
+                b.old_layout = e.old_layout;
+                b.new_layout = e.new_layout;
                 invalidate[inv_n++] = b;
             }
-            pe.layout = new_layout;
-            if (is_write) {
-                pe.to_flush_access = dst_access;
-                pe.src_stages = dst_stage;
-                if (flush_n < 8) {
-                    flush[flush_n++] = h;
-                }
-            } else {
-                pe.to_flush_access = 0;  // a read consumes the pending flush
+            if (is_write && flush_n < 8) {
+                flush[flush_n++] = h;
             }
         };
         for (uint8_t i = 0; i < pass.baked_inputs_count; ++i) {
