@@ -432,7 +432,7 @@ void Device::Deinit() {
 }
 
 bool Device::InitSwapChain(SwapChain& sc, const InitConfig& cfg) {
-    return sc.Init(plat.device_, plat.physical_, plat.surface_,
+    return sc.plat.Init(plat.device_, plat.physical_, plat.surface_,
                    cfg.plat.vk_window_size, cfg.plat.vk_window_size_user,
                    plat.command_pool_, plat.graphics_queue_, plat.msaa_samples_,
                    true);

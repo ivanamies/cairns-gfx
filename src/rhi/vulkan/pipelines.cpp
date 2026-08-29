@@ -437,7 +437,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     // pipelines build a single-sample compat render pass, destroyed below.
     VkRenderPass compat_rp = VK_NULL_HANDLE;
     if (desc.swap_chain) {
-        pi.renderPass = desc.swap_chain->renderPass;
+        pi.renderPass = desc.swap_chain->plat.renderPass;
     } else {
         const bool has_color = desc.color_format != Format::kUndefined;
         const bool has_depth = desc.depth_format != Format::kUndefined;

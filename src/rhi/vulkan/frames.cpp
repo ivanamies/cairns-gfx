@@ -381,7 +381,7 @@ bool Frames::Init(Device& device) {
 }
 
 bool Frames::InitTargets(Resources&, Allocator&, uint32_t, uint32_t) {
-    // depth/MSAA/render-pass already created in sc.Init on Vulkan.
+    // depth/MSAA/render-pass already created in sc.plat.Init on Vulkan.
     return true;
 }
 
@@ -471,12 +471,12 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     resources.AdvanceFrame(alloc);  // bump ring reset
 
     uint32_t image_index = 0;
-    VkResult acquire = vkAcquireNextImageKHR(dev, sc.swapChain, UINT64_MAX,
+    VkResult acquire = vkAcquireNextImageKHR(dev, sc.plat.swapChain, UINT64_MAX,
                                              plat.image_available_[cf], VK_NULL_HANDLE,
                                              &image_index);
     if (acquire == VK_ERROR_OUT_OF_DATE_KHR) {
-        sc.RecreateSwapChain();
-        vkAcquireNextImageKHR(dev, sc.swapChain, UINT64_MAX, plat.image_available_[cf],
+        sc.plat.RecreateSwapChain();
+        vkAcquireNextImageKHR(dev, sc.plat.swapChain, UINT64_MAX, plat.image_available_[cf],
                               VK_NULL_HANDLE, &image_index);
     }
     vkResetFences(dev, 1, &plat.in_flight_[cf]);
@@ -556,7 +556,7 @@ void Frames::End(const SwapResolveTarget& target, FrameContext& fc) {
     pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     pi.waitSemaphoreCount = 1;
     pi.pWaitSemaphores = &plat.render_finished_[cf];
-    VkSwapchainKHR swapchains[1] = {sc.swapChain};
+    VkSwapchainKHR swapchains[1] = {sc.plat.swapChain};
     pi.swapchainCount = 1;
     pi.pSwapchains = swapchains;
     pi.pImageIndices = &fc.swapchain_image_index;
@@ -566,16 +566,16 @@ void Frames::End(const SwapResolveTarget& target, FrameContext& fc) {
         vkQueueWaitIdle(plat.present_queue_);
         dump_swapchain_image(plat.device_, plat.physical_,
                              plat.command_pool_, plat.graphics_queue_,
-                             sc.swapChainImages[fc.swapchain_image_index],
-                             sc.swapChainImageFormat,
-                             sc.swapChainExtent.width,
-                             sc.swapChainExtent.height,
+                             sc.plat.swapChainImages[fc.swapchain_image_index],
+                             sc.plat.swapChainImageFormat,
+                             sc.plat.swapChainExtent.width,
+                             sc.plat.swapChainExtent.height,
                              dump_path_.string().c_str());
         dump_path_.clear();
     }
 
     if (present == VK_ERROR_OUT_OF_DATE_KHR || present == VK_SUBOPTIMAL_KHR) {
-        sc.RecreateSwapChain();
+        sc.plat.RecreateSwapChain();
     }
 
     plat.recorder_frame_ = (cf + 1) % plat.frames_in_flight_;

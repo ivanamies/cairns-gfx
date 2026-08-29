@@ -47,7 +47,7 @@ void Device::Deinit() {
 }
 
 bool Device::InitSwapChain(SwapChain& sc, const InitConfig& cfg) {
-    return sc.Init(plat.device_, cfg.plat.metal_layer);
+    return sc.plat.Init(plat.device_, cfg.plat.metal_layer);
 }
 
 }  // namespace cairns::rhi

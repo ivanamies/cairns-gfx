@@ -273,11 +273,11 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& t
     if (is_swapchain) {
         VkRenderPassBeginInfo rpi{};
         rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        rpi.renderPass = sc.renderPass;
-        rpi.framebuffer = sc.swapChainFramebuffers[plat.image_index_];
+        rpi.renderPass = sc.plat.renderPass;
+        rpi.framebuffer = sc.plat.swapChainFramebuffers[plat.image_index_];
         rpi.renderArea.offset = {0, 0};
-        rpi.renderArea.extent = sc.swapChainExtent;
-        extent = sc.swapChainExtent;
+        rpi.renderArea.extent = sc.plat.swapChainExtent;
+        extent = sc.plat.swapChainExtent;
         VkClearValue clears[2]{};
         if (!desc.color.empty()) {
             clears[0].color = {{desc.color[0].clear[0], desc.color[0].clear[1],

@@ -1011,11 +1011,11 @@ public:
             }
             fprintf(stderr,
                     "[FLAKE] frame=%u w=%u h=%u aspect=%.9f vp00=%.9f vp11=%.9f "
-                    "vp22=%.9f vp32=%.9f goff0=%u goff1=%u par_in=%u par_out=%u "
+                    "vp22=%.9f vp32=%.9f goff[0]=%u par_in=%u par_out=%u "
                     "entities=%zu meshes=%zu prims=%zu\n",
                     frame_, FrameWidth(), FrameHeight(), aspect_ratio,
                     vp[0][0], vp[1][1], vp[2][2], vp[3][2],
-                    s.globals_offset[0], s.globals_offset[1],
+                    s.globals_offset[0],
                     pkt.particle_parity_in, pkt.particle_parity_out,
                     entity_count, s.proxies.meshes.size(),
                     s.proxies.primitives.size());
@@ -1539,18 +1539,19 @@ public:
             return;
         }
         if (frame_ <= 6) {
-            const rhi::Handle<rhi::Texture> coff0 = graph_->ResolveTexture(color_off[0]);
-            const rhi::Handle<rhi::Texture> doff0 = graph_->ResolveTexture(depth_off[0]);
-            const rhi::Handle<rhi::Texture> coff1 = graph_->ResolveTexture(color_off[1]);
-            const rhi::Handle<rhi::Texture> doff1 = graph_->ResolveTexture(depth_off[1]);
-            fprintf(stderr,
-                    "[FLAKE-R] frame=%u slot=%u img=%u "
-                    "vp0_color=%u/%u vp0_depth=%u/%u vp1_color=%u/%u vp1_depth=%u/%u "
-                    "steps=%u\n",
+            fprintf(stderr, "[FLAKE-R] frame=%u slot=%u img=%u steps=%u",
                     frame_, pkt.slot, fc.swapchain_image_index,
-                    coff0.index, coff0.generation, doff0.index, doff0.generation,
-                    coff1.index, coff1.generation, doff1.index, doff1.generation,
                     pkt.sim_steps_this_frame);
+            for (int v = 0; v < kNumViewports; ++v) {
+                const rhi::Handle<rhi::Texture> coff =
+                    graph_->ResolveTexture(color_off[v]);
+                const rhi::Handle<rhi::Texture> doff =
+                    graph_->ResolveTexture(depth_off[v]);
+                fprintf(stderr, " vp%d_color=%u/%u vp%d_depth=%u/%u", v,
+                        coff.index, coff.generation, v,
+                        doff.index, doff.generation);
+            }
+            fprintf(stderr, "\n");
         }
         t_record.End();
         rhi_.frames.End(swap_target, fc);
