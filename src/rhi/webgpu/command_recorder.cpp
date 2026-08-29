@@ -182,8 +182,16 @@ void CommandRecorder::DrawFullscreen(Resources& res, Handle<Shader> pipeline,
     }
     wgpuRenderPassEncoderDraw(plat.enc_, 3, 1, 0, 0);
 }
-void CommandRecorder::SetViewport(float x, float y, float w, float h) { (void)x; (void)y; (void)w; (void)h; }
-void CommandRecorder::SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) { (void)x; (void)y; (void)w; (void)h; }
+void CommandRecorder::SetViewport(float x, float y, float w, float h) {
+    if (!plat.enc_ || w <= 0.0f || h <= 0.0f) { return; }
+    wgpuRenderPassEncoderSetViewport(plat.enc_, x, y, w, h, 0.0f, 1.0f);
+}
+void CommandRecorder::SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) {
+    if (!plat.enc_ || w == 0 || h == 0) { return; }
+    const uint32_t ux = x < 0 ? 0u : static_cast<uint32_t>(x);
+    const uint32_t uy = y < 0 ? 0u : static_cast<uint32_t>(y);
+    wgpuRenderPassEncoderSetScissorRect(plat.enc_, ux, uy, w, h);
+}
 void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader> pipeline,
                                 Handle<Texture> font, Handle<Sampler> sampler, const ImDrawData* draw_data) {
     (void)res; (void)alloc; (void)pipeline; (void)font; (void)sampler; (void)draw_data;

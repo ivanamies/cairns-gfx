@@ -379,7 +379,39 @@ bool Resources::ReadBackTextureRgba(Handle<Texture> h, std::vector<uint8_t>& out
 }
 
 bool Resources::ReadBackTextureR32UTexel(Handle<Texture> h, uint32_t x, uint32_t y, uint32_t& out) { (void)h; (void)x; (void)y; (void)out; return false; }
-bool Resources::ReadBackBuffer(Allocator& a, Handle<Buffer> h, uint32_t bytes, std::vector<uint8_t>& out) { (void)a; (void)h; (void)bytes; (void)out; return false; }
+bool Resources::ReadBackBuffer(Allocator& a, Handle<Buffer> h, uint32_t bytes, std::vector<uint8_t>& out) {
+    if (!bytes) { return false; }
+    uint32_t src_off = 0;
+    WGPUBuffer src = plat.GetWgpuBuffer(a, h, &src_off);
+    if (!src) { return false; }
+    const uint32_t copy_bytes = (bytes + 3u) & ~3u;  // copy size must be 4-aligned
+    WGPUBufferDescriptor bd = {};
+    bd.usage = WGPUBufferUsage_MapRead | WGPUBufferUsage_CopyDst;
+    bd.size = copy_bytes;
+    WGPUBuffer staging = wgpuDeviceCreateBuffer(plat.device_, &bd);
+    WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(plat.device_, nullptr);
+    wgpuCommandEncoderCopyBufferToBuffer(enc, src, src_off, staging, 0, copy_bytes);
+    WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(enc, nullptr);
+    wgpuQueueSubmit(plat.queue_, 1, &cmd);
+    wgpuCommandBufferRelease(cmd);
+    wgpuCommandEncoderRelease(enc);
+
+    bool done = false;
+    WGPUBufferMapCallbackInfo mcb = {};
+    mcb.mode = WGPUCallbackMode_AllowProcessEvents;
+    mcb.callback = [](WGPUMapAsyncStatus, WGPUStringView, void* u1, void*) { *static_cast<bool*>(u1) = true; };
+    mcb.userdata1 = &done;
+    wgpuBufferMapAsync(staging, WGPUMapMode_Read, 0, copy_bytes, mcb);
+    for (int i = 0; i < 4000 && !done; ++i) { webgpu::DrainGpu(plat.device_); }
+    const uint8_t* data = static_cast<const uint8_t*>(
+        wgpuBufferGetConstMappedRange(staging, 0, copy_bytes));
+    if (!data) { wgpuBufferRelease(staging); return false; }
+    out.resize(bytes);
+    std::memcpy(out.data(), data, bytes);
+    wgpuBufferUnmap(staging);
+    wgpuBufferRelease(staging);
+    return true;
+}
 bool Resources::ClearColorTexture(Handle<Texture> h, const float color[4]) { (void)h; (void)color; return false; }
 
 SwapResolveTarget Resources::MakeSurfacelessSwapResolveTarget(Handle<Texture> h, uint32_t w, uint32_t h_px) {
