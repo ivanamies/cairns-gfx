@@ -463,7 +463,13 @@ public:
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
             ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_FirstUseEver);
-            ImGui::Begin("cairns", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, 0.85f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.1f, 0.1f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_PlotLines, ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
+            ImGui::SetNextWindowSize(ImVec2(420.0f, 320.0f), ImGuiCond_Always);
+            ImGui::Begin("cairns", nullptr, ImGuiWindowFlags_NoResize);
+            ImGui::SetWindowFontScale(2.0f);
             const float fps = cpu_ms_last_ > 0.0f ? 1000.0f / cpu_ms_last_ : 0.0f;
             float ms_max = 1.0f;
             float ms_avg = 0.0f;
@@ -492,6 +498,7 @@ public:
                              cpu_ms_head_, overlay, 0.0f, ms_max * 1.15f,
                              ImVec2(300.0f, 110.0f));
             ImGui::End();
+            ImGui::PopStyleColor(4);
             ImGui::Render();
         }
 

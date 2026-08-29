@@ -138,6 +138,7 @@ void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader>
     }
     MTL::RenderCommandEncoder* enc = enc_;
     enc->setRenderPipelineState(res.GetHot(pipeline)->api_pso);
+    enc->setCullMode(MTL::CullModeNone);
     enc->setFragmentTexture(res.GetHot(font)->api_view, 0);
     enc->setFragmentSamplerState(res.GetHot(sampler)->api_sampler, 0);
 
