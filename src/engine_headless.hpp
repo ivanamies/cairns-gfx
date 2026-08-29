@@ -106,6 +106,8 @@ uint32_t ClearActiveScene(Engine* engine);
 // #224 L3: the instrument.
 LoadTrace LastLoadTrace(Engine* engine);
 LoaderCounters Counters(Engine* engine);
+// #224 L2: validation report from the last LoadPrefabBatch call.
+ValidationReport LastValidationReport(Engine* engine);
 
 }  // namespace headless
 }  // namespace cairns

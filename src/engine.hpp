@@ -267,6 +267,60 @@ public:
         return per_batch_shared_skin_[mhot.batch_id];
     }
 
+    // #224 L2: validate a parsed Prefab against engine caps. Returns
+    // true iff no errors. `report` accumulates issues across many calls
+    // (the caller resets between batches). Header-only; static so
+    // engine_headless.cpp / the validate op can call directly.
+    static bool ValidatePrefab(const cairns::Prefab::Cold& cold,
+                                cairns::ValidationReport& report,
+                                uint32_t prefab_idx = UINT32_MAX) {
+        const uint8_t pre_errors = report.issue_count;
+        const uint32_t node_count =
+            static_cast<uint32_t>(cold.nodes.size());
+        if (node_count > kAnimMaxNodes) {
+            report.Add(cairns::ValidationSeverity::kError,
+                        "node_count > kAnimMaxNodes (256)", prefab_idx);
+        }
+        uint32_t max_joints = 0;
+        for (const cairns::Skin& s : cold.skins) {
+            const uint32_t jc = static_cast<uint32_t>(s.jointNodes.size());
+            if (jc > max_joints) {
+                max_joints = jc;
+            }
+        }
+        if (max_joints > kAnimMaxJoints) {
+            report.Add(cairns::ValidationSeverity::kError,
+                        "max_joints > kAnimMaxJoints (256)", prefab_idx);
+        }
+        // Per-mesh weight-sum check requires Mesh::Cold (pre-CleanupTmps)
+        // -- runs in LoadPrefabBatch via ValidateMeshWeights below since
+        // mesh data is owned by the engine pool, not by Prefab::Cold.
+        return report.issue_count == pre_errors;
+    }
+
+    // #224 L2: per-mesh weight-sum check. Called in LoadPrefabBatch
+    // before CleanupTmps clears cpuSkinAttrs.
+    bool ValidateMeshWeights(const cairns::Mesh::Cold& mc,
+                              cairns::ValidationReport& report,
+                              uint32_t prefab_idx = UINT32_MAX) {
+        const uint8_t pre_errors = report.issue_count;
+        uint32_t bad_vertices = 0;
+        for (const cairns::SkinVertex& sv : mc.cpuSkinAttrs) {
+            const float sum = sv.weights.x + sv.weights.y +
+                              sv.weights.z + sv.weights.w;
+            if (sum < 0.999f || sum > 1.001f) {
+                ++bad_vertices;
+            }
+        }
+        if (bad_vertices > 0) {
+            // One warning per mesh (not per vertex) to bound issues[].
+            report.Add(cairns::ValidationSeverity::kWarning,
+                        "weight_sum != 1 on at least one skinned vertex",
+                        prefab_idx);
+        }
+        return report.issue_count == pre_errors;
+    }
+
     // #224 L1: append one batch of GLBs to the live Prefab / Mesh pools.
     // Returns {first_prefab_idx, count} = the span [first, first+count)
     // into prefab_ids_ where this batch's prefabs landed. Bad parses are
@@ -292,8 +346,9 @@ public:
         const auto t_total = Clock::now();
         cairns::LoadTrace trace{};
 
-        // ── parse + prepare resources per glb (no GPU upload yet) ──
+        // ── parse + validate + prepare resources per glb (no GPU upload yet) ──
         const auto t_parse = Clock::now();
+        cairns::ValidationReport vreport{};
         for (const std::filesystem::path& p : glbs) {
             cairns::PrefabId sid = prefabs_.Acquire();
             cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
@@ -302,6 +357,16 @@ public:
                 !cairns::LoadPrefabFromGltf(p, *shot, *scold, meshes_)) {
                 CAIRNS_PRINT_ERR("[LoadPrefabBatch] parse failed: %s\n",
                                   p.string().c_str());
+                prefabs_.Release(sid);
+                continue;
+            }
+            // #224 L2: validate against engine caps before upload.
+            const uint32_t prefab_idx_for_log =
+                static_cast<uint32_t>(prefab_ids_.size());
+            if (!ValidatePrefab(*scold, vreport, prefab_idx_for_log)) {
+                CAIRNS_PRINT_ERR(
+                    "[LoadPrefabBatch] validation failed for %s -- "
+                    "skipping prefab.\n", p.string().c_str());
                 prefabs_.Release(sid);
                 continue;
             }
@@ -403,8 +468,21 @@ public:
                        std::chrono::steady_clock::now() - t_group_a).count(),
                    0, r.count);
 
-        // ── per-new-prefab CleanupTmps + per-new-mesh cpu temp clear ──
+        // ── per-mesh weight-sum check + per-new-prefab CleanupTmps +
+        //    per-new-mesh cpu temp clear ──
         const auto t_cleanup = std::chrono::steady_clock::now();
+        for (uint32_t pi = 0; pi < r.count; ++pi) {
+            const uint32_t prefab_idx = r.first_prefab_idx + pi;
+            cairns::Prefab::Hot* shot = prefabs_.GetHot(prefab_ids_[prefab_idx]);
+            if (!shot) {
+                continue;
+            }
+            for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
+                if (cairns::Mesh::Cold* mc = meshes_.GetCold(mid)) {
+                    ValidateMeshWeights(*mc, vreport, prefab_idx);
+                }
+            }
+        }
         for (cairns::PrefabId sid : new_span) {
             if (cairns::Prefab::Cold* sc = prefabs_.GetCold(sid)) {
                 sc->CleanupTmps();
@@ -433,6 +511,7 @@ public:
         trace.prefabs_added = r.count;
         trace.meshes_added = batch_mesh_count;
         last_load_trace_ = trace;
+        last_validation_report_ = vreport;
         ++loader_counters_.batches_loaded;
         loader_counters_.prefabs_resident += r.count;
         loader_counters_.meshes_resident += batch_mesh_count;
@@ -446,6 +525,9 @@ public:
 
     // #224 L3: instrument accessors.
     const cairns::LoadTrace& LastLoadTrace() const { return last_load_trace_; }
+    const cairns::ValidationReport& LastValidationReport() const {
+        return last_validation_report_;
+    }
     cairns::LoaderCounters Counters() {
         // Live-derive actors_live + textures_resident from the registry +
         // pools. Cached fields (prefabs/meshes/batches) are updated in
@@ -3941,8 +4023,9 @@ private:
     //   ResolvedSharedSkin(mhot) == per_batch_shared_skin_[mhot.batch_id]
     std::vector<rhi::Handle<rhi::Buffer>> per_batch_shared_skin_;
     // #224 L3: the instrument. Populated each LoadPrefabBatch call.
-    cairns::LoadTrace      last_load_trace_{};
-    cairns::LoaderCounters loader_counters_{};
+    cairns::LoadTrace        last_load_trace_{};
+    cairns::LoaderCounters   loader_counters_{};
+    cairns::ValidationReport last_validation_report_{};
     std::vector<int32_t> root_nodes_stack_cache_;
 
     // #220 Step 1: handle-pilled pool. Bind group lives on Hot;

@@ -73,6 +73,18 @@ struct ValidationReport {
     }
 };
 
+// #224 L2: validate a parsed Prefab::Cold against engine caps before
+// GPU upload. Returns true iff no errors (warnings allowed). Currently
+// checks: joint_count <= kAnimMaxJoints, node_count <= kAnimMaxNodes,
+// per-skin weight_sum ~= 1 (within 1e-3). prefab_idx is stamped on
+// every issue for the agent's "which GLB?" lookup; pass UINT32_MAX
+// when validating pre-acquire.
+//
+// Header-only declaration; the body lives in engine.hpp's translation
+// unit so it can see Prefab::Cold's full type without dragging the
+// gltf_loader headers into anywhere that includes load_trace.hpp.
+// Implementation is `Engine::ValidatePrefab(...)`.
+
 struct LoaderCounters {
     uint64_t bytes_resident = 0;       // sum of all resident vertex/index/skin buffers
     uint32_t prefabs_resident = 0;

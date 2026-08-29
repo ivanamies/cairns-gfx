@@ -217,4 +217,8 @@ LoaderCounters Counters(Engine* engine) {
     return engine ? engine->Counters() : LoaderCounters{};
 }
 
+ValidationReport LastValidationReport(Engine* engine) {
+    return engine ? engine->LastValidationReport() : ValidationReport{};
+}
+
 }  // namespace cairns::headless

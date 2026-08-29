@@ -191,6 +191,29 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         });
 
     registry.Register(
+        "cairns.prefab.validate",
+        json::object(),
+        "#224 L2: return the validation report from the LAST "
+        "LoadPrefabBatch call (issues + ok flag). No args. Returns: "
+        "{ok, issue_count, issues:[{sev, what, prefab_idx}]}.",
+        [&engine](const json&) -> json {
+            const cairns::ValidationReport rep =
+                cairns::headless::LastValidationReport(&engine);
+            json arr = json::array();
+            for (uint8_t i = 0; i < rep.issue_count; ++i) {
+                arr.push_back({
+                    {"sev",
+                     rep.issues[i].sev == cairns::ValidationSeverity::kError
+                         ? "error" : "warning"},
+                    {"what", rep.issues[i].what},
+                    {"prefab_idx", rep.issues[i].prefab_idx}});
+            }
+            return {{"ok", rep.ok},
+                    {"issue_count", static_cast<uint32_t>(rep.issue_count)},
+                    {"issues", std::move(arr)}};
+        });
+
+    registry.Register(
         "cairns.loader.counters",
         json::object(),
         "Live LoaderCounters: residency + batch stats. Returns: "
