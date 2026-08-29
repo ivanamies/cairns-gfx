@@ -255,15 +255,17 @@ cairns_serve -> stale binaries silently pass ctest (bit me twice on 2026-07-09;
 worked around with `--target cairns_golden_tests`). Either fix the inits per
 header or drop the target from the default build (CAIRNS_BUILD_WGPU_SMOKE off).
 
-### Shadow-map visual correctness: side-polarity PROVEN, acne/bias still eyeball
-2026-07-09: tests/test_npr_properties.cpp now proves headlessly (metal+vk)
-that shadows (a) only darken, (b) toggle with castShadows, (c) land on the
-geometrically correct side -- the darkened-region centroid tracks the light's
-X-tilt symmetrically (occluder-over-ground scene). The Y-flip/UV-side fear is
-closed. STILL needs interactive eyeball: acne / peter-panning at grazing
-angles (bias tuning) -- drive `dev_drive.sh start metal` per the original
-note. The lit-side and intensity-monotonicity of M1 lighting are also
-property-tested there.
+### Shadow-map correctness: side-polarity + acne + peter-pan all machine-proven
+2026-07-09: tests/test_npr_properties.cpp proves headlessly (metal+vk) that
+shadows (a) only darken, (b) toggle with castShadows, (c) land on the
+geometrically correct side (darkened-centroid tracks light X-tilt), (d) NO
+acne: an unoccluded convex ground renders identical (<=1 LSB) with shadows on
+-- the shaders' slope-scaled bias (max(0.0015, 0.004*(1-NdotL))) holds at
+this 2048^2 / ~radius-8 ortho fit, and (e) NO peter-panning: a 0.3-gap
+near-contact shadow stays strong (>40 lum). Remaining eyeball value is only
+aesthetic (penumbra softness) + regimes the tests don't cover (huge scene
+extents where the same NDC bias costs more world units -- if a big-world
+scene shows acne, scale the property scene up first to reproduce).
 
 ### C7 resize — path DONE, verification artifacts deferred
 The unified resize PATH landed + is golden-tested (`Engine::ApplyResize` single
