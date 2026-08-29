@@ -67,6 +67,7 @@ class ResourceManager;
 class Device;
 class Allocator;
 class Resources;
+class Bindless;
 struct Buffer;
 struct Texture;
 struct Sampler;
@@ -535,7 +536,8 @@ public:
     // Mirrors the device handles + borrows the allocator, then initializes the
     // per-frame command/sync/descriptor state. Device + Allocator must be Init'd
     // first (the engine owns construction order).
-    bool InitDevice(Device& device, Allocator& alloc, Resources& res);
+    bool InitDevice(Device& device, Allocator& alloc, Resources& res,
+                    Bindless& bindless);
     // Neutral swapchain bring-up: fills `sc` using the device objects InitDevice
     // owns (Vulkan: device/surface/queues/pool/samples; Metal: device).
     bool InitSwapChain(SwapChain& sc, SDL_Window* window);
@@ -556,12 +558,6 @@ public:
     Handle<DynamicBuffers> CreateDynamicBuffers(const DynamicBuffersDesc& desc);
     Handle<Shader> CreateGraphicsPipeline(const GraphicsPipelineDesc& desc);
     Handle<Kernel> CreateComputePipeline(const ComputePipelineDesc& desc);
-
-    Handle<BindGroup> CreateBindlessRegistry(const BindlessRegistryDesc& desc);
-    uint32_t BindlessAddTexture(Handle<BindGroup> reg, Handle<Texture> tex);
-    uint32_t BindlessAddAttrBuffer(Handle<BindGroup> reg, Handle<Buffer> buf);
-    uint32_t BindlessAddSampler(Handle<BindGroup> reg, Handle<Sampler> samp);
-    void BindlessFinalize(Handle<BindGroup> reg);
 
     void Destroy(Handle<Buffer> h);
     void Destroy(Handle<Texture> h);

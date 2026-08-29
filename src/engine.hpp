@@ -34,6 +34,7 @@
 #include "rhi/device.hpp"
 #include "rhi/allocator.hpp"
 #include "rhi/resources.hpp"
+#include "rhi/bindless.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/command_recorder.hpp"
 
@@ -120,7 +121,10 @@ public:
         if (!resources_.Init(device_, alloc_)) {
             return false;
         }
-        if (!rm_.InitDevice(device_, alloc_, resources_)) {
+        if (!bindless_.Init(device_, resources_)) {
+            return false;
+        }
+        if (!rm_.InitDevice(device_, alloc_, resources_, bindless_)) {
             return false;
         }
         if ( !initSwapChain(window)) {
@@ -451,7 +455,7 @@ public:
             rdesc.attr_buffer_slot = R::kAttrBufferRegistrySlot;
             rdesc.sampler_slot = R::kSamplerRegistrySlot;
             rdesc.debug_name = "bindless";
-            bindless_bg_ = rm_.CreateBindlessRegistry(rdesc);
+            bindless_bg_ = bindless_.CreateRegistry(rdesc);
 
             texture_id_map_.clear();
             mesh_attr_id_map_.clear();
@@ -464,24 +468,24 @@ public:
                     rhi::Texture::Hot* hot = rm_.GetHot(h);
                     if (hot && hot->api_view) {
                         texture_id_map_[h.index] =
-                            rm_.BindlessAddTexture(bindless_bg_, h);
+                            bindless_.AddTexture(bindless_bg_, h);
                     }
                 }
                 for (size_t j = 0; j < scene.meshes.size(); ++j) {
                     auto h = scene.meshes[j].attrHandle;
                     if (!h.IsNull()) {
                         mesh_attr_id_map_[h.index] =
-                            rm_.BindlessAddAttrBuffer(bindless_bg_, h);
+                            bindless_.AddAttrBuffer(bindless_bg_, h);
                     }
                 }
                 for (size_t j = 0; j < scene.samplerHandles.size(); ++j) {
                     auto h = scene.samplerHandles[j];
                     sampler_id_map_[h.index] =
-                        rm_.BindlessAddSampler(bindless_bg_, h);
+                        bindless_.AddSampler(bindless_bg_, h);
                 }
             }
 
-            rm_.BindlessFinalize(bindless_bg_);
+            bindless_.Finalize(bindless_bg_);
         }
 
         {  // unlit graphics pipeline via rhi
@@ -613,6 +617,7 @@ public:
     bool deinit() {
         swapchain_.Deinit();
         rm_.Deinit();
+        bindless_.Deinit();
         resources_.Deinit();
         alloc_.Deinit();
         device_.Deinit();
@@ -644,6 +649,7 @@ private:
     rhi::Device device_;
     rhi::Allocator alloc_;
     rhi::Resources resources_;
+    rhi::Bindless bindless_;
     rhi::ResourceManager rm_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
     rhi::Handle<rhi::BindGroup> bindless_bg_;
