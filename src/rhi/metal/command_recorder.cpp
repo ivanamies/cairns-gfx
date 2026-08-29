@@ -89,6 +89,12 @@ void CommandRecorder::DispatchSkinBatches(
     }
     MTL::ComputeCommandEncoder* cenc = plat.cmd_->computeCommandEncoder();
     cenc->setComputePipelineState(khot->api_pso);
+    // anim_eval writes palette_out_buf_ in a prior encoder; that buffer
+    // is HazardTrackingModeUntracked so the encoder boundary alone does
+    // NOT synchronize the write. Wait on the fence anim_eval signaled.
+    if (plat.compute_fence_ != nullptr) {
+        cenc->waitForFence(plat.compute_fence_);
+    }
     MTL::Buffer* dyn_master =
         res.plat.GetBumpMasterBuffer(alloc, Memory::kDynamic);
     uint32_t pool_master_off = 0;
@@ -171,6 +177,9 @@ void CommandRecorder::DispatchAnimEval(
     if (!khot) {
         return;
     }
+    if (plat.compute_fence_ == nullptr) {
+        plat.compute_fence_ = plat.cmd_->device()->newFence();
+    }
     MTL::ComputeCommandEncoder* cenc = plat.cmd_->computeCommandEncoder();
     cenc->setComputePipelineState(khot->api_pso);
     Handle<Buffer> hs[12] = {
@@ -193,6 +202,7 @@ void CommandRecorder::DispatchAnimEval(
     cenc->setThreadgroupMemoryLength(256u * 48u, 0);
     cenc->dispatchThreadgroups(MTL::Size{actor_count, 1u, 1u},
                                 MTL::Size{64u, 1u, 1u});
+    cenc->updateFence(plat.compute_fence_);
     cenc->endEncoding();
 }
 
