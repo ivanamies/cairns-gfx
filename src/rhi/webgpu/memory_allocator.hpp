@@ -90,6 +90,12 @@ public:
     void BeginFrame(uint32_t frame_index);
     void RetireFrame(uint32_t frame_slot);
 
+    // Upload the current frame slot's written bump-ring bytes (per Memory) from
+    // the CPU mirror to the GPU master buffer. WebGPU has no persistent host
+    // mapping, so this runs once per frame before submit -- without it the
+    // globals/drawtmp dynamic UBOs reach the GPU as zeros.
+    void FlushBumpRing(WGPUQueue queue);
+
     static constexpr uint32_t kBumpHeapIndex = 0;
 
 private:

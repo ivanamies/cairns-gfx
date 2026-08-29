@@ -10,6 +10,7 @@
 #include "rhi/gpu_profiler.hpp"
 #include "rhi/offscreen_targets.hpp"
 #include "rhi/frame_capture.hpp"
+#include "rhi/webgpu/memory_allocator.hpp"
 
 #include <cstdio>
 
@@ -37,6 +38,7 @@ bool Frames::InitTargets(Resources& resources, Allocator& alloc, uint32_t width,
 FrameContext Frames::Begin(Resources& resources, Allocator& alloc, GpuProfiler& gpu_profiler,
                            OffscreenTargets& offscreen_targets, const SwapResolveTarget& target) {
     (void)gpu_profiler; (void)offscreen_targets; (void)target;
+    plat.bump_alloc_ = &alloc.plat.memory_;
     resources.AdvanceFrame(alloc);
     resources.DrainDeferredFrees(alloc, resources.FrameIndex());
     FrameContext fc{};
@@ -50,6 +52,9 @@ void Frames::EndSubmit(const SwapResolveTarget& target, FrameCapture& frame_capt
     (void)target; (void)frame_capture;
     CommandRecorder& ri = fc.cmd;
     if (ri.plat.enc_) { wgpuRenderPassEncoderEnd(ri.plat.enc_); ri.plat.enc_ = nullptr; }
+    // Upload the frame's dynamic UBO/staging writes to the GPU before the draws
+    // that read them execute (queueWriteBuffer is ordered before queueSubmit).
+    if (plat.bump_alloc_) { plat.bump_alloc_->FlushBumpRing(plat.queue_); }
     if (ri.plat.cmd_) {
         WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(ri.plat.cmd_, nullptr);
         wgpuQueueSubmit(plat.queue_, 1, &cmd);

@@ -124,6 +124,24 @@ void* MemoryAllocator::HeapMappedPtr(uint32_t heap_index) const {
     return heap_index < blocks_.size() ? blocks_[heap_index].mapped_ptr : nullptr;
 }
 
+void MemoryAllocator::FlushBumpRing(WGPUQueue queue) {
+    if (blocks_.empty() || !blocks_[0].master_buffer || !blocks_[0].mapped_ptr) {
+        return;
+    }
+    const uint32_t slot = bump_.current_slot % kFramesInFlight;
+    for (size_t m = 0; m < kMemoryCount; ++m) {
+        const uint32_t written = bump_.cursors[m][slot];
+        if (!written) { continue; }
+        const uint32_t abs = bump_.region_base[m] + slot * bump_.slot_size[m];
+        // queueWriteBuffer requires a 4-multiple size; the mirror is calloc'd so
+        // the padding bytes are zero and within the slot.
+        const uint32_t bytes = align_up(written, 4u);
+        wgpuQueueWriteBuffer(queue, blocks_[0].master_buffer, abs,
+                             static_cast<uint8_t*>(blocks_[0].mapped_ptr) + abs,
+                             bytes);
+    }
+}
+
 void MemoryAllocator::BeginFrame(uint32_t frame_index) {
     bump_.current_slot = frame_index % kFramesInFlight;
     const uint32_t slot = bump_.current_slot;

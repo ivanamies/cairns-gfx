@@ -11,6 +11,7 @@
 #include "rhi/allocator.hpp"
 #include "rhi/frames.hpp"
 #include "rhi/pipelines.hpp"
+#include "rhi/webgpu/layouts_plat.hpp"
 
 #include <webgpu/webgpu.h>
 #include <cstdio>
@@ -53,6 +54,23 @@ WGPUFilterMode ToWgpuFilter(Filter f) {
 WGPUMipmapFilterMode ToWgpuMipFilter(Filter f) {
     return f == Filter::kNearest ? WGPUMipmapFilterMode_Nearest
                                  : WGPUMipmapFilterMode_Linear;
+}
+uint32_t BppForFormat(Format f) {
+    switch (f) {
+        case Format::kR8Unorm: return 1;
+        case Format::kRg8Unorm: return 2;
+        case Format::kR16F: return 2;
+        case Format::kRgba8Unorm:
+        case Format::kRgba8Srgb:
+        case Format::kBgra8Unorm:
+        case Format::kBgra8Srgb:
+        case Format::kR32F:
+        case Format::kR32Uint: return 4;
+        case Format::kRgba16F:
+        case Format::kRg32F: return 8;
+        case Format::kRgba32F: return 16;
+        default: return 0;  // compressed / unsupported: skip pixel upload
+    }
 }
 WGPUAddressMode ToWgpuAddress(AddressMode m) {
     switch (m) {
@@ -107,16 +125,57 @@ void Resources::UploadBuffer(Allocator& alloc, Handle<Buffer> h, uint32_t dst_of
 
 Handle<Texture> Resources::CreateTexture(Allocator& alloc, const TextureDesc& d) {
     (void)alloc;
+    const uint32_t bpp = BppForFormat(d.format);
+    const uint32_t bw = static_cast<uint32_t>(d.dimensions.x);
+    const uint32_t bh = static_cast<uint32_t>(d.dimensions.y);
+    // How many mip levels does initial_data actually cover? metal/vk generate
+    // the rest from mip 0; WebGPU has no auto-mipgen, so we create only the
+    // filled levels -- otherwise minified surfaces sample empty (white) mips.
+    uint32_t fill_levels = d.mip_levels;
+    const bool upload = !d.initial_data.empty() && bpp > 0 && d.array_layers == 1;
+    if (upload) {
+        fill_levels = 0;
+        size_t off = 0;
+        for (uint32_t level = 0; level < d.mip_levels; ++level) {
+            const uint32_t lw = bw >> level ? bw >> level : 1u;
+            const uint32_t lh = bh >> level ? bh >> level : 1u;
+            const size_t ls = static_cast<size_t>(lw * bpp) * lh;
+            if (off + ls > d.initial_data.size()) { break; }
+            off += ls;
+            ++fill_levels;
+        }
+        if (fill_levels == 0) { fill_levels = 1; }
+    }
+
     WGPUTextureDescriptor td = {};
     td.usage = ToWgpuTexUsage(d.usage);
     td.dimension = WGPUTextureDimension_2D;
-    td.size = {static_cast<uint32_t>(d.dimensions.x), static_cast<uint32_t>(d.dimensions.y),
-               d.array_layers};
+    td.size = {bw, bh, d.array_layers};
     td.format = ToWgpuFormat(d.format);
-    td.mipLevelCount = d.mip_levels;
+    td.mipLevelCount = fill_levels;
     td.sampleCount = d.sample_count;
     WGPUTexture tex = wgpuDeviceCreateTexture(plat.device_, &td);
     if (!tex) { return Handle<Texture>::Null; }
+    if (upload) {
+        size_t offset = 0;
+        for (uint32_t level = 0; level < fill_levels; ++level) {
+            const uint32_t lw = bw >> level ? bw >> level : 1u;
+            const uint32_t lh = bh >> level ? bh >> level : 1u;
+            const uint32_t bytes_per_row = lw * bpp;
+            const size_t level_size = static_cast<size_t>(bytes_per_row) * lh;
+            WGPUTexelCopyTextureInfo dst = {};
+            dst.texture = tex;
+            dst.mipLevel = level;
+            dst.aspect = WGPUTextureAspect_All;
+            WGPUTexelCopyBufferLayout layout = {};
+            layout.bytesPerRow = bytes_per_row;
+            layout.rowsPerImage = lh;
+            WGPUExtent3D ext = {lw, lh, 1};
+            wgpuQueueWriteTexture(plat.queue_, &dst, d.initial_data.data() + offset,
+                                  level_size, &layout, &ext);
+            offset += level_size;
+        }
+    }
     WGPUTextureView view = wgpuTextureCreateView(tex, nullptr);
     Handle<Texture> h = textures.Acquire();
     Texture::Hot* hot = textures.GetHot(h);
@@ -154,7 +213,33 @@ Handle<Sampler> Resources::CreateSampler(const SamplerDesc& d) {
     samplers.GetCold(h)->debug_name = d.debug_name;
     return h;
 }
-Handle<BindGroup> Resources::CreateBindGroup(const BindGroupDesc& d) { (void)d; return Handle<BindGroup>::Null; }
+Handle<BindGroup> Resources::CreateBindGroup(const BindGroupDesc& d) {
+    // Material set (group 1): one texture+sampler. Layout is group-equivalent
+    // to the unlit pipeline's group-1 layout (wgpu dedups identical descriptors).
+    WGPUBindGroupLayout layout = webgpu::MakeMaterialLayout(plat.device_);
+    WGPUBindGroupEntry entries[2] = {};
+    entries[0].binding = 0;
+    if (!d.textures.empty()) {
+        Texture::Hot* th = textures.GetHot(d.textures[0].texture);
+        if (th) { entries[0].textureView = static_cast<WGPUTextureView>(th->api_view); }
+    }
+    entries[1].binding = 1;
+    if (!d.samplers.empty()) {
+        Sampler::Hot* sh = samplers.GetHot(d.samplers[0].sampler);
+        if (sh) { entries[1].sampler = static_cast<WGPUSampler>(sh->api_sampler); }
+    }
+    WGPUBindGroupDescriptor bgd = {};
+    bgd.layout = layout;
+    bgd.entryCount = 2;
+    bgd.entries = entries;
+    WGPUBindGroup bg = wgpuDeviceCreateBindGroup(plat.device_, &bgd);
+    wgpuBindGroupLayoutRelease(layout);  // bind group retains its own ref
+    if (!bg) { return Handle<BindGroup>::Null; }
+    Handle<BindGroup> h = bind_groups.Acquire();
+    bind_groups.GetHot(h)->api_descriptor_set = static_cast<void*>(bg);
+    bind_groups.GetCold(h)->debug_name = d.debug_name;
+    return h;
+}
 Handle<BindGroup> Resources::CreateSkinGroupA(Allocator& a, Frames& f, Pipelines& p, const BindGroupDesc& d) { (void)a; (void)f; (void)p; (void)d; return Handle<BindGroup>::Null; }
 Handle<DynamicBuffers> Resources::CreateDynamicBuffers(const DynamicBuffersDesc& d) {
     Handle<DynamicBuffers> h = dynamic_buffers.Acquire();
@@ -166,8 +251,34 @@ Handle<DynamicBuffers> Resources::CreateDynamicBuffers(const DynamicBuffersDesc&
     return h;
 }
 Handle<DynamicBuffers> Resources::CreateDynamicBuffers(Allocator& a, Frames& f, const DynamicBuffersDesc& d) {
-    (void)a; (void)f;
-    return CreateDynamicBuffers(d);
+    (void)f;
+    Handle<DynamicBuffers> h = CreateDynamicBuffers(d);
+    // Real bind group for the single dynamic-offset uniform case (globals +
+    // drawtmp, both backed by the kDynamic bump master). Multi-binding /
+    // storage / explicitly-backed dyn buffers feed compute pipelines that are
+    // still stubbed -- they keep layout metadata only.
+    const bool simple = d.bindings.size() == 1 &&
+                        d.bindings[0].kind == BufferKind::kUniform &&
+                        d.bindings[0].has_dynamic_offset;
+    if (!simple) { return h; }
+    WGPUBuffer buf = d.bindings[0].backing.IsNull()
+                         ? plat.GetBumpMasterBuffer(a, Memory::kDynamic)
+                         : plat.GetWgpuBuffer(a, d.bindings[0].backing, nullptr);
+    if (!buf) { return h; }
+    WGPUBindGroupLayout layout = webgpu::MakeDynUboLayout(plat.device_);
+    WGPUBindGroupEntry e = {};
+    e.binding = 0;
+    e.buffer = buf;
+    e.offset = 0;
+    e.size = d.bindings[0].max_range;
+    WGPUBindGroupDescriptor bgd = {};
+    bgd.layout = layout;
+    bgd.entryCount = 1;
+    bgd.entries = &e;
+    DynamicBuffers::Hot* hot = dynamic_buffers.GetHot(h);
+    hot->plat.layout = layout;  // kept alive for the bind group's lifetime
+    hot->plat.sets[0] = wgpuDeviceCreateBindGroup(plat.device_, &bgd);
+    return h;
 }
 
 void Resources::Destroy(Allocator& a, Handle<Buffer> h) { (void)a; (void)h; }

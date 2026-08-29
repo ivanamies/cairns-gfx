@@ -87,7 +87,65 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& t
     plat.enc_ = wgpuCommandEncoderBeginRenderPass(plat.cmd_, &rp);
 }
 void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list) {
-    (void)res; (void)alloc; (void)list;
+    if (!plat.enc_) { return; }
+    Shader::Hot* unlit = res.GetHot(list.pipeline);
+    if (!unlit || !unlit->api_pso) { return; }  // un-ported (id MRT) variant
+    wgpuRenderPassEncoderSetPipeline(plat.enc_,
+                                     static_cast<WGPURenderPipeline>(unlit->api_pso));
+    // Group 0 (globals): bind once for the pass, dynamic offset = globals_offset.
+    if (!list.dyn_globals.IsNull()) {
+        DynamicBuffers::Hot* dh = res.GetHot(list.dyn_globals);
+        if (dh && dh->plat.sets[0]) {
+            uint32_t off = list.globals_offset;
+            wgpuRenderPassEncoderSetBindGroup(plat.enc_, 0, dh->plat.sets[0], 1, &off);
+        }
+    }
+    // Pack-meshes (Aaltonen slide 26): only rebind a stream / material when it
+    // changes; baseVertex + firstIndex select the primitive.
+    uint32_t last_bg1 = 0xFFFFFFFFu;
+    for (size_t i = 0; i < list.sorted_draws.size(); ++i) {
+        const cairns::Draw& draw = list.draws[list.sorted_draws[i].second];
+        // Group 1 (material): per-draw, no dynamic offset.
+        if (!draw.bind_groups[1].IsNull() && draw.bind_groups[1].index != last_bg1) {
+            last_bg1 = draw.bind_groups[1].index;
+            BindGroup::Hot* mh = res.GetHot(draw.bind_groups[1]);
+            if (mh && mh->api_descriptor_set) {
+                wgpuRenderPassEncoderSetBindGroup(
+                    plat.enc_, 1,
+                    static_cast<WGPUBindGroup>(mh->api_descriptor_set), 0, nullptr);
+            }
+        }
+        // Group 2 (drawtmp): per-draw dynamic offset.
+        if (!draw.dynamic_buffers.IsNull()) {
+            DynamicBuffers::Hot* dh = res.GetHot(draw.dynamic_buffers);
+            if (dh && dh->plat.sets[0]) {
+                uint32_t off = draw.dynamic_buffer_offsets[1];
+                wgpuRenderPassEncoderSetBindGroup(plat.enc_, 2, dh->plat.sets[0], 1, &off);
+            }
+        }
+        uint32_t pos_off = 0;
+        WGPUBuffer pos = res.plat.GetWgpuBuffer(
+            alloc, draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
+        if (pos) {
+            wgpuRenderPassEncoderSetVertexBuffer(plat.enc_, 0, pos, pos_off, WGPU_WHOLE_SIZE);
+        }
+        uint32_t attr_off = 0;
+        WGPUBuffer attr = res.plat.GetWgpuBuffer(
+            alloc, draw.vertex_buffers[cairns::Draw::kVertexBufferAttrSlot], &attr_off);
+        if (attr) {
+            wgpuRenderPassEncoderSetVertexBuffer(plat.enc_, 1, attr, attr_off, WGPU_WHOLE_SIZE);
+        }
+        uint32_t idx_base = 0;
+        WGPUBuffer idx = res.plat.GetWgpuBuffer(alloc, draw.index_buffer, &idx_base);
+        if (!idx) { continue; }
+        wgpuRenderPassEncoderSetIndexBuffer(plat.enc_, idx, WGPUIndexFormat_Uint32,
+                                            idx_base, WGPU_WHOLE_SIZE);
+        const uint32_t first_index = (draw.index_offset - idx_base) / sizeof(uint32_t);
+        wgpuRenderPassEncoderDrawIndexed(plat.enc_, draw.triangle_count * 3,
+                                         draw.instance_count, first_index,
+                                         static_cast<int32_t>(draw.vertex_offset),
+                                         draw.instance_offset);
+    }
 }
 void CommandRecorder::DrawPoints(Resources& res, Allocator& alloc, const PointDraw& draw) {
     (void)res; (void)alloc; (void)draw;
