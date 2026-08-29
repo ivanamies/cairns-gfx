@@ -617,6 +617,88 @@ CAIRNS_GFX_BAKE_REFS=1 ./build/.../cairns_golden_tests
 - G1 buffer / G4 resolved-depth / L6+L7 skin-buffer SECTIONs SKIP until
   `Resources::ReadBackBuffer` lands on both backends (open task).
 
+## WebGPU backend — build & run (in progress: W0–W3 done, W4 next)
+
+A third RHI backend via gfx-rs **wgpu-native** C bindings. Boots the full engine
+surfaceless and renders a clear → PNG. Plan:
+`~/dev/plans/2026-06-21_gfx_webgpu-wgpu-native-standup.md`; live state in task list / git log.
+
+### Build + run
+
+```sh
+# wgpu-native artifacts are gitignored; fetch once after a fresh checkout:
+third_party/wgpu-native/fetch.sh   # macOS-arm64 prebuilt, pinned v29.0.0.0
+
+# configure + build the headless host (Ninja single-config):
+cmake -S . -B build/spec-mac-webgpu -DCAIRNS_GFX_BACKEND=webgpu -DCMAKE_BUILD_TYPE=Release -G Ninja
+cmake --build build/spec-mac-webgpu --target cairns_serve
+
+# render one frame + dump final_target_ to a PNG (the W3 verify):
+cd build/spec-mac-webgpu/Release
+( echo '{"op":"cairns.render.frame"}'
+  echo '{"op":"cairns.io.dumpTexture","args":{"target":"final","path":"out.png"}}'
+  echo '{"op":"cairns.app.quit"}'; sleep 4 ) | timeout 30 ./cairns_serve
+# -> out.png (1280x720). Read it to verify. Today it's the bare clear color
+#    (draws no-op until W4 wires real pipelines).
+```
+
+### Smokes (de-risk, off by default; binaries land in the build-dir ROOT, not Release/)
+
+```sh
+cmake -S . -B build/spec-mac-metal -DCAIRNS_BUILD_WGPU_SMOKE=ON   # any backend dir
+cmake --build build/spec-mac-metal --target wgpu_link_smoke
+cmake --build build/spec-mac-metal --target wgpu_readback_smoke
+build/spec-mac-metal/Release/wgpu_link_smoke       # prints the adapter (Apple M2 Max)
+build/spec-mac-metal/Release/wgpu_readback_smoke   # pixel0 = 64 128 191 255 (readback proof)
+```
+
+### Verify metal/vk unaffected (the whole backend is `#if CAIRNS_WEBGPU`-guarded)
+
+```sh
+cmake --build build/spec-mac-metal --target cairns_golden_tests
+(cd build/spec-mac-metal/Release && ./cairns_golden_tests "[scenarios]")  # 11 passed / 1 skipped
+```
+
+### Layout + invariants
+
+- Backend code: `src/rhi/webgpu/*.cpp` + `*_plat.hpp`, every file `#if CAIRNS_WEBGPU`-guarded.
+  The `file(GLOB_RECURSE)` picks them up; metal/vk compile them as empty TUs (stay green).
+- Macro `CAIRNS_WEBGPU` (`util/define.hpp` from `gfx_config.hpp.in`); CMake
+  `-DCAIRNS_GFX_BACKEND=webgpu`. `cairns_core` + `cairns_render_thread` link the
+  `wgpu_native` INTERFACE target (static `.a` + macOS frameworks + include dir).
+- Handles type-erased to `void*` (like vk): `api_view`=WGPUTextureView,
+  `api_image`=WGPUTexture, `api_pso`=WGPURenderPipeline.
+- Allocator (`memory_allocator.cpp`): per-resource individual `WGPUBuffer`s + a CPU-staging
+  bump ring; uploads via `wgpuQueueWriteBuffer` (WebGPU has no persistent host mapping).
+- Readback (`resources.cpp ReadBackTextureRgba`): `copyTextureToBuffer` (bytesPerRow
+  256-aligned) → `wgpuBufferMapAsync` + `wgpuDevicePoll(true)` → unpad rows → BGRA→RGBA swizzle.
+
+### Gotchas (cost real time — do not relearn)
+
+- **WebGPU defaults `maxStorageBufferBindingSize` to 128 MB.** The 1 GB desktop skin pool
+  exceeds it → `Device::Init` queries `wgpuAdapterGetLimits` + passes them as `requiredLimits`
+  at device creation. Without this, GreaterInit FATALs on the skin-pool fit check.
+- **A `Null` graphics-pipeline handle HANGS GreaterInit.** `CreateGraphicsPipeline` must
+  `Acquire` a real handle (a null `api_pso` is fine for not-yet-implemented pipelines) — never
+  return `Handle<Shader>::Null`. This was the W3→W4 unblock.
+- Bundled `run.js` runs at boot (`serve_main.cpp RunBootScript`); it loads GLBs (the
+  `wgpuQueueWriteBuffer` traffic you see). `engine_ok` gates render/scene ops registration —
+  if GreaterInit fails, `cairns.render.frame` is `unknown_op`.
+
+### State + W4 next
+
+W0 (vendor+smoke) · W1 (de-bindless) · W2 (links+boots) · W3 (real device/alloc/resources/
+readback → boots the full engine; `render.frame` → clear → PNG) — all done.
+**W4:** real WGSL pipelines so draws appear. The triangle (`01_triangle.js` →
+`cairns.render.tinyTriangle`, drawn via `DrawFullscreen(red_triangle_pip_)`) needs the
+forward+composite chain — `red_triangle.wgsl` + real pipeline drawing 3 verts into the
+forward MSAA target, then `composite.wgsl` + a texture-sampler bind group sampling that into
+`final_target_`. Both pipelines are currently null-PSO handles → draws no-op → the PNG is the
+bare clear. Wire both → red triangle in the PNG → bake `triangle.macos-webgpu`. Then W5
+(unlit + die/two-die/viking), W6 (Emscripten→Chrome), W7 (CDP drive/capture).
+
+---
+
 ## Known deferrals (acknowledged, not bugs)
 
 Moved to `TODO.md`. README carries architecture, not work items.
