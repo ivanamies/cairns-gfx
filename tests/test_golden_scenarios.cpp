@@ -17,6 +17,7 @@
 #include "test_seams.hpp"
 #include "test_refs.hpp"
 #include "golden_js.hpp"
+#include "shell/scenario_launcher.hpp"  // ScenarioLauncher + DrawScenarioPanel
 #include "util/hud_stats.hpp"
 #include "util/debug_asset.hpp"  // kDebugGlbs (nested 20-GLB scenario)
 
@@ -814,4 +815,61 @@ SCENARIO("C7 resize: headless final-target resize cycle (dims + non-black)",
     render_at(320, 240);   // grow back
     render_at(200, 150);   // odd, non-power-of-two
     render_at(320, 240);   // restore
+}
+
+// HEADLESS TEST #1 (user directive): the scenario picker must render CLEAN.
+// (1) the scenario picker window, (2) NO perf HUD, (3) NO particles, (4) NO
+// depth PIP bottom-right. The windowed app hides the picker behind the HUD;
+// this proves it draws, deterministically, and dumps a viewable
+// scenario_picker.png. Joins the goldens.
+SCENARIO("scenario picker renders clean: picker only, no HUD/particles/depth",
+         "[golden][scenarios][picker]") {
+    seam::EnsureImguiContext();
+    cairns::rhi::InitConfig icfg{};
+    icfg.surfaceless = true;
+    icfg.width = 512;
+    icfg.height = 512;
+    cairns::EngineConfig ecfg{};
+    ecfg.use_fixed_clock = true;
+    ecfg.particles_enabled = false;   // (3) no particles
+    cairns::Engine e;
+    REQUIRE(e.GreaterInit(icfg, ecfg));
+    // (1) picker on + (2) HUD off. Blank scene (no spawn) => (3) no particle
+    // emitter, (4) no composition views => no depth PIP. No injected HUD stats.
+    e.SetImguiInGolden(true);
+    e.SetHudVisible(false);
+    cairns::ScenarioLauncher launcher;
+    launcher.scripts.push_back({"01_triangle", "01_triangle.js"});
+    launcher.scripts.push_back({"04_viking_room", "04_viking_room.js"});
+    launcher.scripts.push_back({"06_three_champ_anim", "06_three_champ_anim.js"});
+    e.SetImguiPanel(&cairns::DrawScenarioPanel, &launcher);
+    REQUIRE(seam::AdvanceToGoldenFrame(e));
+
+    std::vector<uint8_t> rgba;
+    uint32_t w = 0;
+    uint32_t h = 0;
+    REQUIRE(seam::ReadFinalTargetRgba(e, rgba, w, h));
+    seam::DumpFinalTargetPng(e, "scenario_picker");   // viewable artifact
+
+    REQUIRE(e.ParticlesEnabled() == false);   // (3) no emitter bound
+    REQUIRE(e.HudVisible() == false);          // (2) HUD suppressed
+    // (1) the picker drew: non-black pixels exist over the otherwise-black
+    // blank scene (the window frame + the three buttons).
+    bool any_nonblack = false;
+    for (uint8_t v : rgba) {
+        if (v != 0) {
+            any_nonblack = true;
+            break;
+        }
+    }
+    REQUIRE(any_nonblack);
+
+    // Golden compare (per-platform: imgui font atlas differs across backends).
+    const std::string observed = seam::Md5Hex(rgba);
+    const std::string ref =
+        refs::LoadImageRef("scenario_picker", seam::PlatformKey(), observed);
+    if (ref.empty()) {
+        SKIP("bake scenario_picker ref (CAIRNS_GFX_BAKE_REFS=1)");
+    }
+    REQUIRE(observed == ref);
 }

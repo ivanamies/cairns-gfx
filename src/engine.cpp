@@ -2044,6 +2044,7 @@ bool Engine::draw() {
                 io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
             }
             ImGui::NewFrame();
+            if (hud_visible_) {
             ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_FirstUseEver);
             ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, 0.85f));
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
@@ -2131,6 +2132,7 @@ bool Engine::draw() {
                              ImVec2(300.0f, 110.0f));
             ImGui::End();
             ImGui::PopStyleColor(4);
+            }  // hud_visible_
             // #229 app-provided imgui panel (e.g. the scenario launcher), drawn
             // into the same frame as the HUD. Raw fn ptr + ctx -- no singleton,
             // no std::function alloc; the app owns the panel + does any dispatch.

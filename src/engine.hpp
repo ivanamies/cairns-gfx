@@ -1106,6 +1106,11 @@ public:
     // Surfaceless web app opts into the imgui HUD + panel (native windowed gets
     // it free via !surfaceless; cairns_serve leaves it false).
     void SetImguiEnabled(bool on) { imgui_enabled_ = on; }
+    // #229: the perf HUD ("cairns" window) is app-shell chrome, gated
+    // separately from the app panel so a clean capture (scenario picker only)
+    // can suppress it. Default on -- windowed/serve keep the HUD.
+    void SetHudVisible(bool on) { hud_visible_ = on; }
+    bool HudVisible() const { return hud_visible_; }
     void SetImguiPanel(void (*fn)(void*), void* ctx) {
         imgui_panel_fn_ = fn;
         imgui_panel_ctx_ = ctx;
@@ -1856,6 +1861,7 @@ private:
     void* imgui_panel_ctx_ = nullptr;
     // Surfaceless web app opts into imgui (HUD + panel); cairns_serve doesn't.
     bool imgui_enabled_ = false;
+    bool hud_visible_ = true;
     // A.7: stamped at end of BuildMeshOpaqueDraws every frame.
     FrameStats last_frame_stats_{};
 #if CAIRNS_ALLOC_TRACE
