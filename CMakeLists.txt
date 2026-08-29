@@ -670,6 +670,35 @@ else()
     copy_helper("anim_eval.comp.spv") # #221 Phase 5b
     copy_helper("red_triangle.vert.spv") # A.3 L1 single red triangle
     copy_helper("red_triangle.frag.spv")
+    # Scenario picker scripts -> assets/scripts. SDL_EnumerateDirectory finds
+    # them via the AssetManager on Android (posix SDL_sysfsops -> AAssetDir).
+    file(GLOB CAIRNS_SCENARIO_SCRIPTS CONFIGURE_DEPENDS
+         "${CMAKE_CURRENT_LIST_DIR}/assets/scripts/*.js")
+    foreach(SCENARIO_SCRIPT ${CAIRNS_SCENARIO_SCRIPTS})
+        get_filename_component(SCENARIO_SCRIPT_NAME "${SCENARIO_SCRIPT}" NAME)
+        copy_helper("scripts/${SCENARIO_SCRIPT_NAME}")
+    endforeach()
+    # Android APK: real GLB copies (an APK can't hold symlinks, so the .app's
+    # link/add_resource approach doesn't port). Mirror the .app bundle:
+    # assets/*.glb = die/two_die/viking_room; the staging dir = the kDebugGlbs
+    # champion roster. Missing champions make the roster resolve short -- the
+    # silent 99 the loader now aborts on -- and missing test GLBs leave
+    # one_die/two_die/viking_room with no mesh. copy_if_different = incremental.
+    if (ANDROID)
+        set(ANDROID_GLB_SRC_DIRS
+            "${CMAKE_CURRENT_LIST_DIR}/assets"
+            "/Users/ivanamies/dev/gfx/assets/riot/lol_champions/staging")
+        foreach(GLB_SRC_DIR ${ANDROID_GLB_SRC_DIRS})
+            file(GLOB ANDROID_GLB_FILES CONFIGURE_DEPENDS "${GLB_SRC_DIR}/*.glb")
+            foreach(ANDROID_GLB ${ANDROID_GLB_FILES})
+                get_filename_component(ANDROID_GLB_NAME "${ANDROID_GLB}" NAME)
+                add_custom_command(TARGET ${EXECUTABLE_NAME} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${ANDROID_GLB}"
+                        "${MOBILE_ASSETS_DIR}/${ANDROID_GLB_NAME}")
+            endforeach()
+        endforeach()
+    endif()
 endif()
 
 # set some extra configs for each platform

@@ -4894,9 +4894,19 @@ std::vector<std::filesystem::path> Engine::ResolveDebugGlbPaths(
             cairns::kDebugGlbsToParseStart + cairns::kDebugGlbsToParse);
         for (uint32_t i = start; i < end_excl; ++i) {
             std::filesystem::path p;
-            if (cairns::GetStaticResourceFilepath(cairns::kDebugGlbs[i], p)) {
-                out.push_back(p);
+            if (!cairns::GetStaticResourceFilepath(cairns::kDebugGlbs[i], p)) {
+                // kDebugGlbs is a compile-time roster -- every entry MUST be
+                // bundled. A soft skip here silently shrinks the batch (the
+                // "99" bug: a missing asset masquerading as a smaller load).
+                // Fail loud, naming the gap, so it can never become a count.
+                CAIRNS_PRINT_ERR(
+                    "[LOAD] FATAL: roster asset unresolved: %s (idx %u) -- "
+                    "asset not bundled for this platform; refusing to short "
+                    "the batch\n",
+                    cairns::kDebugGlbs[i], i);
+                std::abort();
             }
+            out.push_back(p);
         }
         return out;
     }

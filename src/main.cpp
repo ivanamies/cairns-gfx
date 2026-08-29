@@ -325,11 +325,13 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
                                   {"args", {{"on", false}}}});
         reg.Dispatch(cairns::json{{"op", "cairns.particles.enable"},
                                   {"args", {{"on", false}}}});
-        std::ifstream f(app->launcher.scripts[idx].path);
-        std::stringstream ss;
-        ss << f.rdbuf();
-        reg.Dispatch(cairns::json{{"op", "cairns.script.eval"},
-                                  {"args", {{"code", ss.str()}}}});
+        // ReadAsset (SDL_LoadFile) reads APK assets on Android; std::ifstream
+        // can't. Desktop reads the file the same way.
+        std::string code;
+        if (cairns::platform::ReadAsset(app->launcher.scripts[idx].path, code)) {
+            reg.Dispatch(cairns::json{{"op", "cairns.script.eval"},
+                                      {"args", {{"code", code}}}});
+        }
     }
 
     // P1 fly-cam: sample keyboard state once per iterate and drive the
