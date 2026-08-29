@@ -331,8 +331,7 @@ private:
         const float near_z = 0.1f;
         const float far_z = 100.0f;
 
-        glm::mat4 proj_matrix = glm::perspectiveRH_ZO(fov, aspect_ratio, near_z, far_z);
-        proj_matrix[1][1] *= -1;
+        const glm::mat4 proj_matrix = glm::perspectiveRH_ZO(fov, aspect_ratio, near_z, far_z);
 
         const glm::mat4 view_proj = proj_matrix * view_matrix;
         cairns::rhi::RenderPassGlobals render_pass_globals{

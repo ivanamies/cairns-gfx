@@ -1947,11 +1947,13 @@ void CommandRecorder::BeginRenderPass(const RenderPassDesc& desc) {
     rpi.pClearValues = clears;
     vkCmdBeginRenderPass(impl_->gfx, &rpi, VK_SUBPASS_CONTENTS_INLINE);
 
+    // Negative-height viewport flips NDC Y so the shared (Metal-convention)
+    // projection renders upright on Vulkan, instead of an in-shader proj[1][1]*=-1.
     VkViewport viewport{};
     viewport.x = 0.0f;
-    viewport.y = 0.0f;
+    viewport.y = static_cast<float>(impl_->sc->swapChainExtent.height);
     viewport.width = static_cast<float>(impl_->sc->swapChainExtent.width);
-    viewport.height = static_cast<float>(impl_->sc->swapChainExtent.height);
+    viewport.height = -static_cast<float>(impl_->sc->swapChainExtent.height);
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
     vkCmdSetViewport(impl_->gfx, 0, 1, &viewport);
