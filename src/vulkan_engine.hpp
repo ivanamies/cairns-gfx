@@ -1919,14 +1919,28 @@ private:
             queueCreateInfos.push_back(queueCreateInfo);
         }
 
-        VkPhysicalDeviceFeatures deviceFeatures{};
-        deviceFeatures.samplerAnisotropy = VK_TRUE;
+        VkPhysicalDeviceVulkan12Features vk12features{};
+        vk12features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        vk12features.runtimeDescriptorArray = VK_TRUE;
+        vk12features.descriptorBindingPartiallyBound = VK_TRUE;
+        vk12features.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+        vk12features.shaderStorageBufferArrayNonUniformIndexing = VK_TRUE;
+        vk12features.descriptorBindingVariableDescriptorCount = VK_TRUE;
+        vk12features.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+        vk12features.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+        vk12features.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
+
+        VkPhysicalDeviceFeatures2 features2{};
+        features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        features2.features.samplerAnisotropy = VK_TRUE;
+        features2.pNext = &vk12features;
 
         VkDeviceCreateInfo createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
         createInfo.pQueueCreateInfos = queueCreateInfos.data();
-        createInfo.pEnabledFeatures = &deviceFeatures;
+        createInfo.pEnabledFeatures = nullptr;
+        createInfo.pNext = &features2;
         createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
         createInfo.ppEnabledExtensionNames = deviceExtensions.data();
         if ( enableValidationLayers) {
@@ -2413,7 +2427,7 @@ private:
         appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
         appInfo.pEngineName = "No Engine";
         appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-        appInfo.apiVersion = VK_API_VERSION_1_0;
+        appInfo.apiVersion = VK_API_VERSION_1_2;
 
         VkInstanceCreateInfo createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
