@@ -9,6 +9,27 @@ here.
 
 ## Active
 
+### #224 Loading system (P0) — COMPLETE (2026-06-13)
+Plan: `/Users/ivanamies/dev/plans/2026-06-13_gfx_loading-system-224.md`.
+Byte-gate green every commit; studio_js smoke 9/9 throughout.
+- [x] **L0** ListActiveWorld / ClearActiveWorld → …ActiveScene rename
+- [x] **L1** `Engine::LoadPrefabBatch(span<path>)` + per-batch shared skin
+              (`per_batch_shared_skin_` list + `Mesh::Hot::batch_id`)
+- [x] **L2** `Engine::ValidatePrefab` + `…MeshWeights` + `cairns.prefab.validate`
+- [x] **L3** `LoadTrace` + `LoaderCounters` PODs +
+              `cairns.loader.{trace,counters}` (boot batch = ~40s parse +
+              1s upload — instrument quantifies the load slowness)
+- [x] **L4** `Engine::FitGridToViewport(N, extents)` — pure-fn camera solve
+- [x] **L5** `cairns.prefab.loadBatch` + real `cairns.scene.instantiateGrid`
+              (the "+50 +50 +50 auto-fit no-flash" deliverable)
+- [x] **L6** APPEND-only acceptance test
+              (`cairns.debug.snapshotPrefabHandles` /`assertAppendOnly`)
+- [x] **L7** `FitGridToViewport` determinism check (`cairns.debug.loadTwice`)
+- [x] **L8** Editor chrome (selection outline) toggle (`cairns.editor.chrome`)
+
+Follow-ups queued (above): two-sort screenshot strategy
+(full editor vs per-viewport canvas) + chrome-leak byte-gate.
+
 ### #225 Unity-shaped rename pass — COMPLETE (2026-06-13)
 Plan: `/Users/ivanamies/dev/plans/2026-06-13_gfx_unity-rename-225.md`.
 Byte-gate green every commit; studio_js smoke harness covers the new
