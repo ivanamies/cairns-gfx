@@ -110,14 +110,38 @@ class Transform {
         this._rotation = new Quaternion(0, 0, 0, 1);
         this._localScale = new Vector3(1, 1, 1);
     }
+    // #229 C4.3: setters write through to cairns.entity.setTRS (the cache is
+    // the JS-side value, write-through only). [N-node] every op carries
+    // this._go._scene so a Transform edits its own document, not "the" scene.
+    _apply() {
+        cairns.dispatch("cairns.entity.setTRS", {
+            scene: this._go._scene, entity: this._go._entity,
+            t: [this._position.x, this._position.y, this._position.z],
+            r: [this._rotation.x, this._rotation.y, this._rotation.z,
+                this._rotation.w],
+            s: [this._localScale.x, this._localScale.y, this._localScale.z],
+        });
+    }
     get position()   { return this._position; }
-    set position(v)  { this._position = v; }  // TODO lower to cairns.entity.setTransform
+    set position(v)  { this._position = v; this._apply(); }
     get rotation()   { return this._rotation; }
-    set rotation(q)  { this._rotation = q; }
+    set rotation(q)  { this._rotation = q; this._apply(); }
     get localScale() { return this._localScale; }
-    set localScale(v){ this._localScale = v; }
+    set localScale(v){ this._localScale = v; this._apply(); }
     LookAt(_target)  { /* TODO */ }
-    Translate(v)     { this._position = this._position.add(v); }
+    Translate(v)     { this._position = this._position.add(v); this._apply(); }
+    // Unity: parent is a Transform; also accept a GameObject or null (unparent).
+    SetParent(parent) {
+        let pe = null;
+        if (parent) {
+            pe = (parent._go && parent._go._entity !== undefined)
+                ? parent._go._entity
+                : (parent._entity !== undefined ? parent._entity : null);
+        }
+        const args = { scene: this._go._scene, entity: this._go._entity };
+        if (pe !== null) { args.parent = pe; }
+        cairns.dispatch("cairns.entity.setParent", args);
+    }
 }
 
 class GameObject {
@@ -166,6 +190,27 @@ class GameObject {
     get scene()       { return this._scene; }
     // Legacy alias (one release).
     get world()       { return this._scene; }
+
+    // #229 C4.3: lower the lifecycle/name/find surface onto the entity ops.
+    Destroy() {
+        cairns.dispatch("cairns.entity.destroy",
+                        { scene: this._scene, entity: this._entity });
+    }
+    get name()  { return this._name; }
+    set name(n) {
+        this._name = n;
+        cairns.dispatch("cairns.entity.setName",
+                        { scene: this._scene, entity: this._entity, name: n });
+    }
+    // Unity GameObject.Find, but explicit-scene ([N-node]); default scene 0.
+    static Find(name, scene = 0) {
+        const r = cairns.dispatch("cairns.entity.find",
+                                  { scene: scene, name: name });
+        if (r.ok && r.result && r.result.found) {
+            return new GameObject(r.result.entity, scene);
+        }
+        return null;
+    }
 }
 
 class Component {

@@ -454,3 +454,56 @@ SCENARIO("entity ops: TRS round-trip + cycle guard + destroy + N-node isolation"
     const cairns::json f2 = disp("cairns.entity.find", {{"name", "hero0"}});
     REQUIRE(f2["result"]["found"] == false);
 }
+
+// #229 C4.3: the studio.js Unity surface must LOWER onto the entity ops (was
+// JS-only caches / stubs). Drives the real path: script.eval runs GameObject /
+// Transform / GameObject.Find|Destroy inside QuickJS, which dispatches
+// cairns.entity.* -- we assert on the engine-side result.
+SCENARIO("studio.js: Transform setters + name/Find/Destroy lower to entity ops",
+         "[spec][scenarios][studio]") {
+    if (!seam::AssetsPresent({"aatrox.glb"})) {
+        SKIP("assets absent");
+    }
+    seam::EnsureImguiContext();
+    cairns::rhi::InitConfig icfg{};
+    icfg.surfaceless = true;
+    icfg.width = 256;
+    icfg.height = 256;
+    cairns::EngineConfig ecfg{};
+    ecfg.use_fixed_clock = true;
+    cairns::Engine e;
+    REQUIRE(e.GreaterInit(icfg, ecfg));
+    cairns::control::CommandRegistry& reg = cairns::golden::SetupJs(e);
+    auto disp = [&](const char* op, const cairns::json& args) -> cairns::json {
+        return reg.Dispatch({{"op", op}, {"args", args}});
+    };
+    disp("cairns.scene.spawnFitted",
+         {{"glbs", {"aatrox.glb"}}, {"instances", 1}});
+    const cairns::json l =
+        disp("cairns.scene.listEntities", cairns::json::object());
+    REQUIRE(l["result"]["entities"].size() >= 1);
+    const uint32_t ent = l["result"]["entities"][0].get<uint32_t>();
+
+    const std::string code =
+        "var e=" + std::to_string(ent) + ";"
+        "var go=new GameObject(e,0);"
+        "go.transform.position=new Vector3(5,6,7);"
+        "go.transform.localScale=new Vector3(3,3,3);"
+        "go.name='hero';"
+        "var g=cairns.dispatch('cairns.entity.getTRS',{entity:e});"
+        "var f=cairns.dispatch('cairns.entity.find',{name:'hero'});"
+        "go.Destroy();"
+        "var f2=cairns.dispatch('cairns.entity.find',{name:'hero'});"
+        "JSON.stringify({tx:g.result.t[0],tz:g.result.t[2],sy:g.result.s[1],"
+        "found:f.result.found,foundEnt:f.result.entity,gone:!f2.result.found});";
+    const cairns::json ev = disp("cairns.script.eval", {{"code", code}});
+    REQUIRE(ev["ok"] == true);
+    const cairns::json out =
+        cairns::json::parse(ev["result"]["result"].get<std::string>());
+    REQUIRE(out["tx"].get<float>() == 5.0f);   // Transform.position lowered
+    REQUIRE(out["tz"].get<float>() == 7.0f);
+    REQUIRE(out["sy"].get<float>() == 3.0f);   // Transform.localScale lowered
+    REQUIRE(out["found"] == true);             // name -> setName; Find resolves
+    REQUIRE(out["foundEnt"].get<uint32_t>() == ent);
+    REQUIRE(out["gone"] == true);              // Destroy -> entity.destroy
+}
