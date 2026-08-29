@@ -35,6 +35,7 @@ struct Viewport {
     WorldId world;
     Camera camera;
     rhi::Handle<rhi::Texture> target;
+    rhi::Handle<rhi::Texture> depth_target;
     uint32_t target_w = 0;
     uint32_t target_h = 0;
     bool camera_dirty = true;

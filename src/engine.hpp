@@ -87,6 +87,7 @@ public:
     // the render thread reads slot ~S. Capacity grows on demand; .clear()/
     // .resize() preserve buffers across frame reuse. pending_globals etc. are
     // staged by Build and consumed by EncodeDraws.
+    static constexpr int kNumViewportsPerSlot = 2;
     struct PerSlot {
         cairns::RenderProxyArrays proxies;
         std::vector<cairns::Draw, cairns::Allocator<cairns::Draw>> drawList;
@@ -95,11 +96,14 @@ public:
             drawListSorted;
         std::vector<rhi::Handle<rhi::Texture>> resident_textures;
         std::vector<glm::mat4> draw_world_matrices;
-        cairns::rhi::RenderPassGlobals pending_globals{};
-        glm::mat4 pending_view_matrix{1.0f};
-        float pending_near_z = 0.1f;
-        float pending_far_z = 100.0f;
-        uint32_t globals_offset = 0;
+        // Per-viewport camera state. One RenderPassGlobals upload per
+        // viewport at distinct globals_offset; RecordFrame issues one
+        // forward pass per viewport with the matching offset.
+        std::array<cairns::rhi::RenderPassGlobals, kNumViewportsPerSlot> pending_globals{};
+        std::array<glm::mat4, kNumViewportsPerSlot> pending_view_matrix{};
+        std::array<float, kNumViewportsPerSlot> pending_near_z{};
+        std::array<float, kNumViewportsPerSlot> pending_far_z{};
+        std::array<uint32_t, kNumViewportsPerSlot> globals_offset{};
         uint32_t dt_off = 0;
         cairns::ImDrawDataSnapshot imgui_snapshot;
         cairns::FramePacket pkt{};
@@ -107,7 +111,11 @@ public:
         explicit PerSlot(cairns::Arena& a)
             : drawList(cairns::Allocator<cairns::Draw>(a)),
               drawListSorted(
-                  cairns::Allocator<std::pair<cairns::DrawKey, uint32_t>>(a)) {}
+                  cairns::Allocator<std::pair<cairns::DrawKey, uint32_t>>(a)) {
+            pending_view_matrix.fill(glm::mat4(1.0f));
+            pending_near_z.fill(0.1f);
+            pending_far_z.fill(100.0f);
+        }
     };
 
     Engine() :
@@ -176,6 +184,16 @@ public:
     }
 
     bool CamPoseOverridden() const { return cam_pose_override_; }
+
+    // Click-to-focus: caller passes the window-x of the LMB click. Engine
+    // picks the half of the swap target the click lands in. fly_/keyboard
+    // input is then routed to that viewport on subsequent iterates.
+    void SetActiveViewportFromClickX(float window_x) {
+        const float half = static_cast<float>(FrameWidth()) /
+                            static_cast<float>(kNumViewports);
+        active_viewport_ = (window_x < half) ? 0 : 1;
+    }
+    int ActiveViewport() const { return active_viewport_; }
 
     // Override the deterministic-particles seed (default kept at 42 to match
     // the existing CAIRNS_DUMP byte-gate). Must be called before
@@ -493,9 +511,15 @@ public:
             int n = std::sscanf(p, "%f,%f,%f,%f,%f", &v[0], &v[1], &v[2],
                                  &v[3], &v[4]);
             if (n == 5) {
-                fly_[0].position = glm::vec3(v[0], v[1], v[2]);
-                fly_[0].yaw = v[3];
-                fly_[0].pitch = v[4];
+                // Pin BOTH viewports' controllers to the same pose so the
+                // side-by-side composite is deterministic regardless of
+                // which viewport ends up active. Diverging the second
+                // viewport for a multi-pose byte-gate is the P3 follow-up.
+                for (int vi = 0; vi < kNumViewports; ++vi) {
+                    fly_[vi].position = glm::vec3(v[0], v[1], v[2]);
+                    fly_[vi].yaw = v[3];
+                    fly_[vi].pitch = v[4];
+                }
                 cam_pose_override_ = true;
             }
         }
@@ -785,41 +809,43 @@ public:
         const float angle_rads = angle_degs * std::numbers::pi / 180.0f;
         const glm::mat4 rot_matrix = glm::rotate(glm::mat4(1.0f), angle_rads, glm::vec3(0, 1.0, 0));
 
-        // Resolve the active viewport's view matrix from its FlyController.
-        // yaw rotates around world up (Y); pitch around the camera's local
-        // right (X). yaw=0,pitch=0,pos=(0,0,0) reproduces the pre-P1
-        // origin-looking-down-(-Z) camera (the byte-gate hinge).
-        cairns::FlyController& fc = fly_[active_viewport_];
-        const float cy = std::cos(fc.yaw);
-        const float sy = std::sin(fc.yaw);
-        const float cp = std::cos(fc.pitch);
-        const float sp = std::sin(fc.pitch);
-        const glm::vec3 camera_pos = fc.position;
-        const glm::vec3 camera_dir(-cp * sy, sp, -cp * cy);
-        const glm::vec3 world_up(0, 1, 0);
-
-        const glm::mat4 view_matrix = glm::lookAtRH(camera_pos, camera_pos + camera_dir, world_up);
-
-        const float aspect_ratio = (1.0f * FrameWidth()) / FrameHeight();
+        // Per-viewport camera resolve. Each viewport gets its own
+        // RenderPassGlobals (uploaded at a distinct bump offset by
+        // EncodeDraws); RecordFrame issues one forward pass per viewport
+        // bound against the matching offset. Aspect is (vp_w / vp_h) where
+        // vp_w = FrameWidth() / kNumViewportsPerSlot (side-by-side split).
+        const float vp_w = static_cast<float>(FrameWidth()) /
+                            static_cast<float>(kNumViewportsPerSlot);
+        const float vp_h = static_cast<float>(FrameHeight());
+        const float aspect_ratio = vp_w / vp_h;
         const float fov = 90 * (std::numbers::pi / 180.0f);
         const float near_z = 0.1f;
         const float far_z = 100.0f;
-
         const glm::mat4 proj_matrix = glm::perspectiveRH_ZO(fov, aspect_ratio, near_z, far_z);
-        const glm::mat4 view_proj = proj_matrix * view_matrix;
-
-        const float screen_width = FrameWidth();
-        const float screen_height = FrameHeight();
-        s.pending_globals = cairns::rhi::RenderPassGlobals {
-            .view_proj = view_proj,
-            .inv_view_proj = glm::inverse(view_proj),
-            .camera_pos = glm::vec4(camera_pos, 1.0f /*exposure */),
-            .camera_dir = glm::vec4(camera_dir, near_z),
-            .screen_params = glm::vec4(screen_width, screen_height, 1.0f / screen_width, 1.0f / screen_height)
-        };
-        s.pending_view_matrix = view_matrix;
-        s.pending_near_z = near_z;
-        s.pending_far_z = far_z;
+        for (int v = 0; v < kNumViewports; ++v) {
+            cairns::FlyController& fc = fly_[v];
+            const float cy = std::cos(fc.yaw);
+            const float sy = std::sin(fc.yaw);
+            const float cp = std::cos(fc.pitch);
+            const float sp = std::sin(fc.pitch);
+            const glm::vec3 camera_pos = fc.position;
+            const glm::vec3 camera_dir(-cp * sy, sp, -cp * cy);
+            const glm::vec3 world_up(0, 1, 0);
+            const glm::mat4 view_matrix = glm::lookAtRH(camera_pos,
+                                                          camera_pos + camera_dir,
+                                                          world_up);
+            const glm::mat4 view_proj = proj_matrix * view_matrix;
+            s.pending_globals[v] = cairns::rhi::RenderPassGlobals {
+                .view_proj = view_proj,
+                .inv_view_proj = glm::inverse(view_proj),
+                .camera_pos = glm::vec4(camera_pos, 1.0f /*exposure */),
+                .camera_dir = glm::vec4(camera_dir, near_z),
+                .screen_params = glm::vec4(vp_w, vp_h, 1.0f / vp_w, 1.0f / vp_h)
+            };
+            s.pending_view_matrix[v] = view_matrix;
+            s.pending_near_z[v] = near_z;
+            s.pending_far_z[v] = far_z;
+        }
 
         // Set the active world's root_transform, run TRS hierarchy
         // propagation (no-op when no entity carries a Transform; the
@@ -875,14 +901,12 @@ public:
                 draw.triangle_count =
                     tiny_quad_test_ ? 2 : prim.index_count / 3;
 
-                const glm::vec4 view_pos = view_matrix * world_mat[3];
-                const float view_depth = -view_pos.z;
-                const float d01 = glm::clamp(
-                    (view_depth - near_z) / (far_z - near_z), 0.0f, 1.0f);
-                const uint32_t depth_q =
-                    static_cast<uint32_t>(d01 * float((1u << 24) - 1));
+                // P2: depth_q dropped from the sort key (pass 0). Including
+                // it would make the sort camera-dependent and force a per-
+                // viewport re-sort. Material + pipeline ordering still
+                // preserves batching across both viewports.
                 s.drawListSorted[stable_idx] = std::make_pair(
-                    cairns::BuildDrawKey(mat_id & 0x3FFFFFFFu, depth_q,
+                    cairns::BuildDrawKey(mat_id & 0x3FFFFFFFu, /*depth=*/0,
                                          kMockTranslucency, kMockViewport,
                                          kMockViewportLayer, kMockFullscreenLayer),
                     stable_idx);
@@ -902,26 +926,32 @@ public:
     // s.dt_off. Compute kernel sees pkt.fixed_dt (constant sim dt), not wall.
     void EncodeDraws(const FramePacket& pkt) {
         PerSlot& s = slots_[pkt.slot];
-        // 1. globals UBO.
-        void* gptr = rhi_.alloc.BumpAllocate(
-            sizeof(cairns::rhi::RenderPassGlobals), rhi_.alloc.UboAlign(),
-            rhi::Memory::kDynamic, &s.globals_offset);
-        assert(gptr && "bump alloc failed: render pass globals");
-        memcpy(gptr, &s.pending_globals, sizeof(s.pending_globals));
+        // 1. globals UBO -- one per viewport, distinct bump offsets. The
+        // forward pass for viewport v binds s.globals_offset[v].
+        for (int v = 0; v < kNumViewports; ++v) {
+            void* gptr = rhi_.alloc.BumpAllocate(
+                sizeof(cairns::rhi::RenderPassGlobals), rhi_.alloc.UboAlign(),
+                rhi::Memory::kDynamic, &s.globals_offset[v]);
+            assert(gptr && "bump alloc failed: render pass globals");
+            memcpy(gptr, &s.pending_globals[v], sizeof(cairns::rhi::RenderPassGlobals));
+        }
         if (frame_ <= 6) {
-            const glm::mat4& vp = s.pending_globals.view_proj;
-            const float aspect_ratio = (1.0f * FrameWidth()) / FrameHeight();
+            const glm::mat4& vp = s.pending_globals[active_viewport_].view_proj;
+            const float vp_w = static_cast<float>(FrameWidth()) /
+                                static_cast<float>(kNumViewports);
+            const float aspect_ratio = vp_w / static_cast<float>(FrameHeight());
             size_t entity_count = 0;
             if (auto* wc = worlds_.GetCold(active_world_)) {
                 entity_count = wc->registry.storage<entt::entity>().size();
             }
             fprintf(stderr,
                     "[FLAKE] frame=%u w=%u h=%u aspect=%.9f vp00=%.9f vp11=%.9f "
-                    "vp22=%.9f vp32=%.9f goff=%u par_in=%u par_out=%u "
+                    "vp22=%.9f vp32=%.9f goff0=%u goff1=%u par_in=%u par_out=%u "
                     "entities=%zu meshes=%zu prims=%zu\n",
                     frame_, FrameWidth(), FrameHeight(), aspect_ratio,
                     vp[0][0], vp[1][1], vp[2][2], vp[3][2],
-                    s.globals_offset, pkt.particle_parity_in, pkt.particle_parity_out,
+                    s.globals_offset[0], s.globals_offset[1],
+                    pkt.particle_parity_in, pkt.particle_parity_out,
                     entity_count, s.proxies.meshes.size(),
                     s.proxies.primitives.size());
         }
@@ -1035,10 +1065,10 @@ public:
         // Fill packet header (the view into per-slot storage).
         s.pkt.frame_idx = frame_;
         s.pkt.slot = slot;
-        s.pkt.view = s.pending_view_matrix;
+        s.pkt.view = s.pending_view_matrix[active_viewport_];
         s.pkt.proj = glm::mat4(1.0f);  // not used downstream; view_proj baked into pending_globals
-        s.pkt.near_z = s.pending_near_z;
-        s.pkt.far_z = s.pending_far_z;
+        s.pkt.near_z = s.pending_near_z[active_viewport_];
+        s.pkt.far_z = s.pending_far_z[active_viewport_];
         s.pkt.sim_steps_this_frame = sim_steps_this_frame_;
         s.pkt.fixed_dt = static_cast<float>(cairns::kFixedDt);
         // Wait for the previous frame's render-thread-published parity. In
@@ -1216,14 +1246,19 @@ public:
         }
         graph_->Reset();
 
-        rhi::MeshDrawList ml{};
-        ml.draws = pkt.draws;
-        ml.sorted_draws = pkt.sorted;
-        ml.pipeline = unlit_offscreen_;
-        ml.globals_offset = s.globals_offset;
-        ml.resident_textures = pkt.resident_textures;
-        ml.resident_buffers =
-            std::span<const rhi::Handle<rhi::Buffer>>(&mesh_master_handle_, 1);
+        // Per-viewport MeshDrawList: same draws, distinct globals_offset.
+        // (Same world for both viewports this commit; multi-world content
+        // lands in #195.)
+        std::array<rhi::MeshDrawList, kNumViewports> mls{};
+        for (int v = 0; v < kNumViewports; ++v) {
+            mls[v].draws = pkt.draws;
+            mls[v].sorted_draws = pkt.sorted;
+            mls[v].pipeline = unlit_offscreen_;
+            mls[v].globals_offset = s.globals_offset[v];
+            mls[v].resident_textures = pkt.resident_textures;
+            mls[v].resident_buffers =
+                std::span<const rhi::Handle<rhi::Buffer>>(&mesh_master_handle_, 1);
+        }
 
         rhi::PointDraw pd{};
         pd.pipeline = particle_render_offscreen_;
@@ -1234,6 +1269,8 @@ public:
         const float clear[4] = {41.0f / 255.0f, 42.0f / 255.0f, 48.0f / 255.0f, 1.0f};
         const uint32_t fb_w = swap_target.width;
         const uint32_t fb_h = swap_target.height;
+        const uint32_t vp_w = fb_w / kNumViewports;
+        const uint32_t vp_h = fb_h;
 
         // pass 1: particle_sim kCompute. import the writer ssbo so prune keeps
         // it (external side effect -- game thread reads particle_parity_out).
@@ -1271,31 +1308,38 @@ public:
                 }
             });
 
-        // pass 2: forward kGraphics. offscreen color + depth, single-sample.
-        rhi::GraphTexture color_off;
-        rhi::GraphTexture depth_off;
-        graph_->AddPass(
-            "forward", rhi::PassType::kGraphics,
-            [&](rhi::PassBuilder& b) {
-                rhi::GraphTextureDesc cd{};
-                cd.width = fb_w;
-                cd.height = fb_h;
-                cd.format = rhi::Format::kBgra8Unorm;
-                cd.usage = rhi::kTexUsageColorTarget | rhi::kTexUsageSampled;
-                color_off = b.CreateColorTarget(cd);
-                rhi::GraphTextureDesc dd{};
-                dd.width = fb_w;
-                dd.height = fb_h;
-                dd.format = rhi::Format::kD32F;
-                dd.usage = rhi::kTexUsageDepthTarget | rhi::kTexUsageSampled;
-                depth_off = b.CreateDepthTarget(dd);
-                b.AddColorOutput("color", color_off, rhi::LoadOp::kClear, clear);
-                b.AddDepthOutput("fwd_depth", depth_off, rhi::LoadOp::kClear, 1.0f);
-            },
-            [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
-                cmd.DrawMeshes(rhi_.resources, rhi_.alloc, ml);
-                cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
-            });
+        // pass 2: forward, ONCE PER VIEWPORT. Each pass writes to a private
+        // half-width color+depth target. Particles render into both viewports
+        // (compute step ran once above; particle render is a graphics
+        // submission that draws into each forward pass's encoder).
+        std::array<rhi::GraphTexture, kNumViewports> color_off{};
+        std::array<rhi::GraphTexture, kNumViewports> depth_off{};
+        for (int v = 0; v < kNumViewports; ++v) {
+            const int vp_idx = v;
+            const char* pass_name = (vp_idx == 0) ? "forward_vp0" : "forward_vp1";
+            graph_->AddPass(
+                pass_name, rhi::PassType::kGraphics,
+                [&, vp_idx](rhi::PassBuilder& b) {
+                    rhi::GraphTextureDesc cd{};
+                    cd.width = vp_w;
+                    cd.height = vp_h;
+                    cd.format = rhi::Format::kBgra8Unorm;
+                    cd.usage = rhi::kTexUsageColorTarget | rhi::kTexUsageSampled;
+                    color_off[vp_idx] = b.CreateColorTarget(cd);
+                    rhi::GraphTextureDesc dd{};
+                    dd.width = vp_w;
+                    dd.height = vp_h;
+                    dd.format = rhi::Format::kD32F;
+                    dd.usage = rhi::kTexUsageDepthTarget | rhi::kTexUsageSampled;
+                    depth_off[vp_idx] = b.CreateDepthTarget(dd);
+                    b.AddColorOutput("color", color_off[vp_idx], rhi::LoadOp::kClear, clear);
+                    b.AddDepthOutput("fwd_depth", depth_off[vp_idx], rhi::LoadOp::kClear, 1.0f);
+                },
+                [&, vp_idx](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
+                    cmd.DrawMeshes(rhi_.resources, rhi_.alloc, mls[vp_idx]);
+                    cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
+                });
+        }
 
         // pass 3: composite + ui kGraphics. Composite samples color_off full-
         // screen, depth_off PIP in the bottom-right; ImGui draws on top into the
@@ -1316,32 +1360,51 @@ public:
                 td.height = fb_h;
                 swap_tex = b.ImportTexture(rhi::Handle<rhi::Texture>::Null, td);
                 b.AddColorOutput("swapchain", swap_tex, rhi::LoadOp::kClear, clear);
-                b.AddAttachmentInput(color_off);
-                b.AddAttachmentInput(depth_off);
+                for (int v = 0; v < kNumViewports; ++v) {
+                    b.AddAttachmentInput(color_off[v]);
+                    b.AddAttachmentInput(depth_off[v]);
+                }
             },
             [&](rhi::CommandRecorder& cmd, const rhi::PassResources& res) {
-                const rhi::Handle<rhi::Texture> color = res.Resolve(color_off);
-                const rhi::Handle<rhi::Texture> depth = res.Resolve(depth_off);
-                // composite: full-screen forward color.
-                cmd.DrawFullscreen(rhi_.resources, composite_pip_,
-                                   std::span<const rhi::Handle<rhi::Texture>>(&color, 1),
-                                   composite_sampler_);
-                // bottom-right 25% PIP, depthviz silhouette.
-                const float x = 0.75f * static_cast<float>(fb_w);
-                const float y = 0.75f * static_cast<float>(fb_h);
-                const float w = 0.25f * static_cast<float>(fb_w);
-                const float h = 0.25f * static_cast<float>(fb_h);
-                cmd.SetViewport(x, y, w, h);
-                cmd.SetScissor(static_cast<int32_t>(x), static_cast<int32_t>(y),
-                               static_cast<uint32_t>(w), static_cast<uint32_t>(h));
-                cmd.DrawFullscreen(rhi_.resources, depthviz_,
-                                   std::span<const rhi::Handle<rhi::Texture>>(&depth, 1),
-                                   composite_sampler_);
-                // restore full extent before the ui draw.
+                std::array<rhi::Handle<rhi::Texture>, kNumViewports> vp_color{};
+                std::array<rhi::Handle<rhi::Texture>, kNumViewports> vp_depth{};
+                for (int v = 0; v < kNumViewports; ++v) {
+                    vp_color[v] = res.Resolve(color_off[v]);
+                    vp_depth[v] = res.Resolve(depth_off[v]);
+                }
+                // Composite each viewport's color into its half of the swap.
+                const float vp_fw = static_cast<float>(vp_w);
+                const float vp_fh = static_cast<float>(vp_h);
+                for (int v = 0; v < kNumViewports; ++v) {
+                    const float x = vp_fw * static_cast<float>(v);
+                    cmd.SetViewport(x, 0.0f, vp_fw, vp_fh);
+                    cmd.SetScissor(static_cast<int32_t>(x), 0,
+                                   vp_w, vp_h);
+                    cmd.DrawFullscreen(rhi_.resources, composite_pip_,
+                                       std::span<const rhi::Handle<rhi::Texture>>(&vp_color[v], 1),
+                                       composite_sampler_);
+                }
+                // Active viewport's depth PIP (bottom-right 25% of the active
+                // viewport's half).
+                {
+                    const float vp_x0 = vp_fw * static_cast<float>(active_viewport_);
+                    const float pip_x = vp_x0 + 0.75f * vp_fw;
+                    const float pip_y = 0.75f * vp_fh;
+                    const float pip_w = 0.25f * vp_fw;
+                    const float pip_h = 0.25f * vp_fh;
+                    cmd.SetViewport(pip_x, pip_y, pip_w, pip_h);
+                    cmd.SetScissor(static_cast<int32_t>(pip_x),
+                                   static_cast<int32_t>(pip_y),
+                                   static_cast<uint32_t>(pip_w),
+                                   static_cast<uint32_t>(pip_h));
+                    cmd.DrawFullscreen(rhi_.resources, depthviz_,
+                                       std::span<const rhi::Handle<rhi::Texture>>(&vp_depth[active_viewport_], 1),
+                                       composite_sampler_);
+                }
+                // Restore full extent before the ui draw.
                 cmd.SetViewport(0.0f, 0.0f, static_cast<float>(fb_w),
                                 static_cast<float>(fb_h));
                 cmd.SetScissor(0, 0, fb_w, fb_h);
-                // ui (in-encoder phase).
                 if (pkt.imgui_snapshot) {
                     cmd.DrawImGui(rhi_.resources, rhi_.alloc, imgui_, imgui_font_,
                                   imgui_sampler_, pkt.imgui_snapshot);
@@ -1355,13 +1418,17 @@ public:
             return;
         }
         if (frame_ <= 6) {
-            const rhi::Handle<rhi::Texture> coff = graph_->ResolveTexture(color_off);
-            const rhi::Handle<rhi::Texture> doff = graph_->ResolveTexture(depth_off);
+            const rhi::Handle<rhi::Texture> coff0 = graph_->ResolveTexture(color_off[0]);
+            const rhi::Handle<rhi::Texture> doff0 = graph_->ResolveTexture(depth_off[0]);
+            const rhi::Handle<rhi::Texture> coff1 = graph_->ResolveTexture(color_off[1]);
+            const rhi::Handle<rhi::Texture> doff1 = graph_->ResolveTexture(depth_off[1]);
             fprintf(stderr,
-                    "[FLAKE-R] frame=%u slot=%u img=%u color_off=%u/%u depth_off=%u/%u "
+                    "[FLAKE-R] frame=%u slot=%u img=%u "
+                    "vp0_color=%u/%u vp0_depth=%u/%u vp1_color=%u/%u vp1_depth=%u/%u "
                     "steps=%u\n",
                     frame_, pkt.slot, fc.swapchain_image_index,
-                    coff.index, coff.generation, doff.index, doff.generation,
+                    coff0.index, coff0.generation, doff0.index, doff0.generation,
+                    coff1.index, coff1.generation, doff1.index, doff1.generation,
                     pkt.sim_steps_this_frame);
         }
         t_record.End();
@@ -1704,14 +1771,14 @@ private:
     cairns::WorldId active_world_;
     cairns::WorldId secondary_world_;  // P6 multi-world coexistence test
 
-    // P1: viewports + per-viewport navigation. Single viewport this commit;
-    // P2 grows to 2. fly_ is parallel (yaw/pitch/position) to avoid
-    // reshaping Viewport every time the camera implementation grows.
-    // cam_pose_override_ pins fly_[0] to a fixed (pos, yaw, pitch) from
-    // CAIRNS_CAM_POSE so byte-gate dumps are deterministic regardless of
+    // P2: two viewports side-by-side. fly_ is parallel (yaw/pitch/position)
+    // to avoid reshaping Viewport every time the camera implementation grows.
+    // cam_pose_override_ pins both controllers to a fixed (pos, yaw, pitch)
+    // from CAIRNS_CAM_POSE so byte-gate dumps are deterministic regardless of
     // any keyboard/mouse input on this run.
-    std::array<cairns::Viewport, 1> viewports_{};
-    std::array<cairns::FlyController, 1> fly_{};
+    static constexpr int kNumViewports = 2;
+    std::array<cairns::Viewport, kNumViewports> viewports_{};
+    std::array<cairns::FlyController, kNumViewports> fly_{};
     int active_viewport_ = 0;
     bool cam_pose_override_ = false;
 

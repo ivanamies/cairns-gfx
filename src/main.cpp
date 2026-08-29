@@ -218,6 +218,11 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event) {
             !ImGui::GetIO().WantCaptureMouse) {
             SDL_SetWindowRelativeMouseMode(app->window, true);
             app->rmb_look = true;
+        } else if (event->button.button == SDL_BUTTON_LEFT &&
+                    !ImGui::GetIO().WantCaptureMouse && app->engine) {
+            // P2 click-to-focus: which half of the swap target did the
+            // click land in? Subsequent WASD/RMB-look drives that viewport.
+            app->engine->SetActiveViewportFromClickX(event->button.x);
         }
     }
     else if (event->type == SDL_EVENT_MOUSE_BUTTON_UP) {
