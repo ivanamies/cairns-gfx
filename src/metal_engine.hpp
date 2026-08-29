@@ -17,7 +17,7 @@
 
 #include <stb_image_write.h>
 
-#include "swap_chain.hpp"
+#include "rhi/swap_chain.hpp"
 #include "gpu_scene_registry.hpp"
 #include "util/misc.hpp"
 #include "util/std_allocator.hpp"
@@ -33,38 +33,6 @@
 #include "util/timer.hpp"
 #include "util/unique_ptr.hpp"
 #include "rhi/resource_manager.hpp"
-
-namespace cairns::rhi {
-
-bool InitRenderPassDescriptor(MTL::RenderPassDescriptor*& renderPassDescriptor, MTL::Texture* msaa, MTL::Texture* depth,
-                              SwapChain& swap_chain) {
-    renderPassDescriptor = MTL::RenderPassDescriptor::alloc()->init();
-
-    MTL::RenderPassColorAttachmentDescriptor* colorAttachment = renderPassDescriptor->colorAttachments()->object(0);
-    MTL::RenderPassDepthAttachmentDescriptor* depthAttachment = renderPassDescriptor->depthAttachment();
-
-    colorAttachment->setTexture(msaa);
-    colorAttachment->setResolveTexture(swap_chain.GetDrawable()->texture());
-    colorAttachment->setLoadAction(MTL::LoadActionClear);
-    colorAttachment->setClearColor(MTL::ClearColor(41.0f/255.0f, 42.0f/255.0f, 48.0f/255.0f, 1.0));
-    colorAttachment->setStoreAction(MTL::StoreActionMultisampleResolve);
-
-    depthAttachment->setTexture(depth);
-    depthAttachment->setLoadAction(MTL::LoadActionClear);
-    depthAttachment->setStoreAction(MTL::StoreActionDontCare);
-    depthAttachment->setClearDepth(1.0);
-
-    return true;
-}
-
-bool UpdateRenderPassDescriptor(MTL::RenderPassDescriptor* render_pass_desc, MTL::Texture* msaa, MTL::Texture* depth, SwapChain& swap_chain) {
-    render_pass_desc->colorAttachments()->object(0)->setTexture(msaa);
-    render_pass_desc->colorAttachments()->object(0)->setResolveTexture(swap_chain.GetDrawable()->texture());
-    render_pass_desc->depthAttachment()->setTexture(depth);
-    return true;
-}
-
-}  // namespace cairns::rhi
 
 namespace cairns {
 

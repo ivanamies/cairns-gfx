@@ -576,4 +576,92 @@ private:
 
 }  // namespace cairns::rhi
 
-#endif  // CAIRNS_VULKAN
+#elif CAIRNS_METAL
+
+#include "gfx_api.hpp"
+#include "util/size.hpp"
+
+namespace cairns::rhi {
+
+struct SwapChain {
+    SwapChain() {}
+
+    bool Init(MTL::Device* device, SDL_Window* window) {
+        metalView_ = SDL_Metal_CreateView(window);
+        if (!metalView_) {
+            return false;
+        }
+        metalLayer_ = static_cast<CA::MetalLayer*>(SDL_Metal_GetLayer(metalView_));
+        if (!metalLayer_) {
+            return false;
+        }
+        metalLayer_->setDevice(device);
+        metalLayer_->setPixelFormat(MTL::PixelFormatBGRA8Unorm);
+        size_ = cairns::Size(metalLayer_->drawableSize().width,
+                             metalLayer_->drawableSize().height);
+        return true;
+    }
+
+    void Deinit() {
+        if (metalView_) {
+            SDL_Metal_DestroyView(metalView_);
+        }
+    }
+
+    bool NextDrawable() {
+        metalDrawable_ = metalLayer_->nextDrawable();
+        return metalDrawable_ != nullptr;
+    }
+
+    CA::MetalDrawable* GetDrawable() const { return metalDrawable_; }
+
+    void SetDrawableSize(uint32_t width, uint32_t height) {
+        size_ = cairns::Size(width, height);
+        metalLayer_->setDrawableSize(CGSizeMake(width, height));
+    }
+
+    Size GetDrawableSize() const { return size_; }
+
+    MTL::PixelFormat GetPixelFormat() const { return metalLayer_->pixelFormat(); }
+
+private:
+    Size size_ = cairns::kInvalidSize;
+    CA::MetalDrawable* metalDrawable_ = nullptr;
+    SDL_MetalView metalView_ = nullptr;
+    CA::MetalLayer* metalLayer_ = nullptr;
+};
+
+bool InitRenderPassDescriptor(MTL::RenderPassDescriptor*& renderPassDescriptor,
+                              MTL::Texture* msaa, MTL::Texture* depth,
+                              SwapChain& swap_chain) {
+    renderPassDescriptor = MTL::RenderPassDescriptor::alloc()->init();
+    MTL::RenderPassColorAttachmentDescriptor* colorAttachment =
+        renderPassDescriptor->colorAttachments()->object(0);
+    MTL::RenderPassDepthAttachmentDescriptor* depthAttachment =
+        renderPassDescriptor->depthAttachment();
+    colorAttachment->setTexture(msaa);
+    colorAttachment->setResolveTexture(swap_chain.GetDrawable()->texture());
+    colorAttachment->setLoadAction(MTL::LoadActionClear);
+    colorAttachment->setClearColor(MTL::ClearColor(41.0f / 255.0f, 42.0f / 255.0f,
+                                                   48.0f / 255.0f, 1.0));
+    colorAttachment->setStoreAction(MTL::StoreActionMultisampleResolve);
+    depthAttachment->setTexture(depth);
+    depthAttachment->setLoadAction(MTL::LoadActionClear);
+    depthAttachment->setStoreAction(MTL::StoreActionDontCare);
+    depthAttachment->setClearDepth(1.0);
+    return true;
+}
+
+bool UpdateRenderPassDescriptor(MTL::RenderPassDescriptor* render_pass_desc,
+                                MTL::Texture* msaa, MTL::Texture* depth,
+                                SwapChain& swap_chain) {
+    render_pass_desc->colorAttachments()->object(0)->setTexture(msaa);
+    render_pass_desc->colorAttachments()->object(0)->setResolveTexture(
+        swap_chain.GetDrawable()->texture());
+    render_pass_desc->depthAttachment()->setTexture(depth);
+    return true;
+}
+
+}  // namespace cairns::rhi
+
+#endif  // CAIRNS_VULKAN / CAIRNS_METAL
