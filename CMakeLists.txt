@@ -82,7 +82,7 @@ if(CAIRNS_GFX_BACKEND_METAL)
   message("tagiamies using metal")
     # --- START METAL-CPP CONFIGURATION ---
     # Point to the metal-cpp directory in the root of your project
-    target_include_directories(${EXECUTABLE_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/metal-cpp")
+    target_include_directories(${EXECUTABLE_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/metal-cpp")
     
     # Find system frameworks required by Metal
     find_library(METAL_LIB Metal REQUIRED)
@@ -138,11 +138,11 @@ add_subdirectory(third_party/fastgltf EXCLUDE_FROM_ALL)
 # Configure SDL by calling its CMake file.
 # we use EXCLUDE_FROM_ALL so that its install targets and configs don't
 # pollute upwards into our configuration.
-add_subdirectory(SDL EXCLUDE_FROM_ALL)
+add_subdirectory(third_party/SDL EXCLUDE_FROM_ALL)
 
 # If you don't want SDL_ttf, then remove this section.
 set(SDLTTF_VENDORED ON) # tell SDL_ttf to build its own dependencies
-add_subdirectory(SDL_ttf EXCLUDE_FROM_ALL)	
+add_subdirectory(third_party/SDL_ttf EXCLUDE_FROM_ALL)	
 
 # SDL_mixer (used for playing audio)
 set(SDLMIXER_MIDI_NATIVE OFF)     # disable formats we don't use to make the build faster and smaller. Also some of these don't work on all platforms so you'll need to do some experimentation.
@@ -155,7 +155,7 @@ set(SDLMIXER_MP3_MPG123 OFF)
 set(SDLMIXER_VORBIS_VORBISFILE OFF)
 set(SDLMIXER_FLAC_LIBFLAC OFF)
 set(SDLMIXER_VENDORED ON)   # tell SDL_mixer to build its own dependencies
-add_subdirectory(SDL_mixer EXCLUDE_FROM_ALL)
+add_subdirectory(third_party/SDL_mixer EXCLUDE_FROM_ALL)
 
 # SDL_image (used for loading various image formats)
 set(SDLIMAGE_VENDORED ON)
@@ -163,7 +163,7 @@ set(SDLIMAGE_AVIF OFF)	# disable formats we don't use to make the build faster a
 set(SDLIMAGE_BMP OFF)
 set(SDLIMAGE_JPEG OFF)
 set(SDLIMAGE_WEBP OFF)
-add_subdirectory(SDL_image EXCLUDE_FROM_ALL)
+add_subdirectory(third_party/SDL_image EXCLUDE_FROM_ALL)
 
 # Link SDL to our executable. This also makes its include directory available to us. 
 target_link_libraries(${EXECUTABLE_NAME} PUBLIC 
