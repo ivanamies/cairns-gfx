@@ -1,6 +1,7 @@
 .DS_Store
 build/
 tmp/
+imgui.ini
 
 # media assets (incl. third-party) — kept local, not tracked
 assets/*.glb
