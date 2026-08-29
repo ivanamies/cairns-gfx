@@ -48,6 +48,7 @@ MTL::PixelFormat to_mtl_pixel_format(Format f) {
         case Format::kR32F:       return MTL::PixelFormatR32Float;
         case Format::kRg32F:      return MTL::PixelFormatRG32Float;
         case Format::kRgba32F:    return MTL::PixelFormatRGBA32Float;
+        case Format::kR32Uint:    return MTL::PixelFormatR32Uint;
         case Format::kD32F:       return MTL::PixelFormatDepth32Float;
         default:                  return MTL::PixelFormatInvalid;
     }

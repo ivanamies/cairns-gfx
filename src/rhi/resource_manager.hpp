@@ -146,6 +146,10 @@ enum class Format : uint16_t {
     kBc7Rgba,
     kAstc4x4,
     kRg32F,
+    // P4: the picking ID buffer's color attachment. R32U packed
+    // {type<<24 | id}. Distinguished from kR32F since uint sampling +
+    // integer-output fragments need integer formats end-to-end.
+    kR32Uint,
 };
 
 enum ShaderStage : uint32_t {
