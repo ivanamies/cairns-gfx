@@ -437,7 +437,7 @@ public:
         BuildMaterialSet2();           // span-independent (idempotent)
         BuildResidentTextures(new_span);
         StampPerPrefabAsset(new_span);
-        // AppendGlbPaths(new_span)    -- H3 (mole #6)
+        AppendGlbPaths(new_span, glbs);  // [PICK] log
         // AppendAnimTables(new_span)  -- H4 (Aaltonen delta, replaces
         //                                  RuntimeLoadBatch's full
         //                                  uploadAnimTablesGpu re-call)
@@ -638,6 +638,25 @@ public:
             for (rhi::Handle<rhi::Texture> th : scold->textureHandles) {
                 resident_textures_.push_back(th);
             }
+        }
+    }
+
+    // Append the new batch's GLB paths to glb_paths_ so the [PICK] log
+    // can name a clicked hero by filename. (Mole #6: this used to run
+    // only in GreaterInit; runtime-loaded heroes logged "" until now.)
+    // The order matches the prefab_ids_ append order (new_span loops
+    // forward); only paths that successfully Acquired a prefab slot
+    // appear -- the input `glbs` may be longer if parses failed, so we
+    // slice to new_span.size().
+    void AppendGlbPaths(std::span<const cairns::PrefabId> new_span,
+                         std::span<const std::filesystem::path> glbs) {
+        // Skipped/failed parses don't append a prefab_id, so the input
+        // glbs and the resulting new_span can disagree in length. Walk
+        // glbs in order, appending only the ones we know succeeded by
+        // iterating new_span in lockstep.
+        glb_paths_.reserve(glb_paths_.size() + new_span.size());
+        for (size_t i = 0; i < new_span.size() && i < glbs.size(); ++i) {
+            glb_paths_.push_back(glbs[i]);
         }
     }
 
@@ -1577,10 +1596,13 @@ public:
             }
         }
         { // init debug assets
-            // #222 Phase #267: stash glb paths on the engine so the [PICK]
-            // log can name the clicked hero in one printf.
-            std::vector<std::filesystem::path>& glb_paths = glb_paths_;
-            glb_paths.clear();
+            // #228 H3: glb_paths_ now appended by LoadPrefabBatch via
+            // AppendGlbPaths (the manifest line). GreaterInit just
+            // builds a local list of paths from CAIRNS_GLB overrides
+            // (if any) and hands them to LoadPrefabBatch; the
+            // [PICK] log's name-by-filename works for both boot-
+            // override prefabs AND runtime cairns.prefab.load.
+            std::vector<std::filesystem::path> glb_paths;
             if (!engine_cfg_.glb_overrides.empty()) {
                 for (const std::string& tok : engine_cfg_.glb_overrides) {
                     if (tok.empty()) {
@@ -1598,12 +1620,10 @@ public:
                     }
                 }
             }
-            // #224 L9: NO IMPLICIT BOOT LOAD. The default (empty
+            // #224 L9: NO IMPLICIT BOOT LOAD. Default (empty
             // glb_overrides) leaves the prefab pool empty; the agent
-            // calls cairns.prefab.loadBatch (or sdl-min's CAIRNS_GLB
-            // env, which still pre-populates glb_paths above) when it
-            // actually needs a Prefab. Boot is sub-second; nothing
-            // parses or uploads until asked.
+            // calls cairns.prefab.load when it needs a Prefab. Boot is
+            // sub-second.
             if (!glb_paths.empty()) {
                 LoadPrefabBatch(std::span<const std::filesystem::path>(
                     glb_paths.data(), glb_paths.size()));
@@ -1653,16 +1673,11 @@ public:
             // #224 L1: CleanupTmps + per-mesh CPU clear moved into
             // LoadPrefabBatch so subsequent batches get the same hygiene.
         }
-        if (!prefab_ids_.empty()) {
-            cairns::Prefab::Hot* s0_hot =
-                prefabs_.GetHot(prefab_ids_[0]);
-            if (s0_hot && !s0_hot->meshes.empty()) {
-                // #220 Step 2: lookup via pool. prefab_ids_[0]'s meshes[0]
-                // is a MeshId; the actual posHandle is in the pool's Hot.
-                mesh_master_handle_ =
-                    meshes_.GetHot(s0_hot->meshes[0])->posHandle;
-            }
-        }
+        // #228 H3: mesh_master_handle_ deleted (mole #5). The field's
+        // only consumer was the unread `MeshDrawList::resident_buffers`
+        // field, itself dead code. Field + reader gone; this gate
+        // (which was the last if(!prefab_ids_.empty()) block at engine
+        // init) vanishes.
 
         // EnTT scene-layer path. Acquire active_scene_ + secondary_scene_
         // ALWAYS (regardless of prefab count), because InstantiatePrefab
@@ -2786,8 +2801,10 @@ public:
             mls[v].dyn_globals = dyn_globals_;
             mls[v].globals_offset = s.globals_offset[v];
             mls[v].resident_textures = pkt.resident_textures;
-            mls[v].resident_buffers =
-                std::span<const rhi::Handle<rhi::Buffer>>(&mesh_master_handle_, 1);
+            // #228 H3: resident_buffers left empty (was a 1-element span
+            // over mesh_master_handle_ -- field deleted, span never read
+            // by the recorder).
+            mls[v].resident_buffers = {};
         }
 
         rhi::PointDraw pd{};
@@ -4451,7 +4468,9 @@ private:
     static constexpr size_t kArenaBytesPerSlot = 16u * 1024u * 1024u;
 
     rhi::Rhi rhi_;
-    rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
+    // #228 H3: mesh_master_handle_ deleted. Was set in GreaterInit to
+    // prefab_ids_[0]'s first mesh's posHandle, copied into
+    // MeshDrawList::resident_buffers, never read by the recorder.
     // Per-frame render graph. Reused via Reset() across frames (vector storage
     // for passes/textures is preserved). Constructed lazily on first RecordFrame
     // because Resources& / Allocator& must already be initialized.
