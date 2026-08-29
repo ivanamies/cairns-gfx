@@ -91,7 +91,7 @@ struct SwapChain {
         SwapResolveTarget t;
         t.width = swapChainExtent.width;
         t.height = swapChainExtent.height;
-        t.swap_chain = this;
+        t.plat.swap_chain = this;
         return t;
     }
 
@@ -718,8 +718,8 @@ struct SwapChain {
         SwapResolveTarget t;
         t.width = size_.width;
         t.height = size_.height;
-        t.drawable = metalDrawable_;
-        t.texture = metalDrawable_ ? metalDrawable_->texture() : nullptr;
+        t.plat.drawable = metalDrawable_;
+        t.plat.texture = metalDrawable_ ? metalDrawable_->texture() : nullptr;
         return t;
     }
 

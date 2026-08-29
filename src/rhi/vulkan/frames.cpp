@@ -429,10 +429,10 @@ void Frames::SetDumpPath(const std::filesystem::path& path) {
 
 FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
                             const SwapResolveTarget& target) {
-    // vk path is window-bound today; target.swap_chain must be set. The
+    // vk path is window-bound today; target.plat.swap_chain must be set. The
     // render-to-texture vk path (future) will land alongside the metal
     // shape and drop this assert.
-    SwapChain& sc = *target.swap_chain;
+    SwapChain& sc = *target.plat.swap_chain;
     const uint32_t cf = plat.recorder_frame_;
     VkDevice dev = plat.device_;
 
@@ -523,7 +523,7 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
 }
 
 void Frames::End(const SwapResolveTarget& target, FrameContext& fc) {
-    SwapChain& sc = *target.swap_chain;
+    SwapChain& sc = *target.plat.swap_chain;
     CommandRecorder& ri = fc.cmd;
     const uint32_t cf = fc.frame_index;
 

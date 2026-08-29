@@ -251,7 +251,7 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
 
 void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& target,
                                       const RenderPassDesc& desc) {
-    SwapChain& sc = *target.swap_chain;
+    SwapChain& sc = *target.plat.swap_chain;
     if (plat.pending_pass_idx_ != UINT32_MAX && plat.pass_cb_ == VK_NULL_HANDLE) {
         plat.pass_cb_ = plat.gfx_;
         vkCmdWriteTimestamp(plat.pass_cb_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,

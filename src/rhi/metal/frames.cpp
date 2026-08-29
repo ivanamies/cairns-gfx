@@ -130,7 +130,7 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
                             DISPATCH_TIME_FOREVER);
     resources.AdvanceFrame(alloc);  // bump ring reset
 
-    MTL::Texture* swap_tex = target.texture;
+    MTL::Texture* swap_tex = target.plat.texture;
     Texture::Hot* msaa_hot = resources.GetHot(plat.msaa_handle_);
     if (swap_tex &&
         (!msaa_hot || msaa_hot->api_view->width() != swap_tex->width() ||
@@ -173,8 +173,8 @@ void Frames::End(const SwapResolveTarget& target, FrameContext& fc) {
     }
 
     MTL::CommandBuffer* term = plat.queue_->commandBuffer();
-    MTL::Texture* swap_tex = target.texture;
-    CA::MetalDrawable* drawable = target.drawable;
+    MTL::Texture* swap_tex = target.plat.texture;
+    CA::MetalDrawable* drawable = target.plat.drawable;
 
     if (!dump_path_.empty() && swap_tex) {
         const NS::UInteger w = swap_tex->width();

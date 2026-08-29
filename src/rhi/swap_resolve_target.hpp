@@ -14,30 +14,17 @@
 #include <cstdint>
 
 #if CAIRNS_METAL
-#include <Metal/Metal.hpp>
-#include <QuartzCore/QuartzCore.hpp>
+#include "rhi/metal/swap_resolve_target_plat.hpp"
 #elif CAIRNS_VULKAN
-#include <vulkan/vulkan.h>
+#include "rhi/vulkan/swap_resolve_target_plat.hpp"
 #endif
 
 namespace cairns::rhi {
 
-struct SwapChain;
-
 struct SwapResolveTarget {
     uint32_t width = 0;
     uint32_t height = 0;
-#if CAIRNS_METAL
-    // Resolve target for the swap pass + the drawable to present, if any.
-    // drawable == nullptr means render-to-texture (no present, sync at End).
-    MTL::Texture* texture = nullptr;
-    CA::MetalDrawable* drawable = nullptr;
-#elif CAIRNS_VULKAN
-    // Today the vk path is window-bound: the resolve target is the
-    // SwapChain's framebuffer at swapchain_image_index. swap_chain == nullptr
-    // is reserved for the upcoming render-to-texture vk path; Frames asserts.
-    SwapChain* swap_chain = nullptr;
-#endif
+    SwapResolveTargetPlat plat;
 };
 
 #if CAIRNS_METAL
@@ -47,8 +34,7 @@ inline SwapResolveTarget MakeSwapResolveTargetFromTexture(MTL::Texture* tex,
     SwapResolveTarget t;
     t.width = w;
     t.height = h;
-    t.texture = tex;
-    t.drawable = nullptr;
+    t.plat = MakeSwapResolveTargetPlatFromTexture(tex);
     return t;
 }
 #endif
