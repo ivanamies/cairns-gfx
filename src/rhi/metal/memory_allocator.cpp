@@ -84,11 +84,71 @@ bool MemoryAllocator::Init(MTL::Device* device) {
     }
     device_ = device;
 
-    rings_[mem_index(Memory::kUpload)].block_bytes = 64u * 1024u * 1024u;
-    rings_[mem_index(Memory::kDynamic)].block_bytes = 16u * 1024u * 1024u;
-    rings_[mem_index(Memory::kReadback)].block_bytes = 8u * 1024u * 1024u;
+    // Per-slot byte budget for each Memory type. Heap = sum * kFramesInFlight.
+    bump_.slot_size[mem_index(Memory::kUpload)]   = 64u * 1024u * 1024u;
+    bump_.slot_size[mem_index(Memory::kDynamic)]  = 16u * 1024u * 1024u;
+    bump_.slot_size[mem_index(Memory::kReadback)] =  8u * 1024u * 1024u;
+    bump_.slot_size[mem_index(Memory::kDefault)]  = 0;
+    bump_.slot_size[mem_index(Memory::kTransient)] = 0;
+
+    uint32_t running = 0;
+    for (size_t m = 0; m < kMemoryCount; ++m) {
+        bump_.region_base[m] = running;
+        running += bump_.slot_size[m] * kFramesInFlight;
+    }
+    // running now = total bump heap bytes.
+
+    if (!CreateBumpHeap()) {
+        return false;
+    }
 
     initialized_ = true;
+    return true;
+}
+
+bool MemoryAllocator::CreateBumpHeap() {
+    // Total span = sum of (slot_size[m] * kFramesInFlight). All slots/types
+    // share ONE MTL::Heap + ONE MTL::Buffer; BumpAllocate is offset arithmetic.
+    uint32_t total = 0;
+    for (size_t m = 0; m < kMemoryCount; ++m) {
+        total += bump_.slot_size[m] * kFramesInFlight;
+    }
+    assert(total > 0 && "bump heap budget is zero");
+
+    MTL::HeapDescriptor* hd = MTL::HeapDescriptor::alloc()->init();
+    hd->setSize(total);
+    hd->setType(MTL::HeapTypePlacement);
+    // One storage mode covers all bump uses (Upload writes, Dynamic UBOs,
+    // Readback). Skipping WriteCombined for Upload to keep Readback fast.
+    hd->setResourceOptions(MTL::ResourceStorageModeShared |
+                           MTL::ResourceHazardTrackingModeUntracked);
+
+    MTL::Heap* heap = device_->newHeap(hd);
+    hd->release();
+    if (!heap) {
+        return false;
+    }
+
+    MTL::Buffer* master = heap->newBuffer(
+        total,
+        MTL::ResourceStorageModeShared | MTL::ResourceHazardTrackingModeUntracked,
+        0);
+    if (!master) {
+        heap->release();
+        return false;
+    }
+
+    HeapBlock blk;
+    blk.heap = heap;
+    blk.master_buffer = master;
+    blk.mapped_ptr = master->contents();
+    blk.gpu_address = master->gpuAddress();
+    blk.size_bytes = total;
+    blk.mem_type = Memory::kDynamic;
+    blk.is_image_pool = false;
+
+    assert(blocks_.empty() && "bump heap must be blocks_[0]");
+    blocks_.push_back(std::move(blk));
     return true;
 }
 
@@ -266,59 +326,44 @@ void MemoryAllocator::FreeImage(uint32_t heap_index,
 
 void* MemoryAllocator::BumpAllocate(uint32_t bytes, uint32_t align, Memory mem,
                                    uint32_t* out_offset) {
-    BumpRing& r = rings_[mem_index(mem)];
-    assert(r.block_bytes != 0 && "bump ring not initialized");
-    if (r.block_bytes == 0) {
+    const size_t mi = mem_index(mem);
+    const uint32_t slot_size = bump_.slot_size[mi];
+    assert(slot_size != 0 && "bump: memory type not budgeted");
+    if (slot_size == 0) {
         return nullptr;
     }
 
-    const uint32_t slot = r.current_slot;
-    const bool needs_block =
-        blocks_.empty() || r.block_indices[slot] >= blocks_.size() ||
-        blocks_[r.block_indices[slot]].master_buffer == nullptr ||
-        blocks_[r.block_indices[slot]].size_bytes != r.block_bytes ||
-        blocks_[r.block_indices[slot]].mem_type != mem;
-    if (needs_block) {
-        uint32_t new_hi = kInvalidBlock;
-        bool block_ok = CreateBufferBlock(r.block_bytes, mem, &new_hi);
-        assert(block_ok && "bump CreateBufferBlock failed");
-        if (!block_ok) {
-            return nullptr;
-        }
-        r.block_indices[slot] = new_hi;
-    }
-
-    const uint32_t off = align_up(r.cursors[slot], align);
-    assert(off + bytes <= r.block_bytes && "bump ring overflow");
-    if (off + bytes > r.block_bytes) {
+    const uint32_t slot = bump_.current_slot;
+    const uint32_t cursor_local = align_up(bump_.cursors[mi][slot], align);
+    assert(cursor_local + bytes <= slot_size && "bump slot overflow");
+    if (cursor_local + bytes > slot_size) {
         return nullptr;
     }
-    r.cursors[slot] = off + bytes;
+    bump_.cursors[mi][slot] = cursor_local + bytes;
+
+    const uint32_t offset_in_buffer =
+        bump_.region_base[mi] + slot * slot_size + cursor_local;
     if (out_offset) {
-        *out_offset = off;
+        *out_offset = offset_in_buffer;
     }
-    void* p = static_cast<uint8_t*>(blocks_[r.block_indices[slot]].mapped_ptr) + off;
-    assert(p && "bump allocate returned null");
-    return p;
+    return static_cast<uint8_t*>(blocks_[kBumpHeapIndex].mapped_ptr) +
+           offset_in_buffer;
 }
 
-uint32_t MemoryAllocator::BumpMasterHeapIndex(Memory mem) const {
-    const BumpRing& r = rings_[mem_index(mem)];
-    return r.block_indices[r.current_slot];
+uint32_t MemoryAllocator::BumpMasterHeapIndex(Memory /*mem*/) const {
+    return kBumpHeapIndex;
 }
 
 uint32_t MemoryAllocator::BumpRingBytes(Memory mem) const {
-    return rings_[mem_index(mem)].block_bytes;
+    return bump_.slot_size[mem_index(mem)];
 }
 
 uint32_t MemoryAllocator::BumpSaveCursor(Memory mem) const {
-    const BumpRing& r = rings_[mem_index(mem)];
-    return r.cursors[r.current_slot];
+    return bump_.cursors[mem_index(mem)][bump_.current_slot];
 }
 
 void MemoryAllocator::BumpRestoreCursor(Memory mem, uint32_t cursor) {
-    BumpRing& r = rings_[mem_index(mem)];
-    r.cursors[r.current_slot] = cursor;
+    bump_.cursors[mem_index(mem)][bump_.current_slot] = cursor;
 }
 
 MTL::Buffer* MemoryAllocator::HeapMasterBuffer(uint32_t heap_index) const {
@@ -340,13 +385,9 @@ uint64_t MemoryAllocator::HeapGpuAddress(uint32_t heap_index) const {
 }
 
 void MemoryAllocator::BeginFrame(uint32_t frame_index) {
+    bump_.current_slot = frame_index % kFramesInFlight;
     for (size_t m = 0; m < kMemoryCount; ++m) {
-        BumpRing& r = rings_[m];
-        if (r.block_bytes == 0) {
-            continue;
-        }
-        r.current_slot = frame_index % kFramesInFlight;
-        r.cursors[r.current_slot] = 0;
+        bump_.cursors[m][bump_.current_slot] = 0;
     }
 }
 
