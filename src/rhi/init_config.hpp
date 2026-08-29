@@ -19,6 +19,8 @@
 #include "rhi/metal/init_config_plat.hpp"
 #elif CAIRNS_VULKAN
 #include "rhi/vulkan/init_config_plat.hpp"
+#elif CAIRNS_WEBGPU
+#include "rhi/webgpu/init_config_plat.hpp"
 #endif
 
 namespace cairns::rhi {

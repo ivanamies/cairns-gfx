@@ -21,6 +21,8 @@
 #include "rhi/metal/command_recorder_plat.hpp"
 #elif CAIRNS_VULKAN
 #include "rhi/vulkan/command_recorder_plat.hpp"
+#elif CAIRNS_WEBGPU
+#include "rhi/webgpu/command_recorder_plat.hpp"
 #endif
 
 struct ImDrawData;

@@ -14,6 +14,8 @@
 #include "rhi/metal/offscreen_targets_plat.hpp"
 #elif CAIRNS_VULKAN
 #include "rhi/vulkan/offscreen_targets_plat.hpp"
+#elif CAIRNS_WEBGPU
+#include "rhi/webgpu/offscreen_targets_plat.hpp"
 #endif
 
 namespace cairns::rhi {

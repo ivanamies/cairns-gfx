@@ -22,6 +22,8 @@
 #include "rhi/metal/resources_plat.hpp"
 #elif CAIRNS_VULKAN
 #include "rhi/vulkan/resources_plat.hpp"
+#elif CAIRNS_WEBGPU
+#include "rhi/webgpu/resources_plat.hpp"
 #endif
 
 namespace cairns::rhi {

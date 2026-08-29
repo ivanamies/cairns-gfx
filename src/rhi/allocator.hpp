@@ -16,6 +16,8 @@
 #include "rhi/metal/allocator_plat.hpp"
 #elif CAIRNS_VULKAN
 #include "rhi/vulkan/allocator_plat.hpp"
+#elif CAIRNS_WEBGPU
+#include "rhi/webgpu/allocator_plat.hpp"
 #endif
 
 namespace cairns::rhi {

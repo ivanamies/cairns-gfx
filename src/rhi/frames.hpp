@@ -20,6 +20,8 @@
 #include "rhi/metal/frames_plat.hpp"
 #elif CAIRNS_VULKAN
 #include "rhi/vulkan/frames_plat.hpp"
+#elif CAIRNS_WEBGPU
+#include "rhi/webgpu/frames_plat.hpp"
 #endif
 
 namespace cairns::rhi {

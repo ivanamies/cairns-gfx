@@ -21,6 +21,8 @@
 #include "rhi/metal/swap_chain_plat.hpp"
 #elif CAIRNS_VULKAN
 #include "rhi/vulkan/swap_chain_plat.hpp"
+#elif CAIRNS_WEBGPU
+#include "rhi/webgpu/swap_chain_plat.hpp"
 #endif
 
 namespace cairns::rhi {

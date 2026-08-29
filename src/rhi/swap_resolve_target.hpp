@@ -17,6 +17,8 @@
 #include "rhi/metal/swap_resolve_target_plat.hpp"
 #elif CAIRNS_VULKAN
 #include "rhi/vulkan/swap_resolve_target_plat.hpp"
+#elif CAIRNS_WEBGPU
+#include "rhi/webgpu/swap_resolve_target_plat.hpp"
 #endif
 
 namespace cairns::rhi {

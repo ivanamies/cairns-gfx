@@ -22,6 +22,8 @@
 #include "rhi/metal/gpu_profiler_plat.hpp"
 #elif CAIRNS_VULKAN
 #include "rhi/vulkan/gpu_profiler_plat.hpp"
+#elif CAIRNS_WEBGPU
+#include "rhi/webgpu/gpu_profiler_plat.hpp"
 #endif
 
 namespace cairns::rhi {

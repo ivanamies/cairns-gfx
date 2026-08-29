@@ -35,6 +35,8 @@
 #include "rhi/metal/resource_manager_plat.hpp"
 #elif CAIRNS_VULKAN
 #include "rhi/vulkan/resource_manager_plat.hpp"
+#elif CAIRNS_WEBGPU
+#include "rhi/webgpu/resource_manager_plat.hpp"
 #endif
 
 struct SDL_Window;

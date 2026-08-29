@@ -328,6 +328,14 @@ if(CAIRNS_GFX_BACKEND_VULKAN)
     endif()
 endif()
 
+# WebGPU (wgpu-native). Headless renders offscreen; a surface is created only in
+# a windowed/web build. cairns_core links the vendored static lib + its macOS
+# framework deps via the wgpu_native INTERFACE target (which also adds the
+# webgpu.h include dir).
+if(CAIRNS_GFX_BACKEND_WEBGPU)
+    target_link_libraries(cairns_core PUBLIC wgpu_native)
+endif()
+
 # Third-party link surface. SDL is PUBLIC for now (P0a) -- swap_chain.hpp and
 # vulkan/device.cpp still call SDL_*. P0b removes these transitively.
 target_link_libraries(cairns_core PUBLIC

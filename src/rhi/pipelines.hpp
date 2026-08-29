@@ -14,6 +14,8 @@
 #include "rhi/metal/pipelines_plat.hpp"
 #elif CAIRNS_VULKAN
 #include "rhi/vulkan/pipelines_plat.hpp"
+#elif CAIRNS_WEBGPU
+#include "rhi/webgpu/pipelines_plat.hpp"
 #endif
 
 namespace cairns::rhi {
