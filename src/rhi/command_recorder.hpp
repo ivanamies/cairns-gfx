@@ -113,10 +113,9 @@ struct SkinDispatchBatch {
     uint32_t params_byte_offset = 0;       // dynamic offset for Group B binding 0
     uint32_t palettes_byte_offset = 0;     // dynamic offset for Group B binding 1
     uint32_t instance_meta_byte_offset = 0; // dynamic offset for Group B binding 2
-    // #221 Phase 5b: Metal-only: when non-null, binding 1 (palettes) points
-    // at this persistent buffer instead of the kDynamic ring. Vulkan picks
-    // this up via Frames::WriteSkinGroupBDescriptors(palette_buf) at init.
-    Handle<Buffer> palette_buffer;
+    // #222 Phase D.3: palette_buffer field retired (MISTAKES.md counter:1).
+    // It was frame-wide constant masquerading as per-batch state. Recorder
+    // now takes palette_buf as a parameter to DispatchSkinBatches.
     uint32_t workgroups = 0;                // workgroups along X axis (per instance)
     uint32_t instance_count = 1;            // dispatched along Y axis
 };
@@ -132,9 +131,13 @@ public:
     // sync via the existing compute->graphics semaphore @ VERTEX_INPUT).
     // batches.size() == 0 is a no-op; the engine guards on this AND on
     // skin_kernel_.IsNull() to keep the static path bit-for-bit.
+    // #222 Phase D.3: palette_buf is the frame-wide palette destination
+    // (palette_out_buf_). Was per-batch on SkinDispatchBatch; promoted to
+    // a parameter since it doesn't vary across batches.
     void DispatchSkinBatches(Resources& res, Allocator& alloc,
                               Handle<Kernel> kernel,
                               Handle<Buffer> output_pool_buffer,
+                              Handle<Buffer> palette_buf,
                               std::span<const SkinDispatchBatch> batches);
     // #221 Phase 5b: dispatch anim_eval (one workgroup per actor; 64 threads
     // per workgroup). Persistent scene-table SSBOs + actor_records dynUBO are

@@ -2260,13 +2260,14 @@ public:
                         db.params_byte_offset = params_off;
                         db.palettes_byte_offset = pal_off;
                         db.instance_meta_byte_offset = meta_off;
-                        db.palette_buffer = palette_out_buf_;
                         db.workgroups = sbg.workgroups;
                         db.instance_count = sbg.instance_count;
                     }
+                    // #222 Phase D.3: palette_out_buf_ threaded as param;
+                    // SkinDispatchBatch::palette_buffer retired.
                     cmd.DispatchSkinBatches(
                         rhi_.resources, rhi_.alloc, skin_kernel_,
-                        skin_output_pool_buffer_,
+                        skin_output_pool_buffer_, palette_out_buf_,
                         std::span<const rhi::SkinDispatchBatch>(
                             dbatches, n_batches));
                 });

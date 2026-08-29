@@ -54,7 +54,7 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
 // immediately and is a no-op.
 void CommandRecorder::DispatchSkinBatches(
     Resources& res, Allocator& alloc, Handle<Kernel> kernel,
-    Handle<Buffer> output_pool_buffer,
+    Handle<Buffer> output_pool_buffer, Handle<Buffer> palette_buf,
     std::span<const SkinDispatchBatch> batches) {
     if (batches.empty() || kernel.IsNull()) {
         return;
@@ -73,18 +73,22 @@ void CommandRecorder::DispatchSkinBatches(
     uint32_t pool_master_off = 0;
     MTL::Buffer* pool_buf =
         res.plat.GetMtlBuffer(alloc, output_pool_buffer, &pool_master_off);
+    // #222 Phase D.3: palette buffer is frame-wide. Resolve once outside
+    // the loop instead of per-batch (per MISTAKES.md counter:1 fix).
+    MTL::Buffer* pal_buf = nullptr;
+    uint32_t pal_master_off = 0;
+    if (!palette_buf.IsNull()) {
+        pal_buf = res.plat.GetMtlBuffer(alloc, palette_buf, &pal_master_off);
+    }
     for (const SkinDispatchBatch& b : batches) {
         if (b.workgroups == 0 || b.pos_buffer.IsNull() ||
             b.skin_attr_buffer.IsNull()) {
             continue;
         }
         cenc->setBuffer(dyn_master, b.params_byte_offset, 0);
-        if (b.palette_buffer.IsNull()) {
+        if (pal_buf == nullptr) {
             cenc->setBuffer(dyn_master, b.palettes_byte_offset, 1);
         } else {
-            uint32_t pal_master_off = 0;
-            MTL::Buffer* pal_buf =
-                res.plat.GetMtlBuffer(alloc, b.palette_buffer, &pal_master_off);
             cenc->setBuffer(pal_buf, pal_master_off + b.palettes_byte_offset, 1);
         }
         cenc->setBuffer(dyn_master, b.instance_meta_byte_offset, 2);

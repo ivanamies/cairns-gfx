@@ -235,8 +235,11 @@ static void transition(VkCommandBuffer cb, Resources& res, Handle<Texture> h,
 
 void CommandRecorder::DispatchSkinBatches(
     Resources& res, Allocator& alloc, Handle<Kernel> kernel,
-    Handle<Buffer> output_pool_buffer,
+    Handle<Buffer> output_pool_buffer, Handle<Buffer> /*palette_buf*/,
     std::span<const SkinDispatchBatch> batches) {
+    // Vulkan reads palette_buf via Frames::WriteSkinGroupBDescriptors once
+    // at init, so this parameter is informational here. D.3 follow-up will
+    // wire it through if/when DynamicBuffers replaces the Group B write.
     if (batches.empty() || kernel.IsNull() ||
         output_pool_buffer.IsNull() ||
         plat.skin_group_b_set_ == VK_NULL_HANDLE) {
