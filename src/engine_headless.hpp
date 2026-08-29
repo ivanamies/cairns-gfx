@@ -109,5 +109,18 @@ LoaderCounters Counters(Engine* engine);
 // #224 L2: validation report from the last LoadPrefabBatch call.
 ValidationReport LastValidationReport(Engine* engine);
 
+// #224 L5: runtime batch load (drain + load + re-upload anim tables).
+// Returns {first_prefab_idx, count}.
+struct LoadBatchExport { uint32_t first_prefab_idx = 0; uint32_t count = 0; };
+LoadBatchExport RuntimeLoadGlbs(Engine* engine,
+                                  uint32_t cursor, uint32_t count);
+
+// #224 L5: instantiate `prefab_count` prefabs starting at `first_prefab_idx`
+// into active scene + slide all existing actors to the new fitted grid.
+// Returns the new entity ids.
+std::vector<uint32_t> InstantiateGridFitted(Engine* engine,
+                                              uint32_t first_prefab_idx,
+                                              uint32_t prefab_count);
+
 }  // namespace headless
 }  // namespace cairns

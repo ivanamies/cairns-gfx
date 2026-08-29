@@ -221,4 +221,69 @@ ValidationReport LastValidationReport(Engine* engine) {
     return engine ? engine->LastValidationReport() : ValidationReport{};
 }
 
+LoadBatchExport RuntimeLoadGlbs(Engine* engine,
+                                  uint32_t cursor, uint32_t count) {
+    LoadBatchExport out{};
+    if (!engine) {
+        return out;
+    }
+    std::vector<std::filesystem::path> paths =
+        engine->ResolveDebugGlbPaths(cursor, count);
+    Engine::LoadPrefabBatchResult r =
+        engine->RuntimeLoadBatch(std::span<const std::filesystem::path>(
+            paths.data(), paths.size()));
+    out.first_prefab_idx = r.first_prefab_idx;
+    out.count = r.count;
+    return out;
+}
+
+std::vector<uint32_t> InstantiateGridFitted(Engine* engine,
+                                              uint32_t first_prefab_idx,
+                                              uint32_t prefab_count) {
+    std::vector<uint32_t> new_entities;
+    if (!engine || prefab_count == 0) {
+        return new_entities;
+    }
+    // existing entities + new prefabs together = total grid size.
+    std::vector<uint32_t> existing = engine->ListActiveSceneEntities();
+    const uint32_t n_total =
+        static_cast<uint32_t>(existing.size()) + prefab_count;
+
+    // per-actor extents: existing actors first (we don't have their
+    // source prefab handy; treat as fallback 100), then new prefabs.
+    std::vector<float> extents;
+    extents.reserve(n_total);
+    for (size_t i = 0; i < existing.size(); ++i) {
+        extents.push_back(0.0f);  // existing: fall back to small default
+    }
+    std::vector<float> new_extents =
+        engine->PrefabExtentSnapshot(first_prefab_idx, prefab_count);
+    for (float e : new_extents) {
+        extents.push_back(e);
+    }
+
+    std::vector<glm::mat4> fitted = engine->FitGridToViewport(
+        n_total,
+        std::span<const float>(extents.data(), extents.size()));
+
+    // relayout existing actors (the no-flash slide).
+    for (size_t i = 0; i < existing.size() && i < fitted.size(); ++i) {
+        engine->SetEntityTransform(existing[i], fitted[i]);
+    }
+    // instantiate the new prefabs at their fitted cells.
+    new_entities.reserve(prefab_count);
+    for (uint32_t i = 0; i < prefab_count; ++i) {
+        const size_t fit_idx = existing.size() + i;
+        if (fit_idx >= fitted.size()) {
+            break;
+        }
+        const float time_phase =
+            0.137f * static_cast<float>(existing.size() + i);
+        const uint32_t eid = engine->InstantiatePrefab(
+            first_prefab_idx + i, fitted[fit_idx], time_phase);
+        new_entities.push_back(eid);
+    }
+    return new_entities;
+}
+
 }  // namespace cairns::headless

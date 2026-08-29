@@ -81,15 +81,23 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.scene.instantiateGrid",
         json::object(),
-        "Instantiate N Prefabs in a grid. Stub today; engine doesn't "
-        "yet honor placement. Args: {count}. Returns: {first, last, "
-        "count}.",
-        [](const json& args) -> json {
-            const uint64_t n = args.value("count", uint64_t{0});
-            const uint64_t start = g_entity_counter.fetch_add(n);
-            return {{"first", start},
-                    {"last", start + (n > 0 ? n - 1 : 0)},
-                    {"count", n}};
+        "#224 L5: instantiate `prefab_count` resident prefabs starting "
+        "at `first_prefab_idx` into the active scene; slide all existing "
+        "actors to the new fitted grid (no flash). Args: "
+        "{first_prefab_idx, prefab_count}. Returns: {entities:[ids], count}.",
+        [&engine](const json& args) -> json {
+            const uint32_t first =
+                args.value("first_prefab_idx", uint32_t{0});
+            const uint32_t cnt =
+                args.value("prefab_count", uint32_t{0});
+            std::vector<uint32_t> ents =
+                cairns::headless::InstantiateGridFitted(&engine, first, cnt);
+            json arr = json::array();
+            for (uint32_t e : ents) {
+                arr.push_back(e);
+            }
+            return {{"entities", std::move(arr)},
+                    {"count",    static_cast<uint32_t>(ents.size())}};
         });
 
     registry.Register(
@@ -129,12 +137,39 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         "cairns.prefab.load",
         json::object(),
         "Load a GLB/texture/audio file as a Prefab. Today: stub returns "
-        "a synthetic asset id (no GPU upload); real load lands with the "
-        "AssetRegistry hookup. Args: {path}.",
+        "a synthetic asset id (no GPU upload); real per-path load lands "
+        "with the AssetRegistry hookup. Use cairns.prefab.loadBatch for "
+        "the real batched path. Args: {path}.",
         [](const json& args) -> json {
             const std::string path = args.value("path", std::string{});
             return {{"prefab", g_asset_counter.fetch_add(1)},
                     {"path", path}};
+        });
+
+    registry.Register(
+        "cairns.prefab.loadBatch",
+        json::object(),
+        "#224 L5: parse + upload `count` GLBs from the kDebugGlbs "
+        "window starting at `cursor`. Runs Device::WaitIdle first; "
+        "re-uploads anim tables after. Args: {cursor, count, source}. "
+        "Returns: {first_prefab_idx, count, prefabs:[{id,name,extent}]}.",
+        [&engine](const json& args) -> json {
+            const uint32_t cursor = args.value("cursor", uint32_t{0});
+            const uint32_t count  = args.value("count",  uint32_t{0});
+            cairns::headless::LoadBatchExport r =
+                cairns::headless::RuntimeLoadGlbs(&engine, cursor, count);
+            json prefabs = json::array();
+            for (uint32_t i = 0; i < r.count; ++i) {
+                const uint32_t idx = r.first_prefab_idx + i;
+                prefabs.push_back({
+                    {"id",      idx},
+                    {"name",    std::string("prefab") + std::to_string(idx)},
+                    {"extent",  cairns::headless::PrefabExtentMax(
+                                    &engine, idx)}});
+            }
+            return {{"first_prefab_idx", r.first_prefab_idx},
+                    {"count",            r.count},
+                    {"prefabs",          std::move(prefabs)}};
         });
 
     registry.Register(

@@ -523,6 +523,120 @@ public:
         return r;
     }
 
+    // #224 L5: runtime entry point for cairns.prefab.loadBatch.
+    //   (1) Device::WaitIdle so no in-flight frame reads pools being mutated
+    //   (2) LoadPrefabBatch -- the actual parse + upload + Group A
+    //   (3) re-upload anim tables (flat array; rebuilds with new prefabs)
+    // Returns LoadPrefabBatchResult exactly like LoadPrefabBatch.
+    LoadPrefabBatchResult RuntimeLoadBatch(
+            std::span<const std::filesystem::path> glbs) {
+        rhi_.device.WaitIdle();
+        LoadPrefabBatchResult r = LoadPrefabBatch(glbs);
+        if (r.count > 0) {
+            // anim tables are a flat per-prefab GPU array; re-flatten +
+            // re-upload picks up the new prefabs. Cost scales with total
+            // prefabs (not batch); cheap relative to parse.
+            uploadAnimTablesGpu();
+            // Backfill any SkinId records that pre-dated the new headers.
+            skins_.ForEachLive(
+                [&](cairns::SkinnedAttachment::Hot& h,
+                    cairns::SkinnedAttachment::Cold& c) {
+                    if (cairns::Prefab::Hot* sht = prefabs_.GetHot(c.scene)) {
+                        h.gpu_prefab_header_idx = sht->gpu_prefab_header_idx;
+                    }
+                });
+        }
+        return r;
+    }
+
+    // #224 L5: convenience -- pick `count` GLB paths from the static
+    // kDebugGlbs window starting at `cursor`. Returns the resolved paths.
+    std::vector<std::filesystem::path> ResolveDebugGlbPaths(
+            uint32_t cursor, uint32_t count) {
+        std::vector<std::filesystem::path> out;
+        out.reserve(count);
+        const uint32_t start =
+            cairns::kDebugGlbsToParseStart + cursor;
+        const uint32_t end_excl = std::min<uint32_t>(
+            start + count,
+            cairns::kDebugGlbsToParseStart + cairns::kDebugGlbsToParse);
+        for (uint32_t i = start; i < end_excl; ++i) {
+            std::filesystem::path p;
+            if (cairns::GetStaticResourceFilepath(cairns::kDebugGlbs[i], p)) {
+                out.push_back(p);
+            }
+        }
+        return out;
+    }
+
+    // #224 L5: snapshot per-prefab extents for a span -- the
+    // FitGridToViewport per_actor_extents input.
+    std::vector<float> PrefabExtentSnapshot(uint32_t first_idx,
+                                             uint32_t count) {
+        std::vector<float> out;
+        out.reserve(count);
+        for (uint32_t i = 0; i < count; ++i) {
+            out.push_back(PrefabExtentMax(first_idx + i));
+        }
+        return out;
+    }
+
+    // #224 L4: fit N actors into a grid that fills the active viewport.
+    // `per_actor_extents[i]` is each actor's bind-pose max-axis extent
+    // (PrefabExtentMax(...) of the actor's source prefab). Returns one
+    // world matrix per actor: translation = grid cell at z=-4, scale =
+    // uniform cell_size / extent so heterogeneous prefabs occupy the
+    // same on-screen footprint. Pure function: deterministic for
+    // identical inputs.
+    std::vector<glm::mat4> FitGridToViewport(
+            uint32_t n_total,
+            std::span<const float> per_actor_extents) {
+        std::vector<glm::mat4> out;
+        if (n_total == 0) {
+            return out;
+        }
+        out.reserve(n_total);
+        const uint32_t cols = static_cast<uint32_t>(
+            std::max(1.0f, std::ceil(std::sqrt(
+                              static_cast<float>(n_total)))));
+        const uint32_t rows = (n_total + cols - 1u) / cols;
+        // Camera: y-axis FOV default 90deg (matches engine.hpp:~1370).
+        // Aspect = active viewport target dims; depth Z = -4 world units
+        // (matches the pre-#224 GenerateDebugGridTransforms convention).
+        const float fov_y = static_cast<float>(M_PI) * 0.5f;
+        float aspect = 16.0f / 9.0f;
+        if (final_target_h_ > 0) {
+            aspect = static_cast<float>(final_target_w_) /
+                     static_cast<float>(final_target_h_);
+        }
+        const float depth = 4.0f;
+        const float visible_h = 2.0f * std::tan(fov_y * 0.5f) * depth;
+        const float visible_w = visible_h * aspect;
+        const float cell_w = visible_w / static_cast<float>(cols);
+        const float cell_h = visible_h / static_cast<float>(rows);
+        const float cell_size = std::min(cell_w, cell_h) * 0.85f;
+        const float start_x = -cell_w * (static_cast<float>(cols - 1u) * 0.5f);
+        const float start_y = -cell_h * (static_cast<float>(rows - 1u) * 0.5f);
+        for (uint32_t i = 0; i < n_total; ++i) {
+            const uint32_t row = i / cols;
+            const uint32_t col = i % cols;
+            const float x = start_x + static_cast<float>(col) * cell_w;
+            const float y = start_y + static_cast<float>(row) * cell_h;
+            // Per-actor scale: cell_size / extent so each model fills the
+            // same on-screen cell regardless of its raw GLB size. Extent
+            // 0 (unknown / missing AABB) falls back to a small fixed scale.
+            const float extent = (i < per_actor_extents.size() &&
+                                   per_actor_extents[i] > 0.0f)
+                                     ? per_actor_extents[i] : 100.0f;
+            const float scale = cell_size / extent;
+            glm::mat4 m(1.0f);
+            m = glm::translate(m, glm::vec3(x, y, -depth));
+            m = glm::scale(m, glm::vec3(scale));
+            out.push_back(m);
+        }
+        return out;
+    }
+
     // #224 L3: instrument accessors.
     const cairns::LoadTrace& LastLoadTrace() const { return last_load_trace_; }
     const cairns::ValidationReport& LastValidationReport() const {
