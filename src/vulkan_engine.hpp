@@ -51,12 +51,18 @@
 #include "gpu_scene_registry.hpp"
 #include "rhi/resource_manager.hpp"
 #include "util/debug_asset.hpp"
+#include "util/draw.hpp"
+#include "util/draw_key.hpp"
 #include "util/gltf_loader.hpp"
 #include "util/material_gpu.hpp"
 #include "util/misc.hpp"
+#include "util/render_pass_globals.hpp"
 #include "util/scene_gpu.hpp"
 #include "util/std_allocator.hpp"
 #include "util/frame_transient_cache.hpp"
+
+#include <algorithm>
+#include <numbers>
 
 namespace cairns {
 
@@ -261,11 +267,143 @@ private:
         return true;
     }
 
+    bool BuildMeshOpaqueDraws() {
+        drawList_.clear();
+        drawListSorted_.clear();
+        draw_material_offsets_.clear();
+        draw_drawtmp_offsets_.clear();
+
+        const char* freeze_rot = std::getenv("CAIRNS_FREEZE_ROT");
+        const float angle_degs = freeze_rot
+                                     ? static_cast<float>(std::atof(freeze_rot))
+                                     : (SDL_GetTicks() / 1000.0 / 2.0 * 45);
+        const float angle_rads = angle_degs * std::numbers::pi / 180.0f;
+        const glm::mat4 rot_matrix = glm::rotate(glm::mat4(1.0f), angle_rads, glm::vec3(0, 1.0, 0));
+
+        const glm::vec3 camera_pos(0, 0, 0);
+        const glm::vec3 camera_dir(0, 0, -1);
+        const glm::vec3 world_up(0, 1, 0);
+        const glm::mat4 view_matrix = glm::lookAtRH(camera_pos, camera_pos + camera_dir, world_up);
+
+        const float aspect_ratio = static_cast<float>(swapChainExtent.width) /
+                                   static_cast<float>(swapChainExtent.height);
+        const float fov = 90.0f * (std::numbers::pi / 180.0f);
+        const float near_z = 0.1f;
+        const float far_z = 100.0f;
+
+        glm::mat4 proj_matrix = glm::perspectiveRH_ZO(fov, aspect_ratio, near_z, far_z);
+        proj_matrix[1][1] *= -1;
+
+        const glm::mat4 view_proj = proj_matrix * view_matrix;
+        cairns::rhi::RenderPassGlobals render_pass_globals{
+            .view_proj = view_proj,
+            .inv_view_proj = glm::inverse(view_proj),
+            .camera_pos = glm::vec4(camera_pos, 1.0f),
+            .camera_dir = glm::vec4(camera_dir, near_z),
+            .screen_params = glm::vec4(
+                static_cast<float>(swapChainExtent.width),
+                static_cast<float>(swapChainExtent.height),
+                1.0f / static_cast<float>(swapChainExtent.width),
+                1.0f / static_cast<float>(swapChainExtent.height))
+        };
+        void* gptr = rm_.BumpAllocate(
+            sizeof(cairns::rhi::RenderPassGlobals), ubo_align_, rhi::Memory::kDynamic);
+        memcpy(gptr, &render_pass_globals, sizeof(render_pass_globals));
+        globals_offset_ = rm_.BumpOffset(gptr);
+
+        for (size_t scene_xform_idx = 0; scene_xform_idx < debugSceneXforms_.size(); ++scene_xform_idx) {
+            const size_t scene_idx = scene_xform_idx % scenes_.size();
+            const glm::mat4& scene_xform = debugSceneXforms_[scene_xform_idx];
+            cairns::Scene& scene = scenes_[scene_idx];
+
+            std::vector<int32_t> node_stack;
+            for (size_t j = 0; j < scene.rootNodes.size(); ++j) {
+                node_stack.push_back(scene.rootNodes[j]);
+            }
+            while (!node_stack.empty()) {
+                const int32_t node_idx = node_stack.back();
+                node_stack.pop_back();
+                const auto& node = scene.nodes[node_idx];
+                if (node.meshIndex < 0) {
+                    for (int32_t c : node.children) {
+                        node_stack.push_back(c);
+                    }
+                    continue;
+                }
+
+                const auto& mesh = scene.meshes[node.meshIndex];
+                const rhi::Handle<rhi::Buffer> pos = mesh.posHandle;
+                const rhi::Handle<rhi::Buffer> index = mesh.indexHandle;
+
+                for (const auto& prim : mesh.primitives) {
+                    const uint32_t scene_mat_idx = prim.materialIndex;
+                    const uint32_t mat_id = scene.materialIds[scene_mat_idx];
+                    const rhi::Handle<rhi::Texture> tex_handle = materials_[mat_id].color;
+                    const rhi::Handle<rhi::Sampler> sampler_handle = materials_[mat_id].sampler;
+
+                    const uint32_t gpu_tex_id = tex_handle.index;
+                    const uint32_t gpu_sampler_id = sampler_id_map_[sampler_handle.index];
+                    const uint32_t gpu_attr_idx = mesh_attr_id_map_[mesh.attrHandle.index];
+
+                    const cairns::rhi::MaterialGpu material_gpu{
+                        .tex_color_id = gpu_tex_id,
+                        .sampler_id = gpu_sampler_id,
+                    };
+                    void* mptr = rm_.BumpAllocate(
+                        sizeof(cairns::rhi::MaterialGpu), ubo_align_, rhi::Memory::kDynamic);
+                    memcpy(mptr, &material_gpu, sizeof(material_gpu));
+                    const uint32_t material_offset = rm_.BumpOffset(mptr);
+
+                    const glm::mat4 model_matrix = scene_xform * rot_matrix;
+                    const cairns::rhi::DrawTmp draw_tmp{
+                        .model_matrix = node.globalTransform * model_matrix,
+                        .mesh_id = gpu_attr_idx,
+                        .tex_id = gpu_tex_id,
+                        .sampler_id = gpu_sampler_id
+                    };
+                    void* tptr = rm_.BumpAllocate(
+                        sizeof(cairns::rhi::DrawTmp), ubo_align_, rhi::Memory::kDynamic);
+                    memcpy(tptr, &draw_tmp, sizeof(draw_tmp));
+                    const uint32_t drawtmp_offset = rm_.BumpOffset(tptr);
+
+                    cairns::Draw draw{};
+                    draw.index_buffer = index;
+                    uint32_t index_base_off = 0;
+                    rm_.GetVkBuffer(index, &index_base_off);
+                    draw.index_offset = index_base_off + (prim.firstIndex * sizeof(uint32_t));
+                    draw.vertex_offset = prim.vertexOffset;
+                    draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot] = pos;
+                    draw.instance_count = 1;
+                    draw.instance_offset = 0;
+                    assert(prim.indexCount % 3 == 0);
+                    draw.triangle_count = prim.indexCount / 3;
+
+                    draw_material_offsets_.push_back(material_offset);
+                    draw_drawtmp_offsets_.push_back(drawtmp_offset);
+                    drawListSorted_.emplace_back(cairns::BuildDrawKey(draw), static_cast<uint32_t>(drawList_.size()));
+                    drawList_.push_back(draw);
+                }
+
+                for (int32_t c : node.children) {
+                    node_stack.push_back(c);
+                }
+            }
+        }
+
+        return true;
+    }
+
     bool initVulkan() {
         if (!createInstance()) return false;
         if (!setupDebugMessenger()) return false;
         if (!createSurface()) return false;
         if (!pickPhysicalDevice()) return false;
+        {
+            VkPhysicalDeviceProperties props{};
+            vkGetPhysicalDeviceProperties(physicalDevice, &props);
+            ubo_align_ = std::max(1u, static_cast<uint32_t>(
+                props.limits.minUniformBufferOffsetAlignment));
+        }
         if (!createLogicalDevice()) return false;
         if (!createSwapChain()) return false;
         if (!createImageViews()) return false;
@@ -629,17 +767,19 @@ private:
     }
 
     bool createDescriptorPool() {
-        std::array<VkDescriptorPoolSize, 2> poolSizes{};
+        std::array<VkDescriptorPoolSize, 3> poolSizes{};
         poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
         poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         poolSizes[1].descriptorCount = 2 * static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+        poolSizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        poolSizes[2].descriptorCount = 3 * static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
         poolInfo.pPoolSizes = poolSizes.data();
-        poolInfo.maxSets = 2 * static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+        poolInfo.maxSets = 3 * static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
         if ( vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
             return false;
         }
@@ -719,6 +859,18 @@ private:
                 descriptorWrites[2].pBufferInfo = &storageBufferInfoCurrentFrame;
 
                 vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+            }
+        }
+        {
+            std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, dynamicUboLayout_);
+            dynUboSets_.resize(MAX_FRAMES_IN_FLIGHT);
+            VkDescriptorSetAllocateInfo alloc_info{};
+            alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            alloc_info.descriptorPool = descriptorPool;
+            alloc_info.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+            alloc_info.pSetLayouts = layouts.data();
+            if (vkAllocateDescriptorSets(device, &alloc_info, dynUboSets_.data()) != VK_SUCCESS) {
+                return false;
             }
         }
         return true;
@@ -1308,10 +1460,44 @@ private:
             viewport.maxDepth = 1.0f;
             vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
 
-            VkRect2D scissor {};
+            VkRect2D scissor{};
             scissor.offset = { 0, 0 };
             scissor.extent = swapChainExtent;
             vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+        }
+        {
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                pipelineLayout, 0, 1, &bindlessSet_, 0, nullptr);
+
+            for (const auto& [key, draw_idx] : drawListSorted_) {
+                const cairns::Draw& draw = drawList_[draw_idx];
+                uint32_t pos_off = 0;
+                VkBuffer pos_buf = rm_.GetVkBuffer(
+                    draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
+                VkDeviceSize pos_off_dev = pos_off;
+                vkCmdBindVertexBuffers(commandBuffer, 0, 1, &pos_buf, &pos_off_dev);
+
+                uint32_t idx_ignore = 0;
+                VkBuffer idx_buf = rm_.GetVkBuffer(draw.index_buffer, &idx_ignore);
+                vkCmdBindIndexBuffer(commandBuffer, idx_buf, draw.index_offset, VK_INDEX_TYPE_UINT32);
+
+                std::array<uint32_t, 3> dyn_offsets = {
+                    globals_offset_,
+                    draw_material_offsets_[draw_idx],
+                    draw_drawtmp_offsets_[draw_idx]
+                };
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    pipelineLayout, 1, 1, &dynUboSets_[currentFrame],
+                    static_cast<uint32_t>(dyn_offsets.size()), dyn_offsets.data());
+
+                vkCmdDrawIndexed(commandBuffer,
+                    draw.triangle_count * 3,
+                    draw.instance_count,
+                    0,
+                    draw.vertex_offset,
+                    draw.instance_offset);
+            }
         }
         {
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline2);
@@ -2390,6 +2576,54 @@ private:
         {
             vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
 
+            rm_.BeginFrame();
+
+            {
+                VkBuffer bump_buf = rm_.GetVkBumpMasterBuffer(rhi::Memory::kDynamic);
+                std::array<VkWriteDescriptorSet, 3> writes{};
+                std::array<VkDescriptorBufferInfo, 3> buf_infos{};
+
+                buf_infos[0].buffer = bump_buf;
+                buf_infos[0].offset = 0;
+                buf_infos[0].range = sizeof(cairns::rhi::RenderPassGlobals);
+                writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[0].dstSet = dynUboSets_[currentFrame];
+                writes[0].dstBinding = 0;
+                writes[0].dstArrayElement = 0;
+                writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+                writes[0].descriptorCount = 1;
+                writes[0].pBufferInfo = &buf_infos[0];
+
+                buf_infos[1].buffer = bump_buf;
+                buf_infos[1].offset = 0;
+                buf_infos[1].range = sizeof(cairns::rhi::MaterialGpu);
+                writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[1].dstSet = dynUboSets_[currentFrame];
+                writes[1].dstBinding = 1;
+                writes[1].dstArrayElement = 0;
+                writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+                writes[1].descriptorCount = 1;
+                writes[1].pBufferInfo = &buf_infos[1];
+
+                buf_infos[2].buffer = bump_buf;
+                buf_infos[2].offset = 0;
+                buf_infos[2].range = sizeof(cairns::rhi::DrawTmp);
+                writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[2].dstSet = dynUboSets_[currentFrame];
+                writes[2].dstBinding = 2;
+                writes[2].dstArrayElement = 0;
+                writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+                writes[2].descriptorCount = 1;
+                writes[2].pBufferInfo = &buf_infos[2];
+
+                vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+            }
+
+            if (!BuildMeshOpaqueDraws()) {
+                return false;
+            }
+            std::sort(drawListSorted_.begin(), drawListSorted_.end());
+
             uint32_t imageIndex;
             VkResult result = vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
 
@@ -2746,6 +2980,14 @@ private:
     VkDescriptorPool bindlessPool_ = VK_NULL_HANDLE;
     VkDescriptorSet bindlessSet_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout dynamicUboLayout_ = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> dynUboSets_;
+
+    uint32_t ubo_align_ = 256;
+    uint32_t globals_offset_ = 0;
+    std::vector<cairns::Draw> drawList_;
+    std::vector<std::pair<cairns::DrawKey, uint32_t>> drawListSorted_;
+    std::vector<uint32_t> draw_material_offsets_;
+    std::vector<uint32_t> draw_drawtmp_offsets_;
 
     VkDescriptorPool descriptorPool;
     std::vector<VkDescriptorSet> descriptorSets;

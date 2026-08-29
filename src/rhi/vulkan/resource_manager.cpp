@@ -642,6 +642,13 @@ uint32_t ResourceManager::GetBufferByteSize(Handle<Buffer> h) const {
     return cold->size_bytes;
 }
 
+VkBuffer ResourceManager::GetVkBumpMasterBuffer(Memory mem) {
+    void* p = BumpAllocate(1, 1, mem);
+    (void)p;
+    uint32_t hi = impl_->memory.BumpMasterHeapIndex(mem);
+    return impl_->memory.HeapMasterBuffer(hi);
+}
+
 VkBuffer ResourceManager::GetVkBuffer(Handle<Buffer> h, uint32_t* out_offset) {
     Buffer::Hot* hot = impl_->buffers.GetHot(h);
     if (!hot) {

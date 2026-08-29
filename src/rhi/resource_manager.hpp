@@ -501,6 +501,9 @@ public:
     // Same-backend native-handle access for Engine2's hand-written draw loop.
     // The neutral surface above stays pointer-free; this is Vulkan-only.
     VkBuffer GetVkBuffer(Handle<Buffer> h, uint32_t* out_offset);
+    // Returns the current bump-ring slot's master VkBuffer for mem type.
+    // Forces ring initialization if the current slot is uninitialized.
+    VkBuffer GetVkBumpMasterBuffer(Memory mem);
     uint8_t* MappedPtr(Handle<Buffer> h);
 #endif  // CAIRNS_VULKAN
 
