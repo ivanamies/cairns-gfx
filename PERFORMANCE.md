@@ -36,7 +36,33 @@ Same `MTLSimDevice::newHeapWithDescriptor:` SIGABRT during `LoadScenesGpu` →
 `CreateBuffer` → `CreateBufferBlock` → `newHeap`. Will retry after batched
 upload (task #143).
 
-### macOS / iOS device — not yet measured at this commit.
+### M2 Max — Metal (Release, window 2400×1080)
+```
+slot 0 (frame):                          avg 17622–18153 us  (~55 fps; missing v-sync at 1.5–2 ms over budget)
+slot 1 (build_draws):                    avg  5406– 6344 us
+slot 2 (record):                         avg  3362– 3856 us
+slot 3 (set up render pass globals):     avg     0–    0 us
+slot 4 (build opaque draw list):         avg  5405– 6343 us
+draws: 11517
+```
+
+### M2 Max — Vulkan (MoltenVK, Release, window 2400×1080)
+```
+slot 0 (frame):                          avg 18541–19115 us
+slot 1 (build_draws):                    avg  5643– 5940 us
+slot 2 (record):                         avg  1091– 1169 us
+slot 3 (set up render pass globals):     avg     0–    0 us
+slot 4 (build opaque draw list):         avg  5641– 5938 us
+draws: 11517
+```
+
+Both desktop backends regressed vs 5/28 baseline (build_draws ~2x: 3.07 → 6.3 ms
+Metal, 2.16 → 5.9 ms Vulkan). Suspect: bigger window (720×1280 → 2400×1080) +
+larger heroes (scale 0.005 → 0.01) push more pixels and the CPU sort/build
+loop touches more state per draw. Worth bisecting if we want to recover the
+5/28 numbers.
+
+### iOS device — not yet measured at this commit.
 
 ---
 
