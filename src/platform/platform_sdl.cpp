@@ -23,6 +23,7 @@ uint64_t TimestampNs() {
     uint64_t freq;
     asm volatile("mrs %0, cntfrq_el0" : "=r"(freq));
     uint64_t count;
+    asm volatile("isb" : : : "memory");
     asm volatile("mrs %0, cntvct_el0" : "=r"(count));
     if (freq == 1'000'000'000ull) { return count; }
     return static_cast<uint64_t>(
