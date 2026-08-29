@@ -64,22 +64,12 @@ public:
         
     }
     
-    bool initDevice() {
-        device_ = MTL::CreateSystemDefaultDevice();
-        return device_ != nullptr;
-    }
-    
     bool initSwapChain(SDL_Window* window) {
         if ( !rm_.InitSwapChain(swapchain_, window)) {
             return false;
         }
 
         return true;
-    }
-    
-    void resetFrameTmps() {
-        dynBufs_.Reset();
-        bindGroups_.Reset();
     }
     
     bool requestResizeFrameBuffer(uint32_t width, uint32_t height) {
@@ -123,8 +113,6 @@ public:
         if (!rm_.InitDevice(window)) {
             return false;
         }
-        device_ = rm_.GetMtlDevice();
-        metalCommandQueue = rm_.GetMtlQueue();
         if ( !initSwapChain(window)) {
             return false;
         }
@@ -210,20 +198,6 @@ public:
         return true;
     }
 
-    // tagiamies
-    DynBufId getDynamicBuffers() {
-        return dynBufs_.Acquire();
-    }
-    
-    BindGroupId getBindGroup() {
-        return bindGroups_.Acquire();
-    }
-    
-    bool initCommandQueue() {
-        metalCommandQueue = device_->newCommandQueue();
-        return metalCommandQueue != nullptr;
-    }
-    
     bool BuildMeshOpaqueDraws() {
         drawList_.clear();
         drawListSorted_.clear();
@@ -490,8 +464,8 @@ public:
                 cairns::Scene& scene = scenes_[i];
                 for (size_t j = 0; j < scene.textureHandles.size(); ++j) {
                     auto h = scene.textureHandles[j];
-                    MTL::Texture* tex = rm_.GetHot(h)->api_view;
-                    if (tex) {
+                    rhi::Texture::Hot* hot = rm_.GetHot(h);
+                    if (hot && hot->api_view) {
                         texture_id_map_[h.index] =
                             rm_.BindlessAddTexture(bindless_bg_, h);
                     }
@@ -588,13 +562,8 @@ public:
     }
 
     bool deinit() {
-        // Metal Cleanup
-        // Note: metal-cpp objects are wrappers. If we used NS::SharedPtr we could just let them destruct.
-        // Since we have raw pointers from create/new, we should release them.
-        if (metalCommandQueue) metalCommandQueue->release();
-
         swapchain_.Deinit();
-
+        rm_.Deinit();
         return true;
     }
     
@@ -607,17 +576,13 @@ private:
     ////////// DO NOT MOVE ARENA BELOW THIS LINE. because c++.
     
     uint32_t frame_ = 0;
-    
-    MTL::Device* device_ = nullptr;
+
     std::vector<cairns::Scene, cairns::Allocator<cairns::Scene>> scenes_;
     std::vector<int32_t, cairns::Allocator<int32_t>> root_nodes_stack_cache_;
-    
-    std::vector<glm::mat4> debugSceneXforms_;
-    
-    cairns::FrameTransientCache<cairns::DynamicBuffersAssoc> dynBufs_;
-    std::vector<cairns::LoadedMaterial> materials_;
 
-    cairns::FrameTransientCache<cairns::BindGroupAssoc> bindGroups_;
+    std::vector<glm::mat4> debugSceneXforms_;
+
+    std::vector<cairns::LoadedMaterial> materials_;
 
     std::vector<std::pair<cairns::DrawKey,uint32_t>,cairns::Allocator<std::pair<cairns::DrawKey,uint32_t>>> drawListSorted_;
     std::vector<cairns::Draw,cairns::Allocator<cairns::Draw>> drawList_;
@@ -632,8 +597,6 @@ private:
     std::unordered_map<uint32_t, uint32_t> sampler_id_map_;
 
     cairns::rhi::SwapChain swapchain_;
-    // command queue
-    MTL::CommandQueue* metalCommandQueue = nullptr;
     // shaders
     ShaderHandle unlit_ = ShaderHandle::Null;
     // particles

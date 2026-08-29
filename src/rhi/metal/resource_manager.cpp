@@ -131,8 +131,28 @@ ResourceManager::~ResourceManager() {
 }
 
 void ResourceManager::Deinit() {
+    if (!impl_) {
+        return;
+    }
+    if (impl_->depth_stencil) {
+        impl_->depth_stencil->release();
+    }
+    if (impl_->render_pass_desc) {
+        impl_->render_pass_desc->release();
+    }
+    // Release device/queue LAST: delete impl_ runs the memory allocator dtor,
+    // which frees device-owned heaps. Releasing the device first would free the
+    // heaps against a dead device.
+    MTL::CommandQueue* queue = impl_->params.queue;
+    MTL::Device* device = impl_->params.device;
     delete impl_;
     impl_ = nullptr;
+    if (queue) {
+        queue->release();
+    }
+    if (device) {
+        device->release();
+    }
 }
 
 bool ResourceManager::Init(const BackendInitParams& params) {
