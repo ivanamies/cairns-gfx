@@ -224,17 +224,19 @@ pass it explicitly; per-instance state lives as a member. ONLY exceptions: state
 the language/ABI forces global (the replaceable global `operator new`/`delete`,
 e.g. `src/util/alloc_count.cpp`'s counters) or a 3rd-party dependency forces it.
 Known offenders:
-- `CommandRegistry::Instance()` (src/control/command_registry.{hpp,cpp}) — the
-  whole dispatch surface routes through one global. Blocks per-test registries
-  (a fresh registry per SCENARIO bound to that SCENARIO's Engine). Make it
-  constructible, pass `CommandRegistry&` everywhere (the `Register*Ops` already
-  take it by ref). modularization-notes #12.
-- `static JsState s` (src/control/handlers/script_ops.cpp:92) — one QuickJS
-  runtime/context for the whole process, bound to whatever registry it first
-  saw. Must become per-caller state owned alongside the registry it serves.
-- `cairns::Timer` static accumulators (accum_times_/accum_itrs_/slot_names_) —
-  shared across Engine instances; perf.last + the imgui overlay read them. A
-  source of cross-Engine state bleed (modularization-notes #9b territory).
+- `CommandRegistry::Instance()` — DONE (08d3ea7). Constructible + non-copyable;
+  serve/main(AppContext)/web(WebApp) own + pass it; RegisterAlias forwards via
+  captured `this`; tests use fresh local registries.
+- `static JsState s` (script_ops.cpp) — DONE (9a4bc9b). Now a `ScriptHost` struct
+  owned alongside the registry; the JS->C++ bridge reaches it via
+  JS_SetContextOpaque (no static). serve/main/web/tests each own one.
+- `cairns::Timer` static accumulators (accum_times_/accum_itrs_/slot_names_ +
+  TimerStorage::mu_/gpu_slot_mask_) — STILL OPEN. Shared across Engine instances;
+  perf.last + the imgui overlay read them; the metal+vulkan command recorders +
+  frames write GPU-pass spans from the render thread. Deferred to land WITH the
+  engine decomposition (C2): FrameTimers becomes `Engine::timers_`, threaded to
+  the RHI recorders + render thread + HUD. Doing it before the Engine ownership
+  split exists would plumb a `FrameTimers&` through the RHI layer twice.
 - Audit for more: grep `Instance()`, `static .*&`, file-scope `static` mutable,
   function-local `static`, `thread_local`.
 
