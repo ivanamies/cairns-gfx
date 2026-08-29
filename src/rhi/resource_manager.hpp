@@ -44,6 +44,8 @@ class DepthStencilState;
 }  // namespace MTL
 #endif  // CAIRNS_METAL
 
+struct SDL_Window;
+
 namespace cairns::rhi {
 
 #if CAIRNS_METAL
@@ -601,6 +603,10 @@ public:
     ResourceManager& operator=(const ResourceManager&) = delete;
 
     bool Init(const BackendInitParams& params);
+    // Neutral backend bring-up: creates the device (and, on Vulkan, the
+    // instance/surface/queues/command pool) from the window, then initializes
+    // the memory allocator. Replaces app-side device creation + Init.
+    bool InitDevice(SDL_Window* window);
     void Deinit();
 
     Handle<Buffer> CreateBuffer(const BufferDesc& desc);
@@ -666,6 +672,17 @@ public:
     VkDescriptorSetLayout GetBindlessLayout(Handle<BindGroup> reg);
     // Register app-owned per-frame resources for BeginFrame/EndFrame to drive.
     void VkRegisterFrame(const VkFrameResources& res);
+    // Transitional accessors for the device objects InitDevice now owns, so the
+    // app's still-raw init can borrow them until that init also moves rhi-side.
+    VkInstance GetVkInstance() const;
+    VkSurfaceKHR GetVkSurface() const;
+    VkPhysicalDevice GetVkPhysicalDevice() const;
+    VkDevice GetVkDevice() const;
+    VkQueue GetVkGraphicsQueue() const;
+    VkQueue GetVkComputeQueue() const;
+    VkQueue GetVkPresentQueue() const;
+    VkCommandPool GetVkCommandPool() const;
+    VkSampleCountFlagBits GetVkMsaaSamples() const;
 #endif  // CAIRNS_VULKAN
 
 #if CAIRNS_METAL
@@ -676,6 +693,9 @@ public:
     Handle<BindGroup> CreateBindGroupFromMtlBuffer(MTL::Buffer* buf, uint32_t offset);
     // Register app-owned per-frame resources for BeginFrame/EndFrame to drive.
     void MtlRegisterFrame(const MtlFrameResources& res);
+    // Transitional accessors for the device/queue InitDevice now owns.
+    MTL::Device* GetMtlDevice() const;
+    MTL::CommandQueue* GetMtlQueue() const;
 #endif  // CAIRNS_METAL
 
 private:

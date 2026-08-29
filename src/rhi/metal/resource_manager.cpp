@@ -137,6 +137,25 @@ bool ResourceManager::Init(const BackendInitParams& params) {
     return true;
 }
 
+bool ResourceManager::InitDevice(SDL_Window* window) {
+    (void)window;
+    impl_ = new Impl();
+    impl_->params.device = MTL::CreateSystemDefaultDevice();
+    impl_->params.queue = impl_->params.device->newCommandQueue();
+    if (!impl_->memory.Init(impl_->params.device)) {
+        return false;
+    }
+    return true;
+}
+
+MTL::Device* ResourceManager::GetMtlDevice() const {
+    return impl_->params.device;
+}
+
+MTL::CommandQueue* ResourceManager::GetMtlQueue() const {
+    return impl_->params.queue;
+}
+
 Handle<Buffer> ResourceManager::CreateBuffer(const BufferDesc& d) {
     metal::AllocResult r =
         impl_->memory.AllocBuffer(d.byte_size, d.usage, d.memory, 16);

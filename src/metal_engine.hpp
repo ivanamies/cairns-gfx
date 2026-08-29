@@ -138,20 +138,11 @@ public:
         if ( !initResourceManagers() ) {
             return false;
         }
-        if ( !initDevice() ) {
+        if (!rm_.InitDevice(window)) {
             return false;
         }
-        if ( !initCommandQueue() ) {
-            return false;
-        }
-        {
-            rhi::BackendInitParams rhi_p;
-            rhi_p.device = device_;
-            rhi_p.queue = metalCommandQueue;
-            if (!rm_.Init(rhi_p)) {
-                return false;
-            }
-        }
+        device_ = rm_.GetMtlDevice();
+        metalCommandQueue = rm_.GetMtlQueue();
         if ( !initSwapChain(window)) {
             return false;
         }

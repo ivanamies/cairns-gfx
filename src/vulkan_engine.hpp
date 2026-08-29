@@ -448,20 +448,23 @@ private:
     }
 
     bool initVulkan() {
-        if (!createInstance()) return false;
-        if (!setupDebugMessenger()) return false;
-        if (!createSurface()) return false;
-        if (!pickPhysicalDevice()) return false;
+        if (!rm_.InitDevice(window_)) return false;
+        instance = rm_.GetVkInstance();
+        surface = rm_.GetVkSurface();
+        physicalDevice = rm_.GetVkPhysicalDevice();
+        device = rm_.GetVkDevice();
+        graphicsQueue = rm_.GetVkGraphicsQueue();
+        computeQueue = rm_.GetVkComputeQueue();
+        presentQueue = rm_.GetVkPresentQueue();
+        commandPool = rm_.GetVkCommandPool();
+        msaaSamples = rm_.GetVkMsaaSamples();
         {
             VkPhysicalDeviceProperties props{};
             vkGetPhysicalDeviceProperties(physicalDevice, &props);
             ubo_align_ = std::max(1u, static_cast<uint32_t>(
                 props.limits.minUniformBufferOffsetAlignment));
         }
-        if (!createLogicalDevice()) return false;
-        if (!createCommandPool()) return false;
         if (!sc_.Init(device, physicalDevice, surface, window_, commandPool, graphicsQueue, msaaSamples, true)) return false;
-        if (!initResourceManager()) return false;
         if (!loadScenes()) return false;
         if (!createBindlessRegistry()) return false;
         if (!createDescriptorSetLayout()) return false;
@@ -2194,18 +2197,7 @@ private:
             vkDestroySemaphore(device, computeFinishedSemaphores[i], nullptr);
             vkDestroyFence(device, computeInFlightFences[i], nullptr);
         }
-        rm_.Deinit();
-
-        vkDestroyCommandPool(device, commandPool, nullptr);
-
-        vkDestroyDevice(device, nullptr);
-
-        if (enableValidationLayers) {
-            DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
-        }
-
-        vkDestroySurfaceKHR(instance, surface, nullptr);
-        vkDestroyInstance(instance, nullptr);
+        rm_.Deinit();  // also destroys command pool, device, surface, instance
     }
 
     bool createInstance() {
