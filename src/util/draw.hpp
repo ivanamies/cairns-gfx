@@ -12,6 +12,8 @@ static constexpr uint32_t kMaterialBindSlot = 2;
 static constexpr uint32_t kShaderSpecificBindSlot = 3;
 static constexpr uint32_t kDrawTmpBindSlot = 4;
 
+static constexpr uint32_t kInvalidBindGroupId = 0xFFFFFFFFu;
+
 // "Hypehype Modern Mobile Rendering Architecture" slide 21-22, page 34-36
 // the draw packet around which all rendering revolves
 struct Draw {
@@ -20,7 +22,7 @@ struct Draw {
     // slot 1: "The first group has render pass global bindings (sun light, camera matrices, shadow maps, etc)"
     // slot 2: "the second slot has material bindings" like samplers and textures
     // slot 3: "the third slot has shader specific bindings" idk. like LUTs and ssbos for particles and skinning.
-    std::array<rhi::Handle<rhi::BindGroup>,3> bind_groups = {};
+    std::array<uint32_t,3> bind_groups = {};
     // slot 4: "We use the last slot in Vulkan and WebGPU for dynamic offset bound buffers. This is important for bump allocated temporary data, such as uniform buffers." I would put r/w SSBOs here too.
     uint32_t dynamic_buffers = 0;
     rhi::Handle<rhi::Buffer> index_buffer = rhi::Handle<rhi::Buffer>::Null;

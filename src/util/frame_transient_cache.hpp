@@ -5,6 +5,7 @@
 #if CAIRNS_METAL
 
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include "rhi/resource.hpp"
@@ -14,6 +15,11 @@ namespace cairns {
 
 struct DynamicBuffersAssoc {
     rhi::Handle<rhi::Buffer> buf = rhi::Handle<rhi::Buffer>::Null;
+};
+
+struct BindGroupAssoc {
+    rhi::Handle<rhi::Buffer> material_buffer = rhi::Handle<rhi::Buffer>::Null;
+    uint32_t material = std::numeric_limits<uint32_t>::max();
 };
 
 template <typename T>

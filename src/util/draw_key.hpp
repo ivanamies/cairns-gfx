@@ -12,8 +12,7 @@ using DrawKey = uint32_t;
 // the way I build draw keys is wrong.
 // this is how to do it right: https://realtimecollisiondetection.net/blog/?p=86
 DrawKey BuildDrawKey(const Draw& draw) {
-    const rhi::Handle<rhi::BindGroup> material = draw.bind_groups[cairns::kMaterialBindSlot - 1];
-    return material.get_id();
+    return draw.bind_groups[cairns::kMaterialBindSlot - 1];
 }
 
 } // namespace cairns

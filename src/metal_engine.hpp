@@ -265,7 +265,7 @@ public:
     using ShaderHandle = rhi2::Handle<rhi2::Shader>;
     using MatId = uint32_t;
     using SamplerHandle = cairns::rhi::Handle<cairns::rhi::Sampler>;
-    using BindGroupHandle = cairns::rhi::Handle<cairns::rhi::BindGroup>;
+    using BindGroupId = uint32_t;
     
     Engine() :
     hot_arena_mem_(malloc(kHotArenaMemorySize)),
@@ -328,7 +328,7 @@ public:
     void resetFrameTmps(uint32_t frame) {
         drawTmpIdxs_[frame] = 0;
         dynBufs_.Reset();
-        bindGroupCacheIdx_ = 0;
+        bindGroups_.Reset();
         materialBufferIdxs_[frame] = 0;
     }
     
@@ -374,7 +374,6 @@ public:
         // 4 because we're only pretending to be a real UGC engine at this point
         samplerManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Sampler>>(hot_arena_, hot_arena_, 256);
         materialBufferManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Buffer>>(hot_arena_, hot_arena_, 1024);
-        bindGroupManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::BindGroup>>(hot_arena_, hot_arena_, 1024);
         return true;
     }
     
@@ -469,16 +468,8 @@ public:
         return dynBufs_.Acquire();
     }
     
-    BindGroupHandle getBindGroup() {
-        if ( bindGroupCacheIdx_ < bindGroupsCache_.size()) {
-            return bindGroupsCache_[bindGroupCacheIdx_++];
-        }
-        else {
-            auto h = bindGroupManager_->New();
-            bindGroupsCache_.push_back(h);
-            ++bindGroupCacheIdx_;
-            return h;
-        }
+    BindGroupId getBindGroup() {
+        return bindGroups_.Acquire();
     }
     
     bool initCommandQueue() {
@@ -568,8 +559,7 @@ public:
         
         const ShaderHandle shader = unlit_;
         
-        const BindGroupHandle bg_globals = getBindGroup();
-        auto& glob_obj = *bindGroupManager_->GetObj(bg_globals);
+        const BindGroupId bg_globals = getBindGroup();
         { // set up render pass globals
             // set up camera
             const float screen_width = swapChain_->GetDrawableSize().width;
@@ -592,8 +582,6 @@ public:
             auto* gh = bufferManager_->GetObj(globals_handle);
             gh->buffer = rm_.GetBumpMasterBuffer(rhi2::Memory::kDynamic);
             gh->mem.offset = rm_.BumpOffset(gptr);
-            glob_obj.type = cairns::rhi::BindGroup::Type::kRenderPassGlobal;
-            glob_obj.globals = globals_handle;
         }
         
         //        cairns::Timer timer2("timer2", 2);
@@ -635,8 +623,8 @@ public:
                     const uint32_t gpu_attr_idx = mesh_attr_id_map_[mesh.attrHandle.get_id()];
                     
                     //                    cairns::Timer timer7("timer7", 7);
-                    const BindGroupHandle bg_material = getBindGroup();
-                    auto& mat_obj = *bindGroupManager_->GetObj(bg_material);
+                    const BindGroupId bg_material = getBindGroup();
+                    auto& mat_obj = bindGroups_.At(bg_material);
                     { // material set up
                         const cairns::rhi::MaterialGpu material_gpu {
                             .tex_color_id = gpu_tex_id,
@@ -654,7 +642,6 @@ public:
                         auto* mh = materialBufferManager_->GetObj(h);
                         mh->buffer = rm_.GetBumpMasterBuffer(rhi2::Memory::kDynamic);
                         mh->mem.offset = rm_.BumpOffset(mptr);
-                        mat_obj.type = cairns::rhi::BindGroup::Type::kMaterial;
                         mat_obj.material_buffer = h;
                         mat_obj.material = mat_id;
                     }
@@ -693,7 +680,7 @@ public:
                     // did I mess up making vertex attributes bind slot 0?
                     draw.bind_groups[cairns::kRenderPassGlobalBindSlot-1] = bg_globals;
                     draw.bind_groups[cairns::kMaterialBindSlot-1] = bg_material;
-                    draw.bind_groups[cairns::kShaderSpecificBindSlot-1] = BindGroupHandle::Null;
+                    draw.bind_groups[cairns::kShaderSpecificBindSlot-1] = cairns::kInvalidBindGroupId;
                     draw.dynamic_buffers = tmp_handle;
                     draw.index_buffer = index;
                     draw.index_offset = bufferManager_->GetObj(index)->mem.offset + (prim.firstIndex * sizeof(uint32_t));
@@ -815,8 +802,8 @@ public:
                     encoder->setVertexBufferOffset(pos_mem.offset, 0 /*hard coded for some reason*/);
                 }
                 { // set up material
-                    const BindGroupHandle mat_bg = draw.bind_groups[cairns::kMaterialBindSlot-1];
-                    auto& mat_bg_obj = *bindGroupManager_->GetObj(mat_bg);
+                    const BindGroupId mat_bg = draw.bind_groups[cairns::kMaterialBindSlot-1];
+                    auto& mat_bg_obj = bindGroups_.At(mat_bg);
                     const MatId mat = mat_bg_obj.material;
                     if ( mat != last_mat ) {
                         last_mat = mat;
@@ -1073,7 +1060,6 @@ private:
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Texture>> texManager_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Buffer>> bufferManager_;
     cairns::FrameTransientCache<cairns::DynamicBuffersAssoc> dynBufs_;
-    cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::BindGroup>> bindGroupManager_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Sampler>> samplerManager_;
     std::vector<cairns::LoadedMaterial> materials_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Buffer>> materialBufferManager_;
@@ -1086,9 +1072,8 @@ private:
     std::vector<uint32_t> materialBufferIdxs_;
     std::vector<std::vector<BufHandle>> materialBuffers_;
     
-    uint32_t bindGroupCacheIdx_ = 0;
-    std::vector<BindGroupHandle> bindGroupsCache_;
-    
+    cairns::FrameTransientCache<cairns::BindGroupAssoc> bindGroups_;
+
     std::vector<std::pair<cairns::DrawKey,uint32_t>,cairns::Allocator<std::pair<cairns::DrawKey,uint32_t>>> drawListSorted_;
     std::vector<cairns::Draw,cairns::Allocator<cairns::Draw>> drawList_;
     
