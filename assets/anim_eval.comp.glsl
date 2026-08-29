@@ -277,6 +277,7 @@ void main() {
             world_scratch[rec.world_scratch_base + uint(ni)] = world;
         }
     }
+    memoryBarrierBuffer();
     barrier();
 
     // Stage 4: cooperative palette build.
