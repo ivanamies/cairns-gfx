@@ -16,7 +16,6 @@
 #include <functional>
 #include <mutex>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "util/json.hpp"
@@ -24,6 +23,7 @@
 namespace cairns::control {
 
 struct Command {
+    std::string name;  // owned canonical name
     json schema;
     std::string doc;
     std::function<json(const json&)> fn;
@@ -31,6 +31,15 @@ struct Command {
     // the result with _deprecated_alias_for; ToolsList surfaces the field so
     // an agent reading the manifest sees the alias relationship.
     std::string aliased_for;
+};
+
+// #215 (name, op_id) sorted lookup table. Binary-searched at Dispatch
+// time -- one std::string construction per request (from the json op
+// field) and one comparison cascade, no hash.
+struct CommandIndex {
+    std::string name;
+    uint32_t op_id = 0;
+    bool operator<(const CommandIndex& o) const { return name < o.name; }
 };
 
 class CommandRegistry {
@@ -77,7 +86,16 @@ public:
 
 private:
     CommandRegistry() = default;
-    std::unordered_map<std::string, Command> commands_;
+    // #215 flat array indexed by OpId + sorted name lookup table. Replaces
+    // std::unordered_map<std::string, Command>. Dispatch: binary search
+    // the sorted_names_ vector to resolve name -> op_id, then commands_
+    // [op_id] is the handler. RegisterAlias adds another entry in
+    // sorted_names_ pointing at the canonical op_id. Names live on
+    // Command::name so sorted_names_ stores std::string copies (small
+    // hashable map -> sorted vector trade); reserve once and re-sort
+    // after each Register.
+    std::vector<Command> commands_;
+    std::vector<CommandIndex> sorted_names_;
     std::mutex events_m_;
     std::vector<json> events_;
 };

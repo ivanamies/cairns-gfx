@@ -39,7 +39,6 @@
 #include "util/material_gpu.hpp"
 #include "util/scene_gpu.hpp"
 #include "util/timer.hpp"
-#include "util/imgui_snapshot.hpp"
 #include "util/frame_clock.hpp"
 #include "util/log.hpp"
 #include "scene/asset_registry.hpp"
@@ -142,7 +141,6 @@ public:
         std::array<float, kNumViewportsPerSlot> pending_far_z{};
         std::array<uint32_t, kNumViewportsPerSlot> globals_offset{};
         uint32_t dt_off = 0;
-        cairns::ImDrawDataSnapshot imgui_snapshot;
         cairns::FramePacket pkt{};
         rhi::FrameContext present_fc{};
         rhi::SwapResolveTarget present_target{};
@@ -1185,10 +1183,13 @@ public:
             ImGui::End();
             ImGui::PopStyleColor(4);
             ImGui::Render();
-            cairns::SnapshotImDrawData(ImGui::GetDrawData(), s.imgui_snapshot);
-            s.pkt.imgui_snapshot = &s.imgui_snapshot.data;
+            // #213 live pointer through the slot mutex (no CloneOutput).
+            // 24 MB / profile of ImGui::MemAlloc gone. Multi-threaded
+            // pkt-build + draw-record lands later -- when it does, swap
+            // back to a per-slot copy or route ImGui's allocator to the
+            // slot arena.
+            s.pkt.imgui_snapshot = ImGui::GetDrawData();
         } else {
-            s.imgui_snapshot.Clear();
             s.pkt.imgui_snapshot = nullptr;
         }
 

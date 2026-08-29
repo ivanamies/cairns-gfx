@@ -12,18 +12,50 @@ CommandRegistry& CommandRegistry::Instance() {
     return registry;
 }
 
+namespace {
+
+// #215 binary-search the sorted lookup table for `name`. Returns op_id or
+// UINT32_MAX if not found.
+constexpr uint32_t kNoOp = 0xFFFFFFFFu;
+uint32_t FindOp(const std::vector<CommandIndex>& sorted, const std::string& name) {
+    auto it = std::lower_bound(sorted.begin(), sorted.end(),
+                                CommandIndex{name, 0});
+    if (it == sorted.end() || it->name != name) {
+        return kNoOp;
+    }
+    return it->op_id;
+}
+
+void InsertSorted(std::vector<CommandIndex>& sorted, std::string name,
+                  uint32_t op_id) {
+    CommandIndex idx{std::move(name), op_id};
+    auto it = std::lower_bound(sorted.begin(), sorted.end(), idx);
+    sorted.insert(it, std::move(idx));
+}
+
+}  // namespace
+
 void CommandRegistry::Register(std::string&& name, json&& schema, std::string&& doc,
                                std::function<json(const json&)>&& fn) {
-    commands_[std::move(name)] =
-        Command{std::move(schema), std::move(doc), std::move(fn), {}};
+    const uint32_t op_id = static_cast<uint32_t>(commands_.size());
+    Command cmd;
+    cmd.name = name;
+    cmd.schema = std::move(schema);
+    cmd.doc = std::move(doc);
+    cmd.fn = std::move(fn);
+    commands_.push_back(std::move(cmd));
+    InsertSorted(sorted_names_, std::move(name), op_id);
 }
 
 void CommandRegistry::RegisterAlias(std::string&& alias, std::string&& canonical) {
-    auto canonical_copy = canonical;
-    // Alias handler dispatches to the canonical op via the registry singleton.
-    // Singleton lookup at call time (not capture) so a later registry rewire
-    // is visible.
+    // Register a new command for the alias that dispatches to the canonical
+    // op via the registry singleton. Pre-#215 used a separate per-alias
+    // Command storing aliased_for + a forwarding lambda; same shape here,
+    // just landed in the flat commands_ vector.
+    const uint32_t op_id = static_cast<uint32_t>(commands_.size());
+    std::string canonical_copy = canonical;
     Command cmd;
+    cmd.name = alias;
     cmd.schema = json::object();
     cmd.doc = "DEPRECATED alias for `" + canonical + "`.";
     cmd.aliased_for = canonical;
@@ -32,8 +64,6 @@ void CommandRegistry::RegisterAlias(std::string&& alias, std::string&& canonical
         req["op"] = canonical_copy;
         req["args"] = args;
         const json resp = CommandRegistry::Instance().Dispatch(req);
-        // Bubble error responses up as exceptions so the outer Dispatch
-        // boundary fills them in identically to a native handler error.
         if (!resp.value("ok", false)) {
             std::string msg = "alias dispatch failed";
             if (resp.contains("error") && resp["error"].is_object() &&
@@ -48,7 +78,8 @@ void CommandRegistry::RegisterAlias(std::string&& alias, std::string&& canonical
         }
         return result;
     };
-    commands_[std::move(alias)] = std::move(cmd);
+    commands_.push_back(std::move(cmd));
+    InsertSorted(sorted_names_, std::move(alias), op_id);
 }
 
 json CommandRegistry::Dispatch(const json& request) {
@@ -64,8 +95,8 @@ json CommandRegistry::Dispatch(const json& request) {
         return resp;
     }
     const std::string op = op_it->get<std::string>();
-    const auto cmd_it = commands_.find(op);
-    if (cmd_it == commands_.end()) {
+    const uint32_t op_id = FindOp(sorted_names_, op);
+    if (op_id == kNoOp || op_id >= commands_.size()) {
         resp["ok"] = false;
         resp["error"] = {{"code", "unknown_op"}, {"message", op}};
         return resp;
@@ -75,7 +106,7 @@ json CommandRegistry::Dispatch(const json& request) {
         args = request["args"];
     }
     try {
-        json result = cmd_it->second.fn(args);
+        json result = commands_[op_id].fn(args);
         resp["ok"] = true;
         resp["result"] = std::move(result);
     } catch (const std::exception& e) {
@@ -90,18 +121,16 @@ json CommandRegistry::Dispatch(const json& request) {
 }
 
 json CommandRegistry::ToolsList() const {
-    // Materialize into a sorted map first so the manifest order is stable
-    // across builds (unordered_map iteration is implementation-defined).
-    std::map<std::string, const Command*> sorted;
-    for (const auto& [name, cmd] : commands_) {
-        sorted.emplace(name, &cmd);
-    }
+    // sorted_names_ is already sorted alphabetically -- iterate it directly
+    // for stable manifest output (was a std::map<string, const Command*>
+    // scratch in the unordered_map era).
     json out = json::array();
-    for (const auto& [name, cmd] : sorted) {
-        json entry = {{"name", name}, {"doc", cmd->doc}, {"schema", cmd->schema}};
-        if (!cmd->aliased_for.empty()) {
+    for (const CommandIndex& idx : sorted_names_) {
+        const Command& cmd = commands_[idx.op_id];
+        json entry = {{"name", cmd.name}, {"doc", cmd.doc}, {"schema", cmd.schema}};
+        if (!cmd.aliased_for.empty()) {
             entry["deprecated"] = true;
-            entry["aliased_for"] = cmd->aliased_for;
+            entry["aliased_for"] = cmd.aliased_for;
         }
         out.push_back(std::move(entry));
     }
@@ -110,7 +139,6 @@ json CommandRegistry::ToolsList() const {
 
 namespace {
 
-// Lower-case ASCII compare. Cheap; doesn't need to handle non-ASCII names.
 bool contains_ci(const std::string& haystack, const std::string& needle) {
     if (needle.empty()) {
         return true;
@@ -155,30 +183,25 @@ bool starts_with_ci(const std::string& s, const std::string& prefix) {
 json CommandRegistry::ToolsSearch(const std::string& query,
                                   const std::string& namespace_prefix,
                                   size_t limit) const {
-    // Bucket matches by relevance:
-    //   0 = exact-prefix-on-name (best)
-    //   1 = name-substring
-    //   2 = doc-substring
-    // Within each bucket, sort alphabetically by name for stable output.
     struct Match {
         int bucket;
-        std::string name;
         const Command* cmd;
         bool operator<(const Match& o) const {
             if (bucket != o.bucket) return bucket < o.bucket;
-            return name < o.name;
+            return cmd->name < o.cmd->name;
         }
     };
     std::vector<Match> hits;
-    for (const auto& [name, cmd] : commands_) {
+    hits.reserve(commands_.size());
+    for (const Command& cmd : commands_) {
         if (!namespace_prefix.empty() &&
-            !starts_with_ci(name, namespace_prefix)) {
+            !starts_with_ci(cmd.name, namespace_prefix)) {
             continue;
         }
         int bucket = -1;
-        if (!query.empty() && starts_with_ci(name, query)) {
+        if (!query.empty() && starts_with_ci(cmd.name, query)) {
             bucket = 0;
-        } else if (contains_ci(name, query)) {
+        } else if (contains_ci(cmd.name, query)) {
             bucket = 1;
         } else if (contains_ci(cmd.doc, query)) {
             bucket = 2;
@@ -186,7 +209,7 @@ json CommandRegistry::ToolsSearch(const std::string& query,
         if (bucket < 0) {
             continue;
         }
-        hits.push_back(Match{bucket, name, &cmd});
+        hits.push_back(Match{bucket, &cmd});
     }
     std::sort(hits.begin(), hits.end());
     if (limit == 0) {
@@ -196,8 +219,8 @@ json CommandRegistry::ToolsSearch(const std::string& query,
         hits.resize(limit);
     }
     json out = json::array();
-    for (const auto& m : hits) {
-        json entry = {{"name", m.name},
+    for (const Match& m : hits) {
+        json entry = {{"name", m.cmd->name},
                       {"doc", m.cmd->doc},
                       {"schema", m.cmd->schema}};
         if (!m.cmd->aliased_for.empty()) {
@@ -211,6 +234,7 @@ json CommandRegistry::ToolsSearch(const std::string& query,
 
 void CommandRegistry::Clear() {
     commands_.clear();
+    sorted_names_.clear();
     {
         std::lock_guard<std::mutex> lk(events_m_);
         events_.clear();
