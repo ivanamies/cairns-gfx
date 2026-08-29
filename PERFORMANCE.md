@@ -1310,3 +1310,35 @@ Different present model: MoltenVK swapchain (`present_wait`+`acquire_wait`+`fenc
 - Metal `record` (0.93 ms) is ~2.5× vk `record` (0.37 ms).
 - Present accounting differs by backend (Metal main-thread pacing vs MoltenVK
   swapchain) — compare CPU/GPU work slots across backends, not the present slots.
+
+### Samsung Galaxy S22 (SM-S901U, Adreno 730) — Android Vulkan, Release
+
+**100 actors** (100 GLBs × 1 — mobile renders 1/5th the desktop instances via the
+platform-aware `cairns.instancePasses`; the Adreno tile budget can't take 500
+skinned actors). Read from logcat `[Timer]` after settle. Same 100 GLBs loaded as
+desktop. The GLB load took **9.1 s** on the phone.
+```
+slot 0  frame              9108 us    (CPU frame -- but mostly GPU-fence-bound, below)
+slot 1  build_draws        2992 us
+slot 2  record             4208 us
+slot 3  skinning_compute   8994 us    (GPU compute -- idle-clock; see note)
+slot 4  particle_sim          6 us
+slot 5  forward_vp0        3888 us    (GPU forward raster)
+slot 6  swap                477 us
+slot 8  skin_eval           222 us
+slot 9  present_wait       5279 us
+slot 10 acquire_wait       2264 us
+slot 11 fence_wait         9155 us    (CPU stalls on the GPU fence -- GPU-bound)
+```
+`fence_wait` (9.2 ms) ≈ `frame` (9.1 ms): the CPU spends the frame waiting on the
+GPU. GPU work (`skinning_compute` 9.0 ms + `forward_vp0` 3.9 ms) is the bottleneck,
+and `skinning_compute` is again an **idle-clock** reading (Adreno power-saving) —
+expect it well under this with the GPU pinned to max, same as the desktop ~5.4→2 ms
+delta. `record` (4.2 ms) is notably heavier than desktop vk (0.37 ms).
+
+**Memory (the point of the #229 arena work):** `[CPU-BLOCK] in_use = 173 MB /
+512 MB budget` (33%), `[PREFAB-ARENA] 58 MB / 96 MB`. The mobile `cpu_persistent`
+budget was raised 256 → 512 MB (256 MB was a conflation with the Adreno SSBO
+`max_storage_buffer_range` floor — the CPU arena isn't bound by it). The transient
+mesh cpu* (~600 MB across the batch) stay on malloc, not the block. Boots clean,
+no OOM/abort.
