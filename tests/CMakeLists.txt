@@ -171,7 +171,6 @@ if(CAIRNS_GFX_BUILD_GOLDEN_TESTS)
     file(GLOB _cairns_ext_glbs      CONFIGURE_DEPENDS "${_cairns_ext_glbs_root}/*.glb")
     set(_cairns_misc_assets
         "${_cairns_assets_root}/run.js"
-        "${_cairns_assets_root}/Inter-VariableFont.ttf"
         "${_cairns_assets_root}/wc_paper_noise.png")
 
     if(APPLE AND IOS)

@@ -2,11 +2,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_init.h>
-#ifndef __EMSCRIPTEN__
-#include <SDL3_ttf/SDL_ttf.h>
-#include <SDL3_mixer/SDL_mixer.h>
-#include <SDL3_image/SDL_image.h>
-#else
+#ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #include <cstdlib>
 #include <cstring>

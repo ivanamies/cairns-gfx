@@ -1,15 +1,6 @@
 [submodule "SDL"]
 	path = third_party/SDL
 	url = https://github.com/libsdl-org/SDL
-[submodule "SDL_ttf"]
-	path = third_party/SDL_ttf
-	url = https://github.com/libsdl-org/SDL_ttf
-[submodule "SDL_mixer"]
-	path = third_party/SDL_mixer
-	url = https://github.com/libsdl-org/SDL_mixer
-[submodule "SDL_image"]
-	path = third_party/SDL_image
-	url = https://github.com/libsdl-org/SDL_image
 [submodule "third_party/glm"]
 	path = third_party/glm
 	url = git@github.com:g-truc/glm.git

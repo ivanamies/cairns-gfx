@@ -94,30 +94,9 @@ set(FASTGLTF_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(FASTGLTF_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/fastgltf EXCLUDE_FROM_ALL)
 
-# SDL3 + satellite libs.
+# SDL3. Image/font/audio satellites are gone -- texture decode is stb_image,
+# imgui uses its built-in font atlas, and there is no audio path.
 add_subdirectory(third_party/SDL EXCLUDE_FROM_ALL)
-
-set(SDLTTF_VENDORED ON)
-add_subdirectory(third_party/SDL_ttf EXCLUDE_FROM_ALL)
-
-set(SDLMIXER_MIDI_NATIVE OFF)
-set(SDLMIXER_GME OFF)
-set(SDLMIXER_WAVPACK OFF)
-set(SDLMIXER_MOD OFF)
-set(SDLMIXER_MOD_XMP OFF)
-set(SDLMIXER_OPUS OFF)
-set(SDLMIXER_MP3_MPG123 OFF)
-set(SDLMIXER_VORBIS_VORBISFILE OFF)
-set(SDLMIXER_FLAC_LIBFLAC OFF)
-set(SDLMIXER_VENDORED ON)
-add_subdirectory(third_party/SDL_mixer EXCLUDE_FROM_ALL)
-
-set(SDLIMAGE_VENDORED ON)
-set(SDLIMAGE_AVIF OFF)
-set(SDLIMAGE_BMP OFF)
-set(SDLIMAGE_JPEG OFF)
-set(SDLIMAGE_WEBP OFF)
-add_subdirectory(third_party/SDL_image EXCLUDE_FROM_ALL)
 
 # Dear ImGui: core + the SDL3 platform backend ONLY (input/timing). The GPU
 # renderer is our own, through the cairns RHI -- no imgui_impl_metal/vulkan.
@@ -361,32 +340,13 @@ endif()
 
 # Third-party link surface. Core SDL (window/input/timer/IO/filesystem) links on
 # EVERY target including emscripten -- asset IO, the scenario picker, and shader
-# loads all route through SDL. The satellites (audio, fonts, image codecs) stay
-# native-only; the web build has no audio path and loads its own assets.
+# loads all route through SDL.
 target_link_libraries(cairns_core PUBLIC
     fastgltf::fastgltf
     imgui
     cairns_render_thread
     SDL3::SDL3
 )
-if(NOT EMSCRIPTEN)
-    target_link_libraries(cairns_core PUBLIC
-        SDL3_ttf::SDL3_ttf
-        SDL3_mixer::SDL3_mixer
-        SDL3_image::SDL3_image
-    )
-endif()
-
-# SDL_Image bug: https://github.com/libsdl-org/SDL_image/issues/506
-if (APPLE AND NOT BUILD_SHARED_LIBS)
-    find_library(IO_LIB ImageIO REQUIRED)
-    find_library(CS_LIB CoreServices REQUIRED)
-    find_library(CT_LIB CoreText REQUIRED)
-    find_library(CG_LIB CoreGraphics REQUIRED)
-    find_library(CF_LIB CoreFoundation REQUIRED)
-    target_link_libraries(cairns_core PUBLIC
-        ${CF_LIB} ${CT_LIB} ${IO_LIB} ${CS_LIB} ${CG_LIB})
-endif()
 
 # =============================================================================
 # sdl-min -- the SDL3 interactive app. Thin shell over cairns_core.
@@ -590,7 +550,6 @@ if (APPLE)
 
     # 1. Add specific known files
     add_resource("${input_root}/run.js")  # mandatory boot script
-    add_resource("${input_root}/Inter-VariableFont.ttf")
 
     # 1b. Scenario launcher scripts -> Resources/scripts/. The sdl-min imgui
     # picker enumerates this dir at runtime; drop a .js in assets/scripts/ to
