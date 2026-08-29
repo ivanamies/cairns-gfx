@@ -843,7 +843,10 @@ public:
             }
         }
         { // init debug assets
-            std::vector<std::filesystem::path> glb_paths;
+            // #222 Phase #267: stash glb paths on the engine so the [PICK]
+            // log can name the clicked hero in one printf.
+            std::vector<std::filesystem::path>& glb_paths = glb_paths_;
+            glb_paths.clear();
             if (!engine_cfg_.glb_overrides.empty()) {
                 for (const std::string& tok : engine_cfg_.glb_overrides) {
                     if (tok.empty()) {
@@ -2038,10 +2041,69 @@ public:
             const bool ok = rhi_.resources.ReadBackTextureR32UTexel(
                 id_target_[pick_viewport_], pick_x_, pick_y_,
                 entity_plus_one);
-            fprintf(stderr,
-                    "[PICK] vp=%d xy=(%u,%u) tex_dims=(%u,%u) ok=%d id+1=%u\n",
+            // #267: resolve hero name + world AABB from the clicked id so
+            // the [PICK] line answers "which hero + where" in one printf.
+            const char* hero_name = "<none>";
+            uint32_t hero_scene_idx = 0xFFFFFFFFu;
+            glm::vec3 hero_min(0.0f);
+            glm::vec3 hero_max(0.0f);
+            bool hero_has_aabb = false;
+            if (ok && entity_plus_one != 0u && !scene_ids_.empty()) {
+                const uint32_t eid = entity_plus_one - 1u;
+                hero_scene_idx =
+                    eid % static_cast<uint32_t>(scene_ids_.size());
+                if (hero_scene_idx < glb_paths_.size()) {
+                    hero_name =
+                        glb_paths_[hero_scene_idx].filename().string().c_str();
+                }
+                // Resolve world AABB via the entity's WorldTransform + the
+                // scene's first mesh bind-pose AABB (matches the cull path).
+                if (cairns::World::Cold* wcc =
+                        worlds_.GetCold(active_world_)) {
+                    entt::entity ent{eid};
+                    if (wcc->registry.valid(ent)) {
+                        const auto* wt =
+                            wcc->registry.try_get<cairns::WorldTransform>(ent);
+                        cairns::Scene::Hot* sh =
+                            scenes_.GetHot(scene_ids_[hero_scene_idx]);
+                        if (wt && sh && !sh->meshes.empty()) {
+                            cairns::Mesh::Hot* mh =
+                                meshes_.GetHot(sh->meshes[0]);
+                            if (mh && mh->bind_aabb_min.x <=
+                                          mh->bind_aabb_max.x) {
+                                glm::vec3 wmin(1.0e30f);
+                                glm::vec3 wmax(-1.0e30f);
+                                const glm::vec3& mn = mh->bind_aabb_min;
+                                const glm::vec3& mx = mh->bind_aabb_max;
+                                for (int i = 0; i < 8; ++i) {
+                                    const glm::vec3 corner(
+                                        (i & 1) ? mx.x : mn.x,
+                                        (i & 2) ? mx.y : mn.y,
+                                        (i & 4) ? mx.z : mn.z);
+                                    const glm::vec4 wc4 =
+                                        wt->world * glm::vec4(corner, 1.0f);
+                                    const glm::vec3 wc(wc4 / wc4.w);
+                                    wmin = glm::min(wmin, wc);
+                                    wmax = glm::max(wmax, wc);
+                                }
+                                hero_min = wmin;
+                                hero_max = wmax;
+                                hero_has_aabb = true;
+                            }
+                        }
+                    }
+                }
+            }
+            CAIRNS_PRINT(
+                    "[PICK] vp=%d xy=(%u,%u) tex_dims=(%u,%u) ok=%d "
+                    "id+1=%u hero=%s scene_idx=%u "
+                    "aabb=[%s%.3f,%.3f,%.3f]-[%.3f,%.3f,%.3f]\n",
                     pick_viewport_, pick_x_, pick_y_, id_target_w_,
-                    id_target_h_, ok ? 1 : 0, entity_plus_one);
+                    id_target_h_, ok ? 1 : 0, entity_plus_one,
+                    hero_name, hero_scene_idx,
+                    hero_has_aabb ? "" : "n/a:",
+                    hero_min.x, hero_min.y, hero_min.z,
+                    hero_max.x, hero_max.y, hero_max.z);
             if (ok) {
                 last_pick_result_.viewport = pick_viewport_;
                 last_pick_result_.x = pick_x_;
@@ -3646,6 +3708,9 @@ private:
     // / Scene::Cold records live in the pool, not the vector.
     cairns::ResourceManager<cairns::Scene> scenes_;
     std::vector<cairns::SceneId> scene_ids_;
+    // #222 Phase #267: parallel to scene_ids_; index N maps to the GLB
+    // path that produced scene_ids_[N]. Read by the [PICK] log line.
+    std::vector<std::filesystem::path> glb_paths_;
     // #222 Phase H.6: built once at scene-load + uploadAnimTablesGpu;
     // every frame's resident_textures span points at this vector
     // instead of being arena-allocated + filled per frame.
