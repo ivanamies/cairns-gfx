@@ -233,7 +233,12 @@ struct ArenaSlice {
     bool empty() const { return count == 0; }
     bool IsNull() const { return offset == kInvalidOffset; }
 
-    T* data(BumpArena& a) const { return a.ResolveAs<T>(offset); }
+    // Null-safe: an empty slice (no Alloc, or Alloc(0)) resolves to nullptr, so
+    // the common `for (i < size()) data()[i]` leaf case never trips Resolve's
+    // stale-offset assert.
+    T* data(BumpArena& a) const {
+        return IsNull() ? nullptr : a.ResolveAs<T>(offset);
+    }
     T& operator()(BumpArena& a, uint32_t i) const { return data(a)[i]; }
 
     // Allocate `n` elements from `a`; returns the slice (fill via data(a)[i]).

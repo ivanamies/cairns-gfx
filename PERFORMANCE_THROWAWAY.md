@@ -472,9 +472,23 @@ unfulfilled delta — backing fastgltf's pool with a `cpu_block_` load-scratch s
 patch) with **zero** determinism value (gone before any frame); deferred, needs
 supervision.
 
+**String interning DONE** (2026-06-21): `Mesh/Node/Clip` names → `NameRef`
+(`ArenaSlice<char>`, a `{offset,len}` slice into the new budget-scaled
+`Engine::prefab_arena_` BumpArena — 64 MB desktop / block/16 mobile);
+`Node::children`, `Skin::{jointNodes,inverseBinds}`, `Clip::{samplers,channels}`
+→ `ArenaSlice<T>`. These pool structs are now pointer-free POD (no embedded
+std::string/std::vector headers). `prefab_arena_` threaded through
+`LoadPrefab/MeshFromGltf` + `ExtractFromScene` + `SelectWalkingClip`; overflow
+fails loud (`AllocSliceOrDie`/`InternName`, not nullptr-write). Dead CPU
+`ComputeNodeWorldMatrices`/`ComputeSkinningPalette` deleted (superseded by GPU
+anim_eval, blocked the POD conversion). Metal 178 statehash + 97/97 scenarios;
+vk same (+imgui flake); 100-GLB skinned boot renders 120 frames, no arena
+overflow. **Still on malloc:** `glb_paths_` (engine-side reload lookup) + the
+editor-only `Name` ECS component (excluded from the hash; leave).
+
 **Genuinely remaining (low-priority follow-on):**
-- String interning: `Node`/`Skin`/`Clip` inner heap + names + `glb_paths_` stay on
-  malloc (a `{offset,len}` block name-table pass; the `ArenaSlice` DS is staged).
+- `glb_paths_` reload-lookup vector + editor-only `Name` component (both deferred
+  above; neither is in the determinism hash).
 - `JsState`/`CommandRegistry` de-singleton (the two-engine run-to-run *test* already
   passes, empirically proving no cross-engine state leak — so this is hygiene, not a
   correctness gap).

@@ -45,82 +45,26 @@ inline glm::mat4 ComposeTRS(const AnimatedTRS& trs) {
     return m;
 }
 
-// Walk the Node tree parent-before-child, writing each node's world matrix
-// into world_out. local_xforms[i] is the local matrix of node i (caller
-// pre-populates from Node::localTransform or from a clip eval + ComposeTRS
-// override). roots gives top-level node indices.
-//
-// Scratch (DFS stack) comes from the caller's BumpArena; size = n_nodes
-// (worst case). Stack is rewound on exit via a Mark/Rewind. The walk
-// preserves Node::localTransform / Node::globalTransform untouched (output
-// is to world_out only).
-inline void ComputeNodeWorldMatrices(const std::vector<Node>& nodes,
-                                     std::span<const int32_t> roots,
-                                     std::span<const glm::mat4> local_xforms,
-                                     std::span<glm::mat4> world_out,
-                                     BumpArena& arena) {
-    const uint32_t n = static_cast<uint32_t>(nodes.size());
-    if (n == 0) {
-        return;
-    }
-    assert(local_xforms.size() == n);
-    assert(world_out.size() == n);
-    const auto mark = arena.Mark();
-    // (node_idx, parent_world_idx_or_negative_for_root) pairs walked DFS.
-    // Pack as two parallel int arrays so we can ArenaList over them.
-    int32_t* stack_node = arena.AllocateArray<int32_t>(n);
-    int32_t* stack_parent = arena.AllocateArray<int32_t>(n);
-    uint32_t top = 0;
-    for (size_t i = 0; i < roots.size(); ++i) {
-        if (top >= n) {
-            break;
-        }
-        stack_node[top] = roots[i];
-        stack_parent[top] = -1;
-        ++top;
-    }
-    while (top > 0) {
-        --top;
-        const int32_t ni = stack_node[top];
-        const int32_t pi = stack_parent[top];
-        if (ni < 0 || ni >= static_cast<int32_t>(n)) {
-            continue;
-        }
-        const glm::mat4 parent_world =
-            (pi >= 0) ? world_out[pi] : glm::mat4(1.0f);
-        world_out[ni] = parent_world * local_xforms[ni];
-        const Node& node = nodes[ni];
-        for (int32_t child : node.children) {
-            if (top >= n) {
-                break;
-            }
-            stack_node[top] = child;
-            stack_parent[top] = ni;
-            ++top;
-        }
-    }
-    arena.Rewind(mark);
-}
+// #229 P3: ComputeNodeWorldMatrices + ComputeSkinningPalette (CPU node walk +
+// CPU palette build) were dead -- superseded by the GPU anim_eval/palette path
+// (no callers anywhere). Removed here because they read Node::children /
+// Skin::{jointNodes,inverseBinds} as std::vector, which are now pointer-free
+// ArenaSlice (need the prefab arena to resolve). If a CPU fallback is ever
+// needed, restore from git and thread Engine::prefab_arena_ through.
 
-// Build the per-joint palette for one skin. For each joint j:
-//   palette[j] = inverse(mesh_node_world) * joint_world * skin.inverseBinds[j]
-// where joint_world = node_world[skin.jointNodes[j]]. The
-// inverse(mesh_node_world) prefactor is per the glTF skin spec -- it
-// converts mesh-local positions into joint-local space before the joint
-// transform is applied. Pass mesh_node_world_inv pre-computed (caller can
-// share it across multiple skins binding the same mesh node).
 // #221 Phase 9: pick the "walking" clip in a Scene. Case-insensitive
 // substring match against common animation names; falls back to clip 0
 // when no match. Returns -1 only when clips is empty. The user-curated
 // rule: prefer "walk", then "run", then first.
-// #229 P3: allocator-templated so it accepts both std-allocator and
-// block-backed (ChunkStdAllocator) clip vectors.
+// #229 P3: allocator-templated (std + ChunkStdAllocator clip vectors) and
+// takes the prefab arena to resolve the interned NameRef clip names.
 template <typename Alloc>
-inline int SelectWalkingClip(const std::vector<Clip, Alloc>& clips) {
+inline int SelectWalkingClip(const std::vector<Clip, Alloc>& clips,
+                             cairns::BumpArena& arena) {
     if (clips.empty()) {
         return -1;
     }
-    auto contains_ci = [](const std::string& s, const char* needle) {
+    auto contains_ci = [](std::string_view s, const char* needle) {
         auto lower = [](char c) { return static_cast<char>(std::tolower(c)); };
         const size_t n = std::strlen(needle);
         if (s.size() < n) {
@@ -151,11 +95,12 @@ inline int SelectWalkingClip(const std::vector<Clip, Alloc>& clips) {
             richest_channels = ch;
             richest_idx = static_cast<int>(i);
         }
-        if (best_walk < 0 && contains_ci(clips[i].name, "walk")) {
+        const std::string_view cn = ResolveName(arena, clips[i].name);
+        if (best_walk < 0 && contains_ci(cn, "walk")) {
             best_walk = static_cast<int>(i);
-        } else if (best_run < 0 && contains_ci(clips[i].name, "run")) {
+        } else if (best_run < 0 && contains_ci(cn, "run")) {
             best_run = static_cast<int>(i);
-        } else if (best_idle < 0 && contains_ci(clips[i].name, "idle")) {
+        } else if (best_idle < 0 && contains_ci(cn, "idle")) {
             best_idle = static_cast<int>(i);
         }
     }
@@ -171,21 +116,5 @@ inline int SelectWalkingClip(const std::vector<Clip, Alloc>& clips) {
     return richest_idx;
 }
 
-inline void ComputeSkinningPalette(const Skin& skin,
-                                   std::span<const glm::mat4> node_world,
-                                   const glm::mat4& mesh_node_world_inv,
-                                   std::span<glm::mat4> palette_out) {
-    const uint32_t n = static_cast<uint32_t>(skin.jointNodes.size());
-    assert(palette_out.size() >= n);
-    assert(skin.inverseBinds.size() == skin.jointNodes.size());
-    for (uint32_t j = 0; j < n; ++j) {
-        const int32_t ni = skin.jointNodes[j];
-        const glm::mat4 jw = (ni >= 0 && static_cast<size_t>(ni) <
-                              node_world.size())
-                                  ? node_world[ni]
-                                  : glm::mat4(1.0f);
-        palette_out[j] = mesh_node_world_inv * jw * skin.inverseBinds[j];
-    }
-}
 
 }  // namespace cairns

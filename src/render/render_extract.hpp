@@ -26,6 +26,7 @@ inline void ExtractFromScene(Scene::Cold& wc, const glm::mat4& root,
                              AssetRegistry& assets,
                              cairns::ResourceManager<Prefab>& prefabs_pool,
                              cairns::ResourceManager<Mesh>& meshes_pool,
+                             cairns::BumpArena& prefab_arena,
                              RenderProxyArrays& out, bool append) {
     // append=true unions multiple scenes into one proxy array (multi-scene
     // per-viewport draw fan-out); first_primitive/mesh indices stay relative
@@ -89,7 +90,7 @@ inline void ExtractFromScene(Scene::Cold& wc, const glm::mat4& root,
                 // #212 explicit pointer+size iteration. RelWithDebInfo doesn't
             // inline std::vector<int32_t>::begin()/end() reliably -- shows
             // up as ~5% self-time in the profile.
-            const int32_t* cp = node.children.data();
+            const int32_t* cp = node.children.data(prefab_arena);
             const size_t cn = node.children.size();
             for (size_t ci = 0; ci < cn; ++ci) {
                     push_or_die(cp[ci]);
@@ -125,8 +126,10 @@ inline void ExtractFromScene(Scene::Cold& wc, const glm::mat4& root,
             }
             out.meshes.push_back(proxy);
 
-            for (int32_t c : node.children) {
-                push_or_die(c);
+            const int32_t* cp2 = node.children.data(prefab_arena);
+            const size_t cn2 = node.children.size();
+            for (size_t ci = 0; ci < cn2; ++ci) {
+                push_or_die(cp2[ci]);
             }
         }
     }

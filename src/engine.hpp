@@ -433,7 +433,8 @@ public:
             cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
             cairns::Prefab::Cold* scold = prefabs_.GetCold(sid);
             if (!shot || !scold ||
-                !cairns::LoadPrefabFromGltf(p, *shot, *scold, meshes_, cpu_block_)) {
+                !cairns::LoadPrefabFromGltf(p, *shot, *scold, meshes_, cpu_block_,
+                                            prefab_arena_)) {
                 CAIRNS_PRINT_ERR("[LoadPrefabBatch] parse failed: %s\n",
                                   p.string().c_str());
                 prefabs_.Release(sid);
@@ -2105,6 +2106,17 @@ public:
             std::memset(slab, 0, kArenaBytesPerSlot);
             s.arena.Init(slab, kArenaBytesPerSlot);
         }
+        // #229 P3: carve the persistent prefab interning arena (names + nested
+        // load tables). Budget-scaled: 64 MB on the 1 GB desktop block, ~1/16th
+        // on the 256 MB mobile block (16 MB). Overflow fails loud via
+        // AllocSliceOrDie, so a too-small arena aborts with a clear message
+        // rather than corrupting. Zero-filled for deterministic padding.
+        const size_t prefab_bytes =
+            std::min<size_t>(kPrefabArenaBytes, mb.cpu_persistent_bytes / 16u);
+        void* prefab_slab = cpu_block_.Allocate(
+            static_cast<uint32_t>(prefab_bytes), 16, kRegionPersistent);
+        std::memset(prefab_slab, 0, prefab_bytes);
+        prefab_arena_.Init(prefab_slab, prefab_bytes);
         return true;
     }
 
@@ -2777,7 +2789,7 @@ public:
             const uint32_t mesh_lo =
                 static_cast<uint32_t>(s.proxies.meshes.size());
             cairns::ExtractFromScene(*wc, wh->root_transform, assets_,
-                                     prefabs_, meshes_, s.proxies,
+                                     prefabs_, meshes_, prefab_arena_, s.proxies,
                                      /*append=*/true);
             const uint32_t mesh_hi =
                 static_cast<uint32_t>(s.proxies.meshes.size());
@@ -4483,7 +4495,7 @@ public:
             return fail("scold.clips empty");
         }
         const int clip_idx =
-            cairns::SelectWalkingClip(scold->clips);
+            cairns::SelectWalkingClip(scold->clips, prefab_arena_);
         if (clip_idx < 0) {
             return fail("SelectWalkingClip returned -1");
         }
@@ -5779,7 +5791,15 @@ private:
     // CPU state is carved from here (1 GB desktop / 256 MB mobile, fail-loud).
     cairns::ChunkAllocator cpu_block_;
 
+    // #229 P3 string interning: persistent block-backed arena for the prefab
+    // load tables that used to embed std::string/std::vector headers (node/clip
+    // names, Node::children, Skin/Clip inner arrays). NameRef + ArenaSlice store
+    // byte offsets into this slab -> the pool structs become pointer-free POD.
+    // Monotonic (no per-asset free yet; reload churn bump-leaks -- bounded).
+    cairns::BumpArena prefab_arena_{};
+
     static constexpr size_t kArenaBytesPerSlot = 16u * 1024u * 1024u;
+    static constexpr size_t kPrefabArenaBytes = 64u * 1024u * 1024u;
 
     rhi::Rhi rhi_;
     // #228 H3: mesh_master_handle_ deleted. Was set in GreaterInit to
