@@ -383,12 +383,29 @@ inline bool LoadMeshFromGltf(const fastgltf::Asset& asset,
     // Skinned meshes get cpuSkinAttrs aligned with cpuPositions, padded
     // with identity-weight rows for any primitive that lacks the attribute.
     // Unskinned meshes leave cpuSkinAttrs empty so the static crowd pays 0 B/vert.
+    // #229 M3: one pre-pass for skinned-ness + total vertex/index counts, so
+    // the cpu* arrays are sized once instead of growing through the
+    // ~14-realloc doubling chain per mesh.
     bool mesh_skinned = false;
+    size_t total_verts = 0;
+    size_t total_indices = 0;
     for (const auto& primitive : gltfMesh.primitives) {
         if (primitive.findAttribute("JOINTS_0") != primitive.attributes.end()) {
             mesh_skinned = true;
-            break;
         }
+        const auto* posIt = primitive.findAttribute("POSITION");
+        if (posIt != primitive.attributes.end()) {
+            total_verts += asset.accessors[posIt->accessorIndex].count;
+        }
+        if (primitive.indicesAccessor.has_value()) {
+            total_indices += asset.accessors[*primitive.indicesAccessor].count;
+        }
+    }
+    outCold.cpuPositions.reserve(total_verts);
+    outCold.cpuAttrs.reserve(total_verts);
+    outCold.cpuIndices.reserve(total_indices);
+    if (mesh_skinned) {
+        outCold.cpuSkinAttrs.reserve(total_verts);
     }
 
     // #222 Phase S.3: accumulate bind-pose AABB across all primitives.

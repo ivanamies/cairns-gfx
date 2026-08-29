@@ -157,3 +157,26 @@ free. The residual ~47/frame (balanced) is the per-command NDJSON `json::parse`
 ### Perf (no regression)
 frame avg 6797 us (baseline 6666, within ±5% noise; GPU-dominated by
 skinning_compute 3995 us).
+
+---
+
+## M3 — load-time pre-sizing (commit pending)
+
+Pre-pass the glTF primitives for total vert/index counts → `reserve` the mesh
+`cpu*` arrays once (was a ~14-realloc doubling chain per mesh in
+`LoadMeshFromGltf`). Same for the `scene_gpu` per-batch `pos/attr/idx/skin`
+arrays. Byte-identical: spec 105/105, stress 8/8, subject 6/6.
+
+### Receipt (per-GLB load allocs)
+| | M1 | M3 |
+|---|---|---|
+| aatrox.glb | 1970 | 1921 |
+| ahri.glb | 12009 | 11957 |
+| aatrox_blood_moon.glb | 2158 | 2107 |
+| boot (100 GLBs) | 500,872 | 497,257 |
+
+**Modest (~50/GLB)** — the doubling chains ARE gone, but meshes/GLB is small so
+the absolute win is small. The bulk per-GLB residual (~1900) is fastgltf-internal
+allocation + many small load vectors (nodes/clips/channels/textures); those are
+**M0b's arena target** (carve from one reservation → bump, not malloc). M3's
+pre-sizing makes those arena carves correctly-sized.

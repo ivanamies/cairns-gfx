@@ -137,6 +137,25 @@ inline bool LoadPrefabsGpu(std::span<const cairns::PrefabId> prefab_ids,
         std::vector<uint32_t> idx_batch;
         std::vector<PackedSkinVertex> skin_batch;
         std::vector<SkinVertex> skin_raw;
+        // #229 M3: pre-pass the batch's meshes for the total vert/index/skin
+        // counts, then reserve once -- the insert/push_back loop below does one
+        // alloc per stream instead of a doubling chain per mesh.
+        size_t batch_verts = 0;
+        size_t batch_indices = 0;
+        size_t batch_skin = 0;
+        for (size_t s = batch_start; s < batch_end; ++s) {
+            Prefab::Hot* shot = prefabs_pool.GetHot(prefab_ids[s]);
+            for (cairns::Handle<Mesh> mid : shot->meshes) {
+                Mesh::Cold* mcold = meshes_pool.GetCold(mid);
+                batch_verts += mcold->cpuPositions.size();
+                batch_indices += mcold->cpuIndices.size();
+                batch_skin += mcold->cpuSkinAttrs.size();
+            }
+        }
+        pos_batch.reserve(batch_verts);
+        attr_batch.reserve(batch_verts);
+        idx_batch.reserve(batch_indices);
+        skin_batch.reserve(batch_skin);
         for (size_t s = batch_start; s < batch_end; ++s) {
             Prefab::Hot* shot = prefabs_pool.GetHot(prefab_ids[s]);
             for (cairns::Handle<Mesh> mid : shot->meshes) {
