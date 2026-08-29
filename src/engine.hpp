@@ -128,13 +128,19 @@ public:
     static constexpr int kNumViewportsPerSlot = 4;  // #194 matches kNumViewports
     struct PerSlot {
         cairns::RenderProxyArrays proxies;
-        std::vector<cairns::Draw> drawList;
-        std::vector<std::pair<cairns::DrawKey, uint32_t>> drawListSorted;
-        std::vector<rhi::Handle<rhi::Texture>> resident_textures;
-        std::vector<glm::mat4> draw_world_matrices;
+        // #219 Chunk A: these five per-frame arrays now ride the slot's
+        // BumpArena. Producer (BuildMeshOpaqueDraws / RecordFrame's resident
+        // texture gather) counts first, then arena.AllocateArray, then fills
+        // by index. Lifetime: valid from arena.Reset() at slot Acquire
+        // through render thread's Submit + completion of this slot's frame.
+        // Next Acquire on the same slot resets and reuses the bytes.
+        std::span<cairns::Draw> drawList;
+        std::span<std::pair<cairns::DrawKey, uint32_t>> drawListSorted;
+        std::span<rhi::Handle<rhi::Texture>> resident_textures;
+        std::span<glm::mat4> draw_world_matrices;
         // #207 parallel to draw_world_matrices; baked from MeshProxy::entity_id
         // by BuildMeshOpaqueDraws so unlit.frag can write the per-fragment id.
-        std::vector<uint32_t> draw_entity_ids;
+        std::span<uint32_t> draw_entity_ids;
         // Per-viewport camera state. One RenderPassGlobals upload per
         // viewport at distinct globals_offset; RecordFrame issues one
         // forward pass per viewport with the matching offset.
@@ -954,10 +960,19 @@ public:
         for (const cairns::MeshProxy& mp : s.proxies.meshes.data) {
             total_draws += mp.primitive_count;
         }
-        s.drawList.resize(total_draws);
-        s.drawListSorted.resize(total_draws);
-        s.draw_world_matrices.resize(total_draws);
-        s.draw_entity_ids.resize(total_draws);
+        // #219 Chunk A: count-then-allocate on the per-slot BumpArena. The
+        // arena was reset at slot Acquire and is exclusively ours until
+        // the render thread submits this slot's frame. No std::vector
+        // heap; no .resize() pump-and-shrink.
+        using DrawKeyPair = std::pair<cairns::DrawKey, uint32_t>;
+        s.drawList = {
+            s.arena.AllocateArray<cairns::Draw>(total_draws), total_draws};
+        s.drawListSorted = {
+            s.arena.AllocateArray<DrawKeyPair>(total_draws), total_draws};
+        s.draw_world_matrices = {
+            s.arena.AllocateArray<glm::mat4>(total_draws), total_draws};
+        s.draw_entity_ids = {
+            s.arena.AllocateArray<uint32_t>(total_draws), total_draws};
 
         // Fill pass -- stable_idx assigned by prefix sum over the proxy walk
         // (deterministic of input order, independent of execution order so a
@@ -1205,10 +1220,20 @@ public:
         t_build.End();
         std::sort(s.drawListSorted.begin(), s.drawListSorted.end());
 
-        s.resident_textures.clear();
+        // #219 Chunk A: count-then-allocate the resident-textures gather on
+        // the per-slot BumpArena. scenes_ + textureHandles are persistent
+        // engine state, so two-pass costs nothing.
+        uint32_t rt_count = 0;
+        for (auto& scene : scenes_) {
+            rt_count += static_cast<uint32_t>(scene.textureHandles.size());
+        }
+        s.resident_textures = {
+            s.arena.AllocateArray<rhi::Handle<rhi::Texture>>(rt_count),
+            rt_count};
+        uint32_t rt_idx = 0;
         for (auto& scene : scenes_) {
             for (const auto th : scene.textureHandles) {
-                s.resident_textures.push_back(th);
+                s.resident_textures[rt_idx++] = th;
             }
         }
 
