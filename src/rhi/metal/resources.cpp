@@ -93,6 +93,7 @@ bool Resources::Init(Device& device) {
     }
     plat.device_ = device.plat.device_;
     plat.queue_ = device.plat.queue_;
+    plat.resources_ = this;
     inited_ = true;
     return true;
 }
@@ -230,7 +231,7 @@ void Resources::UploadBuffer(Allocator& alloc, Handle<Buffer> h,
     Buffer::Cold* cold = buffers.GetCold(h);
     assert(hot && cold && "UploadBuffer: bad handle");
     if (is_host_visible(cold->mem_type)) {
-        uint8_t* dst = MappedPtr(alloc, h);
+        uint8_t* dst = plat.MappedPtr(alloc, h);
         if (dst) {
             std::memcpy(dst + dst_offset, data.data(), data.size());
         }
@@ -429,18 +430,18 @@ Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
 
 uint32_t Resources::BufferBaseOffset(Allocator& alloc, Handle<Buffer> h) {
     uint32_t off = 0;
-    GetMtlBuffer(alloc, h, &off);
+    plat.GetMtlBuffer(alloc, h, &off);
     return off;
 }
 
-MTL::Buffer* Resources::GetMtlBuffer(Allocator& alloc, Handle<Buffer> h, uint32_t* out_offset) {
+MTL::Buffer* ResourcesPlat::GetMtlBuffer(Allocator& alloc, Handle<Buffer> h, uint32_t* out_offset) {
     if (h.generation == 0) {  // bump-master sentinel from BumpMasterBuffer()
         if (out_offset) {
             *out_offset = 0;
         }
         return alloc.plat.memory_.HeapMasterBuffer(h.index);
     }
-    Buffer::Hot* hot = buffers.GetHot(h);
+    Buffer::Hot* hot = resources_->buffers.GetHot(h);
     assert(hot && "GetMtlBuffer: invalid buffer handle");
     if (!hot) {
         if (out_offset) {
@@ -454,8 +455,8 @@ MTL::Buffer* Resources::GetMtlBuffer(Allocator& alloc, Handle<Buffer> h, uint32_
     return alloc.plat.memory_.HeapMasterBuffer(hot->heap_buffer_index);
 }
 
-uint8_t* Resources::MappedPtr(Allocator& alloc, Handle<Buffer> h) {
-    Buffer::Hot* hot = buffers.GetHot(h);
+uint8_t* ResourcesPlat::MappedPtr(Allocator& alloc, Handle<Buffer> h) {
+    Buffer::Hot* hot = resources_->buffers.GetHot(h);
     if (!hot) {
         return nullptr;
     }
@@ -467,7 +468,7 @@ uint8_t* Resources::MappedPtr(Allocator& alloc, Handle<Buffer> h) {
     return base + hot->offset_in_heap;
 }
 
-MTL::Buffer* Resources::GetBumpMasterBuffer(Allocator& alloc, Memory mem) const {
+MTL::Buffer* ResourcesPlat::GetBumpMasterBuffer(Allocator& alloc, Memory mem) const {
     uint32_t hi = alloc.plat.memory_.BumpMasterHeapIndex(mem);
     if (hi == metal::kInvalidBlock) {
         return nullptr;

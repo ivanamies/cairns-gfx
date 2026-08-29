@@ -34,7 +34,7 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
     for (size_t i = 0; i < d.buffers.size(); ++i) {
         const BoundBuffer& b = d.buffers[i];
         uint32_t off = 0;
-        MTL::Buffer* buf = res.GetMtlBuffer(alloc,b.buffer, &off);
+        MTL::Buffer* buf = res.plat.GetMtlBuffer(alloc,b.buffer, &off);
         cenc->setBuffer(buf, off + b.offset, b.slot);
     }
     cenc->dispatchThreadgroups(MTL::Size{d.groups_x, d.groups_y, d.groups_z},
@@ -104,7 +104,7 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
             enc->useResource(tex, MTL::ResourceUsageRead, MTL::RenderStageFragment);
         }
     }
-    MTL::Buffer* dyn_master = res.GetBumpMasterBuffer(alloc, Memory::kDynamic);
+    MTL::Buffer* dyn_master = res.plat.GetBumpMasterBuffer(alloc, Memory::kDynamic);
     enc->setVertexBuffer(dyn_master, list.globals_offset, cairns::kRenderPassGlobalBindSlot);
     enc->setVertexBuffer(dyn_master, 0, cairns::kMaterialBindSlot);
     enc->setVertexBuffer(dyn_master, 0, cairns::kDrawTmpBindSlot);
@@ -129,7 +129,7 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
         }
         {
             uint32_t pos_off = 0;
-            MTL::Buffer* pos_buf = res.GetMtlBuffer(
+            MTL::Buffer* pos_buf = res.plat.GetMtlBuffer(
                 alloc, draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
             if (pos_buf != last_pos_buf || pos_off != last_pos_off) {
                 last_pos_buf = pos_buf;
@@ -140,7 +140,7 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
         }
         {
             uint32_t attr_off = 0;
-            MTL::Buffer* attr_buf = res.GetMtlBuffer(
+            MTL::Buffer* attr_buf = res.plat.GetMtlBuffer(
                 alloc, draw.vertex_buffers[cairns::Draw::kVertexBufferAttrSlot], &attr_off);
             if (attr_buf != last_attr_buf || attr_off != last_attr_off) {
                 last_attr_buf = attr_buf;
@@ -159,7 +159,7 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
         enc->setVertexBufferOffset(draw.dynamic_buffer_offsets[1], cairns::kDrawTmpBindSlot);
         {
             uint32_t index_master_off = 0;
-            MTL::Buffer* index_buffer = res.GetMtlBuffer(alloc,draw.index_buffer, &index_master_off);
+            MTL::Buffer* index_buffer = res.plat.GetMtlBuffer(alloc,draw.index_buffer, &index_master_off);
             enc->drawIndexedPrimitives(MTL::PrimitiveTypeTriangle, draw.triangle_count * 3,
                                        MTL::IndexTypeUInt32, index_buffer, draw.index_offset, 1,
                                        draw.vertex_offset, 0);
@@ -170,7 +170,7 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
 void CommandRecorder::DrawPoints(Resources& res, Allocator& alloc, const PointDraw& pd) {
     plat.enc_->setRenderPipelineState(res.GetHot(pd.pipeline)->api_pso);
     uint32_t off = 0;
-    MTL::Buffer* buf = res.GetMtlBuffer(alloc,pd.vertex_buffer, &off);
+    MTL::Buffer* buf = res.plat.GetMtlBuffer(alloc,pd.vertex_buffer, &off);
     plat.enc_->setVertexBuffer(buf, off, 0);
     plat.enc_->drawPrimitives(MTL::PrimitiveTypePoint, NS::UInteger(pd.vertex_offset),
                                NS::UInteger(pd.vertex_count));
@@ -205,7 +205,7 @@ void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader>
                      0.0, 1.0};
     enc->setViewport(vp);
 
-    MTL::Buffer* master = res.GetBumpMasterBuffer(alloc, Memory::kDynamic);
+    MTL::Buffer* master = res.plat.GetBumpMasterBuffer(alloc, Memory::kDynamic);
     const ImVec2 clip_off = dd->DisplayPos;
     for (int n = 0; n < dd->CmdListsCount; ++n) {
         const ImDrawList* cl = dd->CmdLists[n];

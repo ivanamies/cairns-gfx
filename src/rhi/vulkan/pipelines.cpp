@@ -387,7 +387,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     VkDescriptorSetLayout imgui_set_layout = VK_NULL_HANDLE;
     if (ls == "unlit" || ls == "unlit_offscreen") {
         set_layouts = {frames.plat.globals_set_layout_,      // set 0: globals (once/frame)
-                       resources.MaterialSetLayout(),   // set 1: per-material
+                       resources.plat.MaterialSetLayout(),   // set 1: per-material
                        frames.plat.drawtmp_set_layout_};     // set 2: drawtmp (per draw)
     } else if (ls == "composite_pip" || ls == "depthviz") {
         set_layouts = {frames.plat.composite_set_layout_};   // 1 COMBINED_IMAGE_SAMPLER frag

@@ -3,8 +3,10 @@
 // The resource pools (Aaltonen "arrays you walk") + their create/destroy/get +
 // pipeline creation. Depends on Device + Allocator. The 7 typed ResourceManager<T> are
 // public members; convenience methods delegate to them. Handle-resolving helpers
-// (BufferBaseOffset/MappedPtr/GetVkBuffer/GetMtlBuffer) live here because they
-// need the pool to resolve a Handle.
+// for backend-typed handles (VkBuffer / MTL::Buffer*) live on ResourcesPlat so
+// the common header has no #if-gated public surface; the plat holds a
+// back-pointer to its owning Resources for pool access. BufferBaseOffset stays
+// on the common surface (backend-neutral signature).
 
 #pragma once
 
@@ -73,31 +75,17 @@ public:
     // Byte offset of a buffer within its backing master allocation.
     uint32_t BufferBaseOffset(Allocator& alloc, Handle<Buffer> h);
 
-#if CAIRNS_VULKAN
-    // Native-handle resolution used by the Vulkan CommandRecorder + Bindless.
-    VkBuffer GetVkBuffer(Allocator& alloc, Handle<Buffer> h, uint32_t* out_offset);
-    VkBuffer GetVkBumpMasterBuffer(Allocator& alloc, Memory mem);
-    uint8_t* MappedPtr(Allocator& alloc, Handle<Buffer> h);
-    // set 2: shared layout for per-material combined image+sampler bind groups
-    // (created lazily on first CreateBindGroup). The unlit pipeline layout references it.
-    VkDescriptorSetLayout MaterialSetLayout();
-#endif  // CAIRNS_VULKAN
-
-#if CAIRNS_METAL
-    // Native-handle resolution used by the Metal CommandRecorder + Bindless.
-    MTL::Buffer* GetMtlBuffer(Allocator& alloc, Handle<Buffer> h, uint32_t* out_offset);
-    uint8_t* MappedPtr(Allocator& alloc, Handle<Buffer> h);
-    MTL::Buffer* GetBumpMasterBuffer(Allocator& alloc, Memory mem) const;
-#endif  // CAIRNS_METAL
+    // Native-handle resolution + MaterialSetLayout (vk-only) live on plat.
+    // External callers go `res.plat.GetVkBuffer(...)` / `res.plat.GetMtlBuffer(...)`
+    // / `res.plat.MaterialSetLayout()` etc. Plat holds a back-pointer to its
+    // owning Resources for pool access.
+    ResourcesPlat plat;
 
     // Advance the resource frame counter (drives deferred-free + the bump ring).
     void AdvanceFrame(Allocator& alloc);
     uint32_t FrameIndex() const;
 
 private:
-    // Internal state — self-only (Bindless/CommandRecorder/Pipelines use the
-    // PUBLIC pools + methods above, never this).
-    ResourcesPlat plat;
     bool inited_ = false;
 };
 

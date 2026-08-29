@@ -279,6 +279,7 @@ bool Resources::Init(Device& device) {
     plat.command_pool_ = device.plat.command_pool_;
     plat.queue_ = device.plat.graphics_queue_;
     plat.physical_ = device.plat.physical_;
+    plat.resources_ = this;
     inited_ = true;
     return true;
 }
@@ -430,7 +431,7 @@ void Resources::UploadBuffer(Allocator& alloc, Handle<Buffer> h,
     Buffer::Cold* cold = buffers.GetCold(h);
     assert(hot && cold && "UploadBuffer: bad handle");
     if (is_host_visible(cold->mem_type)) {
-        uint8_t* dst = MappedPtr(alloc, h);
+        uint8_t* dst = plat.MappedPtr(alloc, h);
         if (dst) {
             std::memcpy(dst + dst_offset, data.data(), data.size());
         }
@@ -603,9 +604,9 @@ Handle<Sampler> Resources::CreateSampler(const SamplerDesc& d) {
     return h;
 }
 
-VkDescriptorSetLayout Resources::MaterialSetLayout() {
-    if (plat.material_set_layout_ != VK_NULL_HANDLE) {
-        return plat.material_set_layout_;
+VkDescriptorSetLayout ResourcesPlat::MaterialSetLayout() {
+    if (material_set_layout_ != VK_NULL_HANDLE) {
+        return material_set_layout_;
     }
     VkDescriptorSetLayoutBinding b{};
     b.binding = 0;
@@ -616,7 +617,7 @@ VkDescriptorSetLayout Resources::MaterialSetLayout() {
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     li.bindingCount = 1;
     li.pBindings = &b;
-    vkCreateDescriptorSetLayout(plat.device_, &li, nullptr, &plat.material_set_layout_);
+    vkCreateDescriptorSetLayout(device_, &li, nullptr, &material_set_layout_);
 
     VkDescriptorPoolSize ps{};
     ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -626,12 +627,12 @@ VkDescriptorSetLayout Resources::MaterialSetLayout() {
     pi.maxSets = 4096;
     pi.poolSizeCount = 1;
     pi.pPoolSizes = &ps;
-    vkCreateDescriptorPool(plat.device_, &pi, nullptr, &plat.material_pool_);
-    return plat.material_set_layout_;
+    vkCreateDescriptorPool(device_, &pi, nullptr, &material_pool_);
+    return material_set_layout_;
 }
 
 Handle<BindGroup> Resources::CreateBindGroup(const BindGroupDesc& desc) {
-    MaterialSetLayout();  // ensure shared layout + pool exist
+    plat.MaterialSetLayout();  // ensure shared layout + pool exist
     VkDescriptorSetAllocateInfo ai{};
     ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     ai.descriptorPool = plat.material_pool_;
@@ -672,7 +673,7 @@ Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
     return Handle<DynamicBuffers>::Null;
 }
 
-VkBuffer Resources::GetVkBumpMasterBuffer(Allocator& alloc, Memory mem) {
+VkBuffer ResourcesPlat::GetVkBumpMasterBuffer(Allocator& alloc, Memory mem) {
     void* p = alloc.BumpAllocate(1, 1, mem);
     (void)p;
     uint32_t hi = alloc.plat.memory_.BumpMasterHeapIndex(mem);
@@ -681,18 +682,18 @@ VkBuffer Resources::GetVkBumpMasterBuffer(Allocator& alloc, Memory mem) {
 
 uint32_t Resources::BufferBaseOffset(Allocator& alloc, Handle<Buffer> h) {
     uint32_t off = 0;
-    GetVkBuffer(alloc, h, &off);
+    plat.GetVkBuffer(alloc, h, &off);
     return off;
 }
 
-VkBuffer Resources::GetVkBuffer(Allocator& alloc, Handle<Buffer> h, uint32_t* out_offset) {
+VkBuffer ResourcesPlat::GetVkBuffer(Allocator& alloc, Handle<Buffer> h, uint32_t* out_offset) {
     if (h.generation == 0) {
         if (out_offset) {
             *out_offset = 0;
         }
         return alloc.plat.memory_.HeapMasterBuffer(h.index);
     }
-    Buffer::Hot* hot = buffers.GetHot(h);
+    Buffer::Hot* hot = resources_->buffers.GetHot(h);
     if (!hot) {
         if (out_offset) {
             *out_offset = 0;
@@ -705,8 +706,8 @@ VkBuffer Resources::GetVkBuffer(Allocator& alloc, Handle<Buffer> h, uint32_t* ou
     return alloc.plat.memory_.HeapMasterBuffer(hot->heap_buffer_index);
 }
 
-uint8_t* Resources::MappedPtr(Allocator& alloc, Handle<Buffer> h) {
-    Buffer::Hot* hot = buffers.GetHot(h);
+uint8_t* ResourcesPlat::MappedPtr(Allocator& alloc, Handle<Buffer> h) {
+    Buffer::Hot* hot = resources_->buffers.GetHot(h);
     if (!hot) {
         return nullptr;
     }

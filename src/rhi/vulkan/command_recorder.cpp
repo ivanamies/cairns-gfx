@@ -224,7 +224,7 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
     for (size_t i = 0; i < n; ++i) {
         const BoundBuffer& b = d.buffers[i];
         uint32_t off = 0;
-        VkBuffer buf = res.GetVkBuffer(alloc,b.buffer, &off);
+        VkBuffer buf = res.plat.GetVkBuffer(alloc,b.buffer, &off);
         const bool is_ubo = (b.slot == 0);
         infos[i].buffer = buf;
         infos[i].offset = off + b.offset;
@@ -363,7 +363,7 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     // Aaltonen frequency split: globals = set 0 (one dynamic UBO, bound once per
     // frame), drawtmp = set 2 (one dynamic UBO, one offset per draw). Each is its own
     // descriptor set so the per-draw bind carries a single dynamic offset.
-    VkBuffer bump_buf = res.GetVkBumpMasterBuffer(alloc, Memory::kDynamic);
+    VkBuffer bump_buf = res.plat.GetVkBumpMasterBuffer(alloc, Memory::kDynamic);
     std::array<VkWriteDescriptorSet, 2> writes{};
     std::array<VkDescriptorBufferInfo, 2> buf_infos{};
     const VkDescriptorSet sets[2] = {plat.globals_set_, plat.drawtmp_set_};
@@ -414,7 +414,7 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
         }
         uint32_t pos_off = 0;
         VkBuffer pos_buf =
-            res.GetVkBuffer(alloc,draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
+            res.plat.GetVkBuffer(alloc,draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
         if (pos_buf != last_pos_buf || pos_off != last_pos_off) {
             last_pos_buf = pos_buf;
             last_pos_off = pos_off;
@@ -423,7 +423,7 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
         }
         uint32_t attr_off = 0;
         VkBuffer attr_buf =
-            res.GetVkBuffer(alloc,draw.vertex_buffers[cairns::Draw::kVertexBufferAttrSlot], &attr_off);
+            res.plat.GetVkBuffer(alloc,draw.vertex_buffers[cairns::Draw::kVertexBufferAttrSlot], &attr_off);
         if (attr_buf != last_attr_buf || attr_off != last_attr_off) {
             last_attr_buf = attr_buf;
             last_attr_off = attr_off;
@@ -431,7 +431,7 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
             vkCmdBindVertexBuffers(cb, cairns::kMeshAttrVertexBindSlot, 1, &attr_buf, &off);
         }
         uint32_t idx_base = 0;
-        VkBuffer idx_buf = res.GetVkBuffer(alloc,draw.index_buffer, &idx_base);
+        VkBuffer idx_buf = res.plat.GetVkBuffer(alloc,draw.index_buffer, &idx_base);
         if (idx_buf != last_idx_buf || idx_base != last_idx_off) {
             last_idx_buf = idx_buf;
             last_idx_off = idx_base;
@@ -451,7 +451,7 @@ void CommandRecorder::DrawPoints(Resources& res, Allocator& alloc, const PointDr
     Shader::Hot* p = res.GetHot(pd.pipeline);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p->plat.vk_pipeline);
     uint32_t ssbo_off = 0;
-    VkBuffer ssbo = res.GetVkBuffer(alloc,pd.vertex_buffer, &ssbo_off);
+    VkBuffer ssbo = res.plat.GetVkBuffer(alloc,pd.vertex_buffer, &ssbo_off);
     VkDeviceSize off = ssbo_off;
     vkCmdBindVertexBuffers(cb, 0, 1, &ssbo, &off);
     VkDescriptorSet point_set = plat.point_set_;
@@ -510,7 +510,7 @@ void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader>
     vp.maxDepth = 1.0f;
     vkCmdSetViewport(plat.gfx_, 0, 1, &vp);
 
-    VkBuffer master = res.GetVkBumpMasterBuffer(alloc, Memory::kDynamic);
+    VkBuffer master = res.plat.GetVkBumpMasterBuffer(alloc, Memory::kDynamic);
     const ImVec2 clip_off = dd->DisplayPos;
     for (int n = 0; n < dd->CmdListsCount; ++n) {
         const ImDrawList* cl = dd->CmdLists[n];
