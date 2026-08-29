@@ -1191,6 +1191,12 @@ VkBuffer ResourceManager::GetVkBumpMasterBuffer(Memory mem) {
 }
 
 VkBuffer ResourceManager::GetVkBuffer(Handle<Buffer> h, uint32_t* out_offset) {
+    if (h.generation == 0) {
+        if (out_offset) {
+            *out_offset = 0;
+        }
+        return impl_->memory.HeapMasterBuffer(h.index);
+    }
     Buffer::Hot* hot = impl_->buffers.GetHot(h);
     if (!hot) {
         if (out_offset) {
@@ -1235,6 +1241,32 @@ struct CommandRecorder::Impl {
 void CommandRecorder::Dispatch(const ComputeDispatch& d) {
     Kernel::Hot* k = impl_->rm->GetHot(d.kernel);
     VkDescriptorSet set = impl_->fr.compute_sets[impl_->frame];
+
+    const size_t n = d.buffers.size();
+    std::vector<VkDescriptorBufferInfo> infos(n);
+    std::vector<VkWriteDescriptorSet> writes(n);
+    for (size_t i = 0; i < n; ++i) {
+        const BoundBuffer& b = d.buffers[i];
+        uint32_t off = 0;
+        VkBuffer buf = impl_->rm->GetVkBuffer(b.buffer, &off);
+        const bool is_ubo = (b.slot == 0);
+        infos[i].buffer = buf;
+        infos[i].offset = off + b.offset;
+        infos[i].range = is_ubo ? impl_->fr.compute_ubo_range : VK_WHOLE_SIZE;
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = set;
+        writes[i].dstBinding = b.slot;
+        writes[i].dstArrayElement = 0;
+        writes[i].descriptorType = is_ubo ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                                          : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[i].descriptorCount = 1;
+        writes[i].pBufferInfo = &infos[i];
+    }
+    if (n > 0) {
+        vkUpdateDescriptorSets(impl_->device, static_cast<uint32_t>(n), writes.data(), 0,
+                               nullptr);
+    }
+
     vkCmdBindPipeline(impl_->comp, VK_PIPELINE_BIND_POINT_COMPUTE, k->vk_pipeline);
     vkCmdBindDescriptorSets(impl_->comp, VK_PIPELINE_BIND_POINT_COMPUTE, k->vk_layout,
                             0, 1, &set, 0, nullptr);

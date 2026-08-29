@@ -562,6 +562,7 @@ struct VkFrameResources {
     const VkDescriptorSet* dyn_ubo_sets = nullptr;
     const VkDescriptorSet* compute_sets = nullptr;
     const VkDescriptorSet* point_sets = nullptr;
+    uint32_t compute_ubo_range = 0;
 };
 #elif CAIRNS_METAL
 struct BackendInitParams {

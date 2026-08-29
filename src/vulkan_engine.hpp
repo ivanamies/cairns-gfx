@@ -490,6 +490,7 @@ private:
             fr.dyn_ubo_sets = dynUboSets_.data();
             fr.compute_sets = computeDescriptorSets.data();
             fr.point_sets = descriptorSets2.data();
+            fr.compute_ubo_range = sizeof(ParameterUBO);
             rm_.VkRegisterFrame(fr);
         }
         return true;
@@ -2042,7 +2043,15 @@ private:
 
     bool drawFrame() {
         rhi::FrameContext fc = rm_.BeginFrame(sc_);
-        updateComputeUniformBuffer(fc.frame_index);
+
+        const uint64_t now_ticks = SDL_GetTicks();
+        float delta_time = 0.016f;
+#if !defined(CAIRNS_FREEZE_ROT) || !CAIRNS_FREEZE_ROT
+        if (last_ticks_ > 0) {
+            delta_time = static_cast<float>(now_ticks - last_ticks_) / 1000.0f;
+        }
+#endif
+        last_ticks_ = now_ticks;
 
         if (!BuildMeshOpaqueDraws()) {
             return false;
@@ -2059,11 +2068,21 @@ private:
             }
         }
 
+        float* dt_ptr = static_cast<float*>(
+            rm_.BumpAllocate(sizeof(float), ubo_align_, rhi::Memory::kDynamic));
+        *dt_ptr = delta_time;
+        const uint32_t dt_off = rm_.BumpOffset(dt_ptr);
+
+        rhi::BoundBuffer cbufs[3] = {
+            {0, rm_.BumpMasterBuffer(rhi::Memory::kDynamic), dt_off},
+            {1, ssbo_[particle_parity_], 0},
+            {2, ssbo_[1 - particle_parity_], 0},
+        };
         rhi::ComputeDispatch cd{};
         cd.kernel = particle_kernel_;
+        cd.buffers = rhi::Span<const rhi::BoundBuffer>(cbufs, 3);
         cd.groups_x = PARTICLE_COUNT / 256;
-        cd.groups_y = 1;
-        cd.groups_z = 1;
+        cd.local_x = 256;
         fc.cmd.Dispatch(cd);
 
         rhi::ColorAttachment col[1]{};
@@ -2091,13 +2110,14 @@ private:
 
         rhi::PointDraw pd{};
         pd.pipeline = particle_render_shader_;
-        pd.vertex_buffer = ssbo_[fc.frame_index];
+        pd.vertex_buffer = ssbo_[1 - particle_parity_];
         pd.vertex_offset = 0;
         pd.vertex_count = PARTICLE_COUNT;
         fc.cmd.DrawPoints(pd);
 
         fc.cmd.EndRenderPass();
         rm_.EndFrame(fc);
+        particle_parity_ ^= 1;
 
         if constexpr (vk_debug_has(vk_debug::kDumpSwapchain)) {
             if ( dumpFrameCounter == 60 ) {
@@ -2381,6 +2401,8 @@ private:
     std::vector<std::pair<cairns::DrawKey, uint32_t>> drawListSorted_;
     std::vector<uint32_t> sorted_draw_indices_;
     std::vector<rhi::Handle<rhi::Texture>> resident_textures_;
+    uint32_t particle_parity_ = 0;
+    uint64_t last_ticks_ = 0;
 
     VkDescriptorPool descriptorPool;
     std::vector<VkDescriptorSet> descriptorSets;
