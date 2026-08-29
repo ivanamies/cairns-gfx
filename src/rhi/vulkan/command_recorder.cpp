@@ -57,6 +57,7 @@ static VkFormat to_vk_format(Format f) {
         case Format::kRgba8Unorm: return VK_FORMAT_R8G8B8A8_UNORM;
         case Format::kBgra8Unorm: return VK_FORMAT_B8G8R8A8_UNORM;
         case Format::kR32Uint:    return VK_FORMAT_R32_UINT;
+        case Format::kRgba16F:    return VK_FORMAT_R16G16B16A16_SFLOAT;
         case Format::kD32F: return VK_FORMAT_D32_SFLOAT;
         default: return VK_FORMAT_UNDEFINED;
     }

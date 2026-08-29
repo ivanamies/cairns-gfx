@@ -35,6 +35,7 @@ WGPUTextureFormat PipeFormat(Format f) {
         case Format::kRgba8Unorm: return WGPUTextureFormat_RGBA8Unorm;
         case Format::kRgba8Srgb: return WGPUTextureFormat_RGBA8UnormSrgb;
         case Format::kR32Uint: return WGPUTextureFormat_R32Uint;
+        case Format::kRgba16F: return WGPUTextureFormat_RGBA16Float;
         case Format::kD32F: return WGPUTextureFormat_Depth32Float;
         default: return WGPUTextureFormat_BGRA8Unorm;
     }

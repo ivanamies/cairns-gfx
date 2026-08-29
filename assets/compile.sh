@@ -8,3 +8,6 @@ glslc depthviz.frag -o depthviz.frag.spv
 glslc lit.vert -o lit.vert.spv
 glslc lit.frag -o lit.frag.spv
 glslc lit_noid.frag -o lit_noid.frag.spv
+glslc kuwahara_tensor.frag -o kuwahara_tensor.frag.spv
+glslc kuwahara_tfm.frag -o kuwahara_tfm.frag.spv
+glslc kuwahara_filter.frag -o kuwahara_filter.frag.spv

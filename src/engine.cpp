@@ -1235,6 +1235,36 @@ bool Engine::initRenderPipeline() {
             outline_pip_ = rhi_.pipelines.CreateGraphicsPipeline(
                 rhi_.resources, rhi_.frames, opd);
 
+            // Kuwahara triplet: outline's shape (1-sample, no depth, graph
+            // color target). tensor/tfm write RGBA16F intermediates; filter
+            // writes BGRA like the forward color it replaces. Null = chain
+            // disabled honestly (shadow_pso_ pattern).
+            rhi::GraphicsPipelineDesc ktd = opd;
+            ktd.logical_shader = "kuwahara_tensor";
+            ktd.debug_name = "kuwahara_tensor";
+            ktd.color_format = rhi::Format::kRgba16F;
+            kuwahara_tensor_pip_ = rhi_.pipelines.CreateGraphicsPipeline(
+                rhi_.resources, rhi_.frames, ktd);
+            rhi::GraphicsPipelineDesc kfd = ktd;
+            kfd.logical_shader = "kuwahara_tfm";
+            kfd.debug_name = "kuwahara_tfm";
+            kuwahara_tfm_pip_ = rhi_.pipelines.CreateGraphicsPipeline(
+                rhi_.resources, rhi_.frames, kfd);
+            rhi::GraphicsPipelineDesc kld = opd;
+            kld.logical_shader = "kuwahara_filter";
+            kld.debug_name = "kuwahara_filter";
+            kuwahara_filter_pip_ = rhi_.pipelines.CreateGraphicsPipeline(
+                rhi_.resources, rhi_.frames, kld);
+            if (kuwahara_tensor_pip_.IsNull() || kuwahara_tfm_pip_.IsNull() ||
+                kuwahara_filter_pip_.IsNull()) {
+                CAIRNS_PRINT_ERR(
+                    "[postfx] kuwahara PSOs unavailable -- post-effect chain "
+                    "disabled on this backend\n");
+                kuwahara_tensor_pip_ = ShaderHandle::Null;
+                kuwahara_tfm_pip_ = ShaderHandle::Null;
+                kuwahara_filter_pip_ = ShaderHandle::Null;
+            }
+
             if (composite_pip_.IsNull() || depthviz_.IsNull() ||
                 outline_pip_.IsNull()) {
                 std::exit(0);
@@ -1783,6 +1813,157 @@ void Engine::RecordFrame(FramePacket& pkt) {
             }
         }
 
+        // pass 2.75: post-effect chain. Extracted PostEffect components
+        // append fullscreen passes per viewport (chain input = the outline
+        // output when that ran, so chrome sits under the effect); swap
+        // samples the chain's final output. Setup lambdas run inside
+        // AddPass, so `cur` threads pass N's output into pass N+1's inputs.
+        struct PostFxParamsGpu {
+            glm::vec4 screen;  // x = 1/w, y = 1/h, z = w, w = h
+            glm::vec4 p0;
+            glm::vec4 p1;
+            glm::vec4 p2;
+        };
+        static_assert(sizeof(PostFxParamsGpu) == 64,
+                      "postfx params block must match the 64B dyn-UBO range");
+        std::array<rhi::GraphTexture, kNumViewports> chain_out{};
+        std::array<bool, kNumViewports> chain_ran{};
+        // Execute lambdas resolve these after the build loop ends -- they
+        // must outlive it, hence arrays here and not loop locals.
+        std::array<std::array<rhi::GraphTexture, PerSlot::kMaxPostEffects>,
+                   kNumViewports> fx_tensor{};
+        std::array<std::array<rhi::GraphTexture, PerSlot::kMaxPostEffects>,
+                   kNumViewports> fx_tfm{};
+        std::array<std::array<rhi::GraphTexture, PerSlot::kMaxPostEffects>,
+                   kNumViewports> fx_out{};
+        // Declared at pass-build scope (NOT inside the if): the execute
+        // lambdas capture this by reference and run at graph Execute.
+        auto push_params = [&](rhi::CommandRecorder& cmd,
+                               uint32_t fx_idx,
+                               rhi::Handle<rhi::Shader> pso,
+                               std::span<const rhi::Handle<rhi::Texture>>
+                                   texs) {
+            PostFxParamsGpu pp{};
+            pp.screen = glm::vec4(1.0f / static_cast<float>(vp_w),
+                                  1.0f / static_cast<float>(vp_h),
+                                  static_cast<float>(vp_w),
+                                  static_cast<float>(vp_h));
+            pp.p0 = s.post_effects[fx_idx].p0;
+            pp.p1 = s.post_effects[fx_idx].p1;
+            uint32_t off = 0;
+            void* ptr = rhi_.alloc.BumpAllocate(
+                sizeof(pp), 256, rhi::Memory::kDynamic, &off);
+            if (!ptr) {
+                return;
+            }
+            std::memcpy(ptr, &pp, sizeof(pp));
+            cmd.SetViewport(0.0f, 0.0f, static_cast<float>(vp_w),
+                            static_cast<float>(vp_h));
+            cmd.SetScissor(0, 0, vp_w, vp_h);
+            cmd.DrawFullscreenParams(rhi_.resources, rhi_.alloc, pso,
+                                     texs, composite_sampler_,
+                                     dyn_postfx_, off);
+        };
+        if (s.post_effect_count > 0 && !kuwahara_filter_pip_.IsNull()) {
+            for (int v = 0; v < viewport_mgr_.active_count; ++v) {
+                const int vp_idx = v;
+                rhi::GraphTexture cur = outline_ran[vp_idx]
+                                            ? outline_off[vp_idx]
+                                            : color_off[vp_idx];
+                for (uint32_t f = 0; f < s.post_effect_count; ++f) {
+                    if (s.post_effects[f].type !=
+                        cairns::PostEffectType::kKuwahara) {
+                        continue;  // other types land with M4+.
+                    }
+                    const uint32_t fx_idx = f;
+                    graph_->AddPass(
+                        (vp_idx == 0) ? "kuwahara_tensor_vp0"
+                                      : "kuwahara_tensor_vp1",
+                        rhi::PassType::kGraphics,
+                        [&, vp_idx, fx_idx, cur](rhi::PassBuilder& b) {
+                            rhi::GraphTextureDesc td{};
+                            td.width = vp_w;
+                            td.height = vp_h;
+                            td.format = rhi::Format::kRgba16F;
+                            td.usage = rhi::kTexUsageColorTarget |
+                                       rhi::kTexUsageSampled;
+                            fx_tensor[vp_idx][fx_idx] = b.CreateColorTarget(td);
+                            b.AddAttachmentInput(cur);
+                            const float fc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                            b.AddColorOutput("kuw_tensor",
+                                             fx_tensor[vp_idx][fx_idx],
+                                             rhi::LoadOp::kClear, fc);
+                        },
+                        [&, fx_idx, cur](rhi::CommandRecorder& cmd,
+                                         const rhi::PassResources& res) {
+                            const rhi::Handle<rhi::Texture> srcs[1] = {
+                                res.Resolve(cur)};
+                            push_params(cmd, fx_idx, kuwahara_tensor_pip_,
+                                        std::span<const rhi::Handle<
+                                            rhi::Texture>>(srcs, 1));
+                        });
+                    graph_->AddPass(
+                        (vp_idx == 0) ? "kuwahara_tfm_vp0"
+                                      : "kuwahara_tfm_vp1",
+                        rhi::PassType::kGraphics,
+                        [&, vp_idx, fx_idx](rhi::PassBuilder& b) {
+                            rhi::GraphTextureDesc td{};
+                            td.width = vp_w;
+                            td.height = vp_h;
+                            td.format = rhi::Format::kRgba16F;
+                            td.usage = rhi::kTexUsageColorTarget |
+                                       rhi::kTexUsageSampled;
+                            fx_tfm[vp_idx][fx_idx] = b.CreateColorTarget(td);
+                            b.AddAttachmentInput(fx_tensor[vp_idx][fx_idx]);
+                            const float fc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                            b.AddColorOutput("kuw_tfm",
+                                             fx_tfm[vp_idx][fx_idx],
+                                             rhi::LoadOp::kClear, fc);
+                        },
+                        [&, vp_idx, fx_idx](rhi::CommandRecorder& cmd,
+                                            const rhi::PassResources& res) {
+                            const rhi::Handle<rhi::Texture> srcs[1] = {
+                                res.Resolve(fx_tensor[vp_idx][fx_idx])};
+                            push_params(cmd, fx_idx, kuwahara_tfm_pip_,
+                                        std::span<const rhi::Handle<
+                                            rhi::Texture>>(srcs, 1));
+                        });
+                    graph_->AddPass(
+                        (vp_idx == 0) ? "kuwahara_filter_vp0"
+                                      : "kuwahara_filter_vp1",
+                        rhi::PassType::kGraphics,
+                        [&, vp_idx, fx_idx, cur](rhi::PassBuilder& b) {
+                            rhi::GraphTextureDesc td{};
+                            td.width = vp_w;
+                            td.height = vp_h;
+                            td.format = rhi::Format::kBgra8Unorm;
+                            td.usage = rhi::kTexUsageColorTarget |
+                                       rhi::kTexUsageSampled;
+                            fx_out[vp_idx][fx_idx] = b.CreateColorTarget(td);
+                            b.AddAttachmentInput(cur);
+                            b.AddAttachmentInput(fx_tfm[vp_idx][fx_idx]);
+                            const float fc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                            b.AddColorOutput("kuw_filter",
+                                             fx_out[vp_idx][fx_idx],
+                                             rhi::LoadOp::kClear, fc);
+                        },
+                        [&, vp_idx, fx_idx, cur](
+                            rhi::CommandRecorder& cmd,
+                            const rhi::PassResources& res) {
+                            const rhi::Handle<rhi::Texture> srcs[2] = {
+                                res.Resolve(cur),
+                                res.Resolve(fx_tfm[vp_idx][fx_idx])};
+                            push_params(cmd, fx_idx, kuwahara_filter_pip_,
+                                        std::span<const rhi::Handle<
+                                            rhi::Texture>>(srcs, 2));
+                        });
+                    cur = fx_out[vp_idx][fx_idx];
+                    chain_out[vp_idx] = cur;
+                    chain_ran[vp_idx] = true;
+                }
+            }
+        }
+
         // pass 3: composite + ui kGraphics. Composite samples color_off full-
         // screen, depth_off PIP in the bottom-right; ImGui draws on top into the
         // same encoder. Both backends use MSAA swapchain renderpasses where the
@@ -1810,10 +1991,13 @@ void Engine::RecordFrame(FramePacket& pkt) {
                 swap_tex = b.ImportTexture(swap_handle, td);
                 b.AddColorOutput("swapchain", swap_tex, rhi::LoadOp::kClear, clear);
                 for (int v = 0; v < viewport_mgr_.active_count; ++v) {
-                    // Swap reads outline_off when the outline pass ran this
-                    // frame, else color_off. Both are sampled-readonly.
-                    b.AddAttachmentInput(outline_ran[v] ? outline_off[v]
-                                                    : color_off[v]);
+                    // Swap reads the post-effect chain's final output when
+                    // it ran, else outline_off when that ran, else
+                    // color_off. All sampled-readonly.
+                    b.AddAttachmentInput(
+                        chain_ran[v] ? chain_out[v]
+                                     : (outline_ran[v] ? outline_off[v]
+                                                       : color_off[v]));
                     b.AddAttachmentInput(depth_off[v]);
                 }
             },
@@ -1821,8 +2005,10 @@ void Engine::RecordFrame(FramePacket& pkt) {
                 std::array<rhi::Handle<rhi::Texture>, kNumViewports> vp_color{};
                 std::array<rhi::Handle<rhi::Texture>, kNumViewports> vp_depth{};
                 for (int v = 0; v < viewport_mgr_.active_count; ++v) {
-                    vp_color[v] = res.Resolve(outline_ran[v] ? outline_off[v]
-                                                          : color_off[v]);
+                    vp_color[v] = res.Resolve(
+                        chain_ran[v] ? chain_out[v]
+                                     : (outline_ran[v] ? outline_off[v]
+                                                       : color_off[v]));
                     vp_depth[v] = res.Resolve(depth_off[v]);
                 }
                 const float fb_fw = static_cast<float>(fb_w);
@@ -2825,6 +3011,26 @@ bool Engine::BuildMeshOpaqueDraws(uint32_t slot) {
             s.pending_globals[v].light_view_proj = s.light_view_proj;
         }
 
+        // Post-effect chain: same scene resolution as the shadow light
+        // (viewport-0's bound scene, active fallback). Insertion-sorted by
+        // order; ties keep registry iteration order.
+        s.post_effect_count = 0;
+        if (shadow_wc != nullptr) {
+            auto fxv = shadow_wc->registry.view<cairns::PostEffect>();
+            for (entt::entity fe : fxv) {
+                if (s.post_effect_count >= PerSlot::kMaxPostEffects) {
+                    break;
+                }
+                const cairns::PostEffect& fx = fxv.get<cairns::PostEffect>(fe);
+                uint32_t i = s.post_effect_count++;
+                while (i > 0 && s.post_effects[i - 1].order > fx.order) {
+                    s.post_effects[i] = s.post_effects[i - 1];
+                    --i;
+                }
+                s.post_effects[i] = fx;
+            }
+        }
+
         // Set each scene's root_transform, run TRS hierarchy propagation
         // (no-op when no entity carries a Transform; scene-load emplaces
         // WorldTransform directly), then extract. Extract composes
@@ -3284,7 +3490,23 @@ bool Engine::GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
                 std::span<const cairns::rhi::DynamicBinding>(&db, 1);
             dyn_drawtmp_ = rhi_.resources.CreateDynamicBuffers(rhi_.alloc,
                                                                  rhi_.frames, dd);
-            if (dyn_globals_.IsNull() || dyn_drawtmp_.IsNull()) {
+            // Post-effect params: same shape (dyn UBO over the kDynamic
+            // master, VERTEX|FRAGMENT so the set stays layout-compatible
+            // with globals_set_layout_ on vk).
+            cairns::rhi::DynamicBinding pb{};
+            pb.slot = 0;
+            pb.kind = cairns::rhi::BufferKind::kUniform;
+            pb.max_range = 64;
+            pb.stages = static_cast<cairns::rhi::ShaderStage>(
+                cairns::rhi::kStageVertex | cairns::rhi::kStageFragment);
+            cairns::rhi::DynamicBuffersDesc pd{};
+            pd.debug_name = "dyn_postfx";
+            pd.bindings =
+                std::span<const cairns::rhi::DynamicBinding>(&pb, 1);
+            dyn_postfx_ = rhi_.resources.CreateDynamicBuffers(rhi_.alloc,
+                                                               rhi_.frames, pd);
+            if (dyn_globals_.IsNull() || dyn_drawtmp_.IsNull() ||
+                dyn_postfx_.IsNull()) {
                 CAIRNS_PRINT("GreaterInit: DynamicBuffers create failed\n");
                 return false;
             }

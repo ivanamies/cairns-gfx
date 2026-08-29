@@ -160,6 +160,13 @@ public:
         uint32_t shadow_globals_offset = 0;  // globals w/ light VP in view_proj
         bool shadow_active = false;          // scene has a cast_shadows light
         glm::mat4 light_view_proj{1.0f};
+        // Post-effect chain, extracted from viewport-0's bound scene (active
+        // fallback, same resolution as the shadow light) and insertion-sorted
+        // by order. RecordFrame appends fullscreen passes between outline and
+        // swap for each entry.
+        static constexpr int kMaxPostEffects = 8;
+        std::array<cairns::PostEffect, kMaxPostEffects> post_effects{};
+        uint32_t post_effect_count = 0;
         // Multi-scene fan-out: every distinct scene any viewport binds is
         // extracted into the single s.proxies union; this records each scene's
         // [mesh) range (at extract) and [draw) range (after the prefix sum) so
@@ -1834,6 +1841,15 @@ private:
     ShaderHandle composite_pip_ = ShaderHandle::Null;
     ShaderHandle depthviz_ = ShaderHandle::Null;
     ShaderHandle outline_pip_ = ShaderHandle::Null;
+    // Kuwahara post-effect triplet (tensor -> tfm -> filter). Any Null
+    // disables the chain honestly (mirrors shadow_pso_), so a backend
+    // missing the shaders renders unfiltered instead of crashing.
+    ShaderHandle kuwahara_tensor_pip_ = ShaderHandle::Null;
+    ShaderHandle kuwahara_tfm_pip_ = ShaderHandle::Null;
+    ShaderHandle kuwahara_filter_pip_ = ShaderHandle::Null;
+    // Post-effect params: per-FIF dyn-UBO set over the kDynamic master
+    // (dyn_globals_ shape, 64B blocks); DrawFullscreenParams binds it.
+    rhi::Handle<rhi::DynamicBuffers> dyn_postfx_;
     rhi::Handle<rhi::Sampler> composite_sampler_ = rhi::Handle<rhi::Sampler>::Null;
     // Nearest sampler for outline's id_off binding -- R32_UINT can't be
     // linearly filtered (VUID-vkCmdDraw-magFilter-04553). Outline's color
