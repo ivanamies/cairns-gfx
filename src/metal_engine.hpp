@@ -307,7 +307,7 @@ public:
                     const rhi::Handle<rhi::Texture> tex_handle = materials_[mat_id].color;
                     const SamplerHandle sampler_handle = materials_[mat_id].sampler;
                     
-                    const uint32_t gpu_tex_id = tex_handle.index;
+                    const uint32_t gpu_tex_id = texture_id_map_[tex_handle.index];
                     const uint32_t gpu_sampler_id = sampler_id_map_[sampler_handle.index];
                     const uint32_t gpu_attr_idx = mesh_attr_id_map_[mesh.attrHandle.index];
                     
@@ -484,6 +484,7 @@ public:
             rdesc.debug_name = "bindless";
             bindless_bg_handle_ = rm_.CreateBindlessRegistry(rdesc);
 
+            texture_id_map_.clear();
             mesh_attr_id_map_.clear();
             sampler_id_map_.clear();
 
@@ -493,10 +494,8 @@ public:
                     auto h = scene.textureHandles[j];
                     MTL::Texture* tex = rm_.GetHot(h)->api_view;
                     if (tex) {
-                        const uint32_t slot =
+                        texture_id_map_[h.index] =
                             rm_.BindlessAddTexture(bindless_bg_handle_, h);
-                        assert(h.index == slot);
-                        (void)slot;
                     }
                 }
                 for (size_t j = 0; j < scene.meshes.size(); ++j) {
@@ -630,6 +629,7 @@ private:
     rhi::ResourceManager rm_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
     rhi::Handle<rhi::BindGroup> bindless_bg_handle_;
+    std::unordered_map<uint32_t, uint32_t> texture_id_map_;
     std::unordered_map<uint32_t, uint32_t> mesh_attr_id_map_;
     std::unordered_map<uint32_t, uint32_t> sampler_id_map_;
 
