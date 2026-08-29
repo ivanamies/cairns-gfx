@@ -97,10 +97,10 @@ uint32_t InstantiatePrefab(Engine* engine, uint32_t scene_idx,
                     float time_phase);
 uint32_t NumPrefabs(Engine* engine);
 float PrefabExtentMax(Engine* engine, uint32_t scene_idx);
-std::vector<uint32_t> ListActiveWorldEntities(Engine* engine);
+std::vector<uint32_t> ListActiveSceneEntities(Engine* engine);
 bool SetEntityTransform(Engine* engine, uint32_t entity_int,
                          float x, float y, float z, float scale);
-uint32_t ClearActiveWorld(Engine* engine);
+uint32_t ClearActiveScene(Engine* engine);
 
 }  // namespace headless
 }  // namespace cairns

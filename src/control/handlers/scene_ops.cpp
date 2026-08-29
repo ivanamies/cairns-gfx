@@ -51,7 +51,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         "resets, do not loop.",
         [&engine](const json&) -> json {
             const uint32_t n =
-                cairns::headless::ClearActiveWorld(&engine);
+                cairns::headless::ClearActiveScene(&engine);
             return {{"cleared", n}};
         });
 
@@ -99,7 +99,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         "ids], count:N}.",
         [&engine](const json&) -> json {
             std::vector<uint32_t> ents =
-                cairns::headless::ListActiveWorldEntities(&engine);
+                cairns::headless::ListActiveSceneEntities(&engine);
             json arr = json::array();
             for (uint32_t e : ents) {
                 arr.push_back(e);

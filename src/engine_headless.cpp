@@ -187,11 +187,11 @@ float PrefabExtentMax(Engine* engine, uint32_t scene_idx) {
     return engine ? engine->PrefabExtentMax(scene_idx) : 0.0f;
 }
 
-std::vector<uint32_t> ListActiveWorldEntities(Engine* engine) {
+std::vector<uint32_t> ListActiveSceneEntities(Engine* engine) {
     if (!engine) {
         return {};
     }
-    return engine->ListActiveWorldEntities();
+    return engine->ListActiveSceneEntities();
 }
 
 bool SetEntityTransform(Engine* engine, uint32_t entity_int,
@@ -205,8 +205,8 @@ bool SetEntityTransform(Engine* engine, uint32_t entity_int,
     return engine->SetEntityTransform(entity_int, m);
 }
 
-uint32_t ClearActiveWorld(Engine* engine) {
-    return engine ? engine->ClearActiveWorld() : 0;
+uint32_t ClearActiveScene(Engine* engine) {
+    return engine ? engine->ClearActiveScene() : 0;
 }
 
 }  // namespace cairns::headless

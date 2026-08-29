@@ -288,7 +288,7 @@ public:
     // values are entt::to_integral(entity), the same encoding InstantiatePrefab
     // returns. Caller pairs them with SetEntityTransform to drive a
     // no-flash relayout when the spawn count grows.
-    std::vector<uint32_t> ListActiveWorldEntities() {
+    std::vector<uint32_t> ListActiveSceneEntities() {
         std::vector<uint32_t> out;
         cairns::Scene::Cold* wc = scenes_.GetCold(active_scene_);
         if (!wc) {
@@ -328,7 +328,7 @@ public:
     // alias buffer handles are leaked (no skin Release path yet). Fine
     // for a handful of clears during a debug session; do NOT loop this
     // unbounded -- the pool fills. Returns the entity count cleared.
-    uint32_t ClearActiveWorld() {
+    uint32_t ClearActiveScene() {
         cairns::Scene::Cold* wc = scenes_.GetCold(active_scene_);
         if (!wc) {
             return 0;
