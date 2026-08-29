@@ -7,6 +7,40 @@ here.
 
 ---
 
+## #resize-surface-bugs — window/surface resize is broken across backends (2026-06-22)
+
+One bug class, three surfaces. The engine renders correctly (golden gate is green
+on metal/vk/webgpu; headless WebGPU captures the die/viking perfectly and stably)
+— the breakage is all in **swapchain/surface ↔ window resize handling**, and it's
+flaky, so investigate with a real repro before "fixing."
+
+- **Browser (cairns_web) — canvas/surface size desync → black after frame 1.**
+  REPRODUCIBLE: `web_main.cpp` configures the WebGPU surface + the engine's
+  offscreen `final_target_` at a fixed **1280×720**, and `Frame()` copies
+  final_target_ → the surface each frame. In a window whose canvas backing store
+  isn't exactly 1280×720 (any non-1280×720 window, or dpr≠1), the canvas resizes
+  and desyncs from the fixed surface → the copy mismatches → canvas goes black
+  after the first good frame. Confirmed: `--window-size=1320,840` (canvas backing
+  lands at exactly 1280×720) renders + STAYS; a 2400-wide window goes black.
+  FIX: in `Frame()`, poll `emscripten_get_canvas_element_size` (or watch the
+  canvas) and on change reconfigure the surface AND resize the engine's
+  final_target_/depth to match — i.e. a real resize path, not a fixed size.
+  Stopgap: pin the canvas backing to 1280×720 in `shell.html` and letterbox via CSS.
+- **Browser — intermittent "2nd+ scenario load renders black."** User-observed
+  (first `scn()` click renders, subsequent clicks black). NOT reproducible via CDP
+  `Runtime.evaluate(scn(...))` (3 sequential loads all rendered, no console errors),
+  so it's timing/rAF- or input-path-dependent, likely entangled with the resize
+  desync above or a `scene.clear`+`prefab.unloadAll`→recreate race. Needs a
+  deterministic repro (record the exact click cadence) before fixing.
+- **Native — random resize bugs on Vulkan + macOS-SDL/metal.** User-reported:
+  resizing the sdl-min window intermittently corrupts/blacks the render. Same class
+  — the swapchain recreate on `SDL_EVENT_WINDOW_RESIZED` is racy. The three surfaces
+  should share ONE resize path: on resize, recreate the swapchain + resize every
+  offscreen graph target (final_target_, depth, id, color_off, …) atomically before
+  the next frame records. Today each backend handles it ad hoc.
+
+---
+
 ## #webgpu-browser-strictness — animated champions in Chrome (2026-06-22)
 
 WebGPU reached full parity with metal in the **native/headless golden gate**
