@@ -533,6 +533,11 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     // Pack-meshes (Aaltonen slide 26): bind each stream at its mesh-region base
     // and select the primitive via baseVertex/baseIndex in the draw call, so the
     // VB/IB binds are emitted only when the mesh buffer actually changes.
+    // #222 Phase E.1: per-draw shader cache. list.pipeline is the
+    // initial bind; if a draw sets draw.shader to something different,
+    // rebind. Null shader = stick with last bind. Today all draws keep
+    // shader Null so no rebind fires (byte-identical).
+    uint32_t last_shader_idx = list.pipeline.index;
     VkBuffer last_pos_buf = VK_NULL_HANDLE;
     uint32_t last_pos_off = 0xFFFFFFFFu;
     VkBuffer last_attr_buf = VK_NULL_HANDLE;
@@ -547,6 +552,17 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     uint32_t last_bg[3] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
     for (size_t i = 0; i < list.sorted_draws.size(); ++i) {
         const cairns::Draw& draw = list.draws[list.sorted_draws[i].second];
+        // #222 Phase E.1: per-draw shader rebind on change. Skip if null
+        // (the engine has not opted into per-draw PSOs yet) or if matches
+        // last bind.
+        if (!draw.shader.IsNull() && draw.shader.index != last_shader_idx) {
+            Shader::Hot* sh = res.GetHot(draw.shader);
+            if (sh) {
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                   sh->plat.vk_pipeline);
+                last_shader_idx = draw.shader.index;
+            }
+        }
         for (uint32_t s = 0; s < 3; ++s) {
             if (draw.bind_groups[s].IsNull()) {
                 continue;
