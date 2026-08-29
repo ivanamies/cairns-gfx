@@ -426,10 +426,13 @@ public:
             const float aspect_ratio = (1.0f * swapchain_.Width()) / swapchain_.Height();
             fprintf(stderr,
                     "[FLAKE] frame=%u w=%u h=%u aspect=%.9f vp00=%.9f vp11=%.9f "
-                    "vp22=%.9f vp32=%.9f goff=%u parity=%u\n",
+                    "vp22=%.9f vp32=%.9f goff=%u par_in=%u par_out=%u "
+                    "entities=%zu meshes=%zu prims=%zu\n",
                     frame_, swapchain_.Width(), swapchain_.Height(), aspect_ratio,
                     vp[0][0], vp[1][1], vp[2][2], vp[3][2],
-                    s.globals_offset, pkt.particle_parity_in);
+                    s.globals_offset, pkt.particle_parity_in, pkt.particle_parity_out,
+                    world_.entities.size(), s.proxies.meshes.size(),
+                    s.proxies.primitives.size());
         }
 
         // 2. Per-draw material + draw_tmp UBOs in stable_idx order.
@@ -825,6 +828,16 @@ public:
             t_record.End();
             rhi_.frames.End(swapchain_, fc);
             return;
+        }
+        if (frame_ <= 6) {
+            const rhi::Handle<rhi::Texture> coff = graph_->ResolveTexture(color_off);
+            const rhi::Handle<rhi::Texture> doff = graph_->ResolveTexture(depth_off);
+            fprintf(stderr,
+                    "[FLAKE-R] frame=%u slot=%u img=%u color_off=%u/%u depth_off=%u/%u "
+                    "steps=%u\n",
+                    frame_, pkt.slot, fc.swapchain_image_index,
+                    coff.index, coff.generation, doff.index, doff.generation,
+                    pkt.sim_steps_this_frame);
         }
         t_record.End();
         rhi_.frames.End(swapchain_, fc);
