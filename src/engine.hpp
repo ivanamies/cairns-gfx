@@ -2012,7 +2012,7 @@ public:
                         SkinParamsCpu params{};
                         params.instance_count = sbg.instance_count;
                         params.vertex_count = sbg.vertex_count;
-                        params.joint_count = 0;
+                        params.joint_count = sbg.joint_count;
                         params.mode = engine_cfg_.skin_probe_mode;
                         uint32_t params_off = 0;
                         void* params_ptr = rhi_.alloc.BumpAllocate(
@@ -2075,6 +2075,7 @@ public:
                         db.palettes_byte_offset = pal_off;
                         db.instance_meta_byte_offset = meta_off;
                         db.workgroups = sbg.workgroups;
+                        db.instance_count = sbg.instance_count;
                     }
                     cmd.DispatchSkinBatches(
                         rhi_.resources, rhi_.alloc, skin_kernel_,
@@ -2592,7 +2593,13 @@ public:
             return;
         }
         auto view = wc->registry.view<const cairns::SkinRef>();
-        uint32_t total_joints = 0;
+
+        constexpr uint32_t kBucketCap = cairns::kMaxSkinnedMeshes;
+        uint32_t* mesh_actor_count =
+            s.arena.AllocateArray<uint32_t>(kBucketCap);
+        std::memset(mesh_actor_count, 0,
+                    sizeof(uint32_t) * kBucketCap);
+
         uint32_t total_actors = 0;
         for (auto e : view) {
             const cairns::SkinRef& sr = view.get<const cairns::SkinRef>(e);
@@ -2600,24 +2607,78 @@ public:
             if (!sh) {
                 continue;
             }
-            total_joints += sh->joint_count;
+            if (sh->mesh.index >= kBucketCap) {
+                continue;
+            }
+            ++mesh_actor_count[sh->mesh.index];
             ++total_actors;
         }
-        if (total_actors == 0 || total_joints == 0) {
+        if (total_actors == 0) {
+            return;
+        }
+
+        uint32_t* bucket_remap =
+            s.arena.AllocateArray<uint32_t>(kBucketCap);
+        std::memset(bucket_remap, 0xFF,
+                    sizeof(uint32_t) * kBucketCap);
+
+        cairns::SkinBatchGpu* batches =
+            s.arena.AllocateArray<cairns::SkinBatchGpu>(kBucketCap);
+        uint32_t* bucket_inst_cursor =
+            s.arena.AllocateArray<uint32_t>(kBucketCap);
+        std::memset(bucket_inst_cursor, 0,
+                    sizeof(uint32_t) * kBucketCap);
+
+        uint32_t bucket_count = 0;
+        uint32_t meta_running = 0;
+        uint32_t palette_running = 0;
+        for (auto e : view) {
+            const cairns::SkinRef& sr = view.get<const cairns::SkinRef>(e);
+            auto* sh = skins_.GetHot(sr.id);
+            if (!sh) {
+                continue;
+            }
+            if (sh->mesh.index >= kBucketCap) {
+                continue;
+            }
+            if (bucket_remap[sh->mesh.index] != UINT32_MAX) {
+                continue;
+            }
+            const cairns::Mesh::Hot* mhot = meshes_.GetHot(sh->mesh);
+            if (!mhot) {
+                continue;
+            }
+            const uint32_t inst = mesh_actor_count[sh->mesh.index];
+            const uint32_t joint_count = sh->joint_count;
+            const uint32_t vert_count = mhot->vert_count;
+            if (inst == 0 || joint_count == 0 || vert_count == 0) {
+                continue;
+            }
+            bucket_remap[sh->mesh.index] = bucket_count;
+            cairns::SkinBatchGpu& b = batches[bucket_count];
+            b.mesh_set = rhi::Handle<rhi::BindGroup>{};
+            b.mesh = sh->mesh;
+            b.first_meta = meta_running;
+            b.first_palette_mat4 = palette_running;
+            b.instance_count = inst;
+            b.joint_count = joint_count;
+            b.vertex_count = vert_count;
+            b.workgroups = (vert_count + 63u) / 64u;
+            meta_running += inst;
+            palette_running += inst * joint_count;
+            ++bucket_count;
+        }
+        if (bucket_count == 0) {
             return;
         }
 
         glm::mat4* palettes =
-            s.arena.AllocateArray<glm::mat4>(total_joints);
+            s.arena.AllocateArray<glm::mat4>(palette_running);
         glm::uvec2* instance_meta =
-            s.arena.AllocateArray<glm::uvec2>(total_actors);
-        cairns::SkinBatchGpu* batches =
-            s.arena.AllocateArray<cairns::SkinBatchGpu>(total_actors);
+            s.arena.AllocateArray<glm::uvec2>(meta_running);
 
         const float anim_t = static_cast<float>(sim_frame_) *
                               static_cast<float>(cairns::kFixedDt);
-        uint32_t actor_idx = 0;
-        uint32_t pal_off_mat4 = 0;
         for (auto e : view) {
             const cairns::SkinRef& sr = view.get<const cairns::SkinRef>(e);
             auto* sh = skins_.GetHot(sr.id);
@@ -2625,6 +2686,14 @@ public:
             if (!sh || !sc) {
                 continue;
             }
+            if (sh->mesh.index >= kBucketCap) {
+                continue;
+            }
+            const uint32_t bi = bucket_remap[sh->mesh.index];
+            if (bi == UINT32_MAX) {
+                continue;
+            }
+            cairns::SkinBatchGpu& b = batches[bi];
             cairns::Scene::Hot* shot = scenes_.GetHot(sc->scene);
             cairns::Scene::Cold* scold = scenes_.GetCold(sc->scene);
             if (!shot || !scold) {
@@ -2639,10 +2708,9 @@ public:
             if (!mhot || !mcold) {
                 continue;
             }
-            const uint32_t vert_count = mhot->vert_count;
             const uint32_t n_nodes =
                 static_cast<uint32_t>(scold->nodes.size());
-            if (vert_count == 0 || n_nodes == 0) {
+            if (n_nodes == 0) {
                 continue;
             }
 
@@ -2689,39 +2757,28 @@ public:
             }
             const glm::mat4 mesh_node_world_inv =
                 glm::inverse(mesh_node_world);
+            const uint32_t cursor = bucket_inst_cursor[bi];
+            const uint32_t palette_slot_base =
+                b.first_palette_mat4 + cursor * b.joint_count;
             cairns::ComputeSkinningPalette(
                 skin,
                 std::span<const glm::mat4>(world_out, n_nodes),
                 mesh_node_world_inv,
-                std::span<glm::mat4>(palettes + pal_off_mat4,
+                std::span<glm::mat4>(palettes + palette_slot_base,
                                       sh->joint_count));
 
-            // .x is BATCH-RELATIVE palette offset (kernel reads
-            // palette[palette_off + j] where palette is bound at the
-            // per-batch dynamic byte offset). .y is GLOBAL output offset
-            // into skin_output_pool_buffer_ (bound whole, in vec4 units).
-            instance_meta[actor_idx] =
-                glm::uvec2(0u, sh->slice.offset);
-            cairns::SkinBatchGpu& b = batches[actor_idx];
-            b.mesh_set = rhi::Handle<rhi::BindGroup>{};
-            b.mesh = sh->mesh;
-            b.first_palette_mat4 = pal_off_mat4;
-            b.first_meta = actor_idx;
-            b.instance_count = 1;
-            b.vertex_count = vert_count;
-            b.workgroups = (vert_count + 63u) / 64u;
-
-            pal_off_mat4 += sh->joint_count;
-            ++actor_idx;
+            instance_meta[b.first_meta + cursor] =
+                glm::uvec2(cursor * b.joint_count, sh->slice.offset);
+            ++bucket_inst_cursor[bi];
             s.arena.Rewind(mark);
         }
 
         s.pkt.palettes =
-            std::span<const glm::mat4>(palettes, pal_off_mat4);
+            std::span<const glm::mat4>(palettes, palette_running);
         s.pkt.instance_meta =
-            std::span<const glm::uvec2>(instance_meta, actor_idx);
+            std::span<const glm::uvec2>(instance_meta, meta_running);
         s.pkt.skin_batches =
-            std::span<const cairns::SkinBatchGpu>(batches, actor_idx);
+            std::span<const cairns::SkinBatchGpu>(batches, bucket_count);
     }
 
     // #221 Phase 4: best-effort load of skin compute kernel. Failing the

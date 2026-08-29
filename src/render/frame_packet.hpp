@@ -39,7 +39,8 @@ struct SkinBatchGpu {
     uint32_t first_meta = 0;                 // element index into instance_meta span
     uint32_t instance_count = 0;
     uint32_t vertex_count = 0;               // mesh vertex count
-    uint32_t workgroups = 0;                 // ceil(instance_count * vertex_count / 64)
+    uint32_t joint_count = 0;
+    uint32_t workgroups = 0;                 // workgroups along X axis (per instance)
 };
 
 struct FramePacket {

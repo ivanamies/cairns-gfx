@@ -70,14 +70,9 @@ uvec4 skin_joints_at(uint vid) {
 }
 
 void main() {
-    uint gid = gl_GlobalInvocationID.x;
-    uint per_instance = params.vertex_count;
-    if (per_instance == 0u) {
-        return;
-    }
-    uint inst = gid / per_instance;
-    uint vid = gid - inst * per_instance;
-    if (inst >= params.instance_count) {
+    uint inst = gl_WorkGroupID.y;
+    uint vid = gl_GlobalInvocationID.x;
+    if (inst >= params.instance_count || vid >= params.vertex_count) {
         return;
     }
     uvec2 meta = inst_meta[inst];

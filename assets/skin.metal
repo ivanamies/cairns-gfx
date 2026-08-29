@@ -27,20 +27,17 @@ constant uint kSkinModeOnePalette = 1u;
 constant uint kSkinModeNoSkinAttrs = 2u;
 constant uint kSkinModePassthrough = 3u;
 
-kernel void skin_compute(uint gid [[thread_position_in_grid]],
+kernel void skin_compute(uint3 gid [[thread_position_in_grid]],
+                          uint3 wid [[threadgroup_position_in_grid]],
                           constant SkinParams& params [[buffer(0)]],
                           const device float4x4* palette [[buffer(1)]],
                           const device uint2* inst_meta [[buffer(2)]],
                           device float4* out_pos [[buffer(3)]],
                           const device float4* mesh_pos [[buffer(4)]],
                           const device uint4* skin_joints_then_weights [[buffer(5)]]) {
-    uint per_instance = params.vertex_count;
-    if (per_instance == 0u) {
-        return;
-    }
-    uint inst = gid / per_instance;
-    uint vid = gid - inst * per_instance;
-    if (inst >= params.instance_count) {
+    uint inst = wid.y;
+    uint vid = gid.x;
+    if (inst >= params.instance_count || vid >= params.vertex_count) {
         return;
     }
     uint2 meta = inst_meta[inst];

@@ -278,7 +278,7 @@ void CommandRecorder::DispatchSkinBatches(
         vkCmdBindDescriptorSets(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE,
                                  k->plat.vk_layout, 0, 2, sets,
                                  3, dyn_offsets);
-        vkCmdDispatch(plat.comp_, b.workgroups, 1, 1);
+        vkCmdDispatch(plat.comp_, b.workgroups, b.instance_count, 1);
     }
 }
 

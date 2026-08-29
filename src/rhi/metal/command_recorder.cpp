@@ -86,7 +86,7 @@ void CommandRecorder::DispatchSkinBatches(
         MTL::Buffer* sa_buf = res.plat.GetMtlBuffer(
             alloc, b.skin_attr_buffer, &sa_master_off);
         cenc->setBuffer(sa_buf, sa_master_off + b.skin_attr_byte_offset, 5);
-        cenc->dispatchThreadgroups(MTL::Size{b.workgroups, 1u, 1u},
+        cenc->dispatchThreadgroups(MTL::Size{b.workgroups, b.instance_count, 1u},
                                     MTL::Size{64u, 1u, 1u});
     }
     cenc->endEncoding();

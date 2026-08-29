@@ -108,7 +108,8 @@ struct SkinDispatchBatch {
     uint32_t params_byte_offset = 0;       // dynamic offset for Group B binding 0
     uint32_t palettes_byte_offset = 0;     // dynamic offset for Group B binding 1
     uint32_t instance_meta_byte_offset = 0; // dynamic offset for Group B binding 2
-    uint32_t workgroups = 0;                // total workgroups for this batch
+    uint32_t workgroups = 0;                // workgroups along X axis (per instance)
+    uint32_t instance_count = 1;            // dispatched along Y axis
 };
 
 class CommandRecorder {
