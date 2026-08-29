@@ -5,6 +5,72 @@ Newest first.
 
 ---
 
+## `c311cd7` (2026-06-04) — full readout + Android bisect
+
+Workload: `100 GLBs × 33 slices = 3300 entities`, 11517 draws. Release.
+
+**Metal macOS (M2 Max), 1280×720 windowed:**
+```
+draws 11517 | 100 GLBs x 33 slices = 3300 entities | resolution 1280 x 720
+slot 0 (frame):        avg 16692 us over 120 frames
+slot 1 (build_draws):  avg  2363 us over 120 frames
+slot 2 (record):       avg  1148 us over 120 frames
+slot 3 (particle_sim): avg    11 us over 120 frames
+slot 4 (forward):      avg  9842 us over 119 frames
+```
+gpu_frame ≈ 9.85 ms. Frame vsync-capped at 16.69 ms = 60 FPS.
+
+**Vulkan macOS (MoltenVK, M2 Max), 1280×720 windowed:**
+```
+draws 11517 | 100 GLBs x 33 slices = 3300 entities | resolution 1280 x 720
+slot 0 (frame):        avg 16643 us over 120 frames
+slot 1 (build_draws):  avg  2153 us over 120 frames
+slot 2 (record):       avg   457 us over 120 frames
+slot 3 (particle_sim): avg    16 us over 120 frames
+slot 4 (forward):      avg 11033 us over 120 frames
+```
+gpu_frame ≈ 11.05 ms. Frame vsync-capped at 16.64 ms = 60 FPS. `record` is
+4.4× lower than Metal — MoltenVK is doing more work on the GPU side
+(forward 11.0 vs Metal 9.8) but less on the CPU encode side.
+
+**iPhone 15 Pro Release (screenshot, native ~2556×1179 landscape):**
+```
+CPU 46.66 ms  |  21 FPS
+avg 34.12 ms  |  peak 55.84 ms
+gpu_frame     35.57 ms
+frame         31.65 ms
+build_draws    7.87 ms
+record         3.06 ms
+```
+Thermally throttled into the low 20s after a few seconds; cold start hits
+~28 FPS. Forward GPU dominates as on macOS but at 2.6× the pixel count.
+
+**Samsung S22 (SM-S901U, Adreno 730) Android Vulkan Release (photo, native 2268×1080 landscape):**
+```
+CPU 165.96 ms |  6 FPS
+avg 187.76 ms |  peak 267.61 ms
+gpu_frame    133.85 ms
+frame        188.83 ms
+build_draws    5.97 ms
+record         8.95 ms
+```
+~4× slower than iPhone 15 Pro on gpu_frame at similar pixel count.
+
+### Android regression bisect (vs `f2625d1` baseline gpu_frame 128.78 ms → 140 ms)
+
+User-driven bisect of the 9 commits in `f2625d1..c311cd7`. Two Vulkan-touching
+candidates were prime suspects; both **exonerated**:
+
+- `ab789d9` (vk bump: one VkDeviceMemory + HOST_COHERENT collapse) — **129 ms, not the culprit**.
+- `73e1876` (swap_chain preTransform = IDENTITY, WSI rotates) — **127 ms, not the culprit**.
+
+**Cause**: `2abd6af` raised the Android ImGui scale cap from 1.5× to 2.5×.
+The overlay panel grows ~2.78× in pixel area (`ScaleAllSizes(2.5)`), which
+costs ~10 ms in `forward` on Adreno's fragment pipeline. **Trade accepted,
+not reverting** — readable overlay is worth the 10 ms.
+
+---
+
 ## `f2625d1` (2026-06-03) — gpu_frame row, per-pass GPU timing landed
 
 Workload: `100 GLBs × 33 slices = 3300 entities`, 11517 draws. Release.
