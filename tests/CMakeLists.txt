@@ -72,6 +72,8 @@ add_executable(cairns_spec_tests
     test_threading.cpp
     # G.7 asset/GPU PODs (pure CPU)
     test_asset_gpu_pods.cpp
+    # #229 M0b MemoryBudget + ChunkAllocator fixed reservation
+    test_memory_budget.cpp
     # G.5 control / agent CommandRegistry round-trip
     test_command_registry.cpp
     "${CMAKE_SOURCE_DIR}/src/control/command_registry.cpp"

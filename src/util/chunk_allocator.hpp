@@ -56,6 +56,8 @@ public:
         chunks_.clear();
         oversize_count_ = 0;
         bytes_in_use_ = 0;
+        reserved_ = false;
+        max_chunks_ = 0;
         for (uint32_t i = 0; i < kNumClasses; ++i) {
             bytes_in_use_by_class_[i] = 0;
         }
@@ -63,6 +65,26 @@ public:
         outstanding_ = 0;
 #endif
     }
+
+    // #229 M0b: fixed-reservation mode. The chunk pool is HARD-CAPPED at
+    // ceil(total_bytes / block_bytes) chunks -- "allocate X GB, chop it up,
+    // only ever use that X GB." Chunks stay block_bytes each (chunked backing,
+    // no single giant OS alloc -> Android-safe) and grow lazily up to the cap;
+    // AddChunk fails (-> caller fails loud) once the cap is hit, instead of
+    // silently mallocing past the budget. Oversize (> block_bytes single
+    // allocs) still routes to malloc -- folding those into the reservation is
+    // a follow-on. The migration that routes the load vectors through here
+    // (and activates a real reservation) is the M0b payoff.
+    void InitReserved(uint64_t total_bytes,
+                      uint32_t block_bytes = kDefaultBlockBytes) {
+        Init(block_bytes);
+        reserved_ = true;
+        const uint64_t n = (total_bytes + block_bytes - 1) / block_bytes;
+        max_chunks_ = (n == 0) ? 1u : static_cast<uint32_t>(n);
+    }
+
+    bool IsReserved() const { return reserved_; }
+    uint32_t MaxChunks() const { return max_chunks_; }
 
     void Deinit() {
         if (block_bytes_ == 0) {
@@ -202,6 +224,16 @@ private:
     }
 
     bool AddChunk() {
+        if (reserved_ && chunks_.size() >= max_chunks_) {
+            // #229 M0b: out of the fixed reservation -- fail loud (the caller,
+            // e.g. ChunkStdAllocator, aborts on the null return). No silent
+            // malloc past the budget; the fix is to raise the reservation.
+            std::fprintf(stderr,
+                         "[ALLOC] ChunkAllocator reservation exhausted: "
+                         "%u chunks x %u B budget hit\n",
+                         max_chunks_, block_bytes_);
+            return false;
+        }
         // 16-byte aligned chunks so every cell_start is 16-aligned -> user_ptr is 16-aligned.
         void* mem = std::aligned_alloc(kDefaultAlign, block_bytes_);
         if (mem == nullptr) {
@@ -255,6 +287,8 @@ private:
 
     uint32_t block_bytes_ = 0;
     uint32_t max_class_log_ = 0;
+    bool reserved_ = false;        // #229 M0b fixed-reservation mode
+    uint32_t max_chunks_ = 0;      // chunk-pool cap when reserved_
     FreeCell* free_lists_[kNumClasses] = {};
     std::vector<Chunk> chunks_;
     uint64_t bytes_in_use_ = 0;

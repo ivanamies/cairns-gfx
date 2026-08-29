@@ -194,3 +194,27 @@ stress 8/8, jsmoke 4/4). Marginal alloc win (tens of allocs — these grow to
 hundreds, ~log2 reallocs each); mostly tidiness. **The big pool target
 (`ResourceManager` hot/cold) is Aaltonen-canon with no `Reserve()` — NOT touched
 (needs permission to add one).** Caps will centralize into M0b's `MemoryBudget`.
+
+---
+
+## M0b — reservation FOUNDATION (commit pending)
+
+The user's "allocate 1 GB, chop it up, only ever use that X GB." Two pieces:
+- **`MemoryBudget`** (`src/util/memory_budget.hpp`): the single source of every
+  domain reservation size, per-platform (CPU-persistent **1 GB desktop / 256 MB
+  Android**, GPU resident, staging ring, JS 256 MB, NDJSON 4 MB). M5 reads
+  `gpu_*`; the CPU-arena activation reads `cpu_persistent_bytes`.
+- **`ChunkAllocator` fixed-reservation mode** (`InitReserved`): HARD-CAPS the
+  chunk pool at `ceil(budget/block)` — fails loud (null → `ChunkStdAllocator`
+  aborts) instead of mallocing past budget. Chunks stay 4 MB each (chunked
+  backing, no single giant OS alloc → Android-safe), grow lazily to the cap.
+
+Spec: `[memory]` 3 cases / 1013 assertions; full spec **108/108** (was 105).
+
+**Dormant by design (no receipt yet).** `ChunkAllocator` has ZERO users today —
+activating a 1 GB reservation now would just waste RAM (Android-OOM risk) since
+nothing carves from it. The **payoff** is the follow-on migration: route the hot
+load vectors (`Mesh::Cold`/`Prefab::Cold` cpu+gpu, anim spans) onto a
+`ChunkStdAllocator` over this reservation (per-prefab arena, freed wholesale at
+unload) — that's where the boot ~497k load allocs collapse. The mechanism +
+sizing are now in place and tested; activation is the next structural pass.
