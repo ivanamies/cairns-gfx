@@ -379,26 +379,20 @@ void Resources::Destroy(Handle<Shader> h) { shaders.Release(h); }
 
 void Resources::Destroy(Handle<Kernel> h) { kernels.Release(h); }
 
-// #228 F1: fenced deferred deletion. Both backends share identical logic;
-// the per-backend Destroy() dispatched from DrainDeferredFrees does the
-// actual freeing. Push appends into the current frame's slot; Drain is
-// called by Frames::Begin once it has confirmed the slot's GPU work is
-// past via the existing fence wait, so anything queued during that
-// slot's previous frame (kFIF frames ago) is now safe to release.
+// #228 F1 (v2): fenced deferred deletion -- per-resource retire-frame.
+// Each push stamps retire_frame = current frame_index_ + kFIF; drain
+// pops everything whose retire_frame <= the cutoff passed in. This is
+// the Granite / Themaister pattern and replaces the v1 per-slot bucket
+// (which mis-assumed every push during slot S was used by slot S's
+// frame -- false for between-frames pushes like asset reload).
 void Resources::DeferPushRaw(uint16_t index, uint16_t generation,
                               uint8_t kind) {
-    const uint32_t s = defer_push_slot_;
-    const uint32_t n = defer_counts_[s];
-    if (n >= kPerSlotDeferCap) {
-        // Overflow: caller is producing more frees per frame than the
-        // per-slot cap allows. Raise kPerSlotDeferCap or batch the work.
-        return;
-    }
-    DeferEntry& e = defer_buckets_[s][n];
+    DeferEntry e;
     e.index = index;
     e.generation = generation;
     e.kind = kind;
-    defer_counts_[s] = n + 1;
+    e.retire_frame = plat.frame_index_ + kFramesInFlight;
+    deferred_.push_back(e);
 }
 
 void Resources::DeferFree(Allocator& /*alloc*/, Handle<Buffer> h) {
@@ -430,13 +424,10 @@ void Resources::DeferFree(Handle<Kernel> h) {
     DeferPushRaw(h.index, h.generation, kDeferKernel);
 }
 
-void Resources::DrainDeferredFrees(Allocator& alloc, uint32_t cur_slot) {
-    if (cur_slot >= kFramesInFlight) {
-        return;
-    }
-    const uint32_t n = defer_counts_[cur_slot];
-    for (uint32_t i = 0; i < n; ++i) {
-        const DeferEntry& e = defer_buckets_[cur_slot][i];
+void Resources::DrainDeferredFrees(Allocator& alloc, uint32_t cur_frame) {
+    size_t i = 0;
+    while (i < deferred_.size() && deferred_[i].retire_frame <= cur_frame) {
+        const DeferEntry& e = deferred_[i];
         switch (e.kind) {
             case kDeferBuffer:
                 Destroy(alloc, Handle<Buffer>{e.index, e.generation});
@@ -460,11 +451,11 @@ void Resources::DrainDeferredFrees(Allocator& alloc, uint32_t cur_slot) {
                 Destroy(Handle<Kernel>{e.index, e.generation});
                 break;
         }
+        ++i;
     }
-    defer_counts_[cur_slot] = 0;
-    // After draining the just-retired bucket, the slot the caller is
-    // about to record into becomes the new push target.
-    defer_push_slot_ = cur_slot;
+    if (i > 0) {
+        deferred_.erase(deferred_.begin(), deferred_.begin() + i);
+    }
 }
 
 Buffer::Hot* Resources::GetHot(Handle<Buffer> h) { return buffers.GetHot(h); }

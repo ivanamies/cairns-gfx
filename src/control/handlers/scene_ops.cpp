@@ -56,6 +56,22 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         });
 
     registry.Register(
+        "cairns.prefab.reload",
+        json::object({{"path", "<glb path>"}}),
+        "#228 R1: reload a Prefab in place behind its stable PrefabId. "
+        "Re-parses the GLB at args.path, swaps the pool slot's contents, "
+        "and DeferFrees the previous GPU resources through the F1 (v2) "
+        "per-resource retire-frame ring. Entities holding AssetRef "
+        "remain valid and render the new mesh next frame. Returns "
+        "{ok, path}.",
+        [&engine](const json& args) -> json {
+            std::string path = args.value("path", std::string());
+            const bool ok =
+                cairns::headless::ReloadPrefabByPath(&engine, path);
+            return {{"ok", ok}, {"path", path}};
+        });
+
+    registry.Register(
         "cairns.prefab.unloadAll",
         json::object(),
         "#228 F2: drop every resident prefab. DeferFrees each prefab's "

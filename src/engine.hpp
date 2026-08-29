@@ -1062,6 +1062,128 @@ public:
         return n;
     }
 
+    // #228 R1: hot-reload a Prefab in place behind its stable PrefabId.
+    // Re-parses the GLB at |path| as a NEW append-load via the regular
+    // RuntimeLoadBatch flow, then SWAPS the new pool slot's Hot/Cold
+    // INTO the old slot at |idx|. The old PrefabId handle (index +
+    // generation) is preserved -- entities holding AssetRef remain
+    // valid and pick up the new mesh on the next frame. The previously-
+    // resident GPU resources go through the F1 (v2) per-resource
+    // retire-frame ring, so they're freed kFIF frames later (when no
+    // in-flight submission still binds them).
+    //
+    // F1 (v2)'s retire_frame stamping is what makes this safe -- the
+    // F1 (v1) per-slot bucket would have batched these frees into the
+    // wrong slot and the next-frame drain would tear down resources
+    // still referenced by frames in flight, hanging the next render.
+    bool ReloadPrefab(uint32_t idx, const std::filesystem::path& path) {
+        if (idx >= prefab_ids_.size()) {
+            return false;
+        }
+        cairns::PrefabId oldId = prefab_ids_[idx];
+        // Snapshot the old prefab's owned resources BEFORE LoadPrefabBatch
+        // -- it may grow the prefabs_/meshes_/materials_ pools' backing
+        // vectors and invalidate held Hot/Cold pointers.
+        std::vector<cairns::Handle<cairns::Mesh>> old_meshes;
+        std::vector<cairns::Handle<cairns::Material>> old_materials;
+        std::vector<rhi::Handle<rhi::Texture>> old_textures;
+        std::vector<rhi::Handle<rhi::Sampler>> old_samplers;
+        {
+            cairns::Prefab::Hot* oldH = prefabs_.GetHot(oldId);
+            cairns::Prefab::Cold* oldC = prefabs_.GetCold(oldId);
+            if (!oldH || !oldC) {
+                return false;
+            }
+            old_meshes = oldH->meshes;
+            old_materials = oldH->materials;
+            old_textures = oldC->textureHandles;
+            old_samplers = oldC->samplerHandles;
+        }
+        std::array<std::filesystem::path, 1> single_path{path};
+        LoadPrefabBatchResult r = RuntimeLoadBatch(single_path);
+        if (r.count != 1) {
+            return false;
+        }
+        cairns::PrefabId newId = prefab_ids_.back();
+        // Re-fetch after the load: the pool's backing vector may have
+        // grown, invalidating any pointer obtained pre-RuntimeLoadBatch.
+        cairns::Prefab::Hot* oldH = prefabs_.GetHot(oldId);
+        cairns::Prefab::Cold* oldC = prefabs_.GetCold(oldId);
+        cairns::Prefab::Hot* newH = prefabs_.GetHot(newId);
+        cairns::Prefab::Cold* newC = prefabs_.GetCold(newId);
+        if (!oldH || !oldC || !newH || !newC) {
+            return false;
+        }
+        *oldH = std::move(*newH);
+        *oldC = std::move(*newC);
+        prefabs_.Release(newId);
+        prefab_ids_.pop_back();
+        per_prefab_asset_.pop_back();
+        glb_paths_.pop_back();
+        glb_paths_[idx] = path;
+        // DeferFree the snapshotted old resources. F1 (v2) stamps
+        // retire_frame = current_frame_index + kFIF; drain happens at
+        // frame >= retire_frame's start, after the fence proves the
+        // last-referencing frame is GPU-done.
+        for (rhi::Handle<rhi::Texture> th : old_textures) {
+            rhi_.resources.DeferFree(rhi_.alloc, th);
+        }
+        for (rhi::Handle<rhi::Sampler> sh : old_samplers) {
+            rhi_.resources.DeferFree(sh);
+        }
+        for (cairns::Handle<cairns::Mesh> mh : old_meshes) {
+            cairns::Mesh::Hot* mhot = meshes_.GetHot(mh);
+            if (mhot) {
+                rhi_.resources.DeferFree(rhi_.alloc, mhot->posHandle);
+                rhi_.resources.DeferFree(rhi_.alloc, mhot->attrHandle);
+                rhi_.resources.DeferFree(rhi_.alloc, mhot->indexHandle);
+                if (!mhot->skin_group_a.IsNull()) {
+                    rhi_.resources.DeferFree(mhot->skin_group_a);
+                }
+            }
+            meshes_.Release(mh);
+        }
+        for (cairns::Handle<cairns::Material> matid : old_materials) {
+            cairns::Material::Hot* mathot = materials_.GetHot(matid);
+            if (mathot && !mathot->set2.IsNull()) {
+                rhi_.resources.DeferFree(mathot->set2);
+            }
+            materials_.Release(matid);
+        }
+        // resident_textures_ was populated by AppendGlbPaths' sibling
+        // BuildResidentTextures during boot/load. The old prefab's
+        // texture handles are now stale (Release happens at F1 drain
+        // kFIF frames later); per-frame draw uses resident_textures_
+        // verbatim, so we must rebuild it from the current set of live
+        // prefab textureHandles before the next render reads it.
+        resident_textures_.clear();
+        for (cairns::PrefabId pid : prefab_ids_) {
+            cairns::Prefab::Cold* pc = prefabs_.GetCold(pid);
+            if (!pc) {
+                continue;
+            }
+            for (rhi::Handle<rhi::Texture> th : pc->textureHandles) {
+                resident_textures_.push_back(th);
+            }
+        }
+        return true;
+    }
+
+    // Convenience: look up |path| in glb_paths_ and reload the matching
+    // prefab in place. Matches by full path OR by basename so callers
+    // can pass "aatrox.glb" instead of the resolved absolute path that
+    // glb_paths_ stores.
+    bool ReloadPrefabByPath(const std::filesystem::path& path) {
+        const std::filesystem::path lookup_name = path.filename();
+        for (uint32_t i = 0; i < glb_paths_.size(); ++i) {
+            if (glb_paths_[i] == path ||
+                glb_paths_[i].filename() == lookup_name) {
+                return ReloadPrefab(i, glb_paths_[i]);
+            }
+        }
+        return false;
+    }
+
     // #228 F2: Evict. Manifest 'remove' verb over the WHOLE batch span --
     // drops every currently resident prefab, defer-frees its GPU
     // resources (textures, samplers, meshes' position/index/attr buffers,

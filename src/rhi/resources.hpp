@@ -106,10 +106,12 @@ public:
     void DeferFree(Handle<DynamicBuffers> h);
     void DeferFree(Handle<Shader> h);
     void DeferFree(Handle<Kernel> h);
-    // Drain the bucket for |cur_slot| -- everything enqueued during this
-    // slot's previous frame (kFIF frames ago). Called by Frames::Begin
-    // after the slot's fence/cmd-buffer wait.
-    void DrainDeferredFrees(Allocator& alloc, uint32_t cur_slot);
+    // Pop every queued free whose retire_frame <= |cur_frame|. The
+    // caller (Frames::Begin) passes the current frame index AFTER its
+    // fence/cmd-buffer wait has proven that frame (cur_frame - kFIF)
+    // is GPU-done. Items pushed at frame N stamped retire_frame = N +
+    // kFIF, so they retire exactly when cur_frame catches up.
+    void DrainDeferredFrees(Allocator& alloc, uint32_t cur_frame);
 
     Buffer::Hot* GetHot(Handle<Buffer> h);
     Texture::Hot* GetHot(Handle<Texture> h);
@@ -164,13 +166,15 @@ public:
 private:
     bool inited_ = false;
 
-    // #228 F1: per-slot flat deferred-free ring. Push appends to the
-    // current slot's bucket; DrainDeferredFrees(S) replays + clears
-    // bucket[S] at Frames::Begin after the slot's GPU work is proven
-    // done by the existing fence/cmd-buffer wait. Per-slot capacity
-    // covers ~one frame's worth of resource churn at the remixer's
-    // peak scroll rate; overflow asserts so we notice if we ever
-    // need to raise it.
+    // #228 F1 (v2): per-RESOURCE retire-frame FIFO. Granite / Themaister
+    // pattern -- each enqueued handle carries the frame index at which
+    // it becomes safe to destroy (FrameIndex at-time-of-push + kFIF).
+    // DrainDeferredFrees pops from the front while the front's
+    // retire_frame <= the cutoff frame the caller passes in (driven by
+    // the existing fence / semaphore wait that proves frame N-kFIF is
+    // done). The v1 per-slot bucket design assumed any item pushed
+    // during slot S's frame was last-used by slot S's frame -- false
+    // for items pushed BETWEEN frames (which is when reload runs).
     enum DeferKind : uint8_t {
         kDeferBuffer,
         kDeferTexture,
@@ -184,11 +188,9 @@ private:
         uint16_t index = 0;
         uint16_t generation = 0;
         uint8_t kind = 0;
+        uint32_t retire_frame = 0;
     };
-    static constexpr uint32_t kPerSlotDeferCap = 1024;
-    DeferEntry defer_buckets_[kFramesInFlight][kPerSlotDeferCap]{};
-    uint32_t defer_counts_[kFramesInFlight] = {0};
-    uint32_t defer_push_slot_ = 0;
+    std::vector<DeferEntry> deferred_;
 
     void DeferPushRaw(uint16_t index, uint16_t generation, uint8_t kind);
 };

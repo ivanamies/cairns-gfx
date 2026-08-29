@@ -109,6 +109,13 @@ uint32_t ClearActiveScene(Engine* engine);
 // of prefabs that were dropped (0 if already empty).
 uint32_t UnloadAllPrefabs(Engine* engine);
 
+// #228 R1: hot-reload the resident prefab matching |path|. Re-parses
+// the GLB and swaps the pool slot's contents behind the same PrefabId;
+// entities holding AssetRef remain valid and render the new mesh next
+// frame. Returns true on success, false if no resident prefab matches
+// the path or the parse failed (existing prefab is left untouched).
+bool ReloadPrefabByPath(Engine* engine, const std::string& path);
+
 // #224 L3: the instrument.
 LoadTrace LastLoadTrace(Engine* engine);
 LoaderCounters Counters(Engine* engine);

@@ -13,8 +13,20 @@
 // GetStaticResourceFilepath path resolves.
 //
 // stdout = protocol only (JSON responses). stderr = logs.
+//
+// **W1 watchdog (#228)**: a background thread monitors a heartbeat the
+// transport loop ticks before/after each op-dispatch. If the gap
+// exceeds kWatchdogTimeoutSec, the engine is wedged (e.g. metal's
+// dispatch_semaphore_wait blocking forever on a stalled completion
+// handler) and the watchdog calls std::abort to dump a crash report
+// instead of waiting for an external SIGKILL. Tunable via the
+// CAIRNS_SERVE_WATCHDOG_SEC env var (0 disables).
 
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include <iostream>
+#include <thread>
 
 #include "imgui.h"
 
@@ -69,7 +81,53 @@ int main() {
     // every other op already registered.
     cairns::control::RegisterScriptOps(registry);
 
-    cairns::control::StdioTransport::Run(registry, std::cin, std::cout, quit);
+    // W1 watchdog: monitor the transport's heartbeat. The transport
+    // stamps steady_clock ns BEFORE Dispatch and AFTER the response is
+    // flushed. If the gap exceeds the threshold while an op is in
+    // flight, the engine is wedged and we abort -- noisier than a
+    // SIGKILL, leaves a coredump for debugging.
+    double timeout_sec = 30.0;
+    if (const char* s = std::getenv("CAIRNS_SERVE_WATCHDOG_SEC")) {
+        timeout_sec = std::atof(s);
+    }
+    std::atomic<int64_t> heartbeat_ns{0};
+    std::atomic<bool> watchdog_stop{false};
+    std::thread watchdog;
+    if (timeout_sec > 0.0) {
+        const int64_t timeout_ns =
+            static_cast<int64_t>(timeout_sec * 1.0e9);
+        watchdog = std::thread([&heartbeat_ns, &watchdog_stop, timeout_ns,
+                                timeout_sec]() {
+            while (!watchdog_stop.load(std::memory_order_acquire)) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(250));
+                const int64_t hb =
+                    heartbeat_ns.load(std::memory_order_acquire);
+                if (hb == 0) {
+                    continue;  // no op has run yet
+                }
+                const int64_t now =
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count();
+                if (now - hb > timeout_ns) {
+                    std::fprintf(stderr,
+                        "[Watchdog] op stalled > %.1fs, aborting "
+                        "cairns_serve\n", timeout_sec);
+                    std::fflush(stderr);
+                    std::abort();
+                }
+            }
+        });
+    }
+
+    cairns::control::StdioTransport::Run(registry, std::cin, std::cout, quit,
+                                          &heartbeat_ns);
+
+    watchdog_stop.store(true, std::memory_order_release);
+    if (watchdog.joinable()) {
+        watchdog.join();
+    }
 
     if (engine_ok) {
         engine->deinit();

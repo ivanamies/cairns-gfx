@@ -183,21 +183,16 @@ void Resources::Destroy(Handle<Kernel> h) {
     kernels.Release(h);
 }
 
-// #228 F1: fenced deferred deletion. Logic identical to vulkan/resources.cpp's
-// counterpart; per-backend Destroy() dispatched from DrainDeferredFrees does
-// the actual freeing.
+// #228 F1 (v2): per-resource retire-frame FIFO. See vulkan/resources.cpp
+// for the design rationale (same body, per-backend Destroy() switch).
 void Resources::DeferPushRaw(uint16_t index, uint16_t generation,
                               uint8_t kind) {
-    const uint32_t s = defer_push_slot_;
-    const uint32_t n = defer_counts_[s];
-    if (n >= kPerSlotDeferCap) {
-        return;
-    }
-    DeferEntry& e = defer_buckets_[s][n];
+    DeferEntry e;
     e.index = index;
     e.generation = generation;
     e.kind = kind;
-    defer_counts_[s] = n + 1;
+    e.retire_frame = plat.frame_index_ + kFramesInFlight;
+    deferred_.push_back(e);
 }
 
 void Resources::DeferFree(Allocator& /*alloc*/, Handle<Buffer> h) {
@@ -229,13 +224,10 @@ void Resources::DeferFree(Handle<Kernel> h) {
     DeferPushRaw(h.index, h.generation, kDeferKernel);
 }
 
-void Resources::DrainDeferredFrees(Allocator& alloc, uint32_t cur_slot) {
-    if (cur_slot >= kFramesInFlight) {
-        return;
-    }
-    const uint32_t n = defer_counts_[cur_slot];
-    for (uint32_t i = 0; i < n; ++i) {
-        const DeferEntry& e = defer_buckets_[cur_slot][i];
+void Resources::DrainDeferredFrees(Allocator& alloc, uint32_t cur_frame) {
+    size_t i = 0;
+    while (i < deferred_.size() && deferred_[i].retire_frame <= cur_frame) {
+        const DeferEntry& e = deferred_[i];
         switch (e.kind) {
             case kDeferBuffer:
                 Destroy(alloc, Handle<Buffer>{e.index, e.generation});
@@ -259,9 +251,11 @@ void Resources::DrainDeferredFrees(Allocator& alloc, uint32_t cur_slot) {
                 Destroy(Handle<Kernel>{e.index, e.generation});
                 break;
         }
+        ++i;
     }
-    defer_counts_[cur_slot] = 0;
-    defer_push_slot_ = cur_slot;
+    if (i > 0) {
+        deferred_.erase(deferred_.begin(), deferred_.begin() + i);
+    }
 }
 
 Buffer::Hot* Resources::GetHot(Handle<Buffer> h) { return buffers.GetHot(h); }

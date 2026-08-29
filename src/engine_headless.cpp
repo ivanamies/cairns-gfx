@@ -213,6 +213,13 @@ uint32_t UnloadAllPrefabs(Engine* engine) {
     return engine ? engine->UnloadAllPrefabs() : 0;
 }
 
+bool ReloadPrefabByPath(Engine* engine, const std::string& path) {
+    if (!engine) {
+        return false;
+    }
+    return engine->ReloadPrefabByPath(std::filesystem::path(path));
+}
+
 LoadTrace LastLoadTrace(Engine* engine) {
     return engine ? engine->LastLoadTrace() : LoadTrace{};
 }

@@ -143,11 +143,11 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(plat.frame_semaphore_),
                             DISPATCH_TIME_FOREVER);
     resources.AdvanceFrame(alloc);  // bump ring reset
-    // #228 F1: semaphore wait above caps in-flight frames at kFIF, so the
-    // slot we're about to record into is the kFIF-frames-ago slot whose
-    // GPU work is now done. Drain its deferred-free bucket.
-    resources.DrainDeferredFrees(alloc,
-        resources.FrameIndex() % kFramesInFlight);
+    // #228 F1 (v2): semaphore wait above caps in-flight frames at kFIF;
+    // drain any pending free whose retire_frame <= current frame_index_.
+    // Per-resource stamping fixes the between-frames push case the v1
+    // per-slot bucket got wrong.
+    resources.DrainDeferredFrees(alloc, resources.FrameIndex());
 
     MTL::Texture* swap_tex = target.plat.texture;
     Texture::Hot* msaa_hot = resources.GetHot(plat.msaa_handle_);
