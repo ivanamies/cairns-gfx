@@ -28,6 +28,7 @@
 #include "util/material_gpu.hpp"
 #include "util/scene_gpu.hpp"
 #include "util/timer.hpp"
+#include "util/log.hpp"
 #include "rhi/rhi.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/command_recorder.hpp"
@@ -108,30 +109,39 @@ public:
         // thread 2: wait for fence1 -> upload cpu to gpu mem -> signal fence2
         
         if ( !initCpuAllocators() ) {
+            CAIRNS_PRINT("GreaterInit: initCpuAllocators failed\n");
             return false;
         }
         if ( !initResourceManagers() ) {
+            CAIRNS_PRINT("GreaterInit: initResourceManagers failed\n");
             return false;
         }
         if (!rhi_.device.Init(window)) {
+            CAIRNS_PRINT("GreaterInit: device.Init failed\n");
             return false;
         }
         if (!rhi_.alloc.Init(rhi_.device)) {
+            CAIRNS_PRINT("GreaterInit: alloc.Init failed\n");
             return false;
         }
         if (!rhi_.resources.Init(rhi_.device)) {
+            CAIRNS_PRINT("GreaterInit: resources.Init failed\n");
             return false;
         }
         if (!rhi_.bindless.Init(rhi_.device)) {
+            CAIRNS_PRINT("GreaterInit: bindless.Init failed\n");
             return false;
         }
         if (!rhi_.frames.Init(rhi_.device)) {
+            CAIRNS_PRINT("GreaterInit: frames.Init failed\n");
             return false;
         }
         if (!rhi_.pipelines.Init(rhi_.device)) {
+            CAIRNS_PRINT("GreaterInit: pipelines.Init failed\n");
             return false;
         }
         if ( !initSwapChain(window)) {
+            CAIRNS_PRINT("GreaterInit: initSwapChain failed\n");
             return false;
         }
         { // init debug assets
@@ -175,7 +185,7 @@ public:
                 }
             }
 
-            const int kHeroSlices = 1;
+            const int kHeroSlices = 66;
             const int loaded_heroes = static_cast<int>(glb_paths.size());
             const int instance_count =
                 std::getenv("CAIRNS_N") ? std::atoi(std::getenv("CAIRNS_N"))
@@ -212,12 +222,15 @@ public:
             mesh_master_handle_ = scenes_[0].meshes[0].posHandle;
         }
         if ( !initRenderPipeline() ) {
+            CAIRNS_PRINT("GreaterInit: initRenderPipeline failed\n");
             return false;
         }
         if ( !rhi_.frames.InitTargets(rhi_.resources, rhi_.alloc, swapchain_) ) {
+            CAIRNS_PRINT("GreaterInit: frames.InitTargets failed\n");
             return false;
         }
         if ( !initParticles() ) {
+            CAIRNS_PRINT("GreaterInit: initParticles failed\n");
             return false;
         }
 

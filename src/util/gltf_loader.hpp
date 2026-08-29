@@ -5,6 +5,8 @@
 #include "rhi/resources.hpp"
 #include "util/std_allocator.hpp"
 
+#include <SDL3/SDL.h>
+
 #include <fastgltf/glm_element_traits.hpp>
 #include <fastgltf/core.hpp>
 #include <fastgltf/tools.hpp>
@@ -214,9 +216,13 @@ inline bool LoadMeshFromGltf(const fastgltf::Asset& asset, const fastgltf::Mesh&
 }
 
 inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene) {
-    if (!std::filesystem::exists(path)) return false;
+    size_t byte_count = 0;
+    void* file_data = SDL_LoadFile(path.string().c_str(), &byte_count);
+    if (!file_data) return false;
     fastgltf::Parser parser;
-    auto data = fastgltf::GltfDataBuffer::FromPath(path);
+    auto data = fastgltf::GltfDataBuffer::FromBytes(
+        static_cast<const std::byte*>(file_data), byte_count);
+    SDL_free(file_data);
     if (data.error() != fastgltf::Error::None) return false;
     auto assetRes = parser.loadGltfBinary(data.get(), path.parent_path(), fastgltf::Options::None);
     if (assetRes.error() != fastgltf::Error::None) return false;
@@ -395,6 +401,7 @@ inline void PrepareSceneResources(Scene& scene, rhi::Resources& rm, rhi::Allocat
         d.mip_filter = map_mip(info.mipFilter);
         d.address_mode = map_addr(info.addressModeU);
         d.max_anisotropy = 8.0f;
+        d.max_lod = 1000.0f;
         scene.samplerHandles.push_back(rm.CreateSampler(d));
     }
     

@@ -31,7 +31,9 @@ namespace {
 const std::vector<const char*> kValidationLayers = {"VK_LAYER_KHRONOS_validation"};
 const std::vector<const char*> kDeviceExtensions = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+#if CAIRNS_APPLE
     VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
+#endif
 };
 
 VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
@@ -197,13 +199,17 @@ bool Device::Init(SDL_Window* window) {
         if (validation_enabled_) {
             extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         }
+#if CAIRNS_APPLE
         extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+#endif
         extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
 
         VkInstanceCreateInfo ci{};
         ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         ci.pApplicationInfo = &app;
+#if CAIRNS_APPLE
         ci.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
         ci.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         ci.ppEnabledExtensionNames = extensions.data();
         VkDebugUtilsMessengerCreateInfoEXT dbg{};

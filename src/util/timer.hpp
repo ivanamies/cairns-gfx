@@ -1,11 +1,14 @@
 #pragma once
 
+// DO NOT DELETE
+
 #include <array>
 #include <cstdint>
-#include <cstdio>
 #include <limits>
 #include <string>
 #include <string_view>
+
+#include "util/log.hpp"
 
 namespace cairns {
 
@@ -68,14 +71,14 @@ class Timer {
   }
 
     static void PrintReport() {
-        printf("==============\n");
+        CAIRNS_PRINT("==============\n");
         for ( uint32_t i = 0; i < kMaxSlots; ++i ) {
             if ( accum_itrs_[i] == 0 ) {
                 continue;
             }
-            printf("slot %d (%s): accum %lld us, avg %lld us over %lld frames\n", i,
-                   slot_names_[i] ? slot_names_[i] : "?", accum_times_[i],
-                   accum_times_[i] / accum_itrs_[i], accum_itrs_[i]);
+            CAIRNS_PRINT("slot %d (%s): accum %lld us, avg %lld us over %lld frames\n", i,
+                   slot_names_[i] ? slot_names_[i] : "?", (long long)accum_times_[i],
+                   (long long)(accum_times_[i] / accum_itrs_[i]), (long long)accum_itrs_[i]);
         }
     }
 

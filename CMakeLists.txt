@@ -250,10 +250,7 @@ if (APPLE)
 elseif(EMSCRIPTEN)
     # on the web, we have to put the files inside of the webassembly
     # somewhat unintuitively, this is done via a linker argument.
-    target_link_libraries(${EXECUTABLE_NAME} PRIVATE 
-        "--preload-file \"${CMAKE_CURRENT_LIST_DIR}/assets/Inter-VariableFont.ttf@/\""
-        "--preload-file \"${CMAKE_CURRENT_LIST_DIR}/assets/the_entertainer.ogg@/\""
-        "--preload-file \"${CMAKE_CURRENT_LIST_DIR}/assets/gs_tiger.svg@/\""
+    target_link_libraries(${EXECUTABLE_NAME} PRIVATE
     )
 else()
     if (ANDROID)
@@ -278,9 +275,11 @@ else()
 		    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_LIST_DIR}/assets/${filename}" "${outname}"
 	    )
     endmacro()
-    copy_helper("Inter-VariableFont.ttf")
-    copy_helper("the_entertainer.ogg")
-    copy_helper("gs_tiger.svg")
+    copy_helper("unlit.vert.spv")
+    copy_helper("unlit.frag.spv")
+    copy_helper("particle.vert.spv")
+    copy_helper("particle.frag.spv")
+    copy_helper("particle.comp.spv")
 endif()
 
 # set some extra configs for each platform

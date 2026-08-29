@@ -79,6 +79,7 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     // Setup App State
     *appstate = new AppContext{
         .window = window,
+        .audioDevice = 0,
         .track = nullptr,
         .engine = engine,
     };
@@ -138,9 +139,11 @@ void SDL_AppQuit(void* appstate, [[maybe_unused]] SDL_AppResult result) {
         if ( app->engine ) {
             app->engine->deinit();
         }
+        if (app->window) {
+            SDL_DestroyWindow(app->window);
+        }
         delete app;
     }
-    if (app->window) SDL_DestroyWindow(app->window);
 
     SDL_Quit();
 }

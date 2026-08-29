@@ -10,11 +10,11 @@
 
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
 
+#include <SDL3/SDL.h>
 #include <vulkan/vulkan.h>
 
 #include "rhi/resource_manager.hpp"
@@ -23,6 +23,7 @@
 #include "rhi/bindless.hpp"
 #include "rhi/frames.hpp"
 #include "rhi/swap_chain.hpp"
+#include "util/log.hpp"
 
 namespace cairns::rhi {
 
@@ -89,16 +90,16 @@ void Pipelines::Deinit(Resources& resources) {
 namespace {
 
 bool read_spv_file(const std::string& path, std::vector<char>* out) {
-    std::ifstream file(path, std::ios::ate | std::ios::binary);
-    if (!file.is_open()) {
-        std::cerr << "rhi/vk: failed to open shader: " << path << std::endl;
+    size_t size = 0;
+    void* data = SDL_LoadFile(path.c_str(), &size);
+    if (!data) {
+        CAIRNS_PRINT("rhi/vk: failed to open shader: %s (%s)\n", path.c_str(),
+                     SDL_GetError());
         return false;
     }
-    const size_t size = static_cast<size_t>(file.tellg());
     out->resize(size);
-    file.seekg(0);
-    file.read(out->data(), size);
-    file.close();
+    std::memcpy(out->data(), data, size);
+    SDL_free(data);
     return true;
 }
 

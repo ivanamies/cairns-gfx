@@ -22,9 +22,15 @@ struct Draw {
     //   slot 2: material bindings (samplers, textures)
     //   slot 3: shader-specific bindings (e.g. LUTs, particle/skinning SSBOs)
     // The three user-land slots live here; slot 4 is the dynamic_buffers field below.
+    //
+    // todo @iamies unmangle this
+    //
     std::array<uint32_t,3> bind_groups = {};
     // slot 4: dynamic-offset bound buffers — bump-allocated temporaries like UBOs
     // (and r/w SSBOs).
+    //
+    // todo @iamies unmangle this
+    //
     uint32_t dynamic_buffers = 0;
     rhi::Handle<rhi::Buffer> index_buffer;
     // slot 1: position

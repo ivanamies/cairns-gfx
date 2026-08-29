@@ -5,21 +5,33 @@
 #include <filesystem>
 #include <string_view>
 
+#include <SDL3/SDL.h>
+
 namespace cairns {
 
 inline bool GetStaticResourceFilepath(std::string_view file, std::filesystem::path& output) {
 #if CAIRNS_ANDROID
-    std::filesystem::path basePath = "";   // on Android we do not want to use basepath. Instead, assets are available at the root directory.
+    // On Android, large assets (GLBs) are adb-pushed to the app's external files dir.
+    const char* basePathPtr = SDL_GetAndroidExternalStoragePath();
+    if (not basePathPtr){
+        return false;
+    }
+    const std::filesystem::path basePath = basePathPtr;
 #elif CAIRNS_APPLE
-    auto basePathPtr = SDL_GetBasePath();
+    const char* basePathPtr = SDL_GetBasePath();
     if (not basePathPtr){
         return false;
     }
     const std::filesystem::path basePath = basePathPtr;
 #endif // CAIRNS_APPLE
-    
+
     output = basePath / file;
-    return std::filesystem::exists(output);
+    SDL_IOStream* io = SDL_IOFromFile(output.string().c_str(), "rb");
+    if (!io) {
+        return false;
+    }
+    SDL_CloseIO(io);
+    return true;
 }
 
 } // namespace cairns
