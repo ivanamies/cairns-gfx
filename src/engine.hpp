@@ -541,6 +541,12 @@ public:
         // hunting for the LoadTrace summary.
         CAIRNS_PRINT_ERR("[LOAD] end batch ms=%.3f count=%u\n",
                           trace.total_ms, r.count);
+        // #229: prefab interning arena high-water -- sizes the mobile budget
+        // (kPrefabArenaBytes scaled by block/16); AllocSliceOrDie aborts if it
+        // ever exceeds. Logged so the S22/desktop footprint is visible.
+        CAIRNS_PRINT_ERR("[PREFAB-ARENA] used=%zu KiB / %zu KiB cap\n",
+                          prefab_arena_.Used() / 1024,
+                          prefab_arena_.Capacity() / 1024);
 #if CAIRNS_ALLOC_TRACE
         cairns::alloc_count::PrintDelta("[LOAD]", alloc_load_begin);
 #endif
@@ -2107,16 +2113,20 @@ public:
             s.arena.Init(slab, kArenaBytesPerSlot);
         }
         // #229 P3: carve the persistent prefab interning arena (names + nested
-        // load tables). Budget-scaled: 64 MB on the 1 GB desktop block, ~1/16th
-        // on the 256 MB mobile block (16 MB). Overflow fails loud via
-        // AllocSliceOrDie, so a too-small arena aborts with a clear message
-        // rather than corrupting. Zero-filled for deterministic padding.
-        const size_t prefab_bytes =
-            std::min<size_t>(kPrefabArenaBytes, mb.cpu_persistent_bytes / 16u);
+        // load tables). Fixed 96 MB (the measured 100-GLB footprint is ~58 MB);
+        // oversize => its own malloc, so it does NOT eat the 256 MB mobile chunk
+        // reservation. Overflow fails loud via AllocSliceOrDie. Fail loud here
+        // too if the malloc itself failed (Android OOM) rather than writing
+        // through a null base. Zero-filled for deterministic padding.
         void* prefab_slab = cpu_block_.Allocate(
-            static_cast<uint32_t>(prefab_bytes), 16, kRegionPersistent);
-        std::memset(prefab_slab, 0, prefab_bytes);
-        prefab_arena_.Init(prefab_slab, prefab_bytes);
+            static_cast<uint32_t>(kPrefabArenaBytes), 16, kRegionPersistent);
+        if (prefab_slab == nullptr) {
+            CAIRNS_PRINT_ERR("[PREFAB-ARENA] FATAL: could not reserve %zu MiB\n",
+                             kPrefabArenaBytes / (1024 * 1024));
+            std::abort();
+        }
+        std::memset(prefab_slab, 0, kPrefabArenaBytes);
+        prefab_arena_.Init(prefab_slab, kPrefabArenaBytes);
         return true;
     }
 
@@ -5820,7 +5830,12 @@ private:
     // into cpu_block_ in ~ResourceManager, so the block must outlive them.
 
     static constexpr size_t kArenaBytesPerSlot = 16u * 1024u * 1024u;
-    static constexpr size_t kPrefabArenaBytes = 64u * 1024u * 1024u;
+    // Sized to the measured 100-GLB footprint (~58 MB; mostly all-clip
+    // sampler/channel slices, which are load-scratch -- a follow-on can shrink
+    // this a lot by not persisting non-walk clips). Platform-independent: the
+    // same GLBs need the same space, so NOT budget-scaled. Oversize (> chunk) =>
+    // a dedicated malloc, not carved from the 256 MB mobile chunk reservation.
+    static constexpr size_t kPrefabArenaBytes = 96u * 1024u * 1024u;
 
     rhi::Rhi rhi_;
     // #228 H3: mesh_master_handle_ deleted. Was set in GreaterInit to
