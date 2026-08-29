@@ -73,7 +73,7 @@ namespace vk_debug {
 
 // Default: no debug instrumentation. Flip to vk_debug::kDumpSwapchain to enable
 // the swapchain readback (which also adds TRANSFER_SRC to the swapchain images).
-inline constexpr uint64_t kVkDebugFlags = vk_debug::kDumpSwapchain;
+inline constexpr uint64_t kVkDebugFlags = vk_debug::kNone;
 
 constexpr bool vk_debug_has(uint64_t bit) {
     return (kVkDebugFlags & bit) != 0;
@@ -442,16 +442,6 @@ private:
                     node_stack.push_back(c);
                 }
             }
-        }
-
-        if (frame_log_ < 1) {
-            uint32_t tris = 0;
-            for (const auto& d : drawList_) {
-                tris += d.triangle_count;
-            }
-            fprintf(stderr, "[draws] scenes=%zu draws=%zu tris=%u\n",
-                    scenes_.size(), drawList_.size(), tris);
-            ++frame_log_;
         }
 
         return true;
@@ -2443,7 +2433,7 @@ private:
 
     VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats) {
         for ( const auto& availableFormat : availableFormats ) {
-            if ( availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR ) {
+            if ( availableFormat.format == VK_FORMAT_B8G8R8A8_UNORM && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR ) {
                 return availableFormat;
             }
         }
@@ -3074,7 +3064,6 @@ private:
     std::vector<VkDescriptorSet> computeDescriptorSets;
 
     uint32_t mipLevels = 0;
-    uint32_t frame_log_ = 0;
     rhi::Handle<rhi::Texture> texture_;
     rhi::Handle<rhi::Sampler> sampler_;
 
