@@ -31,23 +31,20 @@ Notes: emulator GPU is host-translated, not real Tensor G1 — these are
 representative-of-low-end-mobile bytecode-path numbers but actual hardware
 will differ (memory subsystem, mali-equivalent throughput etc).
 
-### iOS Simulator (iPhone 16 Pro, Release) — still crashes
-Same `MTLSimDevice::newHeapWithDescriptor:` SIGABRT but **the actual error is
-not OOM** — it's:
+### iOS Simulator (iPhone 16 Pro, Release) — runs, 11517 draws
+Fixed at `30e383c`: metal/memory_allocator `CreateBufferBlock` skips the
+MTL::Heap wrapper for non-Private storage modes and allocates the master
+buffer directly. MTLSimDevice's "Private-only heaps" rejection no longer fires.
 ```
-(Metal) -[MTLSimDevice newHeapWithDescriptor:], line 1199:
-   error 'MTLStorageModePrivate is required for heaps'
+slot 0 (frame):                          avg 16669–20527 us (host-translated)
+slot 1 (build_draws):                    avg  5504– 6187 us
+slot 2 (record):                         avg  3658– 4073 us
+slot 3 (set up render pass globals):     avg     0–   12 us
+slot 4 (build opaque draw list):         avg  5502– 6185 us
+draws: 11517
 ```
-The iOS Simulator's Metal stub refuses to create any MTL::Heap that isn't
-`StorageModePrivate`. Our upload bump ring (and readback ring) use
-`StorageModeShared` because the CPU needs to map them — heaps are right out
-on the simulator. Real iPhone is unaffected (full Metal supports Shared heaps).
-
-This is unrelated to batched-upload work — that fix landed at `e67a2bb` (CPU
-peak now bounded to 1 batch × 10 GLBs instead of all-GLBs-at-once) and is
-verified to render clean on macOS Metal Release. iOS-Sim will need a separate
-"shared-mode bump buffer not heap" carve-out before it can run, since the
-simulator can't host the same allocator shape as real hardware.
+Caveat: simulator GPU is host-translated on the M2 Max — not iPhone hardware.
+Will track real-iPhone numbers separately.
 
 ### M2 Max — Metal (Release, window 2400×1080)
 ```
