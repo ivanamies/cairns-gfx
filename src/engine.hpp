@@ -2778,8 +2778,14 @@ public:
         cairns::GpuActorRecord* actor_records =
             s.arena.AllocateArray<cairns::GpuActorRecord>(meta_running);
 
-        const float anim_t = static_cast<float>(sim_frame_) *
-                              static_cast<float>(cairns::kFixedDt);
+        // #222 Phase 0.3: wide-base anim clock. (sim_frame_ * kFixedDt) +
+        // scale/offset in double, fmod by double(clip duration), narrow to
+        // float. The kernel's own wrap (anim_eval.comp.glsl) still runs on
+        // the narrowed value as a no-op safety. float sim time loses
+        // sub-frame precision after about 17 minutes; double holds it
+        // beyond any plausible camera-app session.
+        const double anim_t_d =
+            static_cast<double>(sim_frame_) * cairns::kFixedDt;
         for (auto e : view) {
             const cairns::SkinRef& sr = view.get<const cairns::SkinRef>(e);
             auto* sh = skins_.GetHot(sr.id);
@@ -2813,11 +2819,21 @@ public:
             instance_meta[actor_idx] =
                 glm::uvec2(cursor * b.joint_count, sh->slice.offset);
 
+            cairns::Scene::Cold* scold = scenes_.GetCold(sc->scene);
+            const double dur =
+                (scold && scold->gpu_clip_duration > 0.0f)
+                    ? static_cast<double>(scold->gpu_clip_duration)
+                    : 1.0;
+            const double scaled =
+                anim_t_d * static_cast<double>(sh->time_scale) +
+                static_cast<double>(sh->time_offset);
+            const double wrapped = scaled - dur * std::floor(scaled / dur);
+
             cairns::GpuActorRecord& rec = actor_records[actor_idx];
             rec.scene_idx = shot->gpu_scene_header_idx;
             rec.world_scratch_base = actor_idx * kAnimMaxNodes;
             rec.palette_out_base = palette_slot_base;
-            rec.time = anim_t * sh->time_scale + sh->time_offset;
+            rec.time = static_cast<float>(wrapped);
 
             ++bucket_inst_cursor[bi];
         }
