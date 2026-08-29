@@ -238,6 +238,14 @@ public:
                 rhi::Memory::kDynamic);
             memcpy(gptr, &render_pass_globals, sizeof(render_pass_globals));
             globals_offset_ = rm_.BumpOffset(gptr);
+            if (frame_ <= 6) {
+                fprintf(stderr,
+                        "[FLAKE] frame=%u w=%u h=%u aspect=%.9f vp00=%.9f vp11=%.9f "
+                        "vp22=%.9f vp32=%.9f goff=%u parity=%u\n",
+                        frame_, swapchain_.Width(), swapchain_.Height(), aspect_ratio,
+                        view_proj[0][0], view_proj[1][1], view_proj[2][2], view_proj[3][2],
+                        globals_offset_, particle_parity_);
+            }
         }
 
         //        cairns::Timer timer2("timer2", 2);

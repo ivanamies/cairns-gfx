@@ -46,6 +46,24 @@ HUMAN TODO (do at the end of the renderer merge):
   resolved rhi-side. Still to audit/hide: VkPipeline/VkPipelineLayout on
   Shader/Kernel Hot, VkDescriptorSet on BindGroup, and the Vk* device getters.]
 
+STATUS 2026-05-27 — investigated, COULD NOT REPRODUCE; tripwire installed:
+  Ran 6x (touch shared header -> incremental rebuild -> run -> cmp), 4x same-binary
+  reruns, and 1 fresh first-build-after-header-edit run: ALL byte-identical. Added a
+  permanent tripwire in src/engine.hpp: it prints, for frames 1-6, a "[FLAKE]" line
+  with w/h/aspect/view_proj[0][0],[1][1],[2][2],[3][2]/globals_offset/particle_parity
+  to stderr (verify_metal.sh pipes stderr to /dev/null, so the gate is unaffected).
+  KNOWN-GOOD frame=5 line (1440x1908 window, CAIRNS_FREEZE_ROT=45):
+    frame=5 w=1440 h=1908 aspect=0.754716992 vp00=1.324999928 vp11=1.000000000
+    vp22=-1.001001000 vp32=-0.100100100 goff=0 parity=0
+  (frames 1..6 all share the same w/h/aspect/vp; parity alternates 0,1,0,1,0,1.)
+  If the flake RECURS: diff the printed line vs known-good ->
+    * w/h/aspect/vp delta  => projection / swapchain-size cold-start (the lead suspect)
+    * parity/goff delta     => sim ping-pong / bump-ring state
+    * all-equal but pixels differ => downstream (stale .o / GPU / kill-wait race)
+  dt is frozen and the globals are proven deterministic here, so the fixed-clock
+  deterministic-verification plan (dev/plans/cairns-gfx-deterministic-verification.md)
+  is NOT needed to fix this; it stays a separate production frame-rate-independence item.
+
 HUMAN TODO — DECISION REQUIRED before/within Phase 0 (god-class split):
   Either (a) ROOT-CAUSE and KILL this flake, or (b) consciously DECIDE it's
   unsolvable / acceptable and write down WHY + how we de-risk the gate around it.
