@@ -40,14 +40,27 @@ void RegisterRenderOps(CommandRegistry& registry, cairns::Engine* engine) {
             if (path.empty()) {
                 throw std::runtime_error("missing path arg");
             }
-            if (target != "final") {
-                throw std::runtime_error("only target=final supported in P1C");
+            if (target == "final") {
+                if (!cairns::headless::DumpFinalTarget(
+                        engine, std::filesystem::path(path))) {
+                    throw std::runtime_error("DumpFinalTarget failed");
+                }
+                return {{"path", path}, {"target", target}};
             }
-            if (!cairns::headless::DumpFinalTarget(
-                    engine, std::filesystem::path(path))) {
-                throw std::runtime_error("DumpFinalTarget failed");
+            if (target == "window") {
+                // Queue the windowed swapchain dump for the next frame.
+                // The actual readback happens in Frames::End after the
+                // engine renders. Only meaningful in cairns_app (sdl-min);
+                // in cairns_serve there's no swapchain so it'd be a no-op.
+                if (!cairns::headless::RequestWindowDump(
+                        engine, std::filesystem::path(path))) {
+                    throw std::runtime_error("RequestWindowDump failed");
+                }
+                return {{"path", path},
+                        {"target", target},
+                        {"note", "queued for next frame end"}};
             }
-            return {{"path", path}};
+            throw std::runtime_error("unsupported target -- use final or window");
         });
 }
 

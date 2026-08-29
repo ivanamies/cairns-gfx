@@ -33,5 +33,12 @@ bool ResizeFinalTarget(Engine* engine, uint32_t w, uint32_t h);
 uint32_t GetFinalTargetWidth(Engine* engine);
 uint32_t GetFinalTargetHeight(Engine* engine);
 
+// Windowed-mode dump: queue a swapchain readback for the NEXT presented
+// frame and write it to `path`. Lives on this facade because the live agent
+// transport in cairns_app reuses the same registry shape as cairns_serve.
+// Returns false if the engine is null (the request itself just queues the
+// path; the actual readback happens in the next Frames::End).
+bool RequestWindowDump(Engine* engine, const std::filesystem::path& path);
+
 }  // namespace headless
 }  // namespace cairns

@@ -35,6 +35,8 @@
 #include "control/command_registry.hpp"
 #include "control/handlers/lifecycle_ops.hpp"
 #include "control/handlers/perf_ops.hpp"
+#include "control/handlers/render_ops.hpp"
+#include "control/handlers/scene_ops.hpp"
 
 namespace cairns {
 
@@ -171,6 +173,11 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     auto& registry = cairns::control::CommandRegistry::Instance();
     cairns::control::RegisterLifecycleOps(registry, &app_ctx->agent_quit);
     cairns::control::RegisterPerfOps(registry, engine);
+    // Live agent surface (target="window" path on io.dumpTexture). render.frame
+    // returns an error in windowed mode (windowed has its own draw loop;
+    // there's nothing to "render once" through the registry).
+    cairns::control::RegisterRenderOps(registry, engine);
+    cairns::control::RegisterSceneOps(registry, engine);
     app_ctx->agent_drain.Start();
     if (app_ctx->agent_drain.Enabled()) {
         std::fprintf(stderr,

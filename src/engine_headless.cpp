@@ -46,4 +46,11 @@ uint32_t GetFinalTargetHeight(Engine* engine) {
     return engine->GetFinalTargetHeight();
 }
 
+bool RequestWindowDump(Engine* engine, const std::filesystem::path& path) {
+    if (!engine) {
+        return false;
+    }
+    return engine->RequestViewportDump(path);
+}
+
 }  // namespace cairns::headless
