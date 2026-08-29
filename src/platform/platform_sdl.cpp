@@ -58,6 +58,7 @@ bool ReadAsset(const std::filesystem::path& path, std::string& out) {
 void ImguiNewFrame() { ImGui_ImplSDL3_NewFrame(); }
 
 uint32_t WorkerThreadCount() {
+    if (std::getenv("CAIRNS_SINGLE_THREAD")) { return 0; }  // diag/web-parity
     // Cap at 4 so M-series fan-out stays on P-cores (hardware_concurrency()
     // counts E-cores too, which ate the win); clamp 0 -> 1.
     const unsigned hw = std::thread::hardware_concurrency();

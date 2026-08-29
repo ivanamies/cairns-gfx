@@ -126,7 +126,9 @@ void StartEngine(WebApp* app) {
     cairns::control::RegisterPerfOps(reg, *app->engine);
     cairns::control::RegisterSelectionOps(reg, *app->engine);
     cairns::control::RegisterScriptOps(reg);
-    cairns::control::RunBootScript(reg);
+    // No RunBootScript: run.js is the native 500-actor perf workload (loadBatch
+    // 100 + instantiateGrid x5). The browser boots empty; scenarios spawn on a
+    // button click via window.cairns.dispatch.
 
     app->ready = true;
     std::fprintf(stderr, "[web] engine ready (%ux%u)\n", app->width, app->height);

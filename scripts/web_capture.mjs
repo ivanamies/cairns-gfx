@@ -82,8 +82,14 @@ class CDP {
       logs.push('[exception] ' + (m.params.exceptionDetails?.exception?.description || JSON.stringify(m.params.exceptionDetails)));
     }
   });
+  cdp.on((m) => {
+    if (m.method === 'Log.entryAdded') {
+      logs.push('[log:' + m.params.entry.level + '] ' + m.params.entry.text);
+    }
+  });
   await cdp.send('Runtime.enable');
   await cdp.send('Page.enable');
+  await cdp.send('Log.enable');
   await cdp.send('Page.navigate', { url: URL });
   await sleep(WAIT);
   if (EVAL) {

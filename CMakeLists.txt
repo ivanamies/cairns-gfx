@@ -448,6 +448,15 @@ if(EMSCRIPTEN AND CAIRNS_GFX_BACKEND_WEBGPU)
         "-sASSERTIONS=1"
         "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/src/web/shell.html"
         "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/assets@/")
+    # A few champion GLBs (external staging dir) for the three-heroes scenario,
+    # mapped to the MEMFS root next to die.glb / viking_room.glb.
+    set(_cairns_web_champs ahri akali alistar)
+    foreach(_c ${_cairns_web_champs})
+        set(_glb "/Users/ivanamies/dev/gfx/assets/riot/lol_champions/staging/${_c}.glb")
+        if(EXISTS "${_glb}")
+            target_link_options(cairns_web PRIVATE "--preload-file=${_glb}@/${_c}.glb")
+        endif()
+    endforeach()
 endif()
 
 # =============================================================================

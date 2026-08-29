@@ -8,8 +8,8 @@
 #include "platform/platform.hpp"
 
 #include <chrono>
+#include <cstdio>
 #include <fstream>
-#include <sstream>
 
 namespace cairns::platform {
 
@@ -37,12 +37,14 @@ bool AssetExists(const std::filesystem::path& path) {
 }
 
 bool ReadAsset(const std::filesystem::path& path, std::string& out) {
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) { return false; }
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    out = ss.str();
-    return true;
+    const std::streamsize n = f.tellg();
+    if (n < 0) { return false; }
+    f.seekg(0, std::ios::beg);
+    out.resize(static_cast<size_t>(n));
+    f.read(out.data(), n);
+    return f.gcount() == n;
 }
 
 void ImguiNewFrame() {}  // web: DisplaySize set by the engine, input via DOM

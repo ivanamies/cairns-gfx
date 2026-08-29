@@ -19,6 +19,7 @@
   <button onclick="scn('one_die')">One Die</button>
   <button onclick="scn('two_die')">Two Die</button>
   <button onclick="scn('viking')">Viking Room</button>
+  <button onclick="scn('three_champ')">Three Heroes</button>
 </div>
 <canvas id="canvas" width="1280" height="720"></canvas>
 <div id="status">loading…</div>
@@ -63,6 +64,10 @@
     } else if (name === 'viking') {
       cairns.dispatch('cairns.scene.spawnFitted',
                       { glbs: ['viking_room.glb'], instances: 1, animated: false });
+    } else if (name === 'three_champ') {
+      cairns.dispatch('cairns.scene.spawnFitted',
+                      { glbs: ['ahri.glb', 'akali.glb', 'alistar.glb'],
+                        instances: 3, animated: false });
     }
     document.getElementById('status').textContent = name;
   }
