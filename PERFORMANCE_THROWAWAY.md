@@ -262,3 +262,27 @@ _Receipt note:_ not visible in `[ALLOC-RECEIPT]` — that counts C++ `operator
 new`; QuickJS is C `malloc`. The win is the **bounded** heap, not a delta in the
 C++ counter. Per-context wholesale-region reclaim (vs. free-list recycle) is a
 later refinement.
+
+---
+
+## M6 — NDJSON dispatch copy-elimination (commit pending)
+
+`CommandRegistry::Dispatch` no longer copies the op name into a `std::string`
+(now a `string_view` into the request + a heterogeneous `FindOp` comparator) nor
+copies the `args` subtree (passed by const-ref straight from the request, no-args
+binds one empty object via pointer — no ternary copy-to-common-type). Byte-
+identical: spec 108/108, jsmoke 4/4, scenarios green (1 = G6 #9b).
+
+### Receipt (steady allocs / 60 frames)
+| | allocs |
+|---|---|
+| M2 | 2814 |
+| **M6** | **2688** |
+
+**Modest (~2/command).** Honest scope: true "zero-alloc NDJSON" additionally
+needs (a) a SAX tokenizer to skip the request-tree `json::parse` (~3-5/command)
++ a per-command scratch arena, and (b) a handler-signature migration off
+`std::function<json(const json&)>` — large, deferred. AND the dominant ~45/frame
+steady residual is **not** NDJSON: it's the surfaceless per-frame render/extract
+path (a separate concern; the real windowed app renders via `draw()`, never
+parsing NDJSON per frame). M6 took the safe, contained copy-elimination.

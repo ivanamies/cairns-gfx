@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <exception>
 #include <map>
+#include <string_view>
 #include <utility>
 
 namespace cairns::control {
@@ -17,9 +18,13 @@ namespace {
 // #215 binary-search the sorted lookup table for `name`. Returns op_id or
 // UINT32_MAX if not found.
 constexpr uint32_t kNoOp = 0xFFFFFFFFu;
-uint32_t FindOp(const std::vector<CommandIndex>& sorted, const std::string& name) {
-    auto it = std::lower_bound(sorted.begin(), sorted.end(),
-                                CommandIndex{name, 0});
+// #229 M6: takes a string_view + a heterogeneous comparator so dispatch
+// doesn't copy the op name into a std::string (nor build a scratch
+// CommandIndex) per command.
+uint32_t FindOp(const std::vector<CommandIndex>& sorted, std::string_view name) {
+    auto it = std::lower_bound(
+        sorted.begin(), sorted.end(), name,
+        [](const CommandIndex& idx, std::string_view n) { return idx.name < n; });
     if (it == sorted.end() || it->name != name) {
         return kNoOp;
     }
@@ -94,19 +99,28 @@ json CommandRegistry::Dispatch(const json& request) {
                          {"message", "request must have a string 'op' field"}};
         return resp;
     }
-    const std::string op = op_it->get<std::string>();
+    // #229 M6: op as a view into the request (no per-command string copy).
+    const std::string_view op = op_it->get_ref<const std::string&>();
     const uint32_t op_id = FindOp(sorted_names_, op);
     if (op_id == kNoOp || op_id >= commands_.size()) {
         resp["ok"] = false;
         resp["error"] = {{"code", "unknown_op"}, {"message", op}};
         return resp;
     }
-    json args = json::object();
-    if (request.contains("args") && request["args"].is_object()) {
-        args = request["args"];
+    // #229 M6: pass args by const-ref straight from the request -- no subtree
+    // copy. The no-args case materializes one empty object (null default costs
+    // nothing); a pointer avoids the ternary's copy-to-common-type.
+    const auto args_it = request.find("args");
+    const json* args_ptr = nullptr;
+    json empty_args;  // null -> no allocation unless the no-args branch runs
+    if (args_it != request.end() && args_it->is_object()) {
+        args_ptr = &*args_it;
+    } else {
+        empty_args = json::object();
+        args_ptr = &empty_args;
     }
     try {
-        json result = commands_[op_id].fn(args);
+        json result = commands_[op_id].fn(*args_ptr);
         resp["ok"] = true;
         resp["result"] = std::move(result);
     } catch (const std::exception& e) {
