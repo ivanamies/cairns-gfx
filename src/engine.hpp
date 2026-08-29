@@ -2249,8 +2249,7 @@ public:
                     return present_thread_stop_ ||
                            !present_thread_queue_.empty();
                 });
-                if (present_thread_stop_ &&
-                    present_thread_queue_.empty()) {
+                if (present_thread_stop_) {
                     return;
                 }
                 slot = present_thread_queue_.front();
@@ -2857,7 +2856,7 @@ public:
         // in the byte-gate) AND in surfaceless mode (cairns_serve has no
         // SDL3 platform backend init'd; ImGui_ImplSDL3_NewFrame would
         // assert. final_target_ being non-null is the surfaceless marker).
-        const bool draw_imgui = !golden_ && final_target_.IsNull();
+        const bool draw_imgui = !golden_ && has_window_;
         if (draw_imgui) {
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
@@ -3143,7 +3142,7 @@ public:
     // Pick the per-frame swap target. SwapChain and Frames are
     // app-mode-agnostic -- the engine is the one place that knows which
     // texture the swap pass writes into this frame.
-    rhi::SwapResolveTarget AcquireFrameSwapTarget() {
+    rhi::SwapResolveTarget AcquireFrameSwapTarget(uint32_t /*slot*/) {
         if (final_target_.IsNull()) {
             return swapchain_.AcquireForFrame();
         }
@@ -3182,7 +3181,7 @@ public:
         // Engine -- not the RHI -- picks the per-frame swap target. Windowed:
         // pull the next drawable from the SwapChain. Surfaceless: hand Frames
         // the engine-owned offscreen, with no drawable so it doesn't present.
-        rhi::SwapResolveTarget swap_target = AcquireFrameSwapTarget();
+        rhi::SwapResolveTarget swap_target = AcquireFrameSwapTarget(pkt.slot);
         rhi::FrameContext fc = rhi_.frames.Begin(
             rhi_.resources, rhi_.alloc, rhi_.gpu_profiler,
             rhi_.offscreen_targets, swap_target);
@@ -4951,7 +4950,7 @@ public:
                 present_thread_stop_ = true;
             }
             present_thread_cv_.notify_all();
-            present_thread_->join();
+            present_thread_->detach();
             present_thread_.reset();
         }
         swapchain_.Deinit();
@@ -5266,6 +5265,7 @@ private:
     // cfg.surfaceless == true in GreaterInit; null otherwise. P1C uses a
     // minimal clear-only render path; P2+ wires the full scene path through it.
     rhi::Handle<rhi::Texture> final_target_ = rhi::Handle<rhi::Texture>::Null;
+    std::array<rhi::Handle<rhi::Texture>, kFramesInFlight> final_targets_{};
     uint32_t final_target_w_ = 0;
     uint32_t final_target_h_ = 0;
 
