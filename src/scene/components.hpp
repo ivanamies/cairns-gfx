@@ -3,9 +3,31 @@
 // EnTT components attached to per-world registries. POD, small, no
 // virtuals. The Extract view (render_extract.hpp) reads WorldTransform
 // + AssetRef + Renderable; everything else is editor-only or wired
-// later. Skin component is deferred to P8 (after the audit of the
-// existing skin_output_pool / RangePool / RenderProxyArrays::skins
-// machinery).
+// later.
+//
+// P8 SKIN AUDIT (2026-06-04, deferred -- no animation in tree yet):
+//   The codebase already has:
+//     - util/cpu_pool.hpp: RangePool + PoolSlice (OffsetAllocator-
+//       backed) -- the canonical user is named "skin_output_pool" in
+//       the doc comment. Right tool for the GPU output range
+//       suballoc (joint matrices, skinned vertices).
+//     - render/render_proxy.hpp: SkinnedAttachment (per-frame proxy:
+//       Handle<Buffer> joint_matrices + joint_count).
+//     - render/render_proxy_arrays.hpp: ProxyArray<SkinnedAttachment>
+//       skins (per-frame).
+//   What's NOT there:
+//     - No engine member named skin_output_pool_ (infra built, not
+//       instantiated).
+//     - No skinned content loads, no skinning compute kernel.
+//   When animation lands, both machineries are needed (NOT redundant):
+//     - RangePool skin_output_pool_   <- output offsets, O(1) free
+//     - ResourceManager<SkinnedAttachment> skins_  <- per-skin
+//       generational descriptor: joint_count, debug name, inverse-
+//       bind data, slice handle into the RangePool.
+//   At that point, add Skin component here (SkinId = Handle<
+//   SkinnedAttachment>), wire SkinningJob holding SkinId, and route
+//   RunSkinning through skins_.GetHot() generation check (the
+//   explicit handle case from the spec's motivation).
 
 #pragma once
 
