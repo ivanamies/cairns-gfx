@@ -253,8 +253,6 @@ namespace cairns {
 
 inline static constexpr uint32_t kHotArenaMemorySize = 1 << 29;
 inline static constexpr uint32_t kPermanentHeapMemorySize = 1 << 30;
-inline static constexpr uint32_t kMaxDrawTmpsPerFrame = 16384;
-inline static constexpr uint32_t kMaxMaterialBuffersPerFrame = 16384;
 
 class Engine {
 public:
@@ -283,33 +281,6 @@ public:
         return allocTransientHeap_->Valid();
     }
     
-    bool initBufferManagers() {
-        { // init render pass globals handles
-            for ( uint32_t i = 0; i < kBufferedFrames; ++i ) {
-                renderPassGlobals_.push_back(bufferManager_->New());
-            }
-        }
-        { // init draw tmp handles
-            drawTmpIdxs_.resize(kBufferedFrames);
-            drawTmps_.resize(kBufferedFrames);
-            for ( uint32_t i = 0; i < kBufferedFrames; ++i ) {
-                for ( uint32_t j = 0; j < kMaxDrawTmpsPerFrame; ++j ) {
-                    drawTmps_[i].push_back(bufferManager_->New());
-                }
-            }
-        }
-        { // init material buffer handles
-            materialBufferIdxs_.resize(kBufferedFrames);
-            materialBuffers_.resize(kBufferedFrames);
-            for ( uint32_t i = 0; i < kBufferedFrames; ++i ) {
-                for ( uint32_t j = 0; j < kMaxMaterialBuffersPerFrame; ++j ) {
-                    materialBuffers_[i].push_back(materialBufferManager_->New());
-                }
-            }
-        }
-        return true;
-    }
-    
     bool initDevice() {
         device = cairns::rhi::Device(MTL::CreateSystemDefaultDevice());
         return device.get() != nullptr;
@@ -325,11 +296,9 @@ public:
         return true;
     }
     
-    void resetFrameTmps(uint32_t frame) {
-        drawTmpIdxs_[frame] = 0;
+    void resetFrameTmps() {
         dynBufs_.Reset();
         bindGroups_.Reset();
-        materialBufferIdxs_[frame] = 0;
     }
     
     bool requestResizeFrameBuffer(uint32_t width, uint32_t height) {
@@ -373,7 +342,6 @@ public:
         bufferManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Buffer>>(hot_arena_, hot_arena_, 1024);
         // 4 because we're only pretending to be a real UGC engine at this point
         samplerManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Sampler>>(hot_arena_, hot_arena_, 256);
-        materialBufferManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Buffer>>(hot_arena_, hot_arena_, 1024);
         return true;
     }
     
@@ -411,9 +379,6 @@ public:
             return false;
         }
         if ( !initGpuAllocators() ) {
-            return false;
-        }
-        if ( !initBufferManagers() ) {
             return false;
         }
         { // init debug assets
@@ -532,7 +497,7 @@ public:
         return true;
     }
     
-    bool BuildMeshOpaqueDraws(uint32_t frame) {
+    bool BuildMeshOpaqueDraws() {
         drawList_.clear();
         drawListSorted_.clear();
         
@@ -578,10 +543,6 @@ public:
                 sizeof(cairns::rhi::RenderPassGlobals), dyn_align,
                 rhi2::Memory::kDynamic);
             memcpy(gptr, &render_pass_globals, sizeof(render_pass_globals));
-            BufHandle globals_handle = renderPassGlobals_[frame];
-            auto* gh = bufferManager_->GetObj(globals_handle);
-            gh->buffer = rm_.GetBumpMasterBuffer(rhi2::Memory::kDynamic);
-            gh->mem.offset = rm_.BumpOffset(gptr);
         }
         
         //        cairns::Timer timer2("timer2", 2);
@@ -632,17 +593,11 @@ public:
                         };
                         const uint32_t dyn_align =
                             static_cast<uint32_t>(device.GetGpuAlignUboOffset());
-                        const uint32_t material_buf_idx = materialBufferIdxs_[frame]++;
-                        assert(material_buf_idx < kMaxMaterialBuffersPerFrame);
-                        const BufHandle h = materialBuffers_[frame][material_buf_idx];
                         void* mptr = rm_.BumpAllocate(
                             sizeof(cairns::rhi::MaterialGpu), dyn_align,
                             rhi2::Memory::kDynamic);
                         memcpy(mptr, &material_gpu, sizeof(material_gpu));
-                        auto* mh = materialBufferManager_->GetObj(h);
-                        mh->buffer = rm_.GetBumpMasterBuffer(rhi2::Memory::kDynamic);
-                        mh->mem.offset = rm_.BumpOffset(mptr);
-                        mat_obj.material_buffer = h;
+                        mat_obj.material_offset = rm_.BumpOffset(mptr);
                         mat_obj.material = mat_id;
                     }
                     
@@ -659,17 +614,11 @@ public:
                         };
                         const uint32_t dyn_align =
                             static_cast<uint32_t>(device.GetGpuAlignUboOffset());
-                        const uint32_t draw_tmp_idx = drawTmpIdxs_[frame]++;
-                        assert(draw_tmp_idx < kMaxDrawTmpsPerFrame);
-                        const BufHandle h = drawTmps_[frame][draw_tmp_idx];
                         void* tptr = rm_.BumpAllocate(
                             sizeof(cairns::rhi::DrawTmp), dyn_align,
                             rhi2::Memory::kDynamic);
                         memcpy(tptr, &draw_tmp, sizeof(draw_tmp));
-                        auto* th = bufferManager_->GetObj(h);
-                        th->buffer = rm_.GetBumpMasterBuffer(rhi2::Memory::kDynamic);
-                        th->mem.offset = rm_.BumpOffset(tptr);
-                        tmp_obj.buf = h;
+                        tmp_obj.offset = rm_.BumpOffset(tptr);
                     }
                     
                     //                    cairns::Timer timer9("timer9", 9);
@@ -705,14 +654,14 @@ public:
     }
     
     bool draw() {
-        const uint32_t frame = frame_++ % kBufferedFrames;
+        frame_++;
         if (frame_ == 5 && dumpPath_.empty()) {
             dumpPath_ = "/tmp/cairns_dump.png";
         }
         
         dispatch_semaphore_wait(frameSemaphore, DISPATCH_TIME_FOREVER);
 
-        resetFrameTmps(frame);
+        resetFrameTmps();
         rm_.BeginFrame();
 
         if ( resizeFrameBufferRequest_ ) {
@@ -731,7 +680,7 @@ public:
         
         cairns::Timer timer0("timer 0", 0);
         
-        if ( !BuildMeshOpaqueDraws(frame)) {
+        if ( !BuildMeshOpaqueDraws()) {
             return false;
         }
         
@@ -807,17 +756,13 @@ public:
                     const MatId mat = mat_bg_obj.material;
                     if ( mat != last_mat ) {
                         last_mat = mat;
-                        const BufHandle material_buffer = mat_bg_obj.material_buffer;
-                        cairns::OffsetAllocator::Allocation mat_mem = materialBufferManager_->GetObj(material_buffer)->mem;
-                        encoder->setVertexBufferOffset(mat_mem.offset, cairns::kMaterialBindSlot);
+                        encoder->setVertexBufferOffset(mat_bg_obj.material_offset, cairns::kMaterialBindSlot);
                     }
                 }
                 { // set up draw temporary
                     const DynBufId draw_tmp_bg = draw.dynamic_buffers;
                     auto& draw_tmp_obj = dynBufs_.At(draw_tmp_bg);
-                    const BufHandle draw_tmp_buf = draw_tmp_obj.buf;
-                    const cairns::OffsetAllocator::Allocation draw_tmp_mem = bufferManager_->GetObj(draw_tmp_buf)->mem;
-                    encoder->setVertexBufferOffset(draw_tmp_mem.offset, cairns::kDrawTmpBindSlot);
+                    encoder->setVertexBufferOffset(draw_tmp_obj.offset, cairns::kDrawTmpBindSlot);
                 }
                 {
                     const uint32_t index_count = draw.triangle_count * 3;
@@ -1062,16 +1007,8 @@ private:
     cairns::FrameTransientCache<cairns::DynamicBuffersAssoc> dynBufs_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Sampler>> samplerManager_;
     std::vector<cairns::LoadedMaterial> materials_;
-    cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Buffer>> materialBufferManager_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Texture>> renderPassTexManager_;
-    
-    std::vector<BufHandle> renderPassGlobals_;
-    std::vector<uint32_t> drawTmpIdxs_;
-    std::vector<std::vector<BufHandle>> drawTmps_;
-    
-    std::vector<uint32_t> materialBufferIdxs_;
-    std::vector<std::vector<BufHandle>> materialBuffers_;
-    
+
     cairns::FrameTransientCache<cairns::BindGroupAssoc> bindGroups_;
 
     std::vector<std::pair<cairns::DrawKey,uint32_t>,cairns::Allocator<std::pair<cairns::DrawKey,uint32_t>>> drawListSorted_;

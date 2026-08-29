@@ -8,17 +8,14 @@
 #include <limits>
 #include <vector>
 
-#include "rhi/resource.hpp"
-#include "rhi/tag.hpp"
-
 namespace cairns {
 
 struct DynamicBuffersAssoc {
-    rhi::Handle<rhi::Buffer> buf = rhi::Handle<rhi::Buffer>::Null;
+    uint32_t offset = 0;
 };
 
 struct BindGroupAssoc {
-    rhi::Handle<rhi::Buffer> material_buffer = rhi::Handle<rhi::Buffer>::Null;
+    uint32_t material_offset = 0;
     uint32_t material = std::numeric_limits<uint32_t>::max();
 };
 
