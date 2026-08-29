@@ -439,6 +439,20 @@ if (APPLE)
     # 1. Add specific known files
     add_resource("${input_root}/run.js")  # mandatory boot script
     add_resource("${input_root}/Inter-VariableFont.ttf")
+
+    # 1b. Scenario launcher scripts -> Resources/scripts/. The sdl-min imgui
+    # picker enumerates this dir at runtime; drop a .js in assets/scripts/ to
+    # add a scenario (no recompile of the picker, no per-scenario C++).
+    file(GLOB SCENARIO_SCRIPTS CONFIGURE_DEPENDS "${input_root}/scripts/*.js")
+    foreach(SCRIPT_FILE ${SCENARIO_SCRIPTS})
+        target_sources(${EXECUTABLE_NAME} PRIVATE "${SCRIPT_FILE}")
+        set_property(SOURCE "${SCRIPT_FILE}" PROPERTY
+                     MACOSX_PACKAGE_LOCATION "Resources/scripts")
+    endforeach()
+    # TODO(#229 cleanup): remove these bundled demo/sample assets -- leftover
+    # SDL-template cruft, not used by cairns. Drop the add_resource lines AND
+    # the files (assets/Inter-VariableFont.ttf, the_entertainer.ogg, gs_tiger.svg,
+    # mc_grass.jpeg). Confirm imgui doesn't load Inter before removing the font.
     add_resource("${input_root}/the_entertainer.ogg")
     add_resource("${input_root}/gs_tiger.svg")
     add_resource("${input_root}/mc_grass.jpeg")

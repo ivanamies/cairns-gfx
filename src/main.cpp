@@ -10,6 +10,10 @@
 #include <string>
 #include <memory>
 #include <set>
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 
 #include <glm/glm.hpp>
 
@@ -35,8 +39,77 @@
 #include "control/handlers/scene_ops.hpp"
 #include "control/handlers/script_ops.hpp"
 #include "control/handlers/selection_ops.hpp"
+#include "util/json.hpp"
+#include "util/misc.hpp"  // GetBasePathSafe
 
 namespace cairns {
+
+// Scenario launcher: enumerates assets scripts/*.js at boot, draws an imgui
+// picker, and records the clicked script. The app dispatches it (reset + eval)
+// at the same safe point it drains agent commands -- so this stays a plain,
+// app-owned value (no singleton) and the engine just calls Draw() via its raw
+// fn-ptr panel hook. Adding a scenario = drop a .js in assets/scripts/.
+struct ScenarioLauncher {
+    struct Script {
+        std::string label;
+        std::string path;
+    };
+    std::vector<Script> scripts;
+    int pending = -1;  // index clicked this frame; consumed by the app, then -1
+    int current = -1;  // last-run index (button highlight)
+
+    void Enumerate() {
+        namespace fs = std::filesystem;
+        const fs::path dir = fs::path(cairns::GetBasePathSafe()) / "scripts";
+        std::error_code ec;
+        if (!fs::is_directory(dir, ec)) {
+            return;
+        }
+        for (const auto& entry : fs::directory_iterator(dir, ec)) {
+            if (entry.path().extension() != ".js") {
+                continue;
+            }
+            // Strip a leading "NN_" sort prefix for the button label.
+            std::string label = entry.path().stem().string();
+            const size_t us = label.find('_');
+            if (us != std::string::npos &&
+                label.find_first_not_of("0123456789") == us) {
+                label = label.substr(us + 1);
+            }
+            scripts.push_back({label, entry.path().string()});
+        }
+        // Sort by path so the NN_ prefix orders the list, label stays clean.
+        std::sort(scripts.begin(), scripts.end(),
+                  [](const Script& a, const Script& b) { return a.path < b.path; });
+    }
+
+    // Drawn inside the engine's HUD imgui frame (panel hook).
+    void Draw() {
+        ImGui::SetNextWindowPos(ImVec2(20.0f, 200.0f), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Scenarios");
+        if (scripts.empty()) {
+            ImGui::TextUnformatted("(no scripts/*.js found next to the app)");
+        }
+        for (int i = 0; i < static_cast<int>(scripts.size()); ++i) {
+            const bool is_cur = (i == current);
+            if (is_cur) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.2f, 1.0f));
+            }
+            if (ImGui::Button(scripts[i].label.c_str(), ImVec2(240.0f, 0.0f))) {
+                pending = i;
+            }
+            if (is_cur) {
+                ImGui::PopStyleColor();
+            }
+        }
+        ImGui::End();
+    }
+};
+
+// Raw fn-ptr trampoline for Engine::SetImguiPanel (no std::function alloc).
+inline void DrawScenarioPanel(void* ctx) {
+    static_cast<ScenarioLauncher*>(ctx)->Draw();
+}
 
 
 } // namespace cairns
@@ -58,6 +131,9 @@ struct AppContext {
     // SDL_AppIterate. Disabled unless CAIRNS_AGENT_STDIN=1.
     cairns::control::AgentStdinDrain agent_drain;
     bool agent_quit = false;
+
+    // #229 imgui scenario picker (boots blank; user clicks to run a scripts/*.js).
+    cairns::ScenarioLauncher launcher;
 
     SDL_AppResult app_quit = SDL_APP_CONTINUE;
 
@@ -153,8 +229,12 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     // Script ops LAST so tools.list inside script.eval reflects every
     // other op already registered. Mirrors serve_main's ordering.
     cairns::control::RegisterScriptOps(registry);
-    // Bundled boot script. Aborts if assets/run.js isn't in the bundle.
-    cairns::control::RunBootScript(registry);
+    // #229: boot BLANK -- no run.js auto-load. Everything starts empty except
+    // the perf HUD + the scenario picker; the user clicks to run a scripts/*.js
+    // (perf_smoke.js is the old 500-actor benchmark). Enumerate the scripts and
+    // hand the engine the imgui panel hook.
+    app_ctx->launcher.Enumerate();
+    engine->SetImguiPanel(&cairns::DrawScenarioPanel, &app_ctx->launcher);
     app_ctx->agent_drain.Start(cairns::shell::AgentStdinEnabledFromEnv());
     if (app_ctx->agent_drain.Enabled()) {
         std::fprintf(stderr,
@@ -283,6 +363,27 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
                            stdout);
     if (app->agent_quit) {
         app->app_quit = SDL_APP_SUCCESS;
+    }
+
+    // #229 scenario picker: if the user clicked a scenario last frame, reset to
+    // blank and eval its script -- same safe pre-draw point as the agent drain.
+    // The reset is fixed (scene + prefabs + render modes), not per-scenario.
+    if (app->launcher.pending >= 0) {
+        const int idx = app->launcher.pending;
+        app->launcher.pending = -1;
+        app->launcher.current = idx;
+        auto& reg = cairns::control::CommandRegistry::Instance();
+        reg.Dispatch(cairns::json{{"op", "cairns.scene.clear"}});
+        reg.Dispatch(cairns::json{{"op", "cairns.prefab.unloadAll"}});
+        reg.Dispatch(cairns::json{{"op", "cairns.render.nestedGraph"},
+                                  {"args", {{"on", false}}}});
+        reg.Dispatch(cairns::json{{"op", "cairns.render.tinyTriangle"},
+                                  {"args", {{"on", false}}}});
+        std::ifstream f(app->launcher.scripts[idx].path);
+        std::stringstream ss;
+        ss << f.rdbuf();
+        reg.Dispatch(cairns::json{{"op", "cairns.script.eval"},
+                                  {"args", {{"code", ss.str()}}}});
     }
 
     // P1 fly-cam: sample keyboard state once per iterate and drive the

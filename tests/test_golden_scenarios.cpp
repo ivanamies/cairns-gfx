@@ -18,6 +18,7 @@
 #include "test_refs.hpp"
 #include "golden_js.hpp"
 #include "util/hud_stats.hpp"
+#include "util/debug_asset.hpp"  // kDebugGlbs (nested 20-GLB scenario)
 
 namespace seam = cairns::test_seams;
 namespace refs = cairns::test_refs;
@@ -224,9 +225,18 @@ SCENARIO("two viewports, two scenes: a different hero in each (JS-driven)",
 //    with a different camera angle.
 //    Building block: [spec][schedule] (depth-after-resolve + 3rd-camera survives)
 //    + [spec][frustum].
-SCENARIO("nested graph: color + resolved depth + third camera",
+SCENARIO("nested graph: 20 GLBs resolved color + depth strip",
          "[golden][scenarios][render_graph][nested]") {
-    if (!seam::AssetsPresent({"ahri.glb","akali.glb","alistar.glb"})) {
+    // The nested-graph idea: render the GLB set, then in one frame show its
+    // RESOLVED color across the top + a depthviz STRIP of the same depth buffer
+    // along the bottom (the render.nestedGraph mode drives the composite). 20
+    // distinct GLBs from the canonical debug set, single camera.
+    std::vector<std::string> glbs;
+    for (uint32_t i = cairns::kDebugGlbsToParseStart;
+         i < cairns::kDebugGlbsToParseStart + 20; ++i) {
+        glbs.emplace_back(cairns::kDebugGlbs[i]);
+    }
+    if (!seam::AssetsPresent(glbs)) {
         SKIP("assets absent");
     }
     seam::EnsureImguiContext();
@@ -238,25 +248,12 @@ SCENARIO("nested graph: color + resolved depth + third camera",
     ecfg.use_fixed_clock = true;
     cairns::Engine e;
     REQUIRE(e.GreaterInit(icfg, ecfg));
-    // 3 animated champions + two extra-camera viewports at +-60 deg yaw + the
-    // nested (color + resolved-depth + extra-camera) graph -- all JS.
-    cairns::golden::DriveJs(e, R"JS(
-        cairns.dispatch("cairns.scene.spawnFitted",
-            { glbs: ["ahri.glb","akali.glb","alistar.glb"], instances: 3,
-              animated: true });
-        cairns.dispatch("cairns.viewport.open", {});
-        cairns.dispatch("cairns.viewport.setCamera",
-                        { viewport: 1, yaw: 1.0471975511965976 });
-        cairns.dispatch("cairns.viewport.particles", { viewport: 1, on: false });
-        cairns.dispatch("cairns.viewport.open", {});
-        cairns.dispatch("cairns.viewport.setCamera",
-                        { viewport: 2, yaw: -1.0471975511965976 });
-        cairns.dispatch("cairns.viewport.particles", { viewport: 2, on: false });
-        cairns.dispatch("cairns.render.nestedGraph", { on: true });
-    )JS");
+    cairns::golden::DriveJs(e, cairns::golden::SpawnFittedJs(glbs, 20, true));
+    cairns::golden::DriveJs(
+        e, R"JS(cairns.dispatch("cairns.render.nestedGraph", { on: true });)JS");
     REQUIRE(seam::AdvanceToGoldenFrame(e));
 
-    SECTION("main color (per-platform image)") {
+    SECTION("color (top) + depthviz strip (bottom) -- eyeball the dumped PNG") {
         std::vector<uint8_t> rgba;
         uint32_t w = 0;
         uint32_t h = 0;
@@ -265,19 +262,7 @@ SCENARIO("nested graph: color + resolved depth + third camera",
         const std::string observed = seam::Md5Hex(rgba);
         const std::string ref = refs::LoadImageRef("nested.color", seam::PlatformKey(), observed);
         if (ref.empty()) {
-            SKIP("bake nested.color");
-        }
-        REQUIRE(observed == ref);
-    }
-    SECTION("resolved depth (per-platform)") {
-        std::vector<uint8_t> depth;
-        if (!seam::ReadResolvedDepth(e, depth)) {
-            SKIP("resolved depth readback not wired yet");
-        }
-        const std::string observed = seam::Md5Hex(depth);
-        const std::string ref = refs::LoadImageRef("nested.depth_resolved", seam::PlatformKey(), observed);
-        if (ref.empty()) {
-            SKIP("bake nested.depth_resolved");
+            SKIP("bake nested.color (layout changed: 20 GLBs + depth strip)");
         }
         REQUIRE(observed == ref);
     }

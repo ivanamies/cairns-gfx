@@ -1560,6 +1560,15 @@ public:
     void SetNestedGraphMode(bool on) { nested_graph_mode_ = on; }
     bool ParticlesEnabled() const { return particles_enabled_; }
 
+    // #229 imgui panel hook: the app (sdl-min) hands a callback that draws extra
+    // imgui windows (the scenario launcher) into the HUD frame. Raw fn ptr + ctx
+    // so the engine gains no singleton + no per-app coupling; the app does any
+    // command dispatch itself, outside the render frame.
+    void SetImguiPanel(void (*fn)(void*), void* ctx) {
+        imgui_panel_fn_ = fn;
+        imgui_panel_ctx_ = ctx;
+    }
+
     // A.9: drop the implicit "no imgui in golden" gate. G6 imgui stability
     // scenario flips this on so the HUD/overlay renders into the golden
     // capture. Implicit constraint: SetInjectedHudStats should be called
@@ -3451,6 +3460,12 @@ public:
                              ImVec2(300.0f, 110.0f));
             ImGui::End();
             ImGui::PopStyleColor(4);
+            // #229 app-provided imgui panel (e.g. the scenario launcher), drawn
+            // into the same frame as the HUD. Raw fn ptr + ctx -- no singleton,
+            // no std::function alloc; the app owns the panel + does any dispatch.
+            if (imgui_panel_fn_) {
+                imgui_panel_fn_(imgui_panel_ctx_);
+            }
             ImGui::Render();
             auto free_snapshot = [](ImDrawData* d) {
                 if (!d) return;
@@ -4211,13 +4226,35 @@ public:
                                                           : color_off[v]);
                     vp_depth[v] = res.Resolve(depth_off[v]);
                 }
+                const float fb_fw = static_cast<float>(fb_w);
+                const float fb_fh = static_cast<float>(fb_h);
+                if (nested_graph_mode_) {
+                  // #229 nested viz: the GLB set's resolved color fills the top
+                  // of the frame; a depthviz strip of the SAME depth buffer runs
+                  // along the bottom. Unlike the debug PIP below, this is enabled
+                  // in golden -- the depth strip IS the subject of the capture.
+                  const int vi = active_viewport_index_;
+                  const float kDepthStrip = 0.22f;
+                  const float color_h = fb_fh * (1.0f - kDepthStrip);
+                  cmd.SetViewport(0.0f, 0.0f, fb_fw, color_h);
+                  cmd.SetScissor(0, 0, fb_w, static_cast<uint32_t>(color_h));
+                  cmd.DrawFullscreen(
+                      rhi_.resources, composite_pip_,
+                      std::span<const rhi::Handle<rhi::Texture>>(&vp_color[vi], 1),
+                      composite_sampler_);
+                  cmd.SetViewport(0.0f, color_h, fb_fw, fb_fh * kDepthStrip);
+                  cmd.SetScissor(0, static_cast<int32_t>(color_h), fb_w,
+                                 static_cast<uint32_t>(fb_fh * kDepthStrip));
+                  cmd.DrawFullscreen(
+                      rhi_.resources, depthviz_,
+                      std::span<const rhi::Handle<rhi::Texture>>(&vp_depth[vi], 1),
+                      composite_sampler_);
+                } else {
                 // #194 composite each LIVE viewport into its layout_rect
                 // region of the swap pane. layout_rect = (x,y,w,h) in NDC
                 // [0..1]. Default for vp 0 is full pane (1,1); follow-up
                 // viewports set their own rects via cairns.viewport.setLayout.
                 // Skip zero-area rects (uninitialised / disabled).
-                const float fb_fw = static_cast<float>(fb_w);
-                const float fb_fh = static_cast<float>(fb_h);
                 for (int v = 0; v < active_viewport_count_; ++v) {
                     const glm::vec4& rect =
                         viewports_.GetHot(viewport_ids_[v])->layout_rect;
@@ -4262,6 +4299,7 @@ public:
                                        std::span<const rhi::Handle<rhi::Texture>>(&vp_depth[active_viewport_index_], 1),
                                        composite_sampler_);
                 }
+                }  // end else (non-nested multi-viewport composite)
                 // Restore full extent before the ui draw.
                 cmd.SetViewport(0.0f, 0.0f, static_cast<float>(fb_w),
                                 static_cast<float>(fb_h));
@@ -6021,6 +6059,9 @@ private:
     // Will gate the resolved-depth path once the ReadBackBuffer salvage
     // is wired.
     bool nested_graph_mode_ = false;
+    // #229 app-provided imgui panel (scenario launcher). nullptr = none.
+    void (*imgui_panel_fn_)(void*) = nullptr;
+    void* imgui_panel_ctx_ = nullptr;
     // A.7: stamped at end of BuildMeshOpaqueDraws every frame.
     FrameStats last_frame_stats_{};
 #if CAIRNS_ALLOC_TRACE

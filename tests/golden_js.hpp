@@ -10,11 +10,14 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
 #include "engine.hpp"
 #include "rhi/init_config.hpp"
+#include "util/misc.hpp"  // GetStaticResourceFilepath -- shared scenario scripts
 
 #include "control/command_registry.hpp"
 #include "control/handlers/lifecycle_ops.hpp"
