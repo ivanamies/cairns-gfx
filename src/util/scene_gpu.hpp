@@ -15,7 +15,7 @@ inline bool LoadMeshGpu(Mesh& mesh, ResourceManager& rm) {
         d.byte_size = static_cast<uint32_t>(srcSize);
         d.usage = kUsageVertex | kUsageIndex;
         d.memory = Memory::kDefault;
-        d.initial_data = Span<const uint8_t>(
+        d.initial_data = std::span<const uint8_t>(
             static_cast<const uint8_t*>(srcData), srcSize);
         h = rm.CreateBuffer(d);
         return !h.IsNull();

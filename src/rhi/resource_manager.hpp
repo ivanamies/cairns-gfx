@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <compare>
+#include <span>
 #include <filesystem>
 #include <initializer_list>
 #include <vector>
@@ -159,24 +160,6 @@ private:
     std::vector<uint16_t> freelist_;
 };
 
-template <typename T>
-struct Span {
-    const T* data_ = nullptr;
-    size_t size_ = 0;
-
-    constexpr Span() = default;
-    constexpr Span(const T* d, size_t s) : data_(d), size_(s) {}
-    constexpr Span(std::initializer_list<T> il)
-        : data_(il.begin()), size_(il.size()) {}
-
-    constexpr const T* data() const { return data_; }
-    constexpr size_t size() const { return size_; }
-    constexpr bool empty() const { return size_ == 0; }
-    constexpr const T& operator[](size_t i) const { return data_[i]; }
-    constexpr const T* begin() const { return data_; }
-    constexpr const T* end() const { return data_ + size_; }
-};
-
 enum class Memory : uint8_t {
     kDefault,    // device-local, GPU-only
     kUpload,     // CPU writes, GPU reads (write-combined)
@@ -271,7 +254,7 @@ struct BufferDesc {
     uint32_t byte_size = 0;
     BufferUsage usage = kUsageUniform;
     Memory memory = Memory::kDefault;
-    Span<const uint8_t> initial_data;
+    std::span<const uint8_t> initial_data;
 };
 
 struct TextureDesc {
@@ -283,7 +266,7 @@ struct TextureDesc {
     Format format = Format::kRgba8Srgb;
     TextureUsage usage = kTexUsageSampled;
     Memory memory = Memory::kDefault;
-    Span<const uint8_t> initial_data;
+    std::span<const uint8_t> initial_data;
 };
 
 struct SamplerDesc {
@@ -319,9 +302,9 @@ struct SamplerBinding {
 
 struct BindGroupDesc {
     const char* debug_name = nullptr;
-    Span<const TextureBinding> textures;
-    Span<const BufferBinding> buffers;
-    Span<const SamplerBinding> samplers;
+    std::span<const TextureBinding> textures;
+    std::span<const BufferBinding> buffers;
+    std::span<const SamplerBinding> samplers;
 };
 
 struct DynamicBinding {
@@ -333,7 +316,7 @@ struct DynamicBinding {
 
 struct DynamicBuffersDesc {
     const char* debug_name = nullptr;
-    Span<const DynamicBinding> bindings;
+    std::span<const DynamicBinding> bindings;
 };
 
 // Each resource type defines Hot (read every draw) and Cold (touched only on
@@ -492,8 +475,8 @@ struct BlendState {
 struct GraphicsPipelineDesc {
     const char* logical_shader = nullptr;  // "unlit" / "particle"
     const char* shader_dir = nullptr;      // base dir for shader files
-    Span<const VertexInputAttribute> vertex_attributes;
-    Span<const VertexBufferLayout> vertex_buffers;
+    std::span<const VertexInputAttribute> vertex_attributes;
+    std::span<const VertexBufferLayout> vertex_buffers;
     PrimitiveTopology topology = PrimitiveTopology::kTriangleList;
     CullMode cull = CullMode::kNone;
     FrontFace front_face = FrontFace::kCounterClockwise;

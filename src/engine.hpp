@@ -374,7 +374,7 @@ public:
         };
         rhi::ComputeDispatch cd{};
         cd.kernel = particle_kernel_;
-        cd.buffers = rhi::Span<const rhi::BoundBuffer>(cbufs, 3);
+        cd.buffers = std::span<const rhi::BoundBuffer>(cbufs, 3);
         cd.groups_x = kParticleCount / 256;
         cd.local_x = 256;
         fc.cmd.Dispatch(cd);
@@ -385,23 +385,23 @@ public:
         col[0].clear[2] = 48.0f / 255.0f;
         col[0].clear[3] = 1.0f;
         rhi::RenderPassDesc rp{};
-        rp.color = rhi::Span<const rhi::ColorAttachment>(col, 1);
+        rp.color = std::span<const rhi::ColorAttachment>(col, 1);
         rp.depth.clear_depth = 1.0f;
         rp.width = swapchain_.Width();
         rp.height = swapchain_.Height();
         fc.cmd.BeginRenderPass(rp);
 
         rhi::MeshDrawList ml{};
-        ml.draws = rhi::Span<const cairns::Draw>(drawList_.data(), drawList_.size());
+        ml.draws = std::span<const cairns::Draw>(drawList_.data(), drawList_.size());
         ml.sorted_indices =
-            rhi::Span<const uint32_t>(sorted_draw_indices_.data(), sorted_draw_indices_.size());
+            std::span<const uint32_t>(sorted_draw_indices_.data(), sorted_draw_indices_.size());
         ml.pipeline = unlit_;
         ml.bindless = bindless_bg_;
         ml.globals_offset = globals_offset_;
-        ml.resident_textures = rhi::Span<const rhi::Handle<rhi::Texture>>(
+        ml.resident_textures = std::span<const rhi::Handle<rhi::Texture>>(
             resident_textures_.data(), resident_textures_.size());
         ml.resident_buffers =
-            rhi::Span<const rhi::Handle<rhi::Buffer>>(&mesh_master_handle_, 1);
+            std::span<const rhi::Handle<rhi::Buffer>>(&mesh_master_handle_, 1);
         fc.cmd.DrawMeshes(ml);
 
         rhi::PointDraw pd{};
@@ -475,9 +475,9 @@ public:
             desc.logical_shader = "unlit";
             desc.shader_dir = shader_dir.c_str();
             desc.vertex_attributes =
-                rhi::Span<const rhi::VertexInputAttribute>(&pos_attr, 1);
+                std::span<const rhi::VertexInputAttribute>(&pos_attr, 1);
             desc.vertex_buffers =
-                rhi::Span<const rhi::VertexBufferLayout>(&pos_layout, 1);
+                std::span<const rhi::VertexBufferLayout>(&pos_layout, 1);
             desc.topology = rhi::PrimitiveTopology::kTriangleList;
             desc.cull = rhi::CullMode::kBack;
             desc.front_face = rhi::FrontFace::kCounterClockwise;
@@ -531,9 +531,9 @@ public:
             desc.logical_shader = "particle";
             desc.shader_dir = shader_dir.c_str();
             desc.vertex_attributes =
-                rhi::Span<const rhi::VertexInputAttribute>(attrs, 2);
+                std::span<const rhi::VertexInputAttribute>(attrs, 2);
             desc.vertex_buffers =
-                rhi::Span<const rhi::VertexBufferLayout>(&layout, 1);
+                std::span<const rhi::VertexBufferLayout>(&layout, 1);
             desc.topology = rhi::PrimitiveTopology::kPointList;
             desc.cull = rhi::CullMode::kBack;
             desc.front_face = rhi::FrontFace::kCounterClockwise;
@@ -575,7 +575,7 @@ public:
             particles[i].color[3] = 1.0f;
         }
 
-        const rhi::Span<const uint8_t> init_data(
+        const std::span<const uint8_t> init_data(
             reinterpret_cast<const uint8_t*>(particles.data()),
             particles.size() * sizeof(Particle));
         rhi::BufferDesc bd;

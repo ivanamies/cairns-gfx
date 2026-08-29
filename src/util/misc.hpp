@@ -2,6 +2,7 @@
 
 #include "util/define.hpp"
 
+#include <bit>
 #include <cassert>
 #include <fstream>
 #include <sstream>
@@ -9,14 +10,9 @@
 
 namespace cairns {
 
-template <typename T>
-inline constexpr bool is_power_of_two(T val) {
-    return val > 0 && (val & (val - 1)) == 0;
-}
-
 template <std::integral T>
 inline void make_aligned(T& val, int64_t align) {
-    assert(is_power_of_two(align));
+    assert(std::has_single_bit(static_cast<uint64_t>(align)));
     const uint64_t align_mask = static_cast<uint64_t>(align) - 1;
     val = static_cast<T>((static_cast<uint64_t>(val) + align_mask) & ~align_mask);
 }

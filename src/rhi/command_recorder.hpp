@@ -32,11 +32,11 @@ struct DepthAttachment {
 };
 
 struct RenderPassDesc {
-    Span<const ColorAttachment> color;
+    std::span<const ColorAttachment> color;
     DepthAttachment depth;
     uint32_t width = 0;
     uint32_t height = 0;
-    Span<const Handle<Texture>> input_textures;
+    std::span<const Handle<Texture>> input_textures;
 };
 
 struct BoundBuffer {
@@ -47,7 +47,7 @@ struct BoundBuffer {
 
 struct ComputeDispatch {
     Handle<Kernel> kernel;
-    Span<const BoundBuffer> buffers;
+    std::span<const BoundBuffer> buffers;
     uint32_t groups_x = 1;
     uint32_t groups_y = 1;
     uint32_t groups_z = 1;
@@ -58,13 +58,13 @@ struct ComputeDispatch {
 };
 
 struct MeshDrawList {
-    Span<const cairns::Draw> draws;
-    Span<const uint32_t> sorted_indices;
+    std::span<const cairns::Draw> draws;
+    std::span<const uint32_t> sorted_indices;
     Handle<Shader> pipeline;
     Handle<BindGroup> bindless;
     uint32_t globals_offset = 0;
-    Span<const Handle<Texture>> resident_textures;
-    Span<const Handle<Buffer>> resident_buffers;
+    std::span<const Handle<Texture>> resident_textures;
+    std::span<const Handle<Buffer>> resident_buffers;
 };
 
 struct PointDraw {

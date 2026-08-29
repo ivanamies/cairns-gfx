@@ -365,7 +365,7 @@ inline void PrepareSceneResources(Scene& scene, rhi::ResourceManager& rm, std::v
         d.array_layers = 1;
         d.usage = rhi::kTexUsageSampled | rhi::kTexUsageTransferDst;
         d.memory = rhi::Memory::kDefault;
-        d.initial_data = rhi::Span<const uint8_t>(
+        d.initial_data = std::span<const uint8_t>(
             static_cast<const uint8_t*>(texDescIn.src_image),
             static_cast<size_t>(texDescIn.src_bytes_per_row) *
                 static_cast<size_t>(texDescIn.height));
