@@ -180,28 +180,28 @@ void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT
     }
 }
 
-static int readFile(const std::string& filename, std::vector<char>& buffer) {
+static bool readFile(const std::string& filename, std::vector<char>& buffer) {
     std::ifstream file(filename, std::ios::ate | std::ios::binary);
     if (!file.is_open()) {
-        return 1;
+        return false;
     }
     size_t fileSize = (size_t)file.tellg();
     buffer.resize(fileSize);
     file.seekg(0);
     file.read(buffer.data(),fileSize);
     file.close();
-    return 0;
+    return true;
 }
 
 class Engine2 {
 public:
     bool GreaterInit(SDL_Window* window) {
         window_ = window;
-        return initVulkan() == 0;
+        return initVulkan();
     }
 
     bool Draw() {
-        return drawFrame() == 0;
+        return drawFrame();
     }
 
     void Deinit() {
@@ -215,48 +215,48 @@ public:
 
 private:
 
-    int initVulkan() {
-        if (createInstance()) return 1;
-        if (setupDebugMessenger()) return 1;
-        if (createSurface()) return 1;
-        if (pickPhysicalDevice()) return 1;
-        if (createLogicalDevice()) return 1;
-        if (createSwapChain()) return 1;
-        if (createImageViews()) return 1;
-        if (createRenderPass()) return 1;
-        if (createCommandPool()) return 1;
-        if (createDescriptorSetLayout()) return 1;
-        if (createComputePipeline()) return 1;
-        if (createGraphicsPipeline()) return 1;
-        if (createColorResources()) return 1;
-        if (createDepthResources()) return 1;
-        if (createFramebuffers()) return 1;
-        if (createTextureImage()) return 1;
-        if (createTextureImageView()) return 1;
-        if (createTextureSampler()) return 1;
-        if (loadModel()) return 1;
-        if (createVertexBuffer()) return 1;
-        if (createIndexBuffer()) return 1;
-        if (createUniformBuffers()) return 1;
-        if (createShaderStorageBuffers()) return 1;
-        if (createDescriptorPool()) return 1;
-        if (createDescriptorSets()) return 1;
-        if (createCommandBuffers()) return 1;
-        if (createComputeCommandBuffers()) return 1;
-        if (createSyncObjects()) return 1;
-        return 0;
+    bool initVulkan() {
+        if (!createInstance()) return false;
+        if (!setupDebugMessenger()) return false;
+        if (!createSurface()) return false;
+        if (!pickPhysicalDevice()) return false;
+        if (!createLogicalDevice()) return false;
+        if (!createSwapChain()) return false;
+        if (!createImageViews()) return false;
+        if (!createRenderPass()) return false;
+        if (!createCommandPool()) return false;
+        if (!createDescriptorSetLayout()) return false;
+        if (!createComputePipeline()) return false;
+        if (!createGraphicsPipeline()) return false;
+        if (!createColorResources()) return false;
+        if (!createDepthResources()) return false;
+        if (!createFramebuffers()) return false;
+        if (!createTextureImage()) return false;
+        if (!createTextureImageView()) return false;
+        if (!createTextureSampler()) return false;
+        if (!loadModel()) return false;
+        if (!createVertexBuffer()) return false;
+        if (!createIndexBuffer()) return false;
+        if (!createUniformBuffers()) return false;
+        if (!createShaderStorageBuffers()) return false;
+        if (!createDescriptorPool()) return false;
+        if (!createDescriptorSets()) return false;
+        if (!createCommandBuffers()) return false;
+        if (!createComputeCommandBuffers()) return false;
+        if (!createSyncObjects()) return false;
+        return true;
     }
 
-    int loadModel() {
+    bool loadModel() {
         std::filesystem::path path(MODEL_PATH);
         fastgltf::Parser parser;
         auto data = fastgltf::GltfDataBuffer::FromPath(path);
         if (data.error() != fastgltf::Error::None) {
-            return 1;
+            return false;
         }
         auto assetRes = parser.loadGltfBinary(data.get(), path.parent_path(), fastgltf::Options::None);
         if (assetRes.error() != fastgltf::Error::None) {
-            return 1;
+            return false;
         }
         const fastgltf::Asset& asset = assetRes.get();
 
@@ -293,33 +293,33 @@ private:
                 }
             }
         }
-        return 0;
+        return true;
     }
 
-    int findSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features, VkFormat& out) {
+    bool findSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features, VkFormat& out) {
         for ( VkFormat format : candidates) {
             VkFormatProperties props;
             vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &props);
             if ( tiling == VK_IMAGE_TILING_LINEAR && (props.linearTilingFeatures & features) == features ) {
                 out = format;
-                return 0;
+                return true;
             }
             else if ( tiling == VK_IMAGE_TILING_OPTIMAL && (props.optimalTilingFeatures & features) == features ) {
                 out = format;
-                return 0;
+                return true;
             }
         }
-        return 1;
+        return false;
     }
 
-    int createColorResources() {
+    bool createColorResources() {
         VkFormat colorFormat = swapChainImageFormat;
-        if (createImage(swapChainExtent.width, swapChainExtent.height, 1, msaaSamples, colorFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, colorImage, colorImageMemory)) return 1;
-        if (createImageView(colorImage, colorFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1, colorImageView)) return 1;
-        return 0;
+        if (!createImage(swapChainExtent.width, swapChainExtent.height, 1, msaaSamples, colorFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, colorImage, colorImageMemory)) return false;
+        if (!createImageView(colorImage, colorFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1, colorImageView)) return false;
+        return true;
     }
 
-    int findDepthFormat(VkFormat& out) {
+    bool findDepthFormat(VkFormat& out) {
         return findSupportedFormat({VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT},VK_IMAGE_TILING_OPTIMAL,VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT, out);
     }
 
@@ -327,16 +327,16 @@ private:
         return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT;
     }
 
-    int createDepthResources() {
+    bool createDepthResources() {
         VkFormat depthFormat;
-        if (findDepthFormat(depthFormat)) return 1;
-        if (createImage(swapChainExtent.width, swapChainExtent.height, 1, msaaSamples, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthImage, depthImageMemory)) return 1;
-        if (createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1, depthImageView)) return 1;
-        if (transitionImageLayout(depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 1)) return 1;
-        return 0;
+        if (!findDepthFormat(depthFormat)) return false;
+        if (!createImage(swapChainExtent.width, swapChainExtent.height, 1, msaaSamples, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthImage, depthImageMemory)) return false;
+        if (!createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1, depthImageView)) return false;
+        if (!transitionImageLayout(depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 1)) return false;
+        return true;
     }
 
-    int createTextureSampler() {
+    bool createTextureSampler() {
         VkSamplerCreateInfo samplerInfo{};
         samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
         samplerInfo.magFilter = VK_FILTER_LINEAR;
@@ -359,13 +359,13 @@ private:
         samplerInfo.maxLod = static_cast<float>(mipLevels);
 
         if ( vkCreateSampler(device, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS) {
-            return 1;
+            return false;
         }
 
-        return 0;
+        return true;
     }
 
-    int createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags, uint32_t mipLevels, VkImageView& out) {
+    bool createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags, uint32_t mipLevels, VkImageView& out) {
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         viewInfo.image = image;
@@ -378,22 +378,22 @@ private:
         viewInfo.subresourceRange.layerCount = 1;
 
         if ( vkCreateImageView(device, &viewInfo, nullptr, &out) != VK_SUCCESS ) {
-            return 1;
+            return false;
         }
-        return 0;
+        return true;
     }
 
-    int createTextureImageView() {
-        if (createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels, textureImageView)) return 1;
-        return 0;
+    bool createTextureImageView() {
+        if (!createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels, textureImageView)) return false;
+        return true;
     }
 
-    int createTextureImage() {
+    bool createTextureImage() {
         int texWidth, texHeight, texChannels;
         stbi_uc* pixels = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
         VkDeviceSize imageSize = texWidth * texHeight * 4;
         if ( !pixels ) {
-            return 1;
+            return false;
         }
         VkBuffer stagingBuffer;
         VkDeviceMemory stagingBufferMemory;
@@ -413,10 +413,10 @@ private:
 
         vkDestroyBuffer(device, stagingBuffer, nullptr);
         vkFreeMemory(device, stagingBufferMemory, nullptr);
-        return 0;
+        return true;
     }
 
-    int createImage(uint32_t width, uint32_t height, uint32_t mipLevels, VkSampleCountFlagBits numSamples, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory) {
+    bool createImage(uint32_t width, uint32_t height, uint32_t mipLevels, VkSampleCountFlagBits numSamples, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory) {
         VkImageCreateInfo imageInfo{};
         imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -434,7 +434,7 @@ private:
         imageInfo.flags = 0;
 
         if ( vkCreateImage(device, &imageInfo, nullptr, &image) != VK_SUCCESS ) {
-            return 1;
+            return false;
         }
 
         VkMemoryRequirements memRequirements;
@@ -443,16 +443,16 @@ private:
         VkMemoryAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocInfo.allocationSize = memRequirements.size;
-        if (findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, allocInfo.memoryTypeIndex)) return 1;
+        if (!findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, allocInfo.memoryTypeIndex)) return false;
 
         if ( vkAllocateMemory(device, &allocInfo, nullptr, &imageMemory) != VK_SUCCESS) {
-            return 1;
+            return false;
         }
         vkBindImageMemory(device, image, imageMemory, 0);
-        return 0;
+        return true;
     }
 
-    int createDescriptorPool() {
+    bool createDescriptorPool() {
         std::array<VkDescriptorPoolSize, 3> poolSizes{};
         poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         // 1 uniform in the viking room material, 1 uniform in the particle shader
@@ -471,12 +471,12 @@ private:
         // MAX_FRAMES_IN_FLIGHT for the particle points
         poolInfo.maxSets = 3*static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
         if ( vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
-            return 1;
+            return false;
         }
-        return 0;
+        return true;
     }
 
-    int createDescriptorSets() {
+    bool createDescriptorSets() {
         {
             std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
             VkDescriptorSetAllocateInfo allocInfo{};
@@ -487,7 +487,7 @@ private:
 
             descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
             if ( vkAllocateDescriptorSets(device, &allocInfo, descriptorSets.data())) {
-                return 1;
+                return false;
             }
 
             for ( size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
@@ -533,7 +533,7 @@ private:
 
             descriptorSets2.resize(MAX_FRAMES_IN_FLIGHT);
             if ( vkAllocateDescriptorSets(device, &allocInfo, descriptorSets2.data())) {
-                return 1;
+                return false;
             }
 
             // all data is in the attributes
@@ -548,7 +548,7 @@ private:
 
             computeDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
             if ( vkAllocateDescriptorSets(device, &allocInfo, computeDescriptorSets.data())) {
-                return 1;
+                return false;
             }
 
             for ( size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
@@ -594,10 +594,10 @@ private:
                 vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
             }
         }
-        return 0;
+        return true;
     }
 
-    int createShaderStorageBuffers() {
+    bool createShaderStorageBuffers() {
         shaderStorageBuffers.resize(MAX_FRAMES_IN_FLIGHT);
         shaderStorageBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
 
@@ -632,10 +632,10 @@ private:
 
         vkDestroyBuffer(device, stagingBuffer, nullptr);
         vkFreeMemory(device, stagingBufferMemory, nullptr);
-        return 0;
+        return true;
     }
 
-    int createUniformBuffers() {
+    bool createUniformBuffers() {
         {
             VkDeviceSize bufferSize = sizeof(UniformBufferObject);
             uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
@@ -656,10 +656,10 @@ private:
                 vkMapMemory(device, computeUniformBuffersMemory[i], 0, bufferSize, 0, &computeUniformBuffersMapped[i]);
             }
         }
-        return 0;
+        return true;
     }
 
-    int createDescriptorSetLayout() {
+    bool createDescriptorSetLayout() {
         {
             VkDescriptorSetLayoutBinding uboLayoutBinding{};
             uboLayoutBinding.binding = 0;
@@ -684,7 +684,7 @@ private:
             layoutInfo.pBindings = bindings.data();
 
             if ( vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS ) {
-                return 1;
+                return false;
             }
         }
         {
@@ -696,7 +696,7 @@ private:
             layoutInfo.pBindings = bindings.data();
 
             if ( vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout2) != VK_SUCCESS ) {
-                return 1;
+                return false;
             }
 
         }
@@ -727,14 +727,14 @@ private:
             layoutInfo.pBindings = layoutBindings.data();
 
             if ( vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &computeDescriptorSetLayout) != VK_SUCCESS ) {
-                return 1;
+                return false;
             }
         }
 
-        return 0;
+        return true;
     }
 
-    int createIndexBuffer() {
+    bool createIndexBuffer() {
         VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
         VkBuffer stagingBuffer;
         VkDeviceMemory stagingBufferMemory;
@@ -751,10 +751,10 @@ private:
 
         vkDestroyBuffer(device, stagingBuffer, nullptr);
         vkFreeMemory(device, stagingBufferMemory, nullptr);
-        return 0;
+        return true;
     }
 
-    int createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
+    bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
         VkBufferCreateInfo bufferInfo{};
         bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bufferInfo.size = size;
@@ -762,7 +762,7 @@ private:
         bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
         if ( vkCreateBuffer(device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS ) {
-            return 1;
+            return false;
         }
 
         VkMemoryRequirements memRequirements;
@@ -771,23 +771,23 @@ private:
         VkMemoryAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocInfo.allocationSize = memRequirements.size;
-        if (findMemoryType(memRequirements.memoryTypeBits, properties, allocInfo.memoryTypeIndex)) return 1;
+        if (!findMemoryType(memRequirements.memoryTypeBits, properties, allocInfo.memoryTypeIndex)) return false;
 
         if ( vkAllocateMemory(device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS ) {
-            return 1;
+            return false;
         }
 
         vkBindBufferMemory(device, buffer, bufferMemory, 0);
 
-        return 0;
+        return true;
     }
 
-    int generateMipmaps(VkImage image, VkFormat imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels) {
+    bool generateMipmaps(VkImage image, VkFormat imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels) {
 
         VkFormatProperties formatProperties;
         vkGetPhysicalDeviceFormatProperties(physicalDevice, imageFormat, &formatProperties);
         if ( !(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
-            return 1;
+            return false;
         }
 
         VkCommandBuffer commandBuffer = beginSingleTimeCommands();
@@ -855,10 +855,10 @@ private:
                              0, nullptr,
                              1, &barrier);
         endSingleTimeCommands(commandBuffer);
-        return 0;
+        return true;
     }
 
-    int transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, uint32_t mipLevels) {
+    bool transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, uint32_t mipLevels) {
         VkCommandBuffer commandBuffer = beginSingleTimeCommands();
 
         VkImageMemoryBarrier barrier{};
@@ -906,7 +906,7 @@ private:
             destinationStage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
         }
         else {
-            return 1;
+            return false;
         }
 
         vkCmdPipelineBarrier(
@@ -919,7 +919,7 @@ private:
                              );
 
         endSingleTimeCommands(commandBuffer);
-        return 0;
+        return true;
     }
 
     void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height) {
@@ -995,7 +995,7 @@ private:
         endSingleTimeCommands(commandBuffer);
     }
 
-    int createVertexBuffer() {
+    bool createVertexBuffer() {
 
         VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
 
@@ -1015,20 +1015,20 @@ private:
         vkDestroyBuffer(device, stagingBuffer, nullptr);
         vkFreeMemory(device, stagingBufferMemory, nullptr);
 
-        return 0;
+        return true;
     }
 
-    int findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties, uint32_t& out) {
+    bool findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties, uint32_t& out) {
         VkPhysicalDeviceMemoryProperties memProperties;
         vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
 
         for ( uint32_t i = 0; i < memProperties.memoryTypeCount; ++i ) {
             if ( (typeFilter & (1<<i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
                 out = i;
-                return 0;
+                return true;
             }
         }
-        return 1;
+        return false;
     }
 
     void recreateSwapChain() {
@@ -1051,7 +1051,7 @@ private:
         createFramebuffers();
     }
 
-    int createSyncObjects() {
+    bool createSyncObjects() {
         {
             imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
             renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
@@ -1067,7 +1067,7 @@ private:
             for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
                 if ( vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS || vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
                     vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS ) {
-                    return 1;
+                    return false;
                 }
             }
         }
@@ -1084,14 +1084,14 @@ private:
 
             for ( size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
                 if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &computeFinishedSemaphores[i]) != VK_SUCCESS || vkCreateFence(device, &fenceInfo, nullptr, &computeInFlightFences[i]) != VK_SUCCESS ) {
-                    return 1;
+                    return false;
                 }
             }
         }
-        return 0;
+        return true;
     }
 
-    int createCommandBuffers() {
+    bool createCommandBuffers() {
         commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 
         VkCommandBufferAllocateInfo allocInfo{};
@@ -1100,12 +1100,12 @@ private:
         allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         allocInfo.commandBufferCount = (uint32_t)commandBuffers.size();
         if ( vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.data()) != VK_SUCCESS ) {
-            return 1;
+            return false;
         }
-        return 0;
+        return true;
     }
 
-    int createCommandBuffers2() {
+    bool createCommandBuffers2() {
         commandBuffers2.resize(MAX_FRAMES_IN_FLIGHT);
 
         VkCommandBufferAllocateInfo allocInfo{};
@@ -1114,12 +1114,12 @@ private:
         allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         allocInfo.commandBufferCount = (uint32_t)commandBuffers2.size();
         if ( vkAllocateCommandBuffers(device, &allocInfo, commandBuffers2.data()) != VK_SUCCESS ) {
-            return 1;
+            return false;
         }
-        return 0;
+        return true;
     }
 
-    int createComputeCommandBuffers() {
+    bool createComputeCommandBuffers() {
         computeCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 
         VkCommandBufferAllocateInfo allocInfo{};
@@ -1128,19 +1128,19 @@ private:
         allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         allocInfo.commandBufferCount = (uint32_t)computeCommandBuffers.size();
         if ( vkAllocateCommandBuffers(device, &allocInfo, computeCommandBuffers.data()) != VK_SUCCESS ) {
-            return 1;
+            return false;
         }
-        return 0;
+        return true;
     }
 
-    int recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
+    bool recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
         VkCommandBufferBeginInfo beginInfo{};
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         beginInfo.flags = 0;
         beginInfo.pInheritanceInfo = nullptr;
 
         if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS ) {
-            return 1;
+            return false;
         }
         VkRenderPassBeginInfo renderPassInfo{};
         renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1200,40 +1200,40 @@ private:
         vkCmdEndRenderPass(commandBuffer);
 
         if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS ) {
-            return 1;
+            return false;
         }
-        return 0;
+        return true;
     }
 
-    int recordComputeCommandBuffer(VkCommandBuffer commandBuffer) {
+    bool recordComputeCommandBuffer(VkCommandBuffer commandBuffer) {
         VkCommandBufferBeginInfo beginInfo{};
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         if ( vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS ) {
-            return 1;
+            return false;
         }
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout, 0, 1, &computeDescriptorSets[currentFrame], 0, 0);
         vkCmdDispatch(commandBuffer, PARTICLE_COUNT / 256, 1, 1);
 
         if ( vkEndCommandBuffer(commandBuffer) != VK_SUCCESS ) {
-            return 1;
+            return false;
         }
-        return 0;
+        return true;
     }
 
-    int createCommandPool() {
+    bool createCommandPool() {
         QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice);
         VkCommandPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
         poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsAndComputeFamily.value();
         if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS ) {
-            return 1;
+            return false;
         }
-        return 0;
+        return true;
     }
 
-    int createFramebuffers() {
+    bool createFramebuffers() {
         swapChainFramebuffers.resize(swapChainImageViews.size());
         for ( size_t i = 0; i < swapChainImageViews.size(); ++i ) {
             std::array<VkImageView,3> attachments = {
@@ -1251,13 +1251,13 @@ private:
             framebufferInfo.layers = 1;
 
             if ( vkCreateFramebuffer(device, &framebufferInfo, nullptr, &swapChainFramebuffers[i])) {
-                return 1;
+                return false;
             }
         }
-        return 0;
+        return true;
     }
 
-    int createRenderPass() {
+    bool createRenderPass() {
         VkAttachmentDescription colorAttachment{};
         colorAttachment.format = swapChainImageFormat;
         colorAttachment.samples = msaaSamples;
@@ -1288,7 +1288,7 @@ private:
 
         VkAttachmentDescription depthAttachment{};
         VkFormat depthFormat;
-        if (findDepthFormat(depthFormat)) return 1;
+        if (!findDepthFormat(depthFormat)) return false;
         depthAttachment.format = depthFormat;
         depthAttachment.samples = msaaSamples;
         depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
@@ -1328,22 +1328,22 @@ private:
         renderPassInfo.pDependencies = &dependency;
 
         if(vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) {
-            return 1;
+            return false;
         }
-        return 0;
+        return true;
     }
 
-    int createGraphicsPipeline() {
+    bool createGraphicsPipeline() {
         { // create graphics pipeline1
             std::vector<char> vertShaderCode;
-            if (readFile("/Users/ivanamies/dev/gfx/Vulkan/vulkan-tutorial-dot-com/src/VulkanTesting/VulkanTesting/vert.spv", vertShaderCode)) return 1;
+            if (!readFile("/Users/ivanamies/dev/gfx/Vulkan/vulkan-tutorial-dot-com/src/VulkanTesting/VulkanTesting/vert.spv", vertShaderCode)) return false;
             std::vector<char> fragShaderCode;
-            if (readFile("/Users/ivanamies/dev/gfx/Vulkan/vulkan-tutorial-dot-com/src/VulkanTesting/VulkanTesting/frag.spv", fragShaderCode)) return 1;
+            if (!readFile("/Users/ivanamies/dev/gfx/Vulkan/vulkan-tutorial-dot-com/src/VulkanTesting/VulkanTesting/frag.spv", fragShaderCode)) return false;
 
             VkShaderModule vertShaderModule;
-            if (createShaderModule(vertShaderCode, vertShaderModule)) return 1;
+            if (!createShaderModule(vertShaderCode, vertShaderModule)) return false;
             VkShaderModule fragShaderModule;
-            if (createShaderModule(fragShaderCode, fragShaderModule)) return 1;
+            if (!createShaderModule(fragShaderCode, fragShaderModule)) return false;
 
             VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
             vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1468,7 +1468,7 @@ private:
             pipelineLayoutInfo.pPushConstantRanges = nullptr;
 
             if ( vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS ) {
-                return 1;
+                return false;
             }
 
             VkGraphicsPipelineCreateInfo pipelineInfo{};
@@ -1490,21 +1490,21 @@ private:
             pipelineInfo.basePipelineIndex = -1;
 
             if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS) {
-                return 1;
+                return false;
             }
             vkDestroyShaderModule(device, fragShaderModule, nullptr);
             vkDestroyShaderModule(device, vertShaderModule, nullptr);
         }
         { // create graphics pipeline 2
             std::vector<char> vertShaderCode;
-            if (readFile("/Users/ivanamies/dev/gfx/Vulkan/vulkan-tutorial-dot-com/src/VulkanTesting/VulkanTesting/vert2.spv", vertShaderCode)) return 1;
+            if (!readFile("/Users/ivanamies/dev/gfx/Vulkan/vulkan-tutorial-dot-com/src/VulkanTesting/VulkanTesting/vert2.spv", vertShaderCode)) return false;
             std::vector<char> fragShaderCode;
-            if (readFile("/Users/ivanamies/dev/gfx/Vulkan/vulkan-tutorial-dot-com/src/VulkanTesting/VulkanTesting/frag2.spv", fragShaderCode)) return 1;
+            if (!readFile("/Users/ivanamies/dev/gfx/Vulkan/vulkan-tutorial-dot-com/src/VulkanTesting/VulkanTesting/frag2.spv", fragShaderCode)) return false;
 
             VkShaderModule vertShaderModule;
-            if (createShaderModule(vertShaderCode, vertShaderModule)) return 1;
+            if (!createShaderModule(vertShaderCode, vertShaderModule)) return false;
             VkShaderModule fragShaderModule;
-            if (createShaderModule(fragShaderCode, fragShaderModule)) return 1;
+            if (!createShaderModule(fragShaderCode, fragShaderModule)) return false;
 
             VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
             vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1629,7 +1629,7 @@ private:
             pipelineLayoutInfo.pPushConstantRanges = nullptr;
 
             if ( vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout2) != VK_SUCCESS ) {
-                return 1;
+                return false;
             }
 
             VkGraphicsPipelineCreateInfo pipelineInfo{};
@@ -1651,21 +1651,21 @@ private:
             pipelineInfo.basePipelineIndex = -1;
 
             if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline2) != VK_SUCCESS) {
-                return 1;
+                return false;
             }
             vkDestroyShaderModule(device, fragShaderModule, nullptr);
             vkDestroyShaderModule(device, vertShaderModule, nullptr);
         }
         { // create graphics pipeline 3
             std::vector<char> vertShaderCode;
-            if (readFile("/Users/ivanamies/dev/gfx/Vulkan/vulkan-tutorial-dot-com/src/VulkanTesting/VulkanTesting/vert3.spv", vertShaderCode)) return 1;
+            if (!readFile("/Users/ivanamies/dev/gfx/Vulkan/vulkan-tutorial-dot-com/src/VulkanTesting/VulkanTesting/vert3.spv", vertShaderCode)) return false;
             std::vector<char> fragShaderCode;
-            if (readFile("/Users/ivanamies/dev/gfx/Vulkan/vulkan-tutorial-dot-com/src/VulkanTesting/VulkanTesting/frag3.spv", fragShaderCode)) return 1;
+            if (!readFile("/Users/ivanamies/dev/gfx/Vulkan/vulkan-tutorial-dot-com/src/VulkanTesting/VulkanTesting/frag3.spv", fragShaderCode)) return false;
 
             VkShaderModule vertShaderModule;
-            if (createShaderModule(vertShaderCode, vertShaderModule)) return 1;
+            if (!createShaderModule(vertShaderCode, vertShaderModule)) return false;
             VkShaderModule fragShaderModule;
-            if (createShaderModule(fragShaderCode, fragShaderModule)) return 1;
+            if (!createShaderModule(fragShaderCode, fragShaderModule)) return false;
 
             VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
             vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1757,7 +1757,7 @@ private:
             pipelineLayoutInfo.pushConstantRangeCount = 0;
 
             if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout3) != VK_SUCCESS) {
-                return 1;
+                return false;
             }
 
             VkGraphicsPipelineCreateInfo pipelineInfo{};
@@ -1778,21 +1778,21 @@ private:
             pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
 
             if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline3) != VK_SUCCESS) {
-                return 1;
+                return false;
             }
 
             vkDestroyShaderModule(device, fragShaderModule, nullptr);
             vkDestroyShaderModule(device, vertShaderModule, nullptr);
         }
-        return 0;
+        return true;
     }
 
-    int createComputePipeline() {
+    bool createComputePipeline() {
         {
             std::vector<char> computeShaderCode;
-            if (readFile("/Users/ivanamies/dev/gfx/Vulkan/vulkan-tutorial-dot-com/src/VulkanTesting/VulkanTesting/comp.spv", computeShaderCode)) return 1;
+            if (!readFile("/Users/ivanamies/dev/gfx/Vulkan/vulkan-tutorial-dot-com/src/VulkanTesting/VulkanTesting/comp.spv", computeShaderCode)) return false;
             VkShaderModule computeShaderModule;
-            if (createShaderModule(computeShaderCode, computeShaderModule)) return 1;
+            if (!createShaderModule(computeShaderCode, computeShaderModule)) return false;
 
             VkPipelineShaderStageCreateInfo computeShaderStageInfo{};
             computeShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1806,7 +1806,7 @@ private:
             pipelineLayoutInfo.pSetLayouts = &computeDescriptorSetLayout;
 
             if ( vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &computePipelineLayout) != VK_SUCCESS ) {
-                return 1;
+                return false;
             }
 
             VkComputePipelineCreateInfo pipelineInfo{};
@@ -1815,34 +1815,34 @@ private:
             pipelineInfo.stage = computeShaderStageInfo;
 
             if ( vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &computePipeline) != VK_SUCCESS ) {
-                return 1;
+                return false;
             }
 
             vkDestroyShaderModule(device, computeShaderModule, nullptr);
         }
-        return 0;
+        return true;
     }
 
-    int createShaderModule(const std::vector<char>& code, VkShaderModule& out) {
+    bool createShaderModule(const std::vector<char>& code, VkShaderModule& out) {
         VkShaderModuleCreateInfo createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
         createInfo.codeSize = code.size();
         createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
         if ( vkCreateShaderModule(device, &createInfo, nullptr, &out) != VK_SUCCESS) {
-            return 1;
+            return false;
         }
-        return 0;
+        return true;
     }
 
-    int createImageViews() {
+    bool createImageViews() {
         swapChainImageViews.resize(swapChainImages.size());
         for ( size_t i = 0; i < swapChainImages.size(); ++i ) {
-            if (createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1, swapChainImageViews[i])) return 1;
+            if (!createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1, swapChainImageViews[i])) return false;
         }
-        return 0;
+        return true;
     }
 
-    int createSwapChain() {
+    bool createSwapChain() {
         SwapChainSupportDetails swapChainSupport = querySwapChainSupport(physicalDevice);
         VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
         VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
@@ -1885,7 +1885,7 @@ private:
         createInfo.oldSwapchain = VK_NULL_HANDLE;
 
         if (vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapChain) != VK_SUCCESS) {
-            return 1;
+            return false;
         }
 
         vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
@@ -1893,17 +1893,17 @@ private:
         vkGetSwapchainImagesKHR(device, swapChain, &imageCount, swapChainImages.data());
         swapChainImageFormat = surfaceFormat.format;
         swapChainExtent = extent;
-        return 0;
+        return true;
     }
 
-    int createSurface() {
+    bool createSurface() {
         if (!SDL_Vulkan_CreateSurface(window_, instance, nullptr, &surface)) {
-            return 1;
+            return false;
         }
-        return 0;
+        return true;
     }
 
-    int createLogicalDevice() {
+    bool createLogicalDevice() {
         QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
         std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
         std::set<uint32_t> uniqueQueueFamilies = {indices.graphicsAndComputeFamily.value(), indices.presentFamily.value()};
@@ -1936,12 +1936,12 @@ private:
         }
 
         if (vkCreateDevice(physicalDevice, &createInfo, nullptr, &device) != VK_SUCCESS ) {
-            return 1;
+            return false;
         }
         vkGetDeviceQueue(device, indices.graphicsAndComputeFamily.value(), 0, &graphicsQueue);
         vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
         vkGetDeviceQueue(device, indices.graphicsAndComputeFamily.value(), 0, &computeQueue);
-        return 0;
+        return true;
     }
 
     struct QueueFamilyIndices {
@@ -2083,11 +2083,11 @@ private:
         return VK_SAMPLE_COUNT_1_BIT;
     }
 
-    int pickPhysicalDevice() {
+    bool pickPhysicalDevice() {
         uint32_t deviceCount = 0;
         vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
         if ( deviceCount == 0 ) {
-            return 1;
+            return false;
         }
         std::vector<VkPhysicalDevice> devices(deviceCount);
         vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
@@ -2100,9 +2100,9 @@ private:
             }
         }
         if (physicalDevice == VK_NULL_HANDLE) {
-            return 1;
+            return false;
         }
-        return 0;
+        return true;
     }
 
     void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) {
@@ -2113,16 +2113,16 @@ private:
         createInfo.pfnUserCallback = debugCallback;
     }
 
-    int setupDebugMessenger() {
+    bool setupDebugMessenger() {
         if (!enableValidationLayers) {
-            return 0;
+            return true;
         }
         VkDebugUtilsMessengerCreateInfoEXT createInfo{};
         populateDebugMessengerCreateInfo(createInfo);
         if (CreateDebugUtilsMessengerEXT(instance, &createInfo, nullptr, &debugMessenger)) {
-            return 1;
+            return false;
         }
-        return 0;
+        return true;
     }
 
     void dumpSwapchainToPng(uint32_t imageIndex, const char* path) {
@@ -2203,7 +2203,7 @@ private:
         vkFreeMemory(device, bufMem, nullptr);
     }
 
-    int drawFrame() {
+    bool drawFrame() {
         {
             vkWaitForFences(device, 1, &computeInFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
             updateComputeUniformBuffer(currentFrame);
@@ -2219,7 +2219,7 @@ private:
             submitInfo.pSignalSemaphores = &computeFinishedSemaphores[currentFrame];
 
             if ( vkQueueSubmit(computeQueue, 1, &submitInfo, computeInFlightFences[currentFrame]) != VK_SUCCESS ) {
-                return 1;
+                return false;
             }
 
         }
@@ -2231,10 +2231,10 @@ private:
 
             if ( result == VK_ERROR_OUT_OF_DATE_KHR ) {
                 recreateSwapChain();
-                return 0;
+                return true;
             }
             else if ( result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR ) {
-                return 1;
+                return false;
             }
 
             updateUniformBuffer(currentFrame);
@@ -2267,7 +2267,7 @@ private:
             submitInfo.pSignalSemaphores = signalSemaphores.data();
 
             if ( vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS ) {
-                return 1;
+                return false;
             }
 
             VkPresentInfoKHR presentInfo{};
@@ -2289,7 +2289,7 @@ private:
                 recreateSwapChain();
             }
             else if ( result != VK_SUCCESS ) {
-                return 1;
+                return false;
             }
 
             if constexpr (vk_debug_has(vk_debug::kDumpSwapchain)) {
@@ -2302,7 +2302,7 @@ private:
         }
 
         currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
-        return 0;
+        return true;
     }
 
     uint32_t dumpFrameCounter = 0;
@@ -2423,7 +2423,7 @@ private:
         vkDestroyInstance(instance, nullptr);
     }
 
-    int createInstance() {
+    bool createInstance() {
         if (enableValidationLayers && !checkValidationLayerSupport()) {
             enableValidationLayers = false;
         }
@@ -2466,9 +2466,9 @@ private:
 
         VkResult result = vkCreateInstance(&createInfo, nullptr, &instance);
         if ( result != VK_SUCCESS ) {
-            return 1;
+            return false;
         }
-        return 0;
+        return true;
     }
 
     bool checkValidationLayerSupport() {
