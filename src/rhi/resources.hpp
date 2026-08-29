@@ -84,11 +84,21 @@ public:
     uint32_t FrameIndex() const;
 
 private:
-    friend class Bindless;
-    friend class CommandRecorder;
-
-    struct Impl;
-    Impl* impl_ = nullptr;
+    // Internal state — self-only (Bindless/CommandRecorder/Pipelines use the
+    // PUBLIC pools + methods above, never these). No friends needed.
+#if CAIRNS_VULKAN
+    VkDevice device_ = VK_NULL_HANDLE;          // mirrored from Device
+    VkCommandPool command_pool_ = VK_NULL_HANDLE;
+    VkQueue queue_ = VK_NULL_HANDLE;
+    VkPhysicalDevice physical_ = VK_NULL_HANDLE;
+    uint32_t frame_index_ = 0;                  // drives deferred-free + bump retire
+#elif CAIRNS_METAL
+    MTL::Device* device_ = nullptr;             // mirrored from Device
+    MTL::CommandQueue* queue_ = nullptr;        // mirrored from Device
+    uint32_t frame_index_ = 1;                  // drives deferred-free + bump retire
+#endif
+    Allocator* alloc_ = nullptr;                // borrowed
+    bool inited_ = false;
 };
 
 }  // namespace cairns::rhi
