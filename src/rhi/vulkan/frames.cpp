@@ -500,23 +500,23 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     FrameContext fc;
     fc.frame_index = cf;
     fc.swapchain_image_index = image_index;
-    fc.cmd.frame_ = cf;
-    fc.cmd.image_index_ = image_index;
-    fc.cmd.gfx_ = plat.graphics_cmds_[cf];
-    fc.cmd.comp_ = plat.compute_cmds_[cf];
-    fc.cmd.device_ = dev;
-    fc.cmd.globals_set_ = plat.globals_sets_[cf];
-    fc.cmd.drawtmp_set_ = plat.drawtmp_sets_[cf];
-    fc.cmd.compute_sets_ = plat.compute_sets_[cf];
-    fc.cmd.point_set_ = plat.point_sets_[cf];
-    fc.cmd.composite_sets_ = plat.composite_sets_[cf];
-    fc.cmd.composite_next_idx_ = 0;
-    fc.cmd.offscreen_ = &plat.offscreen_target_cache_;
-    fc.cmd.ts_pool_ = plat.ts_pool_;
-    fc.cmd.pass_names_ = &plat.pass_names_[cf];
-    fc.cmd.pass_count_ = &plat.pass_count_[cf];
-    fc.cmd.pass_cb_ = VK_NULL_HANDLE;
-    fc.cmd.pending_pass_idx_ = UINT32_MAX;
+    fc.cmd.plat.frame_ = cf;
+    fc.cmd.plat.image_index_ = image_index;
+    fc.cmd.plat.gfx_ = plat.graphics_cmds_[cf];
+    fc.cmd.plat.comp_ = plat.compute_cmds_[cf];
+    fc.cmd.plat.device_ = dev;
+    fc.cmd.plat.globals_set_ = plat.globals_sets_[cf];
+    fc.cmd.plat.drawtmp_set_ = plat.drawtmp_sets_[cf];
+    fc.cmd.plat.compute_sets_ = plat.compute_sets_[cf];
+    fc.cmd.plat.point_set_ = plat.point_sets_[cf];
+    fc.cmd.plat.composite_sets_ = plat.composite_sets_[cf];
+    fc.cmd.plat.composite_next_idx_ = 0;
+    fc.cmd.plat.offscreen_ = &plat.offscreen_target_cache_;
+    fc.cmd.plat.ts_pool_ = plat.ts_pool_;
+    fc.cmd.plat.pass_names_ = &plat.pass_names_[cf];
+    fc.cmd.plat.pass_count_ = &plat.pass_count_[cf];
+    fc.cmd.plat.pass_cb_ = VK_NULL_HANDLE;
+    fc.cmd.plat.pending_pass_idx_ = UINT32_MAX;
     fc.cmd.pending_name_ = nullptr;
     fc.cmd.pending_slot_ = -1;
     return fc;
@@ -527,7 +527,7 @@ void Frames::End(const SwapResolveTarget& target, FrameContext& fc) {
     CommandRecorder& ri = fc.cmd;
     const uint32_t cf = fc.frame_index;
 
-    vkEndCommandBuffer(ri.comp_);
+    vkEndCommandBuffer(ri.plat.comp_);
     VkSubmitInfo csi{};
     csi.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     csi.commandBufferCount = 1;
@@ -536,7 +536,7 @@ void Frames::End(const SwapResolveTarget& target, FrameContext& fc) {
     csi.pSignalSemaphores = &plat.compute_finished_[cf];
     vkQueueSubmit(plat.compute_queue_, 1, &csi, plat.compute_in_flight_[cf]);
 
-    vkEndCommandBuffer(ri.gfx_);
+    vkEndCommandBuffer(ri.plat.gfx_);
     VkSubmitInfo gsi{};
     gsi.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     VkSemaphore wait_sems[2] = {plat.compute_finished_[cf],

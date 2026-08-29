@@ -196,11 +196,11 @@ static void transition(VkCommandBuffer cb, Resources& res, Handle<Texture> h,
 }
 
 void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDispatch& d) {
-    if (pending_pass_idx_ != UINT32_MAX && pass_cb_ == VK_NULL_HANDLE) {
-        pass_cb_ = comp_;
-        vkCmdWriteTimestamp(pass_cb_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                            ts_pool_,
-                            2 * kMaxPasses * frame_ + 2 * pending_pass_idx_);
+    if (plat.pending_pass_idx_ != UINT32_MAX && plat.pass_cb_ == VK_NULL_HANDLE) {
+        plat.pass_cb_ = plat.comp_;
+        vkCmdWriteTimestamp(plat.pass_cb_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                            plat.ts_pool_,
+                            2 * kMaxPasses * plat.frame_ + 2 * plat.pending_pass_idx_);
     }
     Kernel::Hot* k = res.GetHot(d.kernel);
     assert(d.step_index < kMaxStepsPerFrame);
@@ -212,11 +212,11 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
         mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
         mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        vkCmdPipelineBarrier(comp_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        vkCmdPipelineBarrier(plat.comp_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb,
                              0, nullptr, 0, nullptr);
     }
-    VkDescriptorSet set = compute_sets_[d.step_index];
+    VkDescriptorSet set = plat.compute_sets_[d.step_index];
 
     const size_t n = d.buffers.size();
     std::vector<VkDescriptorBufferInfo> infos(n);
@@ -239,31 +239,31 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
         writes[i].pBufferInfo = &infos[i];
     }
     if (n > 0) {
-        vkUpdateDescriptorSets(device_, static_cast<uint32_t>(n), writes.data(), 0,
+        vkUpdateDescriptorSets(plat.device_, static_cast<uint32_t>(n), writes.data(), 0,
                                nullptr);
     }
 
-    vkCmdBindPipeline(comp_, VK_PIPELINE_BIND_POINT_COMPUTE, k->vk_pipeline);
-    vkCmdBindDescriptorSets(comp_, VK_PIPELINE_BIND_POINT_COMPUTE, k->vk_layout,
+    vkCmdBindPipeline(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE, k->vk_pipeline);
+    vkCmdBindDescriptorSets(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE, k->vk_layout,
                             0, 1, &set, 0, nullptr);
-    vkCmdDispatch(comp_, d.groups_x, d.groups_y, d.groups_z);
+    vkCmdDispatch(plat.comp_, d.groups_x, d.groups_y, d.groups_z);
 }
 
 void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& target,
                                       const RenderPassDesc& desc) {
     SwapChain& sc = *target.swap_chain;
-    if (pending_pass_idx_ != UINT32_MAX && pass_cb_ == VK_NULL_HANDLE) {
-        pass_cb_ = gfx_;
-        vkCmdWriteTimestamp(pass_cb_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                            ts_pool_,
-                            2 * kMaxPasses * frame_ + 2 * pending_pass_idx_);
+    if (plat.pending_pass_idx_ != UINT32_MAX && plat.pass_cb_ == VK_NULL_HANDLE) {
+        plat.pass_cb_ = plat.gfx_;
+        vkCmdWriteTimestamp(plat.pass_cb_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                            plat.ts_pool_,
+                            2 * kMaxPasses * plat.frame_ + 2 * plat.pending_pass_idx_);
     }
 
     // Sampled inputs from prior passes -> shader-read, for BOTH swapchain and
     // offscreen passes (e.g. composite samples offscreen color + depth while
     // rendering into the swapchain).
     for (const Handle<Texture>& in : desc.input_textures) {
-        transition(gfx_, res, in, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        transition(plat.gfx_, res, in, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
 
     const bool is_swapchain = desc.color.empty() ||
@@ -274,7 +274,7 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& t
         VkRenderPassBeginInfo rpi{};
         rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         rpi.renderPass = sc.renderPass;
-        rpi.framebuffer = sc.swapChainFramebuffers[image_index_];
+        rpi.framebuffer = sc.swapChainFramebuffers[plat.image_index_];
         rpi.renderArea.offset = {0, 0};
         rpi.renderArea.extent = sc.swapChainExtent;
         extent = sc.swapChainExtent;
@@ -286,7 +286,7 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& t
         clears[1].depthStencil = {desc.depth.clear_depth, 0};
         rpi.clearValueCount = 2;
         rpi.pClearValues = clears;
-        vkCmdBeginRenderPass(gfx_, &rpi, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBeginRenderPass(plat.gfx_, &rpi, VK_SUBPASS_CONTENTS_INLINE);
     } else {
         const bool has_color = !desc.color.empty();
         const bool has_depth = !desc.depth.depth.IsNull();
@@ -296,7 +296,7 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& t
         key.has_color = has_color;
         key.has_depth = has_depth;
         if (has_color) {
-            transition(gfx_, res, desc.color[0].target,
+            transition(plat.gfx_, res, desc.color[0].target,
                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             Texture::Cold* c = res.textures.GetCold(desc.color[0].target);
             color_view = reinterpret_cast<VkImageView>(
@@ -305,7 +305,7 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& t
             key.color_load = to_vk_load(desc.color[0].load);
         }
         if (has_depth) {
-            transition(gfx_, res, desc.depth.depth,
+            transition(plat.gfx_, res, desc.depth.depth,
                        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
             Texture::Cold* c = res.textures.GetCold(desc.depth.depth);
             depth_view = reinterpret_cast<VkImageView>(
@@ -313,11 +313,11 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& t
             key.depth = to_vk_format(c->format);
             key.depth_load = to_vk_load(desc.depth.load);
         }
-        VkRenderPass rp = get_offscreen_rp(offscreen_, key);
+        VkRenderPass rp = get_offscreen_rp(plat.offscreen_, key);
         // attachment order matches the render pass: color (if any) then depth.
         const VkImageView v0 = has_color ? color_view : depth_view;
         const VkImageView v1 = has_color ? depth_view : VK_NULL_HANDLE;
-        VkFramebuffer fb = get_offscreen_fb(offscreen_, rp, v0, v1,
+        VkFramebuffer fb = get_offscreen_fb(plat.offscreen_, rp, v0, v1,
                                             extent.width, extent.height);
         VkClearValue clears[2]{};
         uint32_t clear_n = 0;
@@ -338,7 +338,7 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& t
         rpi.renderArea.extent = extent;
         rpi.clearValueCount = clear_n;
         rpi.pClearValues = clears;
-        vkCmdBeginRenderPass(gfx_, &rpi, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBeginRenderPass(plat.gfx_, &rpi, VK_SUBPASS_CONTENTS_INLINE);
     }
 
     // Negative-height viewport flips NDC Y so the shared (Metal-convention)
@@ -350,15 +350,15 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& t
     viewport.height = -static_cast<float>(extent.height);
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(gfx_, 0, 1, &viewport);
+    vkCmdSetViewport(plat.gfx_, 0, 1, &viewport);
     VkRect2D scissor{};
     scissor.offset = {0, 0};
     scissor.extent = extent;
-    vkCmdSetScissor(gfx_, 0, 1, &scissor);
+    vkCmdSetScissor(plat.gfx_, 0, 1, &scissor);
 }
 
 void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list) {
-    VkCommandBuffer cb = gfx_;
+    VkCommandBuffer cb = plat.gfx_;
 
     // Aaltonen frequency split: globals = set 0 (one dynamic UBO, bound once per
     // frame), drawtmp = set 2 (one dynamic UBO, one offset per draw). Each is its own
@@ -366,7 +366,7 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     VkBuffer bump_buf = res.GetVkBumpMasterBuffer(alloc, Memory::kDynamic);
     std::array<VkWriteDescriptorSet, 2> writes{};
     std::array<VkDescriptorBufferInfo, 2> buf_infos{};
-    const VkDescriptorSet sets[2] = {globals_set_, drawtmp_set_};
+    const VkDescriptorSet sets[2] = {plat.globals_set_, plat.drawtmp_set_};
     const uint32_t ranges[2] = {static_cast<uint32_t>(sizeof(RenderPassGlobals)),
                                 static_cast<uint32_t>(sizeof(DrawTmp))};
     for (uint32_t i = 0; i < 2; ++i) {
@@ -381,14 +381,14 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
         writes[i].descriptorCount = 1;
         writes[i].pBufferInfo = &buf_infos[i];
     }
-    vkUpdateDescriptorSets(device_, 2, writes.data(), 0, nullptr);
+    vkUpdateDescriptorSets(plat.device_, 2, writes.data(), 0, nullptr);
 
     Shader::Hot* unlit = res.GetHot(list.pipeline);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_pipeline);
 
     // set 0 globals: bind once for the whole pass.
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_layout, 0, 1,
-                            &globals_set_, 1, &list.globals_offset);
+                            &plat.globals_set_, 1, &list.globals_offset);
 
     // Pack-meshes (Aaltonen slide 26): bind each stream at its mesh-region base
     // and select the primitive via baseVertex/baseIndex in the draw call, so the
@@ -440,21 +440,21 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
         const uint32_t first_index = (draw.index_offset - idx_base) / sizeof(uint32_t);
         // set 2 drawtmp: the only per-draw dynamic offset.
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_layout, 2, 1,
-                                &drawtmp_set_, 1, &draw.dynamic_buffer_offsets[1]);
+                                &plat.drawtmp_set_, 1, &draw.dynamic_buffer_offsets[1]);
         vkCmdDrawIndexed(cb, draw.triangle_count * 3, draw.instance_count, first_index,
                          static_cast<int32_t>(draw.vertex_offset), draw.instance_offset);
     }
 }
 
 void CommandRecorder::DrawPoints(Resources& res, Allocator& alloc, const PointDraw& pd) {
-    VkCommandBuffer cb = gfx_;
+    VkCommandBuffer cb = plat.gfx_;
     Shader::Hot* p = res.GetHot(pd.pipeline);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p->vk_pipeline);
     uint32_t ssbo_off = 0;
     VkBuffer ssbo = res.GetVkBuffer(alloc,pd.vertex_buffer, &ssbo_off);
     VkDeviceSize off = ssbo_off;
     vkCmdBindVertexBuffers(cb, 0, 1, &ssbo, &off);
-    VkDescriptorSet point_set = point_set_;
+    VkDescriptorSet point_set = plat.point_set_;
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p->vk_layout, 0, 1,
                             &point_set, 0, nullptr);
     vkCmdDraw(cb, pd.vertex_count, 1, 0, 0);
@@ -482,10 +482,10 @@ void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader>
     w.descriptorCount = 1;
     w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     w.pImageInfo = &ii;
-    vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
+    vkUpdateDescriptorSets(plat.device_, 1, &w, 0, nullptr);
 
-    vkCmdBindPipeline(gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->vk_pipeline);
-    vkCmdBindDescriptorSets(gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->vk_layout, 0, 1,
+    vkCmdBindPipeline(plat.gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->vk_pipeline);
+    vkCmdBindDescriptorSets(plat.gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->vk_layout, 0, 1,
                             &sh->vk_imgui_set, 0, nullptr);
 
     const float fsx = dd->FramebufferScale.x;
@@ -499,7 +499,7 @@ void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader>
     pc[1] = 2.0f / disp_h;
     pc[2] = -1.0f - dd->DisplayPos.x * pc[0];
     pc[3] = -1.0f - dd->DisplayPos.y * pc[1];
-    vkCmdPushConstants(gfx_, sh->vk_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, 16, pc);
+    vkCmdPushConstants(plat.gfx_, sh->vk_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, 16, pc);
 
     VkViewport vp{};
     vp.x = 0.0f;
@@ -508,7 +508,7 @@ void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader>
     vp.height = fb_h;
     vp.minDepth = 0.0f;
     vp.maxDepth = 1.0f;
-    vkCmdSetViewport(gfx_, 0, 1, &vp);
+    vkCmdSetViewport(plat.gfx_, 0, 1, &vp);
 
     VkBuffer master = res.GetVkBumpMasterBuffer(alloc, Memory::kDynamic);
     const ImVec2 clip_off = dd->DisplayPos;
@@ -525,8 +525,8 @@ void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader>
         std::memcpy(vptr, cl->VtxBuffer.Data, vbytes);
         std::memcpy(iptr, cl->IdxBuffer.Data, ibytes);
         VkDeviceSize vbo = voff;
-        vkCmdBindVertexBuffers(gfx_, 0, 1, &master, &vbo);
-        vkCmdBindIndexBuffer(gfx_, master, ioff,
+        vkCmdBindVertexBuffers(plat.gfx_, 0, 1, &master, &vbo);
+        vkCmdBindIndexBuffer(plat.gfx_, master, ioff,
                              sizeof(ImDrawIdx) == 2 ? VK_INDEX_TYPE_UINT16
                                                     : VK_INDEX_TYPE_UINT32);
         for (int c = 0; c < cl->CmdBuffer.Size; ++c) {
@@ -545,8 +545,8 @@ void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader>
             VkRect2D scis{};
             scis.offset = {static_cast<int32_t>(cx), static_cast<int32_t>(cy)};
             scis.extent = {static_cast<uint32_t>(cz - cx), static_cast<uint32_t>(cw - cy)};
-            vkCmdSetScissor(gfx_, 0, 1, &scis);
-            vkCmdDrawIndexed(gfx_, cmd->ElemCount, 1, cmd->IdxOffset,
+            vkCmdSetScissor(plat.gfx_, 0, 1, &scis);
+            vkCmdDrawIndexed(plat.gfx_, cmd->ElemCount, 1, cmd->IdxOffset,
                              static_cast<int32_t>(cmd->VtxOffset), 0);
         }
     }
@@ -558,8 +558,8 @@ void CommandRecorder::DrawFullscreen(Resources& res, Handle<Shader> pipeline,
     Shader::Hot* sh = res.GetHot(pipeline);
     VkSampler samp = reinterpret_cast<VkSampler>(
         res.GetHot(sampler)->api_sampler);
-    VkDescriptorSet set = composite_sets_[composite_next_idx_];
-    composite_next_idx_ = (composite_next_idx_ + 1) % kCompositeRingSize;
+    VkDescriptorSet set = plat.composite_sets_[plat.composite_next_idx_];
+    plat.composite_next_idx_ = (plat.composite_next_idx_ + 1) % kCompositeRingSize;
     const uint32_t n = static_cast<uint32_t>(textures.size());
     std::array<VkDescriptorImageInfo, 4> infos{};
     std::array<VkWriteDescriptorSet, 4> writes{};
@@ -576,11 +576,11 @@ void CommandRecorder::DrawFullscreen(Resources& res, Handle<Shader> pipeline,
         writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[i].pImageInfo = &infos[i];
     }
-    vkUpdateDescriptorSets(device_, n, writes.data(), 0, nullptr);
-    vkCmdBindPipeline(gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->vk_pipeline);
-    vkCmdBindDescriptorSets(gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->vk_layout,
+    vkUpdateDescriptorSets(plat.device_, n, writes.data(), 0, nullptr);
+    vkCmdBindPipeline(plat.gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->vk_pipeline);
+    vkCmdBindDescriptorSets(plat.gfx_, VK_PIPELINE_BIND_POINT_GRAPHICS, sh->vk_layout,
                             0, 1, &set, 0, nullptr);
-    vkCmdDraw(gfx_, 3, 1, 0, 0);
+    vkCmdDraw(plat.gfx_, 3, 1, 0, 0);
 }
 
 void CommandRecorder::SetViewport(float x, float y, float w, float h) {
@@ -592,45 +592,45 @@ void CommandRecorder::SetViewport(float x, float y, float w, float h) {
     vp.height = -h;
     vp.minDepth = 0.0f;
     vp.maxDepth = 1.0f;
-    vkCmdSetViewport(gfx_, 0, 1, &vp);
+    vkCmdSetViewport(plat.gfx_, 0, 1, &vp);
 }
 
 void CommandRecorder::SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) {
     VkRect2D s{};
     s.offset = {x, y};
     s.extent = {w, h};
-    vkCmdSetScissor(gfx_, 0, 1, &s);
+    vkCmdSetScissor(plat.gfx_, 0, 1, &s);
 }
 
 void CommandRecorder::EndRenderPass() {
-    vkCmdEndRenderPass(gfx_);
+    vkCmdEndRenderPass(plat.gfx_);
 }
 
 void CommandRecorder::PassTimerBegin(const char* name) {
     pending_name_ = name;
     pending_slot_ = TimerStorage::SlotForPass(name);
-    if (pass_count_ == nullptr || pass_names_ == nullptr) {
+    if (plat.pass_count_ == nullptr || plat.pass_names_ == nullptr) {
         return;
     }
-    if (*pass_count_ >= kMaxPasses) {
-        pending_pass_idx_ = UINT32_MAX;
+    if (*plat.pass_count_ >= kMaxPasses) {
+        plat.pending_pass_idx_ = UINT32_MAX;
         return;
     }
-    pending_pass_idx_ = (*pass_count_)++;
-    (*pass_names_)[pending_pass_idx_] = name;
-    pass_cb_ = VK_NULL_HANDLE;
+    plat.pending_pass_idx_ = (*plat.pass_count_)++;
+    (*plat.pass_names_)[plat.pending_pass_idx_] = name;
+    plat.pass_cb_ = VK_NULL_HANDLE;
 }
 
 void CommandRecorder::PassTimerEnd() {
-    if (pending_pass_idx_ != UINT32_MAX && pass_cb_ != VK_NULL_HANDLE) {
-        vkCmdWriteTimestamp(pass_cb_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                            ts_pool_,
-                            2 * kMaxPasses * frame_ + 2 * pending_pass_idx_ + 1);
+    if (plat.pending_pass_idx_ != UINT32_MAX && plat.pass_cb_ != VK_NULL_HANDLE) {
+        vkCmdWriteTimestamp(plat.pass_cb_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                            plat.ts_pool_,
+                            2 * kMaxPasses * plat.frame_ + 2 * plat.pending_pass_idx_ + 1);
     }
-    pending_pass_idx_ = UINT32_MAX;
+    plat.pending_pass_idx_ = UINT32_MAX;
     pending_name_ = nullptr;
     pending_slot_ = -1;
-    pass_cb_ = VK_NULL_HANDLE;
+    plat.pass_cb_ = VK_NULL_HANDLE;
 }
 
 }  // namespace cairns::rhi

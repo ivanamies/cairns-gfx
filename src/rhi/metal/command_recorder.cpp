@@ -26,10 +26,10 @@
 namespace cairns::rhi {
 
 void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDispatch& d) {
-    if (cmd_ == nullptr) {
-        cmd_ = queue_->commandBuffer();
+    if (plat.cmd_ == nullptr) {
+        plat.cmd_ = plat.queue_->commandBuffer();
     }
-    MTL::ComputeCommandEncoder* cenc = cmd_->computeCommandEncoder();
+    MTL::ComputeCommandEncoder* cenc = plat.cmd_->computeCommandEncoder();
     cenc->setComputePipelineState(res.GetHot(d.kernel)->api_pso);
     for (size_t i = 0; i < d.buffers.size(); ++i) {
         const BoundBuffer& b = d.buffers[i];
@@ -53,20 +53,20 @@ static MTL::LoadAction to_mtl_load(LoadOp op) {
 
 void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
                                       const RenderPassDesc& desc) {
-    if (cmd_ == nullptr) {
-        cmd_ = queue_->commandBuffer();
+    if (plat.cmd_ == nullptr) {
+        plat.cmd_ = plat.queue_->commandBuffer();
     }
     const bool is_swapchain = desc.color.empty() ||
                               desc.color[0].target.IsNull();
     if (is_swapchain) {
         if (!desc.color.empty()) {
             const float* c = desc.color[0].clear;
-            render_pass_desc_->colorAttachments()->object(0)->setClearColor(
+            plat.render_pass_desc_->colorAttachments()->object(0)->setClearColor(
                 MTL::ClearColor(c[0], c[1], c[2], c[3]));
-            render_pass_desc_->colorAttachments()->object(0)->setLoadAction(
+            plat.render_pass_desc_->colorAttachments()->object(0)->setLoadAction(
                 to_mtl_load(desc.color[0].load));
         }
-        enc_ = cmd_->renderCommandEncoder(render_pass_desc_);
+        plat.enc_ = plat.cmd_->renderCommandEncoder(plat.render_pass_desc_);
         return;
     }
 
@@ -88,14 +88,14 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
         da->setStoreAction(MTL::StoreActionStore);
         da->setClearDepth(desc.depth.clear_depth);
     }
-    enc_ = cmd_->renderCommandEncoder(rpd);
+    plat.enc_ = plat.cmd_->renderCommandEncoder(rpd);
     rpd->release();
 }
 
 void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list) {
-    MTL::RenderCommandEncoder* enc = enc_;
+    MTL::RenderCommandEncoder* enc = plat.enc_;
     enc->setRenderPipelineState(res.GetHot(list.pipeline)->api_pso);
-    enc->setDepthStencilState(depth_stencil_);
+    enc->setDepthStencilState(plat.depth_stencil_);
     enc->setFrontFacingWinding(MTL::WindingCounterClockwise);
     enc->setCullMode(MTL::CullModeBack);
     for (size_t i = 0; i < list.resident_textures.size(); ++i) {
@@ -168,11 +168,11 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
 }
 
 void CommandRecorder::DrawPoints(Resources& res, Allocator& alloc, const PointDraw& pd) {
-    enc_->setRenderPipelineState(res.GetHot(pd.pipeline)->api_pso);
+    plat.enc_->setRenderPipelineState(res.GetHot(pd.pipeline)->api_pso);
     uint32_t off = 0;
     MTL::Buffer* buf = res.GetMtlBuffer(alloc,pd.vertex_buffer, &off);
-    enc_->setVertexBuffer(buf, off, 0);
-    enc_->drawPrimitives(MTL::PrimitiveTypePoint, NS::UInteger(pd.vertex_offset),
+    plat.enc_->setVertexBuffer(buf, off, 0);
+    plat.enc_->drawPrimitives(MTL::PrimitiveTypePoint, NS::UInteger(pd.vertex_offset),
                                NS::UInteger(pd.vertex_count));
 }
 
@@ -182,7 +182,7 @@ void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader>
     if (!dd || dd->CmdListsCount == 0 || dd->DisplaySize.x <= 0.0f) {
         return;
     }
-    MTL::RenderCommandEncoder* enc = enc_;
+    MTL::RenderCommandEncoder* enc = plat.enc_;
     enc->setRenderPipelineState(res.GetHot(pipeline)->api_pso);
     enc->setCullMode(MTL::CullModeNone);
     enc->setFragmentTexture(res.GetHot(font)->api_view, 0);
@@ -254,7 +254,7 @@ void CommandRecorder::DrawImGui(Resources& res, Allocator& alloc, Handle<Shader>
 void CommandRecorder::DrawFullscreen(Resources& res, Handle<Shader> pipeline,
                                      std::span<const Handle<Texture>> textures,
                                      Handle<Sampler> sampler) {
-    MTL::RenderCommandEncoder* enc = enc_;
+    MTL::RenderCommandEncoder* enc = plat.enc_;
     enc->setRenderPipelineState(res.GetHot(pipeline)->api_pso);
     enc->setCullMode(MTL::CullModeNone);
     MTL::SamplerState* samp = res.GetHot(sampler)->api_sampler;
@@ -277,7 +277,7 @@ void CommandRecorder::SetViewport(float x, float y, float w, float h) {
     vp.height = h;
     vp.znear = 0.0;
     vp.zfar = 1.0;
-    enc_->setViewport(vp);
+    plat.enc_->setViewport(vp);
 }
 
 void CommandRecorder::SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) {
@@ -286,11 +286,11 @@ void CommandRecorder::SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) {
     s.y = NS::UInteger(y < 0 ? 0 : y);
     s.width = NS::UInteger(w);
     s.height = NS::UInteger(h);
-    enc_->setScissorRect(s);
+    plat.enc_->setScissorRect(s);
 }
 
 void CommandRecorder::EndRenderPass() {
-    enc_->endEncoding();
+    plat.enc_->endEncoding();
 }
 
 void CommandRecorder::PassTimerBegin(const char* name) {
@@ -299,12 +299,12 @@ void CommandRecorder::PassTimerBegin(const char* name) {
 }
 
 void CommandRecorder::PassTimerEnd() {
-    if (cmd_ == nullptr) {
+    if (plat.cmd_ == nullptr) {
         pending_name_ = nullptr;
         pending_slot_ = -1;
         return;
     }
-    MTL::CommandBuffer* cb = cmd_;
+    MTL::CommandBuffer* cb = plat.cmd_;
     const char* name = pending_name_;
     const int slot = pending_slot_;
     cb->addCompletedHandler([slot, name](MTL::CommandBuffer* b) {
@@ -313,7 +313,7 @@ void CommandRecorder::PassTimerEnd() {
         TimerStorage::Span(slot, name, us);
     });
     cb->commit();
-    cmd_ = nullptr;
+    plat.cmd_ = nullptr;
     pending_name_ = nullptr;
     pending_slot_ = -1;
 }

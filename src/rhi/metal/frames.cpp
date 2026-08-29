@@ -153,11 +153,11 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     FrameContext fc;
     fc.frame_index = 0;
     fc.swapchain_image_index = 0;
-    fc.cmd.cmd_ = nullptr;
-    fc.cmd.queue_ = plat.queue_;
-    fc.cmd.enc_ = nullptr;
-    fc.cmd.render_pass_desc_ = plat.render_pass_desc_;
-    fc.cmd.depth_stencil_ = plat.depth_stencil_;
+    fc.cmd.plat.cmd_ = nullptr;
+    fc.cmd.plat.queue_ = plat.queue_;
+    fc.cmd.plat.enc_ = nullptr;
+    fc.cmd.plat.render_pass_desc_ = plat.render_pass_desc_;
+    fc.cmd.plat.depth_stencil_ = plat.depth_stencil_;
     fc.cmd.pending_name_ = nullptr;
     fc.cmd.pending_slot_ = -1;
     return fc;
@@ -165,11 +165,11 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
 
 void Frames::End(const SwapResolveTarget& target, FrameContext& fc) {
     CommandRecorder& ri = fc.cmd;
-    if (ri.cmd_ != nullptr) {
+    if (ri.plat.cmd_ != nullptr) {
         // Encoded work without a PassTimerEnd -- commit the orphan so the GPU
         // sees it before the terminal buffer presents.
-        ri.cmd_->commit();
-        ri.cmd_ = nullptr;
+        ri.plat.cmd_->commit();
+        ri.plat.cmd_ = nullptr;
     }
 
     MTL::CommandBuffer* term = plat.queue_->commandBuffer();
