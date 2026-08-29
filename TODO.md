@@ -245,6 +245,21 @@ diagnosed source of drift:
 
 ## Active
 
+### C7 resize — path DONE, verification artifacts deferred
+The unified resize PATH landed + is golden-tested (`Engine::ApplyResize` single
+entry; headless `cairns.window.resize` and windowed SDL `PIXEL_SIZE_CHANGED`
+both route through `ApplyPendingResize` at draw() top; forward targets are
+graph transients sized per-frame; `id_target_` has its own `EnsureIdTargets`
+resize). Golden `"C7 resize: headless final-target resize cycle"` passes.
+Deferred (optional verification scaffolding, NOT the mechanism):
+- `scripts/verify_resize.sh` — native windowed non-golden (dev_drive FIFO →
+  `cairns.window.resize` → dumpTexture{target:"window"} → PNG dims + non-black).
+- `resize.small.*` image-hash round-trip refs ×3 backends (viking_room
+  @1280×720 hash A → resize 640×360 + bake → resize back → assert hash == A).
+  The existing C7 golden is dims+non-black only, not a pixel-hash round-trip.
+- Browser resize check — extend `scripts/web_capture.mjs` (CDP resize → 2 rAF →
+  screenshot → dims).
+
 ### No global mutable state (no globals, no singletons, no thread-locals)
 Delete every global, singleton (`static X& Instance()`), file-scope mutable
 `static`, function-local `static`, and `thread_local` — construct the thing and
