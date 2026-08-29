@@ -16,6 +16,13 @@ cmake -S . -B build
 You can also use an init script inside [`config/`](config/). Then open the IDE project inside `build/` 
 (If you had CMake generate one) and run!
 
+### cairns-gfx: selecting the GPU backend (macOS)
+Generate the Xcode project for a specific backend with `-DCAIRNS_GFX_BACKEND=metal|vulkan`:
+```sh
+cmake -B build/mac -G Xcode -DCAIRNS_GFX_BACKEND=metal    # Metal
+cmake -B build/vk  -G Xcode -DCAIRNS_GFX_BACKEND=vulkan   # Vulkan (MoltenVK; run via ./run_vk.sh)
+```
+
 ## Supported Platforms
 I have tested the following:
 | Platform | Architecture | Generator |

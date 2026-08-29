@@ -96,6 +96,7 @@ template <typename T>
 const Handle<T> Handle<T>::Null = Handle<T>{};
 
 // Generational typed pool with SoA hot/cold storage (Aaltonen "arrays you walk").
+// Obtained from Sebastian Aaltonen's "Modern Mobile Rendering Architecture", slide 19.
 // T must define T::Hot and T::Cold nested types.
 template <typename T>
 class ResourceManager {

@@ -28,6 +28,7 @@
 #include "util/draw_key.hpp"
 #include "util/material_gpu.hpp"
 #include "util/scene_gpu.hpp"
+#include "util/timer.hpp"
 #include "rhi/rhi.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/command_recorder.hpp"
@@ -351,6 +352,8 @@ public:
             rhi_.frames.SetDumpPath("/tmp/cairns_dump.png");
         }
 
+        cairns::Timer t_frame("frame", 0);
+
         rhi::FrameContext fc = rhi_.frames.Begin(rhi_.resources, rhi_.alloc, swapchain_);
 
         const uint64_t now_ticks = SDL_GetTicks();
@@ -362,9 +365,11 @@ public:
 #endif
         last_ticks_ = now_ticks;
 
+        cairns::Timer t_build("build_draws", 1);
         if ( !BuildMeshOpaqueDraws()) {
             return false;
         }
+        t_build.End();
         std::sort(drawListSorted_.begin(), drawListSorted_.end());
         sorted_draw_indices_.clear();
         for (const auto& [key, idx] : drawListSorted_) {
@@ -377,6 +382,7 @@ public:
             }
         }
 
+        cairns::Timer t_record("record", 2);
         float* dt_ptr = static_cast<float*>(
             rhi_.alloc.BumpAllocate(sizeof(float), rhi_.alloc.UboAlign(), rhi::Memory::kDynamic));
         *dt_ptr = delta_time;
@@ -427,8 +433,13 @@ public:
         fc.cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
 
         fc.cmd.EndRenderPass();
+        t_record.End();
         rhi_.frames.End(swapchain_, fc);
         particle_parity_ ^= 1;
+        t_frame.End();
+        if (frame_ % 120 == 0) {
+            cairns::Timer::PrintReport(false);
+        }
         return true;
     }
     

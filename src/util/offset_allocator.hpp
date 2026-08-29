@@ -1,5 +1,5 @@
-// I MODIFED THIS FROM https://github.com/sebbbi/OffsetAllocator/tree/main
-// (MIT license)
+// I MODIFED THIS FROM Sebastian Aaltonen's (sebbbi) GPU allocator:
+// https://github.com/sebbbi/OffsetAllocator/tree/main  (MIT license)
 
 #pragma once
 

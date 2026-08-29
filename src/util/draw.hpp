@@ -12,16 +12,19 @@ static constexpr uint32_t kMaterialBindSlot = 2;
 static constexpr uint32_t kShaderSpecificBindSlot = 3;
 static constexpr uint32_t kDrawTmpBindSlot = 4;
 
-// "Hypehype Modern Mobile Rendering Architecture" slide 21-22, page 34-36
-// the draw packet around which all rendering revolves
+// The draw packet around which all rendering revolves. Taken from Sebastian
+// Aaltonen's "Modern Mobile Rendering Architecture" presentation, slide 22.
 struct Draw {
     rhi::Handle<rhi::Shader> shader;
-    // "Our draw call API exposes three bind group slots to the user land. Vulkan on Android and WebGPU mandate minimum of four bind group slots."
-    // slot 1: "The first group has render pass global bindings (sun light, camera matrices, shadow maps, etc)"
-    // slot 2: "the second slot has material bindings" like samplers and textures
-    // slot 3: "the third slot has shader specific bindings" idk. like LUTs and ssbos for particles and skinning.
+    // Bind groups — Aaltonen's presentation, slide 21. Maps onto the old WebGPU
+    // 4-bindslot split (Vulkan on Android + WebGPU mandate a minimum of four):
+    //   slot 1: render pass global bindings (sun light, camera matrices, shadow maps)
+    //   slot 2: material bindings (samplers, textures)
+    //   slot 3: shader-specific bindings (e.g. LUTs, particle/skinning SSBOs)
+    // The three user-land slots live here; slot 4 is the dynamic_buffers field below.
     std::array<uint32_t,3> bind_groups = {};
-    // slot 4: "We use the last slot in Vulkan and WebGPU for dynamic offset bound buffers. This is important for bump allocated temporary data, such as uniform buffers." I would put r/w SSBOs here too.
+    // slot 4: dynamic-offset bound buffers — bump-allocated temporaries like UBOs
+    // (and r/w SSBOs).
     uint32_t dynamic_buffers = 0;
     rhi::Handle<rhi::Buffer> index_buffer;
     // slot 1: position
