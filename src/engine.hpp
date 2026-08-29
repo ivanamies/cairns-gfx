@@ -224,6 +224,18 @@ public:
         if (!scenes_.empty() && !scenes_[0].meshes.empty()) {
             mesh_master_handle_ = scenes_[0].meshes[0].posHandle;
         }
+        if (!scenes_.empty()) {
+            world_.scenes = scenes_.data();
+            world_.scene_count = scenes_.size();
+            world_.entities.clear();
+            world_.entities.reserve(debugSceneXforms_.size());
+            for (size_t i = 0; i < debugSceneXforms_.size(); ++i) {
+                cairns::SceneEntity e;
+                e.transform = debugSceneXforms_[i];
+                e.scene_index = static_cast<uint32_t>(i % scenes_.size());
+                world_.entities.push_back(e);
+            }
+        }
         if ( !initRenderPipeline() ) {
             CAIRNS_PRINT("GreaterInit: initRenderPipeline failed\n");
             return false;
@@ -294,88 +306,64 @@ public:
         }
 
         cairns::Timer t_build("build opaque draw list", 4);
-        for ( size_t scene_xform_idx = 0; scene_xform_idx < debugSceneXforms_.size(); ++scene_xform_idx ) {
-            size_t scene_idx = scene_xform_idx % scenes_.size();
-            const glm::mat4& scene_xform = debugSceneXforms_[scene_xform_idx];
-            cairns::Scene& scene = scenes_[scene_idx];
-            root_nodes_stack_cache_.clear();
-            for ( size_t j = 0; j < scene.rootNodes.size(); ++j ) {
-                root_nodes_stack_cache_.push_back(scene.rootNodes[j]);
-            }
-            while(!root_nodes_stack_cache_.empty()) {
-                int32_t nodeIdx = root_nodes_stack_cache_.back();
-                root_nodes_stack_cache_.pop_back();
-                const auto& node = scene.nodes[nodeIdx];
-                if ( node.meshIndex < 0 ) {
-                    for (int32_t c : node.children) {
-                        root_nodes_stack_cache_.push_back(c);
-                    }
-                    continue;
-                }
+        world_.root_transform = rot_matrix;
+        cairns::Extract(world_, proxies_);
+        for (const cairns::MeshProxy& mp : proxies_.meshes.data) {
+            const BufHandle pos = mp.pos;
+            [[maybe_unused]] const BufHandle attr = mp.attr;
+            const BufHandle index = mp.index;
+            const glm::mat4& world_mat = mp.world_matrix;
+            const uint32_t index_base_off = rhi_.resources.BufferBaseOffset(rhi_.alloc, index);
+            for (uint32_t p = 0; p < mp.primitive_count; ++p) {
+                const cairns::PrimitiveProxy& prim = proxies_.primitives[mp.first_primitive + p];
+                const MatId mat_id = prim.material_id;
+                const cairns::rhi::MaterialGpu material_gpu {};
+                uint32_t material_offset = 0;
+                void* mptr = rhi_.alloc.BumpAllocate(
+                    sizeof(cairns::rhi::MaterialGpu), rhi_.alloc.UboAlign(),
+                    rhi::Memory::kDynamic, &material_offset);
+                assert(mptr && "bump alloc failed: material");
+                memcpy(mptr, &material_gpu, sizeof(material_gpu));
 
-                const auto& mesh = scene.meshes[node.meshIndex];
-                const BufHandle pos = mesh.posHandle;
-                [[maybe_unused]] const BufHandle attr = mesh.attrHandle;
-                const BufHandle index = mesh.indexHandle;
-                
-                for(const auto& prim : mesh.primitives) {
-                    const uint32_t scene_mat_idx = prim.materialIndex;
-                    const MatId mat_id = scene.materialIds[scene_mat_idx];
-                    const cairns::rhi::MaterialGpu material_gpu {};
-                    uint32_t material_offset = 0;
-                    void* mptr = rhi_.alloc.BumpAllocate(
-                        sizeof(cairns::rhi::MaterialGpu), rhi_.alloc.UboAlign(),
-                        rhi::Memory::kDynamic, &material_offset);
-                    assert(mptr && "bump alloc failed: material");
-                    memcpy(mptr, &material_gpu, sizeof(material_gpu));
+                const cairns::rhi::DrawTmp draw_tmp {
+                    .model_matrix = world_mat,
+                };
+                uint32_t drawtmp_offset = 0;
+                void* tptr = rhi_.alloc.BumpAllocate(
+                    sizeof(cairns::rhi::DrawTmp), rhi_.alloc.UboAlign(),
+                    rhi::Memory::kDynamic, &drawtmp_offset);
+                assert(tptr && "bump alloc failed: draw tmp");
+                memcpy(tptr, &draw_tmp, sizeof(draw_tmp));
 
-                    // todo @iamies not a good idea
-                    const glm::mat4 model_matrix = scene_xform * rot_matrix;
-                    const glm::mat4 world_mat = node.globalTransform * model_matrix;
-                    const cairns::rhi::DrawTmp draw_tmp {
-                        .model_matrix = world_mat,
-                    };
-                    uint32_t drawtmp_offset = 0;
-                    void* tptr = rhi_.alloc.BumpAllocate(
-                        sizeof(cairns::rhi::DrawTmp), rhi_.alloc.UboAlign(),
-                        rhi::Memory::kDynamic, &drawtmp_offset);
-                    assert(tptr && "bump alloc failed: draw tmp");
-                    memcpy(tptr, &draw_tmp, sizeof(draw_tmp));
+                cairns::Draw draw{};
+                draw.bind_groups[1] = material_bind_groups_[mat_id];
+                draw.index_buffer = index;
+                draw.index_offset = index_base_off + (prim.first_index * sizeof(uint32_t));
+                draw.vertex_offset = prim.vertex_offset;
+                draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot] = pos;
+                draw.vertex_buffers[cairns::Draw::kVertexBufferAttrSlot] = attr;
+                draw.instance_offset = 0;
+                draw.instance_count = 1;
+                draw.dynamic_buffer_offsets[0] = material_offset;
+                draw.dynamic_buffer_offsets[1] = drawtmp_offset;
+                assert(prim.index_count % 3 == 0);
+                draw.triangle_count = prim.index_count / 3;
 
-                    cairns::Draw draw{};
-                    draw.bind_groups[1] = material_bind_groups_[mat_id];  // set 2: material
-                    draw.index_buffer = index;
-                    const uint32_t index_base_off = rhi_.resources.BufferBaseOffset(rhi_.alloc, index);
-                    draw.index_offset = index_base_off + (prim.firstIndex * sizeof(uint32_t));
-                    draw.vertex_offset = prim.vertexOffset;
-                    draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot] = pos;
-                    draw.vertex_buffers[cairns::Draw::kVertexBufferAttrSlot] = attr;  // stream 1
-                    draw.instance_offset = 0;
-                    draw.instance_count = 1;
-                    draw.dynamic_buffer_offsets[0] = material_offset;
-                    draw.dynamic_buffer_offsets[1] = drawtmp_offset;
-                    assert(prim.indexCount % 3 == 0);
-                    draw.triangle_count = prim.indexCount / 3;
-
-                    const glm::vec4 view_pos = view_matrix * world_mat[3];
-                    const float view_depth = -view_pos.z;
-                    const float d01 = glm::clamp(
-                        (view_depth - near_z) / (far_z - near_z), 0.0f, 1.0f);
-                    const uint32_t depth_q =
-                        static_cast<uint32_t>(d01 * float((1u << 24) - 1));
-                    drawListSorted_.emplace_back(
-                        cairns::BuildDrawKey(mat_id & 0x3FFFFFFFu, depth_q,
-                                             kMockTranslucency, kMockViewport,
-                                             kMockViewportLayer, kMockFullscreenLayer),
-                        drawList_.size());
-                    drawList_.push_back(draw);
-                }
-                for(int32_t c : node.children) {
-                    root_nodes_stack_cache_.push_back(c);
-                }
+                const glm::vec4 view_pos = view_matrix * world_mat[3];
+                const float view_depth = -view_pos.z;
+                const float d01 = glm::clamp(
+                    (view_depth - near_z) / (far_z - near_z), 0.0f, 1.0f);
+                const uint32_t depth_q =
+                    static_cast<uint32_t>(d01 * float((1u << 24) - 1));
+                drawListSorted_.emplace_back(
+                    cairns::BuildDrawKey(mat_id & 0x3FFFFFFFu, depth_q,
+                                         kMockTranslucency, kMockViewport,
+                                         kMockViewportLayer, kMockFullscreenLayer),
+                    drawList_.size());
+                drawList_.push_back(draw);
             }
         }
-        
+
         return true;
     }
     
@@ -660,7 +648,10 @@ private:
     std::vector<std::pair<cairns::DrawKey,uint32_t>,cairns::Allocator<std::pair<cairns::DrawKey,uint32_t>>> drawListSorted_;
     std::vector<cairns::Draw,cairns::Allocator<cairns::Draw>> drawList_;
     std::vector<rhi::Handle<rhi::Texture>> resident_textures_;
-    
+
+    cairns::SceneWorld world_;
+    cairns::RenderProxyArrays proxies_;
+
     rhi::Rhi rhi_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
 
