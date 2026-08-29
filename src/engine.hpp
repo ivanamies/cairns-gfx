@@ -32,7 +32,6 @@
 #include "scene/scene_world.hpp"
 #include "render/render_extract.hpp"
 #include "render/render_scene.hpp"
-#include "render/render_graph.hpp"
 #include "rhi/rhi.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/command_recorder.hpp"
@@ -250,10 +249,6 @@ public:
         if ( !initParticles() ) {
             CAIRNS_PRINT("GreaterInit: initParticles failed\n");
             return false;
-        }
-
-        if (std::getenv("CAIRNS_RG_TOY")) {
-            cairns::rhi::RenderGraphToyTest(rhi_.resources, rhi_.alloc);
         }
 
         return true;
@@ -502,42 +497,29 @@ public:
             ImGui::Render();
         }
 
-        graph_.Reset();
-        rhi::GraphBuffer sim_out;
-        rhi::GraphTexture swap_tex;
-        graph_.AddPass(
-            "particle_sim", rhi::PassType::kCompute,
-            [&](rhi::PassBuilder& b) {
-                rhi::GraphBufferDesc bd{};
-                bd.usage = rhi::kUsageStorage;
-                sim_out = b.ImportBuffer(particle_ssbo_[particle_parity_], bd);
-                b.WriteBuffer(sim_out);
-            },
-            [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
-                cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
-            });
-        graph_.AddPass(
-            "forward", rhi::PassType::kGraphics,
-            [&](rhi::PassBuilder& b) {
-                rhi::GraphTextureDesc td{};
-                td.width = swapchain_.Width();
-                td.height = swapchain_.Height();
-                swap_tex = b.ImportTexture(rhi::Handle<rhi::Texture>::Null, td);
-                b.AddColorOutput("swapchain", swap_tex, rhi::LoadOp::kClear, clear);
-            },
-            [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
-                cmd.DrawMeshes(rhi_.resources, rhi_.alloc, ml);
-                cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
-                if (draw_imgui) {
-                    cmd.DrawImGui(rhi_.resources, rhi_.alloc, imgui_,
-                                  imgui_font_, imgui_sampler_,
-                                  ImGui::GetDrawData());
-                }
-            });
-        graph_.SetOutput(swap_tex);
-        if (!graph_.Bake() || !graph_.Execute(fc, swapchain_)) {
-            return false;
+        // particle_sim (compute)
+        fc.cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
+
+        // forward (graphics, MSAA -> swapchain resolve)
+        rhi::ColorAttachment ca{};
+        ca.clear[0] = clear[0];
+        ca.clear[1] = clear[1];
+        ca.clear[2] = clear[2];
+        ca.clear[3] = clear[3];
+        ca.load = rhi::LoadOp::kClear;
+        ca.store = rhi::StoreOp::kStore;
+        rhi::RenderPassDesc rp{};
+        rp.color = std::span<const rhi::ColorAttachment>(&ca, 1);
+        rp.width = swapchain_.Width();
+        rp.height = swapchain_.Height();
+        fc.cmd.BeginRenderPass(swapchain_, rp);
+        fc.cmd.DrawMeshes(rhi_.resources, rhi_.alloc, ml);
+        fc.cmd.DrawPoints(rhi_.resources, rhi_.alloc, pd);
+        if (draw_imgui) {
+            fc.cmd.DrawImGui(rhi_.resources, rhi_.alloc, imgui_, imgui_font_,
+                             imgui_sampler_, ImGui::GetDrawData());
         }
+        fc.cmd.EndRenderPass();
         t_record.End();
         rhi_.frames.End(swapchain_, fc);
         particle_parity_ ^= 1;
@@ -803,7 +785,6 @@ private:
 
     rhi::Rhi rhi_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
-    rhi::RenderGraph graph_{rhi_.resources, rhi_.alloc};
 
     cairns::rhi::SwapChain swapchain_;
     // shaders
