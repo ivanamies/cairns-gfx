@@ -324,6 +324,9 @@ else()
     copy_helper("particle.comp.spv")
     copy_helper("imgui.vert.spv")
     copy_helper("imgui.frag.spv")
+    copy_helper("composite_pip.vert.spv")
+    copy_helper("composite_pip.frag.spv")
+    copy_helper("depthviz.frag.spv")
 endif()
 
 # set some extra configs for each platform

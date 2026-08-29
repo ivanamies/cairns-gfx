@@ -184,13 +184,80 @@ struct VkShaderFiles {
     const char* comp;
 };
 VkShaderFiles resolve_vk_shader(const char* logical) {
-    if (std::strcmp(logical, "unlit") == 0) {
+    if (std::strcmp(logical, "unlit") == 0 ||
+        std::strcmp(logical, "unlit_offscreen") == 0) {
         return {"unlit.vert.spv", "unlit.frag.spv", nullptr};
     }
     if (std::strcmp(logical, "imgui") == 0) {
         return {"imgui.vert.spv", "imgui.frag.spv", nullptr};
     }
+    if (std::strcmp(logical, "composite_pip") == 0) {
+        return {"composite_pip.vert.spv", "composite_pip.frag.spv", nullptr};
+    }
+    if (std::strcmp(logical, "depthviz") == 0) {
+        // depthviz reuses the composite full-screen tri vert.
+        return {"composite_pip.vert.spv", "depthviz.frag.spv", nullptr};
+    }
     return {"particle.vert.spv", "particle.frag.spv", "particle.comp.spv"};
+}
+
+// Render-pass compatibility object built once per pipeline create, then
+// destroyed. Used when desc.swap_chain is null (offscreen target compat).
+VkRenderPass build_offscreen_compat_rp(VkDevice dev, VkFormat color, bool has_color,
+                                       VkFormat depth, bool has_depth,
+                                       VkSampleCountFlagBits samples) {
+    VkAttachmentDescription atts[2]{};
+    VkAttachmentReference color_ref{};
+    VkAttachmentReference depth_ref{};
+    uint32_t n = 0;
+    int color_idx = -1;
+    int depth_idx = -1;
+    if (has_color) {
+        color_idx = static_cast<int>(n);
+        atts[n].format = color;
+        atts[n].samples = samples;
+        atts[n].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        atts[n].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        atts[n].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        atts[n].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        atts[n].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        atts[n].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        ++n;
+    }
+    if (has_depth) {
+        depth_idx = static_cast<int>(n);
+        atts[n].format = depth;
+        atts[n].samples = samples;
+        atts[n].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        atts[n].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        atts[n].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        atts[n].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        atts[n].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        atts[n].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        ++n;
+    }
+    VkSubpassDescription sub{};
+    sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    if (color_idx >= 0) {
+        color_ref.attachment = static_cast<uint32_t>(color_idx);
+        color_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        sub.colorAttachmentCount = 1;
+        sub.pColorAttachments = &color_ref;
+    }
+    if (depth_idx >= 0) {
+        depth_ref.attachment = static_cast<uint32_t>(depth_idx);
+        depth_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        sub.pDepthStencilAttachment = &depth_ref;
+    }
+    VkRenderPassCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    ci.attachmentCount = n;
+    ci.pAttachments = atts;
+    ci.subpassCount = 1;
+    ci.pSubpasses = &sub;
+    VkRenderPass rp = VK_NULL_HANDLE;
+    vkCreateRenderPass(dev, &ci, nullptr, &rp);
+    return rp;
 }
 
 }  // namespace
@@ -317,10 +384,12 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     const std::string ls = desc.logical_shader ? desc.logical_shader : "";
     std::vector<VkDescriptorSetLayout> set_layouts;
     VkDescriptorSetLayout imgui_set_layout = VK_NULL_HANDLE;
-    if (ls == "unlit") {
+    if (ls == "unlit" || ls == "unlit_offscreen") {
         set_layouts = {frames.globals_set_layout_,      // set 0: globals (once/frame)
                        resources.MaterialSetLayout(),   // set 1: per-material
                        frames.drawtmp_set_layout_};     // set 2: drawtmp (per draw)
+    } else if (ls == "composite_pip" || ls == "depthviz") {
+        set_layouts = {frames.composite_set_layout_};   // 1 COMBINED_IMAGE_SAMPLER frag
     } else if (ls == "imgui") {
         VkDescriptorSetLayoutBinding b{};
         b.binding = 0;
@@ -363,7 +432,20 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     pi.pDynamicState = &dynamic_state;
     pi.pDepthStencilState = &depth_stencil;
     pi.layout = layout;
-    pi.renderPass = desc.swap_chain->renderPass;
+    // Swapchain pipelines bind the swapchain's (MSAA) render pass; offscreen
+    // pipelines build a single-sample compat render pass, destroyed below.
+    VkRenderPass compat_rp = VK_NULL_HANDLE;
+    if (desc.swap_chain) {
+        pi.renderPass = desc.swap_chain->renderPass;
+    } else {
+        const bool has_color = desc.color_format != Format::kUndefined;
+        const bool has_depth = desc.depth_format != Format::kUndefined;
+        compat_rp = build_offscreen_compat_rp(
+            device, to_vk_format(desc.color_format), has_color,
+            to_vk_format(desc.depth_format), has_depth,
+            to_vk_samples(desc.sample_count));
+        pi.renderPass = compat_rp;
+    }
     pi.subpass = 0;
     pi.basePipelineHandle = VK_NULL_HANDLE;
     pi.basePipelineIndex = -1;
@@ -373,6 +455,9 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
         vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pi, nullptr, &pipeline);
     vkDestroyShaderModule(device, vert_mod, nullptr);
     vkDestroyShaderModule(device, frag_mod, nullptr);
+    if (compat_rp) {
+        vkDestroyRenderPass(device, compat_rp, nullptr);
+    }
     if (res != VK_SUCCESS) {
         vkDestroyPipelineLayout(device, layout, nullptr);
         return Handle<Shader>::Null;

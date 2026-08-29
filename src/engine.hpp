@@ -800,6 +800,53 @@ public:
             if (unlit_.IsNull()) {
                 std::exit(0);
             }
+
+            // Offscreen variant: single-sample, no swapchain compat. Same shaders
+            // + vertex layout as unlit; targets a render-graph color_off+depth_off.
+            rhi::GraphicsPipelineDesc ofd = desc;
+            ofd.logical_shader = "unlit_offscreen";
+            ofd.sample_count = 1;
+            ofd.swap_chain = nullptr;
+            ofd.debug_name = "unlit_offscreen";
+            unlit_offscreen_ = rhi_.pipelines.CreateGraphicsPipeline(
+                rhi_.resources, rhi_.frames, ofd);
+            if (unlit_offscreen_.IsNull()) {
+                std::exit(0);
+            }
+
+            // composite_pip: full-screen tri, samples 1 color tex, writes MSAA swap.
+            rhi::GraphicsPipelineDesc cpd{};
+            cpd.logical_shader = "composite_pip";
+            cpd.shader_dir = shader_dir.c_str();
+            cpd.topology = rhi::PrimitiveTopology::kTriangleList;
+            cpd.cull = rhi::CullMode::kNone;
+            cpd.depth_test = false;
+            cpd.depth_write = false;
+            cpd.color_format = rhi::Format::kBgra8Unorm;
+            cpd.depth_format = rhi::Format::kD32F;
+            cpd.sample_count = sampleCount;
+            cpd.debug_name = "composite_pip";
+            cpd.swap_chain = &swapchain_;
+            composite_pip_ = rhi_.pipelines.CreateGraphicsPipeline(
+                rhi_.resources, rhi_.frames, cpd);
+
+            // depthviz: same shape, samples 1 depth tex, blue silhouette.
+            rhi::GraphicsPipelineDesc dvd = cpd;
+            dvd.logical_shader = "depthviz";
+            dvd.debug_name = "depthviz";
+            depthviz_ = rhi_.pipelines.CreateGraphicsPipeline(
+                rhi_.resources, rhi_.frames, dvd);
+
+            if (composite_pip_.IsNull() || depthviz_.IsNull()) {
+                std::exit(0);
+            }
+
+            rhi::SamplerDesc sd{};
+            sd.min_filter = rhi::Filter::kLinear;
+            sd.mag_filter = rhi::Filter::kLinear;
+            sd.mip_filter = rhi::Filter::kLinear;
+            sd.address_mode = rhi::AddressMode::kClampToEdge;
+            composite_sampler_ = rhi_.resources.CreateSampler(sd);
         }
 
         return true;
@@ -1024,6 +1071,10 @@ private:
     cairns::rhi::SwapChain swapchain_;
     // shaders
     ShaderHandle unlit_ = ShaderHandle::Null;
+    ShaderHandle unlit_offscreen_ = ShaderHandle::Null;
+    ShaderHandle composite_pip_ = ShaderHandle::Null;
+    ShaderHandle depthviz_ = ShaderHandle::Null;
+    rhi::Handle<rhi::Sampler> composite_sampler_ = rhi::Handle<rhi::Sampler>::Null;
     // imgui
     rhi::Handle<rhi::Shader> imgui_ = rhi::Handle<rhi::Shader>::Null;
     rhi::Handle<rhi::Texture> imgui_font_ = rhi::Handle<rhi::Texture>::Null;
