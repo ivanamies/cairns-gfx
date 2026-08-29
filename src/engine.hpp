@@ -43,7 +43,7 @@
 #include "rhi/rhi.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/command_recorder.hpp"
-#include "rhi/task_guard.hpp"
+#include "util/task_guard.hpp"
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 
@@ -626,7 +626,7 @@ public:
     // from draw(). Owns: rhi_.frames.Begin/End, the bump-ring EncodeDraws,
     // the compute + render-pass encode. Reads pkt + slots_[pkt.slot].
     void RecordFrame(FramePacket& pkt) {
-        rhi::TaskGuard task_guard;
+        [[maybe_unused]] cairns::TaskGuard task_guard;
 
         PerSlot& s = slots_[pkt.slot];
 

@@ -20,7 +20,7 @@
 #include "imgui_impl_sdl3.h"
 
 #include "engine.hpp"
-#include "rhi/task_guard.hpp"
+#include "util/task_guard.hpp"
 
 namespace cairns {
 
@@ -128,7 +128,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event) {
 SDL_AppResult SDL_AppIterate(void *appstate) {
     auto* app = (AppContext*)appstate;
 
-    cairns::rhi::TaskGuard task_guard;
+    [[maybe_unused]] cairns::TaskGuard task_guard;
 
     if ( app->engine) {
         if ( !app->engine->draw()) {
