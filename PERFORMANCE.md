@@ -67,10 +67,36 @@ compilation-unit boundaries that the linker handles differently, or
 genuine thermal/system noise from the heavier headless-editor TUs.
 Worth a focused investigation when the next round of vk work lands.
 
-### Samsung S22 Vulkan Release — not captured this round
-Android device not attached during this measurement. Re-run from
-`scripts/regenerate_perf.sh android` (or push + on-device run) when the
-device is back online.
+### Samsung S22 Vulkan Release — on-device, 2115×1008
+| Pass            | avg     |
+|-----------------|---------|
+| `frame`         |  7.78 ms |
+| `build_draws`   |  6.79 ms |
+| `record`        | 10.62 ms |
+| `particle_sim`  |  n/a (Android Vulkan timestamps disabled, see f2625d1) |
+| `forward`       | 83.0 ms (GPU) |
+| `swap`          |  0.66 ms (GPU) |
+| GPU total       | ~83.7 ms |
+
+vs `c90a43b` S22: CPU side -0.6 ms across the three CPU timers (frame
+8.10 → 7.78, build 7.12 → 6.79, record 10.72 → 10.62). **`forward`
+regressed 56.5 → 83.0 ms (+47%) — significant**, and `swap` 0.43 → 0.66
+(+0.23 ms). The `c90a43b` entry explicitly called itself the
+"cold end of the thermally-noisy range" — this run is plausibly the
+warm end, but two converged 120-frame windows (82 ms and 84 ms) and
+a warmup window (96 ms) is a consistent profile not a one-off spike.
+Phone was charging during the run (potential heat source); device
+sat at 92% battery, USB-FAST charging — Samsung's thermal mgmt may
+have throttled the GPU. **Re-run when next at the bench with cooler
+device + non-charging state to confirm.** If the regression holds
+cold, suspects to chase: anything that increased per-draw bandwidth
+or shader instruction count between `c90a43b` and `52d5d16` — but
+the only engine-side changes shipped are gated to `cfg.surfaceless`
+so this is unexpected.
+
+APK built from `third_party/SDL/android-project/` via
+`./gradlew assembleRelease`. GLBs adb-pushed to
+`/sdcard/Android/data/org.libsdl.app/files/` (100 files, ~150 MB).
 
 ### cairns_serve headless smoke (not a perf gate, for record)
 NDJSON-driven `render.frame` (clear-only) + `io.dumpTexture("final")`
