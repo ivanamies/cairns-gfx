@@ -56,6 +56,23 @@ add_executable(cairns_spec_tests
     test_render_graph_schedule.cpp
     # scene data layer (8)
     test_transform.cpp
+    # G.1 scene ECS PODs
+    test_scene_ecs.cpp
+    # G.2 render proxies
+    test_render_proxies.cpp
+    # G.3 rhi cross-platform interfaces
+    test_rhi_interfaces.cpp
+    # G.4 rhi backend boot-cap / offset×16
+    test_rhi_backends.cpp
+    # G.9 top-risk consolidation
+    test_top_risks.cpp
+    # G.6 threading SPSC invariants
+    test_threading.cpp
+    # G.7 asset/GPU PODs (pure CPU)
+    test_asset_gpu_pods.cpp
+    # G.5 control / agent CommandRegistry round-trip
+    test_command_registry.cpp
+    "${CMAKE_SOURCE_DIR}/src/control/command_registry.cpp"
     # cpu_pool.hpp pulls in offset_allocator.hpp + needs its TU for the
     # allocator implementation. Compile that one file directly into the spec
     # target so we don't link the engine library.
@@ -63,7 +80,11 @@ add_executable(cairns_spec_tests
 
 target_include_directories(cairns_spec_tests PRIVATE
     "${CMAKE_SOURCE_DIR}/src"
-    "${CMAKE_SOURCE_DIR}/third_party/glm")
+    "${CMAKE_SOURCE_DIR}/third_party/glm"
+    "${CMAKE_SOURCE_DIR}/third_party/entt/single_include"
+    "${CMAKE_SOURCE_DIR}/third_party/entt"
+    "${CMAKE_SOURCE_DIR}/third_party"
+    "${CMAKE_BINARY_DIR}/generated")
 
 target_compile_features(cairns_spec_tests PRIVATE cxx_std_20)
 
