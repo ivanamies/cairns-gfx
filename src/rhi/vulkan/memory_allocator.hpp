@@ -88,6 +88,11 @@ public:
     uint32_t BumpOffset(void* ptr) const;
     uint32_t BumpMasterHeapIndex(Memory mem) const;
 
+    // Save/restore the current bump cursor. Used to reclaim transient staging
+    // memory after a synchronous upload so it does not accumulate.
+    uint32_t BumpSaveCursor(Memory mem) const;
+    void BumpRestoreCursor(Memory mem, uint32_t cursor);
+
     // Backend access.
     VkBuffer HeapMasterBuffer(uint32_t heap_index) const;
     VkDeviceMemory HeapDeviceMemory(uint32_t heap_index) const;

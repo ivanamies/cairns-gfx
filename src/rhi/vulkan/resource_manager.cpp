@@ -368,6 +368,8 @@ Handle<Buffer> ResourceManager::CreateBuffer(const BufferDesc& d) {
                 std::memcpy(dst, d.initial_data.data(), d.initial_data.size());
             }
         } else {
+            uint32_t saved_cursor =
+                impl_->memory.BumpSaveCursor(Memory::kUpload);
             void* staging = impl_->memory.BumpAllocate(
                 static_cast<uint32_t>(d.initial_data.size()), 16,
                 Memory::kUpload);
@@ -384,6 +386,7 @@ Handle<Buffer> ResourceManager::CreateBuffer(const BufferDesc& d) {
                     impl_->params.queue, src, src_off, dst, r.offset,
                     static_cast<uint32_t>(d.initial_data.size()));
             }
+            impl_->memory.BumpRestoreCursor(Memory::kUpload, saved_cursor);
         }
     }
     return h;
@@ -430,6 +433,7 @@ Handle<Texture> ResourceManager::CreateTexture(const TextureDesc& d) {
                       impl_->memory.HeapDeviceMemory(r.heap_index), r.offset);
 
     if (!d.initial_data.empty()) {
+        uint32_t saved_cursor = impl_->memory.BumpSaveCursor(Memory::kUpload);
         void* staging = impl_->memory.BumpAllocate(
             static_cast<uint32_t>(d.initial_data.size()), 16, Memory::kUpload);
         if (staging) {
@@ -450,6 +454,7 @@ Handle<Texture> ResourceManager::CreateTexture(const TextureDesc& d) {
                              vk_format, d.dimensions.x, d.dimensions.y,
                              d.mip_levels);
         }
+        impl_->memory.BumpRestoreCursor(Memory::kUpload, saved_cursor);
     }
 
     VkImageViewCreateInfo vci{};

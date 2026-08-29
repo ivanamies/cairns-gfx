@@ -372,6 +372,16 @@ void* MemoryAllocator::BumpAllocate(uint32_t bytes, uint32_t align, Memory mem) 
     return static_cast<uint8_t*>(blk.mapped_ptr) + off;
 }
 
+uint32_t MemoryAllocator::BumpSaveCursor(Memory mem) const {
+    const BumpRing& r = rings_[static_cast<size_t>(mem)];
+    return r.cursors[r.current_slot];
+}
+
+void MemoryAllocator::BumpRestoreCursor(Memory mem, uint32_t cursor) {
+    BumpRing& r = rings_[static_cast<size_t>(mem)];
+    r.cursors[r.current_slot] = cursor;
+}
+
 uint32_t MemoryAllocator::BumpOffset(void* ptr) const {
     for (uint32_t i = 0; i < blocks_.size(); ++i) {
         const HeapBlock& b = blocks_[i];
