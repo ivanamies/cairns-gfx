@@ -712,7 +712,7 @@ public:
 
         cairns::Timer t_frame("frame", 0);
 
-        rhi::FrameContext fc = rhi_.frames.Begin(rhi_.resources, rhi_.alloc, swapchain_);
+        rhi::FrameContext fc = rhi_.frames.Begin(rhi_.resources, rhi_.alloc);
         frame_arena_.BeginFrame(frame_);
 
         cairns::Timer t_build("build_draws", 1);

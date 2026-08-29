@@ -16,6 +16,7 @@
 #include "imgui.h"
 #include "rhi/allocator.hpp"
 #include "rhi/command_recorder.hpp"
+#include "rhi/frames.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/resources.hpp"
 #include "rhi/swap_chain.hpp"
@@ -246,6 +247,9 @@ void CommandRecorder::BeginRenderPass(Resources& res, SwapChain& sc,
     VkExtent2D extent{desc.width, desc.height};
 
     if (is_swapchain) {
+        if (frames_ && !frames_->IsSwapchainAcquired()) {
+            frames_->AcquireSwapchain(*res_, *alloc_, sc, *this);
+        }
         VkRenderPassBeginInfo rpi{};
         rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         rpi.renderPass = sc.renderPass;

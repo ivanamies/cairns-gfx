@@ -25,6 +25,7 @@ namespace cairns::rhi {
 
 class Resources;
 class Allocator;
+class Frames;
 struct SwapChain;
 
 // Per-frame ring of fullscreen-sampling descriptor sets: each DrawFullscreen in a
@@ -144,6 +145,13 @@ public:
     void SetViewport(float x, float y, float w, float h);
     void SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h);
     void EndRenderPass();
+
+    // Lazy-acquire back-pointers (set by Frames::Begin). The swapchain branch
+    // of BeginRenderPass calls frames_->AcquireSwapchain(*res_, *alloc_, sc, *this)
+    // so the drawable is held for the minimum possible time.
+    Frames* frames_ = nullptr;
+    Resources* res_ = nullptr;
+    Allocator* alloc_ = nullptr;
 
     // Per-frame recording state, populated by Frames::Begin.
 #if CAIRNS_VULKAN

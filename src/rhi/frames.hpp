@@ -44,8 +44,16 @@ public:
     // CALLER: ENGINE.
     [[nodiscard]] bool InitTargets(Resources& resources, Allocator& alloc, SwapChain& sc);
 
-    // CALLER: ENGINE (per-frame draw loop).
-    FrameContext Begin(Resources& resources, Allocator& alloc, SwapChain& sc);
+    // CALLER: ENGINE (per-frame draw loop). Does NOT touch the swapchain --
+    // drawable acquisition is deferred until the first swapchain-targeting
+    // BeginRenderPass via AcquireSwapchain (best-practice late-acquire).
+    FrameContext Begin(Resources& resources, Allocator& alloc);
+    // CALLER: CommandRecorder::BeginRenderPass swapchain branch. Idempotent
+    // within a frame. Does drawable acquisition + (Metal) MSAA/depth resize +
+    // (Vk) image index update.
+    void AcquireSwapchain(Resources& resources, Allocator& alloc, SwapChain& sc,
+                          CommandRecorder& cmd);
+    bool IsSwapchainAcquired() const { return swapchain_acquired_; }
     void End(SwapChain& sc, FrameContext& fc);
 
     // Request a one-shot swapchain dump on the next End(). CALLER: ENGINE.
@@ -92,6 +100,10 @@ public:
     Handle<Texture> depth_handle_ = Handle<Texture>::Null;
 #endif
     std::filesystem::path dump_path_;
+    bool swapchain_acquired_ = false;
+#if CAIRNS_VULKAN
+    uint32_t last_image_index_ = 0;
+#endif
 
 private:
     bool inited_ = false;

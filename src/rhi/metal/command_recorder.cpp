@@ -15,6 +15,7 @@
 #include "imgui.h"
 #include "rhi/allocator.hpp"
 #include "rhi/command_recorder.hpp"
+#include "rhi/frames.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/resources.hpp"
 #include "rhi/swap_chain.hpp"
@@ -47,12 +48,15 @@ MTL::LoadAction to_mtl_load(LoadOp op) {
 }
 }  // namespace
 
-void CommandRecorder::BeginRenderPass(Resources& res, SwapChain&,
+void CommandRecorder::BeginRenderPass(Resources& res, SwapChain& sc,
                                       const RenderPassDesc& desc) {
     // Swapchain pass: the imported target is the null handle -> reuse the
     // prebuilt MSAA/depth descriptor (only the clear color varies).
     const bool is_swapchain = !desc.color.empty() && desc.color[0].target.IsNull();
     if (is_swapchain) {
+        if (frames_ && !frames_->IsSwapchainAcquired()) {
+            frames_->AcquireSwapchain(*res_, *alloc_, sc, *this);
+        }
         const float* c = desc.color[0].clear;
         render_pass_desc_->colorAttachments()->object(0)->setClearColor(
             MTL::ClearColor(c[0], c[1], c[2], c[3]));

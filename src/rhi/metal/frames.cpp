@@ -93,11 +93,34 @@ void Frames::SetDumpPath(const std::filesystem::path& path) {
     dump_path_ = path;
 }
 
-FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc) {
+FrameContext Frames::Begin(Resources& resources, Allocator& alloc) {
     dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(frame_semaphore_),
                             DISPATCH_TIME_FOREVER);
     resources.AdvanceFrame(alloc);  // bump ring reset
 
+    MTL::CommandBuffer* cmd = queue_->commandBuffer();
+    dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(frame_semaphore_);
+    cmd->addCompletedHandler([sem](MTL::CommandBuffer*) { dispatch_semaphore_signal(sem); });
+
+    swapchain_acquired_ = false;
+    FrameContext fc;
+    fc.frame_index = 0;
+    fc.swapchain_image_index = 0;
+    fc.cmd.cmd_ = cmd;
+    fc.cmd.enc_ = nullptr;
+    fc.cmd.render_pass_desc_ = render_pass_desc_;
+    fc.cmd.depth_stencil_ = depth_stencil_;
+    fc.cmd.frames_ = this;
+    fc.cmd.res_ = &resources;
+    fc.cmd.alloc_ = &alloc;
+    return fc;
+}
+
+void Frames::AcquireSwapchain(Resources& resources, Allocator& alloc, SwapChain& sc,
+                              CommandRecorder& /*cmd*/) {
+    if (swapchain_acquired_) {
+        return;
+    }
     sc.NextDrawable();
     MTL::Texture* drawable_tex = sc.GetDrawable()->texture();
     Texture::Hot* msaa_hot = resources.GetHot(msaa_handle_);
@@ -118,19 +141,7 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
     MTL::Texture* msaa = resources.GetHot(msaa_handle_)->api_view;
     MTL::Texture* depth = resources.GetHot(depth_handle_)->api_view;
     UpdateRenderPassDescriptor(render_pass_desc_, msaa, depth, sc);
-
-    MTL::CommandBuffer* cmd = queue_->commandBuffer();
-    dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(frame_semaphore_);
-    cmd->addCompletedHandler([sem](MTL::CommandBuffer*) { dispatch_semaphore_signal(sem); });
-
-    FrameContext fc;
-    fc.frame_index = 0;
-    fc.swapchain_image_index = 0;
-    fc.cmd.cmd_ = cmd;
-    fc.cmd.enc_ = nullptr;
-    fc.cmd.render_pass_desc_ = render_pass_desc_;
-    fc.cmd.depth_stencil_ = depth_stencil_;
-    return fc;
+    swapchain_acquired_ = true;
 }
 
 void Frames::End(SwapChain& sc, FrameContext& fc) {

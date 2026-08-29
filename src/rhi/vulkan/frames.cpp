@@ -393,7 +393,7 @@ void Frames::SetDumpPath(const std::filesystem::path& path) {
     dump_path_ = path;
 }
 
-FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc) {
+FrameContext Frames::Begin(Resources& resources, Allocator& alloc) {
     const uint32_t cf = recorder_frame_;
     VkDevice dev = device_;
 
@@ -404,15 +404,6 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
     vkWaitForFences(dev, 1, &in_flight_[cf], VK_TRUE, UINT64_MAX);
     resources.AdvanceFrame(alloc);  // bump ring reset
 
-    uint32_t image_index = 0;
-    VkResult acquire = vkAcquireNextImageKHR(dev, sc.swapChain, UINT64_MAX,
-                                             image_available_[cf], VK_NULL_HANDLE,
-                                             &image_index);
-    if (acquire == VK_ERROR_OUT_OF_DATE_KHR) {
-        sc.RecreateSwapChain();
-        vkAcquireNextImageKHR(dev, sc.swapChain, UINT64_MAX, image_available_[cf],
-                              VK_NULL_HANDLE, &image_index);
-    }
     vkResetFences(dev, 1, &in_flight_[cf]);
     vkResetCommandBuffer(graphics_cmds_[cf], 0);
 
@@ -421,11 +412,13 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
     vkBeginCommandBuffer(compute_cmds_[cf], &bi);
     vkBeginCommandBuffer(graphics_cmds_[cf], &bi);
 
+    swapchain_acquired_ = false;
+    last_image_index_ = 0;
     FrameContext fc;
     fc.frame_index = cf;
-    fc.swapchain_image_index = image_index;
+    fc.swapchain_image_index = 0;
     fc.cmd.frame_ = cf;
-    fc.cmd.image_index_ = image_index;
+    fc.cmd.image_index_ = 0;
     fc.cmd.gfx_ = graphics_cmds_[cf];
     fc.cmd.comp_ = compute_cmds_[cf];
     fc.cmd.device_ = dev;
@@ -440,7 +433,31 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
     fc.cmd.imgui_set_ = imgui_sets_[cf];
     offscreen_cache_.device = dev;
     fc.cmd.offscreen_ = &offscreen_cache_;
+    fc.cmd.frames_ = this;
+    fc.cmd.res_ = &resources;
+    fc.cmd.alloc_ = &alloc;
     return fc;
+}
+
+void Frames::AcquireSwapchain(Resources& /*resources*/, Allocator& /*alloc*/, SwapChain& sc,
+                              CommandRecorder& cmd) {
+    if (swapchain_acquired_) {
+        return;
+    }
+    const uint32_t cf = recorder_frame_;
+    VkDevice dev = device_;
+    uint32_t image_index = 0;
+    VkResult acquire = vkAcquireNextImageKHR(dev, sc.swapChain, UINT64_MAX,
+                                             image_available_[cf], VK_NULL_HANDLE,
+                                             &image_index);
+    if (acquire == VK_ERROR_OUT_OF_DATE_KHR) {
+        sc.RecreateSwapChain();
+        vkAcquireNextImageKHR(dev, sc.swapChain, UINT64_MAX, image_available_[cf],
+                              VK_NULL_HANDLE, &image_index);
+    }
+    last_image_index_ = image_index;
+    cmd.image_index_ = image_index;
+    swapchain_acquired_ = true;
 }
 
 void Frames::End(SwapChain& sc, FrameContext& fc) {
@@ -479,6 +496,7 @@ void Frames::End(SwapChain& sc, FrameContext& fc) {
     VkSwapchainKHR swapchains[1] = {sc.swapChain};
     pi.swapchainCount = 1;
     pi.pSwapchains = swapchains;
+    fc.swapchain_image_index = last_image_index_;
     pi.pImageIndices = &fc.swapchain_image_index;
     const VkResult present = vkQueuePresentKHR(present_queue_, &pi);
 
