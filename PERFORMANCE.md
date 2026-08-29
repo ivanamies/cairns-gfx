@@ -5,6 +5,63 @@ Newest first.
 
 ---
 
+## `b69f582` (2026-07-05) — perf smoke, 4-platform pass
+
+Scenario-driven (desktop via `scripts/dev_drive.sh` eval of the scenario script;
+Android + web via the picker), 120-frame timer windows at steady state. Actor
+counts differ by platform budget: desktop 300, phone 100, web 50 (web MEMFS caps
+the champion preload at 50; the S22 tile / 256 MB skin-pool budget at 100/300).
+
+### macOS, M2 Max, Release, 2560×1440 — perf_smoke_300 (300 actors)
+
+| Pass               | metal   | vk      |
+|--------------------|---------|---------|
+| `frame`            | 1.65 ms | 1.99 ms |
+| `build_draws`      | 1.47 ms | 1.77 ms |
+| `record`           | 1.35 ms | 0.51 ms |
+| `forward_vp0`      | 1.06 ms | 1.49 ms |
+| `skinning_compute` | 3.54 ms | 3.28 ms |
+| `swap`             | 0.13 ms | 0.09 ms |
+| `skin_eval`        | 0.04 ms | 0.04 ms |
+| `present_wait`     | 0.00 ms | 0.04 ms |
+| `acquire_wait`     | —       | 0.04 ms |
+| `fence_wait`       | —       | 0.01 ms |
+
+### Android S22 (Adreno 730), Release, 2115×1008 — perf_smoke_100 (100 actors)
+
+| Pass               | avg     |
+|--------------------|---------|
+| `frame`            | 9.32 ms |
+| `build_draws`      | 3.17 ms |
+| `record`           | 3.91 ms |
+| `forward_vp0`      | 3.68 ms |
+| `skinning_compute` | 9.06 ms |
+| `swap`             | 0.45 ms |
+| `skin_eval`        | 0.19 ms |
+| `present_wait`     | 5.26 ms |
+| `acquire_wait`     | 2.40 ms |
+| `fence_wait`       | 9.37 ms |
+
+### WebGPU, headed Chrome (ANGLE/Metal), 1280×720 — perf_smoke_50 (50 actors)
+
+⚠️ **GPU timings are broken on wgpu.** `gpu_frame` reads 0.00 and the GPU-pass
+slots (`forward_vp0`, `skinning_compute`) are not recorded — only the CPU-side
+slots below are valid. Browser-variable (~±40% window-to-window; values are
+representative). Capture method: README.md "Driving the WASM build in a HEADED
+browser."
+
+| Pass               | avg      |
+|--------------------|----------|
+| `frame`            | ~2.0 ms  |
+| `build_draws`      | ~0.8 ms  |
+| `record`           | ~1.0 ms  |
+| `skin_eval`        | 0.02 ms  |
+| `present_wait`     | 0.00 ms  |
+| `forward_vp0`      | — (GPU timing broken) |
+| `skinning_compute` | — (GPU timing broken) |
+
+---
+
 ## `6674340` (2026-06-22) — perf smoke, 300 actors / 100 distinct GLBs
 
 **Forced down from 500 → 300 actors by WebGPU.** The anim_eval SSBO pack (12 → 6

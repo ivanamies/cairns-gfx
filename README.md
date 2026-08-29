@@ -654,6 +654,56 @@ cd build/spec-mac-webgpu/Release
 # CAIRNS_GFX_BAKE_REFS=1 overwrites; a missing macos-webgpu ref auto-bakes once.
 ```
 
+### Driving the WASM build in a HEADED browser (perf / interactive)
+
+WebGPU in the browser needs a **real GPU context** — it must run **headed**, in a
+visible Chrome window. `--headless` gives no/unreliable WebGPU. Serve the build,
+launch a **dedicated, throwaway-profile** Chrome, and drive it over CDP:
+
+```sh
+# 1. Serve (single-threaded ASYNCIFY build -- no COOP/COEP headers needed):
+( cd build/web-webgpu/Release && python3 -m http.server 8771 )
+
+# 2. Headed Chrome + remote debugging. --user-data-dir MUST be a throwaway
+#    (see the crash warning below); NEVER the user's default profile.
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9333 --enable-unsafe-webgpu --use-angle=metal \
+  --user-data-dir=/tmp/cairns-chrome-profile \
+  http://localhost:8771/cairns_web.html
+```
+
+**Select a scenario by CLICKING its picker button** via CDP
+`Input.dispatchMouseEvent` (`mouseMoved` → `mousePressed` → `mouseReleased`,
+`button:"left"`). Read perf/logs by draining `Runtime.consoleAPICalled` — the
+engine's `[Timer]`/`[STEADY]` stderr surfaces there. `scripts/web_capture.mjs`
+is the CDP scaffold (drop its `--headless=new`; sequence: navigate → boot-wait →
+Input click → long wait for load+steady → drain console).
+
+**What does NOT work (and why):**
+
+- ❌ **`window.cairns.dispatch("cairns.prefab.loadBatch", …)` directly — CRASHES
+  THE TAB.** `loadBatch` is ASYNCIFY (it lazy-fetches GLBs and awaits), but the
+  `cairns_dispatch` ccall is synchronous, so emscripten hits
+  `Aborted(Assertion failed: The call to cairns_dispatch is running
+  asynchronously…)`. That `abort()` tears down the WASM instance. The **picker
+  click is the only async-safe way in** — it dispatches from the main loop.
+- ❌ **Synthetic JS DOM events** (`canvas.dispatchEvent(new MouseEvent(...))`) are
+  **ignored**: emscripten/SDL only honor **trusted** events (`isTrusted`), so
+  they never reach ImGuiIO. Use CDP `Input.dispatchMouseEvent` (OS-level, trusted).
+
+> ⚠️ **CRASH WARNING — never automate the user's browser.** Always launch a
+> throwaway `--user-data-dir` and your own Chrome instance. A crashing
+> WASM/WebGPU tab can destabilize Chrome's shared GPU process and take down
+> **other tabs — including unsaved documents — in the same session.** The
+> `loadBatch`-abort above is exactly such a crash; it has killed a live browser
+> window mid-session. Treat the browser as the user's live workspace, not a
+> disposable target.
+
+> **GPU timings are BROKEN on wgpu.** The HUD `gpu_frame` reads `0.00` and the
+> GPU-pass timer slots (`forward_vp0`, `skinning_compute`) are not recorded on
+> the WebGPU backend — only the CPU-side slots (`frame`, `build_draws`,
+> `record`, `skin_eval`, `present_wait`) are valid. See PERFORMANCE.md.
+
 > W-state: W0–W5 done. Headless renders triangle + die/two-die/viking,
 > matching macos-metal. NOT yet ported (consumers no-op): the id-MRT unlit
 > variant (pick/outline), particle/compute, imgui, skinning. After adding a new
