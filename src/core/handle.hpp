@@ -44,6 +44,14 @@ public:
         if (!freelist_.empty()) {
             idx = freelist_.back();
             freelist_.pop_back();
+            // Reset reused storage so the caller sees a fresh slot.
+            // Without this, LoadPrefabFromGltf-style append-into-vector
+            // patterns carry over the previous occupant's data
+            // (228 R1.x: aatrox loaded -> unloadAll -> aatrox re-loaded
+            // hit "nodes>kAnimMaxNodes" because the old nodes vector
+            // still had 129 entries before the loader appended 129 more).
+            hot_[idx] = typename T::Hot{};
+            cold_[idx] = typename T::Cold{};
         } else {
             idx = static_cast<uint16_t>(hot_.size());
             hot_.emplace_back();
