@@ -91,10 +91,38 @@ run_backend() {
     assert_diff tmp/_lf_${bk}_empty.png   tmp/_lf_${bk}_loaded.png   "$bk: instantiate produced no pixel delta" || return 1
     assert_diff tmp/_lf_${bk}_loaded.png  tmp/_lf_${bk}_animated.png "$bk: animation produced no pixel delta"  || return 1
 
+    # ── #228 H5: runtime-load golden. WARN-mode pending determinism fix.
+    #    The pixel-delta checks above only prove "something changed";
+    #    the golden proves "changed to the RIGHT thing." But load_flow's
+    #    runtime path is currently non-deterministic across cairns_serve
+    #    invocations (two consecutive `regenerate_load_flow_golden.sh
+    #    && verify_load_flow.sh` runs differ by ~all-bytes; the static
+    #    verify_headless byte-gate IS deterministic at the same seed, so
+    #    something on the runtime cairns.prefab.load path leaks state).
+    #    Suspect H4's per-load uploadAnimTablesGpu re-flatten -- the GPU
+    #    allocator hands out non-deterministic offsets when buffers churn
+    #    every call. Tracking: task #297.
+    #    Until then: WARN on mismatch (visible signal of pixel drift), do
+    #    not fail the gate. When H4 lands, flip back to hard-cmp.
+    #    vk is excluded until #296 fixes the load_flow vk render bug.
+    if [ "$bk" = "metal" ] && [ -f goldens/load_flow_loaded_metal.png ]; then
+        local g_drift=0
+        /usr/bin/cmp -s tmp/_lf_metal_loaded.png   goldens/load_flow_loaded_metal.png   || g_drift=$((g_drift + 1))
+        /usr/bin/cmp -s tmp/_lf_metal_animated.png goldens/load_flow_animated_metal.png || g_drift=$((g_drift + 1))
+        /usr/bin/cmp -s tmp/_lf_metal_empty.png    goldens/load_flow_empty_metal.png    || g_drift=$((g_drift + 1))
+        if [ "$g_drift" -gt 0 ]; then
+            echo "$bk: WARN ${g_drift}/3 goldens drifted from committed reference (load_flow non-determinism; #297)" >&2
+        fi
+    fi
+
     local okc
     okc=$(printf '%s' "$out" | /usr/bin/python3 -c \
         'import json,sys; r=json.loads(sys.stdin.read())["result"]; payload=json.loads(r["result"] if isinstance(r,dict) and "result" in r else r); print(payload["ok"]);')
-    echo "$bk: load-flow: ${okc}/9 JS steps + 3 file checks + 2 pixel-delta checks ✓"
+    if [ "$bk" = "metal" ]; then
+        echo "$bk: load-flow: ${okc}/9 JS steps + 3 file checks + 2 pixel-delta + golden(WARN; #297) ✓"
+    else
+        echo "$bk: load-flow: ${okc}/9 JS steps + 3 file checks + 2 pixel-delta ✓ (golden gated to metal; #296)"
+    fi
 }
 
 if [ -n "$1" ]; then
