@@ -188,3 +188,20 @@ XX. SIM-TIME != REAL-TIME BUG (fixed-clock accumulator).
   the gap is from CPU mesh data, the fix is shrinking kDebugGlbsToParse on iOS or sharing
   the static mesh data across hero slices. Not a real perf bug -- Release works -- but worth
   understanding before turning more knobs.
+
+[2026-06-05] DrawKey must be rethought soon. Today BuildDrawKey (src/util/draw_key.hpp)
+  packs material_id + camera-space depth_q + translucency + viewport + viewport_layer
+  + fullscreen_layer into one uint64, with depth_q derived from view_matrix * world_mat[3]
+  (engine.hpp:498). That coupling held while there was one camera, but the moment work
+  lands that wants to:
+   - reuse one sorted draw list across N viewports (current resizing/cameras plan dodges
+     this by per-viewport extract + sort, but that's N x sort cost),
+   - introduce real translucency / layered passes (the 2-bit translucency field is mocked),
+   - or move to GPU-driven culling / indirect draws,
+  the camera-baked-into-key shape becomes load-bearing in the wrong way. Rethink before the
+  next pass-shape change. Likely directions: (a) split into two keys (state-key vs depth-
+  key), sort state-key first then bucket-sort depth within each state cluster; (b) emit
+  per-viewport sort indices over a shared draw array, no per-viewport drawList realloc;
+  (c) DrawKey schema bits get repurposed for layer / pipeline-state hash, with depth
+  computed at sort time. Don't redesign in isolation -- pair with whoever introduces the
+  next pass type (lighting/shadows companion plan, or GPU culling, or transparency).
