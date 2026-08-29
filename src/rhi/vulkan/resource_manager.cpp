@@ -25,6 +25,7 @@ struct ResourceManager::Impl {
     Pool<BindGroup> bind_groups;
     Pool<DynamicBuffers> dynamic_buffers;
     Pool<Kernel> kernels;
+    Pool<Shader> shaders;
 
     uint32_t frame_index = 0;
     uint32_t uniform_align = 256;
@@ -534,6 +535,30 @@ Handle<BindGroup> ResourceManager::CreateBindGroup(const BindGroupDesc&) {
     return Handle<BindGroup>::Null;
 }
 
+Handle<BindGroup> ResourceManager::CreateBindGroupFromVkDescriptorSet(
+    VkDescriptorSet set) {
+    Handle<BindGroup> h = impl_->bind_groups.Acquire();
+    impl_->bind_groups.GetHot(h)->api_descriptor_set = set;
+    return h;
+}
+
+Handle<Shader> ResourceManager::CreateShader(const ShaderDesc& desc) {
+    Handle<Shader> h = impl_->shaders.Acquire();
+    Shader::Hot* hot = impl_->shaders.GetHot(h);
+    hot->vk_pipeline = desc.vk_pipeline;
+    hot->vk_layout = desc.vk_layout;
+    impl_->shaders.GetCold(h)->debug_name = desc.debug_name;
+    return h;
+}
+
+void ResourceManager::Destroy(Handle<Shader> h) {
+    impl_->shaders.Release(h);
+}
+
+Shader::Hot* ResourceManager::GetHot(Handle<Shader> h) {
+    return impl_->shaders.GetHot(h);
+}
+
 Handle<DynamicBuffers> ResourceManager::CreateDynamicBuffers(
     const DynamicBuffersDesc&) {
     return Handle<DynamicBuffers>::Null;
@@ -583,8 +608,13 @@ void ResourceManager::Destroy(Handle<DynamicBuffers> h) {
     impl_->dynamic_buffers.Release(h);
 }
 
-Handle<Kernel> ResourceManager::CreateKernel(const KernelDesc&) {
-    return Handle<Kernel>::Null;
+Handle<Kernel> ResourceManager::CreateKernel(const KernelDesc& desc) {
+    Handle<Kernel> h = impl_->kernels.Acquire();
+    Kernel::Hot* hot = impl_->kernels.GetHot(h);
+    hot->vk_pipeline = desc.vk_pipeline;
+    hot->vk_layout = desc.vk_layout;
+    impl_->kernels.GetCold(h)->debug_name = desc.debug_name;
+    return h;
 }
 
 void ResourceManager::Destroy(Handle<Kernel> h) {

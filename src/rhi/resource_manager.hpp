@@ -403,6 +403,10 @@ struct DynamicBuffers {
 struct Shader {
     struct Hot {
         ApiPsoHandle api_pso = nullptr;  // VkPipeline / MTLRenderPipelineState
+#if CAIRNS_VULKAN
+        VkPipeline vk_pipeline = VK_NULL_HANDLE;
+        VkPipelineLayout vk_layout = VK_NULL_HANDLE;
+#endif
     };
     struct Cold {
         const char* debug_name = nullptr;
@@ -412,11 +416,19 @@ struct Shader {
 struct ShaderDesc {
     ApiPsoHandle api_pso = nullptr;  // engine-compiled; rhi takes ownership
     const char* debug_name = nullptr;
+#if CAIRNS_VULKAN
+    VkPipeline vk_pipeline = VK_NULL_HANDLE;
+    VkPipelineLayout vk_layout = VK_NULL_HANDLE;
+#endif
 };
 
 struct Kernel {
     struct Hot {
         ApiKernelHandle api_pso = nullptr;  // MTLComputePipelineState
+#if CAIRNS_VULKAN
+        VkPipeline vk_pipeline = VK_NULL_HANDLE;
+        VkPipelineLayout vk_layout = VK_NULL_HANDLE;
+#endif
     };
     struct Cold {
         const char* debug_name = nullptr;
@@ -426,6 +438,10 @@ struct Kernel {
 struct KernelDesc {
     ApiKernelHandle api_pso = nullptr;  // engine-compiled; rhi takes ownership
     const char* debug_name = nullptr;
+#if CAIRNS_VULKAN
+    VkPipeline vk_pipeline = VK_NULL_HANDLE;
+    VkPipelineLayout vk_layout = VK_NULL_HANDLE;
+#endif
 };
 
 #if CAIRNS_VULKAN
@@ -505,6 +521,9 @@ public:
     // Forces ring initialization if the current slot is uninitialized.
     VkBuffer GetVkBumpMasterBuffer(Memory mem);
     uint8_t* MappedPtr(Handle<Buffer> h);
+    // Wrap an app-provided VkDescriptorSet as a BindGroup handle (wrap-only;
+    // rhi does not own the set). Parallel to Metal's CreateBindGroupFromMtlBuffer.
+    Handle<BindGroup> CreateBindGroupFromVkDescriptorSet(VkDescriptorSet set);
 #endif  // CAIRNS_VULKAN
 
 #if CAIRNS_METAL
