@@ -134,31 +134,31 @@ bool LoadSceneGpu(Scene& scene, rhi2::ResourceManager& rm)
     return true;
 }
 
-bool InitRenderPassDescriptor(MTL::RenderPassDescriptor*& renderPassDescriptor, Handle<Texture> msaa, Handle<Texture> depth,
-                              ResourceManager<Texture>& tex_mgr, SwapChain& swap_chain) {
+bool InitRenderPassDescriptor(MTL::RenderPassDescriptor*& renderPassDescriptor, MTL::Texture* msaa, MTL::Texture* depth,
+                              SwapChain& swap_chain) {
     renderPassDescriptor = MTL::RenderPassDescriptor::alloc()->init();
 
     MTL::RenderPassColorAttachmentDescriptor* colorAttachment = renderPassDescriptor->colorAttachments()->object(0);
     MTL::RenderPassDepthAttachmentDescriptor* depthAttachment = renderPassDescriptor->depthAttachment();
-    
-    colorAttachment->setTexture(tex_mgr.GetObj(msaa)->texture);
+
+    colorAttachment->setTexture(msaa);
     colorAttachment->setResolveTexture(swap_chain.GetDrawable()->texture());
     colorAttachment->setLoadAction(MTL::LoadActionClear);
     colorAttachment->setClearColor(MTL::ClearColor(41.0f/255.0f, 42.0f/255.0f, 48.0f/255.0f, 1.0));
     colorAttachment->setStoreAction(MTL::StoreActionMultisampleResolve);
-    
-    depthAttachment->setTexture(tex_mgr.GetObj(depth)->texture);
+
+    depthAttachment->setTexture(depth);
     depthAttachment->setLoadAction(MTL::LoadActionClear);
     depthAttachment->setStoreAction(MTL::StoreActionDontCare);
     depthAttachment->setClearDepth(1.0);
-    
+
     return true;
 }
 
-bool UpdateRenderPassDescriptor(MTL::RenderPassDescriptor* render_pass_desc, Handle<Texture> msaa, Handle<Texture> depth, ResourceManager<Texture>& texture_mgr, SwapChain& swap_chain) {
-    render_pass_desc->colorAttachments()->object(0)->setTexture(texture_mgr.GetObj(msaa)->texture);
+bool UpdateRenderPassDescriptor(MTL::RenderPassDescriptor* render_pass_desc, MTL::Texture* msaa, MTL::Texture* depth, SwapChain& swap_chain) {
+    render_pass_desc->colorAttachments()->object(0)->setTexture(msaa);
     render_pass_desc->colorAttachments()->object(0)->setResolveTexture(swap_chain.GetDrawable()->texture());
-    render_pass_desc->depthAttachment()->setTexture(texture_mgr.GetObj(depth)->texture);
+    render_pass_desc->depthAttachment()->setTexture(depth);
     return true;
 }
 
@@ -167,12 +167,11 @@ bool UpdateRenderPassDescriptor(MTL::RenderPassDescriptor* render_pass_desc, Han
 namespace cairns {
 
 inline static constexpr uint32_t kHotArenaMemorySize = 1 << 29;
-inline static constexpr uint32_t kPermanentHeapMemorySize = 1 << 30;
 
 class Engine {
 public:
     
-    using TexHandle = cairns::rhi::Handle<cairns::rhi::Texture>;
+    using TexHandle = rhi2::Handle<rhi2::Texture>;
     using BufHandle = rhi2::Handle<rhi2::Buffer>;
     using DynBufId = uint32_t;
     using ShaderHandle = rhi2::Handle<rhi2::Shader>;
@@ -189,11 +188,6 @@ public:
     drawList_(cairns::Allocator<cairns::Draw>(hot_arena_))
     {
         
-    }
-    
-    bool initGpuAllocators() {
-        allocTransientHeap_ = std::make_unique<cairns::rhi::GpuAllocatorHeap>("alloc transient heap", device, MTL::StorageModeShared, kPermanentHeapMemorySize);
-        return allocTransientHeap_->Valid();
     }
     
     bool initDevice() {
@@ -229,15 +223,13 @@ public:
     bool resizeFrameBuffer(int width, int height) {
         swapChain_->SetDrawableSize(width, height);
         // Deallocate the textures if they have been created
-        if ( msaaHandle_ != TexHandle::Null ) {
-            auto& obj = *renderPassTexManager_->GetObj(msaaHandle_);
-            obj.texture->release();
-            obj.texture = nullptr;
+        if ( !msaaHandle_.IsNull() ) {
+            rm_.Destroy(msaaHandle_);
+            msaaHandle_ = TexHandle::Null;
         }
-        if ( depthHandle_ != TexHandle::Null ) {
-            auto& obj = *renderPassTexManager_->GetObj(depthHandle_);
-            obj.texture->release();
-            obj.texture = nullptr;
+        if ( !depthHandle_.IsNull() ) {
+            rm_.Destroy(depthHandle_);
+            depthHandle_ = TexHandle::Null;
         }
         initDepthAndMSAATextures();
         swapChain_->NextDrawable();
@@ -252,7 +244,6 @@ public:
     bool initResourceManagers() {
         using namespace cairns;
         using namespace cairns::rhi;
-        renderPassTexManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Texture>>(hot_arena_, hot_arena_, 2);
         // 4 because we're only pretending to be a real UGC engine at this point
         return true;
     }
@@ -288,9 +279,6 @@ public:
             }
         }
         if ( !initSwapChain(window)) {
-            return false;
-        }
-        if ( !initGpuAllocators() ) {
             return false;
         }
         { // init debug assets
@@ -356,35 +344,29 @@ public:
     }
     
     bool initDepthAndMSAATextures() {
+        const int32_t w = static_cast<int32_t>(swapChain_->GetDrawableSize().width);
+        const int32_t h = static_cast<int32_t>(swapChain_->GetDrawableSize().height);
         {
-            msaaHandle_ = renderPassTexManager_->New();
-            auto& obj = *renderPassTexManager_->GetObj(msaaHandle_);
-            auto& desc = *renderPassTexManager_->GetDesc(msaaHandle_);
-            desc.type = static_cast<int64_t>(MTL::TextureType2DMultisample);
-            desc.format = static_cast<int64_t>(MTL::PixelFormatBGRA8Unorm);
-            desc.width = swapChain_->GetDrawableSize().width;
-            desc.height = swapChain_->GetDrawableSize().height;
-            desc.sample_count = sampleCount;
-            desc.usage = MTL::TextureUsageRenderTarget;
-            desc.levels = 1;
-            desc.storage = MTL::StorageModeShared;
-            if (!allocTransientHeap_->AllocTexture(obj, desc)) {
+            rhi2::TextureDesc d;
+            d.dimensions = {w, h, 1};
+            d.format = rhi2::Format::kBgra8Unorm;
+            d.sample_count = static_cast<uint32_t>(sampleCount);
+            d.usage = rhi2::kTexUsageColorTarget;
+            d.memory = rhi2::Memory::kDefault;
+            msaaHandle_ = rm_.CreateTexture(d);
+            if (msaaHandle_.IsNull()) {
                 return false;
             }
         }
         {
-            depthHandle_ = renderPassTexManager_->New();
-            auto& obj = *renderPassTexManager_->GetObj(depthHandle_);
-            auto& desc = *renderPassTexManager_->GetDesc(depthHandle_);
-            desc.type = static_cast<int64_t>(MTL::TextureType2DMultisample);
-            desc.format = static_cast<int64_t>(MTL::PixelFormatDepth32Float);
-            desc.width = swapChain_->GetDrawableSize().width;
-            desc.height = swapChain_->GetDrawableSize().height;
-            desc.sample_count = sampleCount;
-            desc.usage = MTL::TextureUsageRenderTarget;
-            desc.levels = 1;
-            desc.storage = MTL::StorageModeShared;
-            if ( !allocTransientHeap_->AllocTexture(obj, desc) ) {
+            rhi2::TextureDesc d;
+            d.dimensions = {w, h, 1};
+            d.format = rhi2::Format::kD32F;
+            d.sample_count = static_cast<uint32_t>(sampleCount);
+            d.usage = rhi2::kTexUsageDepthTarget;
+            d.memory = rhi2::Memory::kDefault;
+            depthHandle_ = rm_.CreateTexture(d);
+            if (depthHandle_.IsNull()) {
                 return false;
             }
         }
@@ -392,7 +374,9 @@ public:
     }
     
     bool initRenderPassDescriptor() {
-        if ( !cairns::rhi::InitRenderPassDescriptor(render_pass_descriptor_, msaaHandle_, depthHandle_, *renderPassTexManager_, *swapChain_)) {
+        MTL::Texture* msaa = static_cast<MTL::Texture*>(rm_.GetHot(msaaHandle_)->api_view);
+        MTL::Texture* depth = static_cast<MTL::Texture*>(rm_.GetHot(depthHandle_)->api_view);
+        if ( !cairns::rhi::InitRenderPassDescriptor(render_pass_descriptor_, msaa, depth, *swapChain_)) {
             return false;
         }
         return true;
@@ -404,7 +388,9 @@ public:
     }
     
     bool updateRenderPassDescriptor() {
-        if ( cairns::rhi::UpdateRenderPassDescriptor(render_pass_descriptor_, msaaHandle_, depthHandle_, *renderPassTexManager_, *swapChain_)) {
+        MTL::Texture* msaa = static_cast<MTL::Texture*>(rm_.GetHot(msaaHandle_)->api_view);
+        MTL::Texture* depth = static_cast<MTL::Texture*>(rm_.GetHot(depthHandle_)->api_view);
+        if ( cairns::rhi::UpdateRenderPassDescriptor(render_pass_descriptor_, msaa, depth, *swapChain_)) {
             return false;
         }
         return true;
@@ -630,7 +616,6 @@ public:
                                            cairns::rhi::GpuSceneRegistry::kBindSlot);
             }
             // use resource call for all textures in argument table
-            encoder->useHeap(allocTransientHeap_->GetHeap());
             for (auto& s : scenes_) {
                 for (const auto th : s.textureHandles) {
                     MTL::Texture* tex =
@@ -924,7 +909,6 @@ private:
     
     cairns::FrameTransientCache<cairns::DynamicBuffersAssoc> dynBufs_;
     std::vector<cairns::LoadedMaterial> materials_;
-    cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Texture>> renderPassTexManager_;
 
     cairns::FrameTransientCache<cairns::BindGroupAssoc> bindGroups_;
 
@@ -937,8 +921,6 @@ private:
     std::unordered_map<uint32_t, uint32_t> mesh_attr_id_map_;
     std::unordered_map<uint32_t, uint32_t> sampler_id_map_;
 
-    std::unique_ptr<cairns::rhi::GpuAllocatorHeap> allocTransientHeap_;
-    
     //    std::vector<std::vector<std::function<void(void)>>> deletionRequests_;
     //    std::vector<std::function<void(void)>> deletions_;
     

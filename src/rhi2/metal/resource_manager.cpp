@@ -169,7 +169,12 @@ Handle<Buffer> ResourceManager::CreateBuffer(const BufferDesc& d) {
 
 Handle<Texture> ResourceManager::CreateTexture(const TextureDesc& d) {
     MTL::TextureDescriptor* td = MTL::TextureDescriptor::alloc()->init();
-    td->setTextureType(MTL::TextureType2D);
+    if (d.sample_count > 1) {
+        td->setTextureType(MTL::TextureType2DMultisample);
+        td->setSampleCount(static_cast<NS::UInteger>(d.sample_count));
+    } else {
+        td->setTextureType(MTL::TextureType2D);
+    }
     td->setPixelFormat(to_mtl_pixel_format(d.format));
     td->setWidth(static_cast<NS::UInteger>(d.dimensions.x));
     td->setHeight(static_cast<NS::UInteger>(d.dimensions.y));

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "rhi/resource_impl.hpp"
-#include "rhi/gpu_allocator.hpp"
 #include "rhi2/resource_manager.hpp"
 
 #include <fastgltf/glm_element_traits.hpp>

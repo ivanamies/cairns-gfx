@@ -239,6 +239,7 @@ struct TextureDesc {
     Vector3I dimensions = {1, 1, 1};
     uint32_t mip_levels = 1;
     uint32_t array_layers = 1;
+    uint32_t sample_count = 1;
     Format format = Format::kRgba8Srgb;
     TextureUsage usage = kTexUsageSampled;
     Memory memory = Memory::kDefault;
