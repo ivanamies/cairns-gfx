@@ -266,6 +266,7 @@ void RenderGraph::BindSlotArena(uint32_t slot, cairns::BumpArena& arena) {
 
 bool RenderGraph::Bake(uint32_t slot) {
     topo_order_.clear();
+    alias_events_n_ = 0;
     resolved_tex_.assign(textures_.size(), Handle<Texture>::Null);
     resolved_buf_.assign(buffers_.size(), Handle<Buffer>::Null);
 
@@ -500,6 +501,16 @@ bool RenderGraph::Bake(uint32_t slot) {
                     chosen = s.handle;
                     s.last = tex_last[t];
                     s.desc_tex = t;
+                    // alias_transfer boundary: Execute discards the prior
+                    // occupant's contents at this lifetime's first pass.
+                    if (alias_events_n_ >= kMaxAliasEvents) {
+                        fprintf(stderr, "[RG] alias event overflow\n");
+                        abort();
+                    }
+                    alias_events_[alias_events_n_].topo_pos =
+                        static_cast<uint32_t>(tex_first[t]);
+                    alias_events_[alias_events_n_].handle = chosen;
+                    ++alias_events_n_;
                     if (log) {
                         fprintf(stderr, "[RG] alias tex %u -> reuse slot (lifetime %d..%d)\n",
                                 t, tex_first[t], tex_last[t]);
@@ -570,8 +581,22 @@ bool RenderGraph::Bake(uint32_t slot) {
 
 bool RenderGraph::Execute(FrameContext& fc, const SwapResolveTarget& target) {
     PassResources res(&resolved_tex_, &resolved_buf_);
-    for (uint32_t p : topo_order_) {
+    for (uint32_t pos = 0; pos < topo_order_.size(); ++pos) {
+        const uint32_t p = topo_order_[pos];
         PassRecord& pass = passes_[p];
+        // alias_transfer: a transient lifetime that starts at this pass on a
+        // reused slot must NOT preserve the prior occupant -- reset the
+        // tracked layout so its first use transitions from UNDEFINED.
+        for (uint32_t ai = 0; ai < alias_events_n_; ++ai) {
+            if (alias_events_[ai].topo_pos != pos) {
+                continue;
+            }
+            Texture::Cold* acold =
+                resources_.textures.GetCold(alias_events_[ai].handle);
+            if (acold != nullptr) {
+                AliasReset(acold->sync);
+            }
+        }
         // Buffers ride the same invalidate/flush events as textures, minus
         // layouts (kUndefined pins the layout clause off). Emits into the
         // caller's invalidate list; returns whether a barrier was appended.

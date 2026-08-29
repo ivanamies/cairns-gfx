@@ -240,6 +240,18 @@ private:
     std::vector<PooledBuf> buf_pool_;
     bool disable_aliasing_ = false;  // golden-mode determinism
 
+    // Granite alias_transfer: Bake records each transient slot reuse; Execute
+    // resets the handle's tracked layout to kUndefined at the reusing
+    // lifetime's first pass (topo position), so its first use discards
+    // instead of preserving the prior occupant's contents.
+    struct AliasEvent {
+        uint32_t topo_pos = 0;
+        Handle<Texture> handle;
+    };
+    static constexpr uint32_t kMaxAliasEvents = 16;
+    std::array<AliasEvent, kMaxAliasEvents> alias_events_{};
+    uint32_t alias_events_n_ = 0;
+
     // Per-slot arena table. Engine binds once at init; Bake(slot)
     // resolves slot_arenas_[slot] -> the BumpArena that owns Bake's
     // scratch. nullptr until BindSlotArena fires for that slot.

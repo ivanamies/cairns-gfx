@@ -271,3 +271,29 @@ SCENARIO("the anim->skin->forward chain emits exactly its three edges",
     REQUIRE(e.src_access == cairns::rhi::kAccessNone);
     REQUIRE((e.src_stage & cairns::rhi::kPipeCompute) != 0);
 }
+
+SCENARIO("alias_transfer: the reusing lifetime discards, never preserves",
+         "[spec][graph_barrier]") {
+    // Lifetime A writes + is read; the slot is then reused by lifetime B.
+    // B's first write must transition from UNDEFINED (discard) while still
+    // waiting on A's accesses (execution deps chain across the alias).
+    PipelineEvent pe{};
+    BarrierEmit e{};
+    AccessResource(pe, cairns::rhi::kAccessColorWrite,
+                   cairns::rhi::kPipeColorOutput,
+                   BarrierLayout::kColorAttachment, /*is_write=*/true, &e);
+    AccessResource(pe, cairns::rhi::kAccessShaderRead,
+                   cairns::rhi::kPipeFragment, BarrierLayout::kShaderRead,
+                   /*is_write=*/false, &e);
+    cairns::rhi::AliasReset(pe);
+    const bool need = AccessResource(pe, cairns::rhi::kAccessColorWrite,
+                                     cairns::rhi::kPipeColorOutput,
+                                     BarrierLayout::kColorAttachment,
+                                     /*is_write=*/true, &e);
+    REQUIRE(need);
+    REQUIRE(e.old_layout == BarrierLayout::kUndefined);
+    REQUIRE(e.new_layout == BarrierLayout::kColorAttachment);
+    // A's reader/writer stages survive the reset.
+    REQUIRE((e.src_stage & cairns::rhi::kPipeFragment) != 0);
+    REQUIRE((e.src_stage & cairns::rhi::kPipeColorOutput) != 0);
+}

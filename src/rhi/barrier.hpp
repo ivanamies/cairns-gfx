@@ -113,4 +113,13 @@ inline bool AccessResource(PipelineEvent& pe, uint32_t dst_access,
     return need;
 }
 
+// Granite alias_transfer: at a transient alias boundary the new lifetime's
+// contents are undefined. Force the tracked layout so the first use
+// transitions from UNDEFINED (discard, never preserve) while the pending
+// flush / reader stages survive -- execution deps still chain across the
+// alias.
+inline void AliasReset(PipelineEvent& pe) {
+    pe.layout = BarrierLayout::kUndefined;
+}
+
 }  // namespace cairns::rhi
