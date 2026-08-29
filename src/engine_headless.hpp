@@ -122,5 +122,16 @@ std::vector<uint32_t> InstantiateGridFitted(Engine* engine,
                                               uint32_t first_prefab_idx,
                                               uint32_t prefab_count);
 
+// #224 L6: APPEND-only debug pair.
+uint32_t DebugSnapshotPrefabHandles(Engine* engine);
+uint32_t DebugAssertAppendOnly(Engine* engine);
+
+// #224 L7: deterministic load-twice check. Runs RuntimeLoadGlbs twice
+// with the same {cursor, count}, compares prefab/mesh counts and
+// per-actor fitted transforms (modulo trace timing). Returns mismatch
+// count; 0 == deterministic.
+uint32_t DebugDeterminismCheck(Engine* engine,
+                                 uint32_t cursor, uint32_t count);
+
 }  // namespace headless
 }  // namespace cairns

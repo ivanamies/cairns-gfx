@@ -237,6 +237,44 @@ LoadBatchExport RuntimeLoadGlbs(Engine* engine,
     return out;
 }
 
+uint32_t DebugSnapshotPrefabHandles(Engine* engine) {
+    return engine ? engine->DebugSnapshotPrefabHandles() : 0u;
+}
+
+uint32_t DebugAssertAppendOnly(Engine* engine) {
+    return engine ? engine->DebugAssertAppendOnly() : 0u;
+}
+
+uint32_t DebugDeterminismCheck(Engine* engine,
+                                 uint32_t cursor, uint32_t count) {
+    if (!engine) {
+        return 0u;
+    }
+    (void)cursor;  // determinism check is pure-fn; doesn't need a load
+    // Build per-actor extents from the first `count` resident prefabs
+    // (or fewer if NumPrefabs() < count -- pad with 0).
+    const uint32_t avail = engine->NumPrefabs();
+    const uint32_t n = std::min(count, avail);
+    std::vector<float> extents = engine->PrefabExtentSnapshot(0, n);
+    std::span<const float> ext_span(extents.data(), extents.size());
+    // Call FitGridToViewport twice; the result must be byte-identical
+    // because the function is pure (no clock, no map, no random).
+    std::vector<glm::mat4> a = engine->FitGridToViewport(n, ext_span);
+    std::vector<glm::mat4> b = engine->FitGridToViewport(n, ext_span);
+    if (a.size() != b.size()) {
+        return static_cast<uint32_t>(
+            a.size() > b.size() ? a.size() - b.size()
+                                : b.size() - a.size());
+    }
+    uint32_t mismatches = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        if (std::memcmp(&a[i], &b[i], sizeof(glm::mat4)) != 0) {
+            ++mismatches;
+        }
+    }
+    return mismatches;
+}
+
 std::vector<uint32_t> InstantiateGridFitted(Engine* engine,
                                               uint32_t first_prefab_idx,
                                               uint32_t prefab_count) {

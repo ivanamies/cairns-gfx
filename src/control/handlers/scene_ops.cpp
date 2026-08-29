@@ -197,6 +197,45 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
                     {"prefab", prefab}};
         });
 
+    // ── #224 L6: APPEND-only debug pair ──
+    registry.Register(
+        "cairns.debug.snapshotPrefabHandles",
+        json::object(),
+        "Snapshot every live Mesh::Hot's handles + batch_id. Stashed "
+        "on Engine; cairns.debug.assertAppendOnly compares against it. "
+        "Returns: {snapshot_size}.",
+        [&engine](const json&) -> json {
+            const uint32_t n =
+                cairns::headless::DebugSnapshotPrefabHandles(&engine);
+            return {{"snapshot_size", n}};
+        });
+    registry.Register(
+        "cairns.debug.assertAppendOnly",
+        json::object(),
+        "Compare current Mesh::Hot handles against the prior snapshot. "
+        "0 mismatches == APPEND-only contract held. "
+        "Returns: {mismatches}.",
+        [&engine](const json&) -> json {
+            const uint32_t m =
+                cairns::headless::DebugAssertAppendOnly(&engine);
+            return {{"mismatches", m}};
+        });
+    registry.Register(
+        "cairns.debug.loadTwice",
+        json::object(),
+        "#224 L7: load the same {cursor,count} GLB window twice, fit "
+        "transforms each time, count mismatches (modulo trace timing). "
+        "0 mismatches == deterministic. Returns: {mismatches, cursor, count}.",
+        [&engine](const json& args) -> json {
+            const uint32_t cursor = args.value("cursor", uint32_t{0});
+            const uint32_t count  = args.value("count",  uint32_t{0});
+            const uint32_t m = cairns::headless::DebugDeterminismCheck(
+                &engine, cursor, count);
+            return {{"mismatches", m},
+                    {"cursor",     cursor},
+                    {"count",      count}};
+        });
+
     // ── #224 L3: the instrument (`cairns.loader.*`) ──
     registry.Register(
         "cairns.loader.trace",

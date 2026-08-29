@@ -637,10 +637,103 @@ public:
         return out;
     }
 
+    // #224 L6: APPEND-only acceptance test.
+    //
+    // Snapshot Mesh::Hot handles + batch_id for every live mesh in every
+    // resident prefab. Returned as a flat vector of (prefab_idx, mesh_idx,
+    // pos_idx, pos_gen, attr_idx, attr_gen, idx_idx, idx_gen, batch_id).
+    // The caller passes this snapshot to AssertAppendOnly after a batch
+    // load -- a mismatch on ANY prior entry proves the load mutated
+    // existing buffers (= bug; the contract is APPENDS, never replaces).
+    struct PrefabHandleSnapshot {
+        uint32_t prefab_idx = 0;
+        uint32_t mesh_idx = 0;
+        uint32_t pos_idx = 0;     uint32_t pos_gen = 0;
+        uint32_t attr_idx = 0;    uint32_t attr_gen = 0;
+        uint32_t idx_idx = 0;     uint32_t idx_gen = 0;
+        uint16_t batch_id = 0;
+        uint32_t global_base_vertex = 0;
+    };
+    std::vector<PrefabHandleSnapshot> SnapshotPrefabHandles() {
+        std::vector<PrefabHandleSnapshot> out;
+        for (uint32_t pi = 0;
+             pi < static_cast<uint32_t>(prefab_ids_.size()); ++pi) {
+            cairns::Prefab::Hot* shot = prefabs_.GetHot(prefab_ids_[pi]);
+            if (!shot) {
+                continue;
+            }
+            for (uint32_t mi = 0;
+                 mi < static_cast<uint32_t>(shot->meshes.size()); ++mi) {
+                cairns::Mesh::Hot* mhot = meshes_.GetHot(shot->meshes[mi]);
+                if (!mhot) {
+                    continue;
+                }
+                PrefabHandleSnapshot s{};
+                s.prefab_idx = pi;
+                s.mesh_idx = mi;
+                s.pos_idx  = mhot->posHandle.index;
+                s.pos_gen  = mhot->posHandle.generation;
+                s.attr_idx = mhot->attrHandle.index;
+                s.attr_gen = mhot->attrHandle.generation;
+                s.idx_idx  = mhot->indexHandle.index;
+                s.idx_gen  = mhot->indexHandle.generation;
+                s.batch_id = mhot->batch_id;
+                s.global_base_vertex = mhot->global_base_vertex;
+                out.push_back(s);
+            }
+        }
+        return out;
+    }
+
+    // For each row in `prior`, look up the same (prefab_idx, mesh_idx) in
+    // the current pool and compare every field. Returns the count of
+    // mismatched rows; 0 == append-only contract held.
+    uint32_t CountAppendOnlyMismatches(
+            std::span<const PrefabHandleSnapshot> prior) {
+        uint32_t mismatches = 0;
+        for (const PrefabHandleSnapshot& p : prior) {
+            if (p.prefab_idx >= prefab_ids_.size()) {
+                ++mismatches; continue;
+            }
+            cairns::Prefab::Hot* shot =
+                prefabs_.GetHot(prefab_ids_[p.prefab_idx]);
+            if (!shot || p.mesh_idx >= shot->meshes.size()) {
+                ++mismatches; continue;
+            }
+            cairns::Mesh::Hot* mhot =
+                meshes_.GetHot(shot->meshes[p.mesh_idx]);
+            if (!mhot) {
+                ++mismatches; continue;
+            }
+            if (mhot->posHandle.index != p.pos_idx ||
+                mhot->posHandle.generation != p.pos_gen ||
+                mhot->attrHandle.index != p.attr_idx ||
+                mhot->attrHandle.generation != p.attr_gen ||
+                mhot->indexHandle.index != p.idx_idx ||
+                mhot->indexHandle.generation != p.idx_gen ||
+                mhot->batch_id != p.batch_id ||
+                mhot->global_base_vertex != p.global_base_vertex) {
+                ++mismatches;
+            }
+        }
+        return mismatches;
+    }
+
     // #224 L3: instrument accessors.
     const cairns::LoadTrace& LastLoadTrace() const { return last_load_trace_; }
     const cairns::ValidationReport& LastValidationReport() const {
         return last_validation_report_;
+    }
+    // #224 L6: snapshot/assert helpers exposed to the NDJSON debug ops.
+    uint32_t DebugSnapshotPrefabHandles() {
+        last_handle_snapshot_ = SnapshotPrefabHandles();
+        return static_cast<uint32_t>(last_handle_snapshot_.size());
+    }
+    uint32_t DebugAssertAppendOnly() {
+        return CountAppendOnlyMismatches(
+            std::span<const PrefabHandleSnapshot>(
+                last_handle_snapshot_.data(),
+                last_handle_snapshot_.size()));
     }
     cairns::LoaderCounters Counters() {
         // Live-derive actors_live + textures_resident from the registry +
@@ -4140,6 +4233,10 @@ private:
     cairns::LoadTrace        last_load_trace_{};
     cairns::LoaderCounters   loader_counters_{};
     cairns::ValidationReport last_validation_report_{};
+    // #224 L6: APPEND-only debug snapshot stashed between two NDJSON
+    // op calls (cairns.debug.snapshotPrefabHandles ->
+    // cairns.debug.assertAppendOnly). Empty until first snapshot call.
+    std::vector<PrefabHandleSnapshot> last_handle_snapshot_;
     std::vector<int32_t> root_nodes_stack_cache_;
 
     // #220 Step 1: handle-pilled pool. Bind group lives on Hot;
