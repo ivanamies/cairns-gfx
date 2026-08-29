@@ -339,6 +339,42 @@ public:
                 }
             }
             world_proxies_.resize(1);  // active_world_ uses slot 0
+
+            // P6: open a SECOND world to flush single-world assumptions
+            // in the type system + pool plumbing. Populated with half
+            // the debug-grid for visible distinctness if anyone wires a
+            // second view to it. NOT rendered yet -- the active path
+            // still draws only active_world_. P6's isolation gate is
+            // satisfied by "world 0 pixels unchanged when world 1
+            // exists." Full side-by-side rendering (per-view targets +
+            // tiled composite + composite_pip variant) is the next
+            // commit on top of this seam.
+            secondary_world_ = worlds_.Acquire();
+            if (auto* wh2 = worlds_.GetHot(secondary_world_)) {
+                if (auto* wc2 = worlds_.GetCold(secondary_world_)) {
+                    *wc2 = cairns::World::Cold{};
+                    wh2->proxy_slot = 1;
+                    wh2->dirty = true;
+                    auto& reg2 = *wc2->registry;
+                    const size_t half = debugSceneXforms_.size() / 2;
+                    for (size_t i = 0; i < half; ++i) {
+                        const uint32_t scene_idx = static_cast<uint32_t>(
+                            i % scenes_.size());
+                        const entt::entity e = reg2.create();
+                        cairns::WorldTransform wt;
+                        wt.world = debugSceneXforms_[i];
+                        reg2.emplace<cairns::WorldTransform>(e, wt);
+                        cairns::AssetRef ar;
+                        ar.asset = per_scene_asset[scene_idx];
+                        reg2.emplace<cairns::AssetRef>(e, ar);
+                        cairns::Renderable rdr;
+                        rdr.layer_mask = 0xFFFFFFFFu;
+                        rdr.flags = cairns::kProxyVisible;
+                        reg2.emplace<cairns::Renderable>(e, rdr);
+                    }
+                }
+            }
+            world_proxies_.resize(2);  // secondary_world_ uses slot 1
         }
         if ( !initRenderPipeline() ) {
             CAIRNS_PRINT("GreaterInit: initRenderPipeline failed\n");
@@ -1245,6 +1281,7 @@ private:
     cairns::ResourceManager<cairns::World> worlds_;
     std::vector<cairns::RenderProxyArrays> world_proxies_;
     cairns::WorldId active_world_;
+    cairns::WorldId secondary_world_;  // P6 multi-world coexistence test
 
     rhi::Rhi rhi_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
