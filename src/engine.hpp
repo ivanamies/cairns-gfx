@@ -2752,7 +2752,7 @@ public:
         }
         if (auto* h = skins_.GetHot(sid)) {
             *h = cairns::SkinnedAttachment::Hot{};
-            h->slice = slice;
+            h->slice_offset = slice.offset;
             h->joint_count =
                 static_cast<uint32_t>(scold->skins[0].jointNodes.size());
             h->time_offset = time_offset;
@@ -2771,6 +2771,7 @@ public:
             c->scene = scene_id;
             c->skin_index = 0;
             c->clip_index = clip_idx;
+            c->slice = slice;  // #222 Phase H.5 finish: Free metadata here.
         }
         return sid;
     }
@@ -2929,7 +2930,7 @@ public:
                 b.first_palette_mat4 + cursor * b.joint_count;
 
             instance_meta[actor_idx] =
-                glm::uvec2(cursor * b.joint_count, sh->slice.offset);
+                glm::uvec2(cursor * b.joint_count, sh->slice_offset);
 
             // #222 Phase H.5: duration cached on Hot at skin-create; no
             // per-actor scenes_.GetCold this frame.

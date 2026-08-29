@@ -82,7 +82,11 @@ struct PointProxy {
 // (pool_buffer, slice.offset * 16).
 struct SkinnedAttachment {
     struct Hot {
-        cairns::PoolSlice slice;
+        // #222 Phase H.5 finish: PoolSlice (16 B + Allocation metadata) →
+        // 4 B slice_offset on Hot. BuildSkinFrame only reads .offset to
+        // fill InstanceMeta. Allocation metadata + count move to Cold (no
+        // destroy path today; matters once Free fires).
+        uint32_t slice_offset = 0;
         uint32_t joint_count = 0;
         // Sim-time phase + speed for clip eval (TODO determinism).
         float time_offset = 0.0f;
@@ -95,11 +99,9 @@ struct SkinnedAttachment {
         uint32_t gpu_scene_header_idx = UINT32_MAX;
         float gpu_clip_duration = 1.0f;
         // #222 Phase E.6: per-actor stream-0 alias of skin_output_pool_
-        // pre-offset by (pool_base + slice.offset * 16) so the skinned
-        // draw can set vertex_buffers[0] = pos_stream and revert the
-        // Draw::pos_buffer_byte_offset side channel (which this retires).
-        // Non-owning VIEW: validity = lifetime of the pool buffer (engine
-        // lifetime; pool is fixed). Release matched at TryDestroySkin.
+        // pre-offset by (pool_base + slice.offset * 16). Skinned draws
+        // set vertex_buffers[0] = pos_stream; retired the F5
+        // Draw::pos_buffer_byte_offset side channel. Non-owning VIEW.
         rhi::Handle<rhi::Buffer> pos_stream = rhi::Handle<rhi::Buffer>::Null;
     };
     struct Cold {
@@ -109,6 +111,10 @@ struct SkinnedAttachment {
         // GPU eval path (the scene header carries the channel/sampler
         // bounds). Kept for debug + future late-toggle.
         int32_t clip_index = -1;
+        // #222 Phase H.5 finish: full PoolSlice (incl OffsetAllocator::
+        // Allocation) lives here. Only read at destroy/Free; today there
+        // is no destroy path so it's effectively a deathbed reference.
+        cairns::PoolSlice slice;
         std::string name;
     };
 };
