@@ -56,8 +56,13 @@ inline void ExtractFromWorld(World::Cold& wc, const glm::mat4& root,
             const int32_t node_idx = stack[--top];
             const Node& node = scene.nodes[node_idx];
             if (node.meshIndex < 0) {
-                for (int32_t c : node.children) {
-                    push_or_die(c);
+                // #212 explicit pointer+size iteration. RelWithDebInfo doesn't
+            // inline std::vector<int32_t>::begin()/end() reliably -- shows
+            // up as ~5% self-time in the profile.
+            const int32_t* cp = node.children.data();
+            const size_t cn = node.children.size();
+            for (size_t ci = 0; ci < cn; ++ci) {
+                    push_or_die(cp[ci]);
                 }
                 continue;
             }

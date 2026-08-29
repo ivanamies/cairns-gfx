@@ -153,55 +153,13 @@ public:
         // exclusivity). No mutex, no shared ptr.
         std::vector<uint8_t> arena_storage;
         cairns::BumpArena arena{};
-        // Per-slot atomic in-use flag. RAII via SlotLock below: CAS to
-        // true on acquire, store false on scope exit (success OR
-        // exception). Detects double-acquire (SLOT_LOCK_BROKEN assert) so
-        // misuse of the slot discipline shows up at the failure point,
-        // not as silent corruption.
-        std::atomic<bool> in_use{false};
-
-        PerSlot() {
-            pending_view_matrix.fill(glm::mat4(1.0f));
-            pending_near_z.fill(0.1f);
-            pending_far_z.fill(100.0f);
-        }
-    };
-
-    // RAII slot lock. Constructor CAS-acquires PerSlot::in_use; destructor
-    // releases. Move-only -- the lock travels with the worker context that
-    // owns the slot. Don't share across threads; pass by value.
-    struct SlotLock {
-        PerSlot* slot_ = nullptr;
-        SlotLock() = default;
-        explicit SlotLock(PerSlot& s) : slot_(&s) {
-            bool expected = false;
-            const bool ok = s.in_use.compare_exchange_strong(
-                expected, true, std::memory_order_acq_rel);
-            (void)ok;
-            assert(ok && "SLOT_LOCK_BROKEN: slot acquired while another "
-                          "owner still holds it -- two workers / two threads "
-                          "raced into the same PerSlot");
-        }
-        SlotLock(const SlotLock&) = delete;
-        SlotLock& operator=(const SlotLock&) = delete;
-        SlotLock(SlotLock&& other) noexcept : slot_(other.slot_) {
-            other.slot_ = nullptr;
-        }
-        SlotLock& operator=(SlotLock&& other) noexcept {
-            if (this != &other) {
-                Release();
-                slot_ = other.slot_;
-                other.slot_ = nullptr;
-            }
-            return *this;
-        }
-        ~SlotLock() { Release(); }
-        void Release() {
-            if (slot_) {
-                slot_->in_use.store(false, std::memory_order_release);
-                slot_ = nullptr;
-            }
-        }
+        // Per-slot mutex. std::lock_guard / std::unique_lock are the RAII
+        // discipline; blocks the second acquirer instead of asserting.
+        // SLOT IS THE LOCK -- the state machine already serialises slot
+        // ownership; this mutex is the C++-idiomatic primitive that
+        // catches misuse + composes with future workers that may want to
+        // take_back / try_lock the slot.
+        std::mutex slot_mutex;
     };
 
     Engine() {
@@ -1061,16 +1019,12 @@ public:
         // Acquire BEFORE touching slot storage -- this is the backpressure
         // gate, blocks if the render thread is still holding slot S.
         PerSlot& s = slots_[slot];
-        // RAII slot lock FIRST -- the atomic CAS is the actual ownership
-        // claim. Then render_thread_->Acquire blocks on the state
-        // machine until the previous slot user (render thread) has
-        // signaled kIdle. Inverting (Acquire then SlotLock) opens a
-        // window where the state machine says "you own it" but the
-        // atomic says "nobody owns it" -- a crash between leaves the
-        // slot in a half-acquired limbo. SlotLock-first means a crash
-        // releases via destructor before anyone could think the slot
-        // was free.
-        SlotLock slot_lock(s);
+        // std::unique_lock FIRST. The mutex is the actual ownership
+        // claim; render_thread_->Acquire then blocks on the state
+        // machine. Lock-first means dtor runs cleanly via stack
+        // unwinding even if anything between this point and Submit
+        // throws.
+        std::unique_lock<std::mutex> slot_lock(s.slot_mutex);
         render_thread_->Acquire(slot);
         // #210 reset this slot's CPU bump arena. Safe here because
         // Acquire blocked until the render thread finished its prior
@@ -1238,10 +1192,10 @@ public:
             s.pkt.imgui_snapshot = nullptr;
         }
 
-        // Hand the slot to the render thread BEFORE main-thread Submit
-        // returns. Release the SlotLock first so render thread's
-        // RecordFrame can CAS-acquire its own SlotLock without racing.
-        slot_lock.Release();
+        // Hand the slot to the render thread BEFORE main-thread Submit.
+        // Unlock the mutex first so render thread's RecordFrame can take
+        // its own std::lock_guard without blocking on main.
+        slot_lock.unlock();
         render_thread_->Submit(slot, &s.pkt);
 
         // MAIN-THREAD present. Render thread ran Frames::EndSubmit and
@@ -1338,11 +1292,10 @@ public:
         [[maybe_unused]] cairns::TaskGuard task_guard;
 
         PerSlot& s = slots_[pkt.slot];
-        // Render-thread RAII slot lock. Main released its SlotLock before
-        // Submit; this CAS asserts no other worker (render thread or
-        // physics worker) is touching pkt.slot. Released on scope exit
-        // (after EndSubmit + PresentPacket push).
-        SlotLock slot_lock(s);
+        // Render-thread RAII slot lock. Main unlocked the slot's mutex
+        // before Submit so this lock_guard takes ownership cleanly.
+        // Released on scope exit (after EndSubmit + PresentPacket push).
+        std::lock_guard<std::mutex> slot_lock(s.slot_mutex);
 
         // Publish parity early -- a pure function of pkt fields (no GPU
         // dependency) so the game thread's parity_cv wait clears immediately.

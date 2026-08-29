@@ -138,7 +138,7 @@ private:
     };
 
     struct PassRecord {
-        std::string name;
+        const char* name = nullptr;  // #214 callers pass string literals
         PassType type = PassType::kGraphics;
         SetupFn setup;
         ExecuteFn execute;

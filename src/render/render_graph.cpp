@@ -482,7 +482,7 @@ bool RenderGraph::Bake(uint32_t slot) {
         fprintf(stderr, "[RG] baked %zu passes (of %u), topo:",
                 topo_order_.size(), n_pass);
         for (uint32_t p : topo_order_) {
-            fprintf(stderr, " %s", passes_[p].name.c_str());
+            fprintf(stderr, " %s", passes_[p].name);
         }
         fprintf(stderr, "\n");
         for (uint16_t t = 0; t < textures_.size(); ++t) {
@@ -500,7 +500,7 @@ bool RenderGraph::Execute(FrameContext& fc, const SwapResolveTarget& target) {
     for (uint32_t p : topo_order_) {
         PassRecord& pass = passes_[p];
         if (pass.type == PassType::kCompute) {
-            fc.cmd.PassTimerBegin(pass.name.c_str());
+            fc.cmd.PassTimerBegin(pass.name);
             if (pass.execute) {
                 pass.execute(fc.cmd, res);
             }
@@ -517,7 +517,7 @@ bool RenderGraph::Execute(FrameContext& fc, const SwapResolveTarget& target) {
         rp.height = target.height;
         rp.input_textures = std::span<const Handle<Texture>>(
             pass.baked_inputs.data(), pass.baked_inputs.size());
-        fc.cmd.PassTimerBegin(pass.name.c_str());
+        fc.cmd.PassTimerBegin(pass.name);
         fc.cmd.BeginRenderPass(resources_, target, rp);
         if (pass.execute) {
             pass.execute(fc.cmd, res);
