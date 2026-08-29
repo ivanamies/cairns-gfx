@@ -245,6 +245,30 @@ diagnosed source of drift:
 
 ## Active
 
+### webgpu ignores per-draw draw.shader (lit/tam variants fall back to unlit)
+`webgpu/command_recorder.cpp DrawMeshes` binds `list.pipeline` once and never
+rebinds per-draw `draw.shader` (metal + vk have the last_shader rebind loop).
+So the NPR material variants (lit, and later tam_hatch/stroke, stamped into
+`draw.shader` by EncodeDraws) are IGNORED on webgpu -- it renders every draw
+with the pass PSO (unlit). Consequence: lit shading + shadows are metal+vk
+only; webgpu silently renders unlit. Fix = port the per-draw pipeline rebind
+into the webgpu DrawMeshes loop (a distinct-pipeline set-cache, like the
+material bind-group cache already there). Until then webgpu is unlit for
+lit/tam materials; goldens are per-platform so webgpu bakes its unlit result.
+NOTE: this masked an M1 bug -- see below.
+
+### Shadow-map visual correctness needs interactive verification
+M2b wired directional shadows on metal+vk (shadow_vp0 depth pass + 3x3 PCF);
+goldens PROVE shadows change pixels (lit_primitives != shadow_primitives) and
+are deterministic per-platform. NOT proven headless: that the shadow lands on
+the correct side (shadow-map UV vs the vk negative-height viewport Y-flip) and
+is acne/peter-panning free (bias tuning). Same class of limit as M5 native
+windowed -- drive `dev_drive.sh start metal`, add a cast_shadows light +
+`setMaterialShaderAll lit` over a receiver, and eyeball. If flipped, it's a
+one-line UV fix in the 3 lit shaders' shadow_factor; if acne, tune the bias.
+Also: the golden scene has no ground plane (primitives self/inter-shadow only);
+a receiver scene would demo it better.
+
 ### C7 resize — path DONE, verification artifacts deferred
 The unified resize PATH landed + is golden-tested (`Engine::ApplyResize` single
 entry; headless `cairns.window.resize` and windowed SDL `PIXEL_SIZE_CHANGED`
