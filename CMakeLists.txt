@@ -98,6 +98,24 @@ target_compile_features(imgui PUBLIC cxx_std_20)
 target_compile_options(imgui PRIVATE -fno-exceptions -fno-rtti)
 target_link_libraries(imgui PUBLIC SDL3::SDL3)
 
+# QuickJS: vendored copy of quickjs-ng (third_party/QuickJS). Minimal static
+# lib over the core C TUs; we don't pull the vendor's CMakeLists because it
+# also builds qjs/qjsc/wasm/test executables we don't need. quickjs-libc is
+# included so script.eval can use stdlib bindings (console.log etc).
+add_library(quickjs STATIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/QuickJS/quickjs.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/QuickJS/quickjs-libc.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/QuickJS/cutils.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/QuickJS/libregexp.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/QuickJS/libunicode.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/QuickJS/xsum.c")
+target_include_directories(quickjs PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/QuickJS")
+target_compile_definitions(quickjs PRIVATE
+    CONFIG_VERSION="cairns-vendored")
+# quickjs's own warnings would trip a -Werror build; relax for its TUs only.
+target_compile_options(quickjs PRIVATE -Wno-everything)
+
 # nlohmann/json uses exceptions internally + has compile-time warnings that
 # trip the app's -Werror. Wrap the control-plane TUs (registry + transport +
 # handlers) in their own static lib with relaxed flags. Mirrors the
@@ -108,7 +126,8 @@ add_library(cairns_control STATIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/transport_stdio.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/lifecycle_ops.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/perf_ops.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/render_ops.cpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/render_ops.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/script_ops.cpp")
 target_include_directories(cairns_control PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_BINARY_DIR}/generated"
@@ -127,7 +146,7 @@ target_compile_definitions(cairns_control PRIVATE
 # and SDL. cairns_core declared its dependencies PUBLIC so linking it here is
 # enough to surface them at compile time without circularity (cairns_core
 # does not include or link cairns_control).
-target_link_libraries(cairns_control PRIVATE cairns_core)
+target_link_libraries(cairns_control PRIVATE cairns_core quickjs)
 
 # Taskflow needs exceptions + has size_t->int narrowing in its headers, so the
 # one TU that includes it lives in its own static library with relaxed flags.

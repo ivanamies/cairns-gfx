@@ -22,6 +22,7 @@
 #include "control/handlers/lifecycle_ops.hpp"
 #include "control/handlers/perf_ops.hpp"
 #include "control/handlers/render_ops.hpp"
+#include "control/handlers/script_ops.hpp"
 #include "control/transport_stdio.hpp"
 #include "engine.hpp"
 #include "rhi/init_config.hpp"
@@ -52,6 +53,7 @@ int main() {
     }
     cairns::control::RegisterRenderOps(registry, engine_ok ? engine : nullptr);
     cairns::control::RegisterPerfOps(registry);
+    cairns::control::RegisterScriptOps(registry);
 
     cairns::control::StdioTransport::Run(registry, std::cin, std::cout, &quit);
 
