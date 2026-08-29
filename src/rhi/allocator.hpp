@@ -46,10 +46,7 @@ public:
     // Advance the bump ring (retire + begin). CALLER: RESOURCES (AdvanceFrame).
     void AdvanceFrame(uint32_t frame_index);
 
-    // ============== BACKEND MEMORY STATE — INTERNAL RHI STATE ===============
-    // ACCESS: RESOURCES (create/destroy/resolve walk the MemoryAllocator + read
-    // the alignments directly). ENGINE MUST NOT TOUCH.
-    // =========================================================================
+    // MemoryAllocator + alignments; Resources walks these during create/destroy.
 #if CAIRNS_VULKAN
     vulkan::MemoryAllocator memory_;
     uint32_t uniform_align_ = 256;

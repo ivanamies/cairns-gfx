@@ -11,8 +11,14 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <vector>
 
 #include "rhi/command_recorder.hpp"  // FrameContext
+#if CAIRNS_VULKAN
+#include <vulkan/vulkan.h>
+#elif CAIRNS_METAL
+#include <Metal/Metal.hpp>
+#endif
 
 namespace cairns::rhi {
 
@@ -27,24 +33,61 @@ public:
     Frames(const Frames&) = delete;
     Frames& operator=(const Frames&) = delete;
 
+    // CALLER: ENGINE.
     [[nodiscard]] bool Init(Device& device, Resources& resources);
+    // CALLER: ENGINE.
     void Deinit();
 
     // Metal: create MSAA/depth render targets + render-pass descriptor (called
     // after scene textures load). Vulkan: no-op (targets created in SwapChain).
+    // CALLER: ENGINE.
     [[nodiscard]] bool InitTargets(SwapChain& sc);
 
+    // CALLER: ENGINE (per-frame draw loop).
     FrameContext Begin(SwapChain& sc);
     void End(FrameContext& fc);
 
-    // Request a one-shot swapchain dump on the next End(); cleared after writing.
+    // Request a one-shot swapchain dump on the next End(). CALLER: ENGINE.
     void SetDumpPath(const std::filesystem::path& path);
 
-private:
-    friend class Pipelines;  // Vulkan pipeline layout reads the set layouts
+    // Frame state; Pipelines reads the *_layout_ set layouts (vk pipeline layouts).
+#if CAIRNS_VULKAN
+    VkDevice device_ = VK_NULL_HANDLE;          // mirrored from Device
+    VkCommandPool command_pool_ = VK_NULL_HANDLE;
+    VkPhysicalDevice physical_ = VK_NULL_HANDLE;
+    VkQueue graphics_queue_ = VK_NULL_HANDLE;
+    VkQueue compute_queue_ = VK_NULL_HANDLE;
+    VkQueue present_queue_ = VK_NULL_HANDLE;
+    uint32_t frames_in_flight_ = 0;
+    uint32_t recorder_frame_ = 0;
+    std::vector<VkCommandBuffer> graphics_cmds_;
+    std::vector<VkCommandBuffer> compute_cmds_;
+    std::vector<VkSemaphore> image_available_;
+    std::vector<VkSemaphore> render_finished_;
+    std::vector<VkSemaphore> compute_finished_;
+    std::vector<VkFence> in_flight_;
+    std::vector<VkFence> compute_in_flight_;
+    VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout dyn_ubo_layout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout compute_layout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout point_layout_ = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> dyn_ubo_sets_;
+    std::vector<VkDescriptorSet> compute_sets_;
+    std::vector<VkDescriptorSet> point_sets_;
+#elif CAIRNS_METAL
+    MTL::Device* device_ = nullptr;             // mirrored from Device
+    MTL::CommandQueue* queue_ = nullptr;        // mirrored from Device
+    void* frame_semaphore_ = nullptr;           // dispatch_semaphore_t
+    MTL::RenderPassDescriptor* render_pass_desc_ = nullptr;
+    MTL::DepthStencilState* depth_stencil_ = nullptr;
+    Handle<Texture> msaa_handle_ = Handle<Texture>::Null;
+    Handle<Texture> depth_handle_ = Handle<Texture>::Null;
+#endif
+    std::filesystem::path dump_path_;
+    Resources* res_ = nullptr;                  // borrowed
 
-    struct Impl;
-    Impl* impl_ = nullptr;
+private:
+    bool inited_ = false;
 };
 
 }  // namespace cairns::rhi

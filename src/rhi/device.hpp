@@ -36,11 +36,7 @@ public:
     // CALLER: ENGINE.
     [[nodiscard]] bool InitSwapChain(SwapChain& sc, SDL_Window* window);
 
-    // ================= BACKEND HANDLES — INTERNAL RHI STATE ==================
-    // ACCESS: ALLOCATOR, RESOURCES, BINDLESS, FRAMES, PIPELINES (they mirror
-    // these during their Init). SWAPCHAIN gets them via InitSwapChain above.
-    // ENGINE MUST NOT TOUCH.
-    // =========================================================================
+    // Platform handles; the subsystems mirror these during their Init().
 #if CAIRNS_VULKAN
     bool validation_enabled_ = false;
     VkInstance instance_ = VK_NULL_HANDLE;

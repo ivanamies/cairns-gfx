@@ -21,19 +21,10 @@
 #include "rhi/device.hpp"
 #include "rhi/resources.hpp"
 #include "rhi/bindless.hpp"
-#include "rhi/vulkan/internal/bindless_impl.hpp"
 #include "rhi/frames.hpp"
-#include "rhi/vulkan/internal/frames_impl.hpp"
 #include "rhi/swap_chain.hpp"
 
 namespace cairns::rhi {
-
-struct Pipelines::Impl {
-    VkDevice device = VK_NULL_HANDLE;  // mirrored from Device
-    Resources* res = nullptr;          // borrowed; stores compiled Shader/Kernel
-    Bindless* bindless = nullptr;      // borrowed; graphics layout reads its set layout
-    Frames* frames = nullptr;          // borrowed; pipeline reads its set layouts
-};
 
 namespace {
 
@@ -62,23 +53,23 @@ Pipelines::~Pipelines() { Deinit(); }
 
 bool Pipelines::Init(Device& device, Resources& resources, Bindless& bindless,
                      Frames& frames) {
-    if (impl_) {
+    if (inited_) {
         return true;
     }
-    impl_ = new Impl();
-    impl_->device = device.device_;
-    impl_->res = &resources;
-    impl_->bindless = &bindless;
-    impl_->frames = &frames;
+    device_ = device.device_;
+    res_ = &resources;
+    bindless_ = &bindless;
+    frames_ = &frames;
+    inited_ = true;
     return true;
 }
 
 void Pipelines::Deinit() {
-    if (!impl_) {
+    if (!inited_) {
         return;
     }
-    VkDevice dev = impl_->device;
-    impl_->res->shaders.ForEachLive([dev](Shader::Hot& hot, Shader::Cold&) {
+    VkDevice dev = device_;
+    res_->shaders.ForEachLive([dev](Shader::Hot& hot, Shader::Cold&) {
         if (hot.vk_pipeline) {
             vkDestroyPipeline(dev, hot.vk_pipeline, nullptr);
             hot.vk_pipeline = VK_NULL_HANDLE;
@@ -88,7 +79,7 @@ void Pipelines::Deinit() {
             hot.vk_layout = VK_NULL_HANDLE;
         }
     });
-    impl_->res->kernels.ForEachLive([dev](Kernel::Hot& hot, Kernel::Cold&) {
+    res_->kernels.ForEachLive([dev](Kernel::Hot& hot, Kernel::Cold&) {
         if (hot.vk_pipeline) {
             vkDestroyPipeline(dev, hot.vk_pipeline, nullptr);
             hot.vk_pipeline = VK_NULL_HANDLE;
@@ -98,8 +89,7 @@ void Pipelines::Deinit() {
             hot.vk_layout = VK_NULL_HANDLE;
         }
     });
-    delete impl_;
-    impl_ = nullptr;
+    inited_ = false;
 }
 
 namespace {
@@ -202,7 +192,7 @@ VkShaderFiles resolve_vk_shader(const char* logical) {
 
 Handle<Shader> Pipelines::CreateGraphicsPipeline(
     const GraphicsPipelineDesc& desc) {
-    VkDevice device = impl_->device;
+    VkDevice device = device_;
     const VkShaderFiles files = resolve_vk_shader(desc.logical_shader);
     const std::filesystem::path dir = desc.shader_dir ? desc.shader_dir : "";
 
@@ -320,10 +310,10 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     pc_range.size = desc.push_constant_bytes;
     std::vector<VkDescriptorSetLayout> set_layouts;
     if (desc.logical_shader && std::string(desc.logical_shader) == "unlit") {
-        set_layouts = {impl_->bindless->impl_->bindless_layout,
-                       impl_->frames->impl_->dyn_ubo_layout};
+        set_layouts = {bindless_->bindless_layout_,
+                       frames_->dyn_ubo_layout_};
     } else {
-        set_layouts = {impl_->frames->impl_->point_layout};
+        set_layouts = {frames_->point_layout_};
     }
     VkPipelineLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -367,17 +357,17 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
         return Handle<Shader>::Null;
     }
 
-    Handle<Shader> h = impl_->res->shaders.Acquire();
-    Shader::Hot* hot = impl_->res->shaders.GetHot(h);
+    Handle<Shader> h = res_->shaders.Acquire();
+    Shader::Hot* hot = res_->shaders.GetHot(h);
     hot->vk_pipeline = pipeline;
     hot->vk_layout = layout;
-    impl_->res->shaders.GetCold(h)->debug_name = desc.debug_name;
+    res_->shaders.GetCold(h)->debug_name = desc.debug_name;
     return h;
 }
 
 Handle<Kernel> Pipelines::CreateComputePipeline(
     const ComputePipelineDesc& desc) {
-    VkDevice device = impl_->device;
+    VkDevice device = device_;
     const VkShaderFiles files = resolve_vk_shader(desc.logical_shader);
     const std::filesystem::path dir = desc.shader_dir ? desc.shader_dir : "";
 
@@ -396,7 +386,7 @@ Handle<Kernel> Pipelines::CreateComputePipeline(
     stage.module = comp_mod;
     stage.pName = "main";
 
-    const VkDescriptorSetLayout compute_layouts[1] = {impl_->frames->impl_->compute_layout};
+    const VkDescriptorSetLayout compute_layouts[1] = {frames_->compute_layout_};
     VkPipelineLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layout_info.setLayoutCount = 1;
@@ -422,11 +412,11 @@ Handle<Kernel> Pipelines::CreateComputePipeline(
         return Handle<Kernel>::Null;
     }
 
-    Handle<Kernel> h = impl_->res->kernels.Acquire();
-    Kernel::Hot* hot = impl_->res->kernels.GetHot(h);
+    Handle<Kernel> h = res_->kernels.Acquire();
+    Kernel::Hot* hot = res_->kernels.GetHot(h);
     hot->vk_pipeline = pipeline;
     hot->vk_layout = layout;
-    impl_->res->kernels.GetCold(h)->debug_name = desc.debug_name;
+    res_->kernels.GetCold(h)->debug_name = desc.debug_name;
     return h;
 }
 

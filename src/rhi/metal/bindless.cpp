@@ -9,36 +9,34 @@
 #include "rhi/bindless.hpp"
 #include "rhi/device.hpp"
 #include "rhi/resources.hpp"
-#include "rhi/metal/internal/bindless_impl.hpp"
 
 namespace cairns::rhi {
 
 Bindless::~Bindless() { Deinit(); }
 
 bool Bindless::Init(Device& device, Resources& resources) {
-    if (impl_) {
+    if (inited_) {
         return true;
     }
-    impl_ = new Impl();
-    impl_->device = device.device_;
-    impl_->res = &resources;
+    device_ = device.device_;
+    res_ = &resources;
+    inited_ = true;
     return true;
 }
 
 void Bindless::Deinit() {
-    if (!impl_) {
+    if (!inited_) {
         return;
     }
-    if (impl_->bindless_encoder) {
-        impl_->bindless_encoder->release();
-        impl_->bindless_encoder = nullptr;
+    if (bindless_encoder_) {
+        bindless_encoder_->release();
+        bindless_encoder_ = nullptr;
     }
-    delete impl_;
-    impl_ = nullptr;
+    inited_ = false;
 }
 
 Handle<BindGroup> Bindless::CreateRegistry(const BindlessRegistryDesc& desc) {
-    MTL::Device* device = impl_->device;
+    MTL::Device* device = device_;
 
     auto* texArg = MTL::ArgumentDescriptor::alloc()->init();
     texArg->setDataType(MTL::DataTypeTexture);
@@ -65,56 +63,56 @@ Handle<BindGroup> Bindless::CreateRegistry(const BindlessRegistryDesc& desc) {
     bd.byte_size = static_cast<uint32_t>(arg_encoder->encodedLength());
     bd.usage = kUsageUniform | kUsageStorage;
     bd.memory = Memory::kUpload;
-    Handle<Buffer> arg_buf_h = impl_->res->CreateBuffer(bd);
+    Handle<Buffer> arg_buf_h = res_->CreateBuffer(bd);
     uint32_t arg_off = 0;
-    MTL::Buffer* arg_buf = impl_->res->GetMtlBuffer(arg_buf_h, &arg_off);
+    MTL::Buffer* arg_buf = res_->GetMtlBuffer(arg_buf_h, &arg_off);
     arg_encoder->setArgumentBuffer(arg_buf, arg_off);
 
-    impl_->bindless_encoder = arg_encoder;
-    impl_->bindless_tex_base = desc.texture_slot;
-    impl_->bindless_attr_base = desc.attr_buffer_slot;
-    impl_->bindless_samp_base = desc.sampler_slot;
-    impl_->bindless_num_tex = 0;
-    impl_->bindless_num_attr = 0;
-    impl_->bindless_num_samp = 0;
+    bindless_encoder_ = arg_encoder;
+    bindless_tex_base_ = desc.texture_slot;
+    bindless_attr_base_ = desc.attr_buffer_slot;
+    bindless_samp_base_ = desc.sampler_slot;
+    bindless_num_tex_ = 0;
+    bindless_num_attr_ = 0;
+    bindless_num_samp_ = 0;
 
-    Handle<BindGroup> h = impl_->res->bind_groups.Acquire();
-    BindGroup::Hot* hot = impl_->res->bind_groups.GetHot(h);
+    Handle<BindGroup> h = res_->bind_groups.Acquire();
+    BindGroup::Hot* hot = res_->bind_groups.GetHot(h);
     hot->api_descriptor_set = arg_buf;
     hot->arg_buf_offset = arg_off;
-    impl_->res->bind_groups.GetCold(h)->debug_name = desc.debug_name;
+    res_->bind_groups.GetCold(h)->debug_name = desc.debug_name;
     return h;
 }
 
 uint32_t Bindless::AddTexture(Handle<BindGroup>, Handle<Texture> tex) {
-    MTL::Texture* t = impl_->res->textures.GetHot(tex)->api_view;
-    const uint32_t slot = impl_->bindless_num_tex;
-    impl_->bindless_encoder->setTexture(t, impl_->bindless_tex_base + slot);
-    impl_->bindless_num_tex = slot + 1;
+    MTL::Texture* t = res_->textures.GetHot(tex)->api_view;
+    const uint32_t slot = bindless_num_tex_;
+    bindless_encoder_->setTexture(t, bindless_tex_base_ + slot);
+    bindless_num_tex_ = slot + 1;
     return slot;
 }
 
 uint32_t Bindless::AddAttrBuffer(Handle<BindGroup>, Handle<Buffer> buf) {
     uint32_t off = 0;
-    MTL::Buffer* b = impl_->res->GetMtlBuffer(buf, &off);
-    const uint32_t slot = impl_->bindless_num_attr;
-    impl_->bindless_encoder->setBuffer(b, off, impl_->bindless_attr_base + slot);
-    impl_->bindless_num_attr = slot + 1;
+    MTL::Buffer* b = res_->GetMtlBuffer(buf, &off);
+    const uint32_t slot = bindless_num_attr_;
+    bindless_encoder_->setBuffer(b, off, bindless_attr_base_ + slot);
+    bindless_num_attr_ = slot + 1;
     return slot;
 }
 
 uint32_t Bindless::AddSampler(Handle<BindGroup>, Handle<Sampler> samp) {
-    MTL::SamplerState* s = impl_->res->samplers.GetHot(samp)->api_sampler;
-    const uint32_t slot = impl_->bindless_num_samp;
-    impl_->bindless_encoder->setSamplerState(s, impl_->bindless_samp_base + slot);
-    impl_->bindless_num_samp = slot + 1;
+    MTL::SamplerState* s = res_->samplers.GetHot(samp)->api_sampler;
+    const uint32_t slot = bindless_num_samp_;
+    bindless_encoder_->setSamplerState(s, bindless_samp_base_ + slot);
+    bindless_num_samp_ = slot + 1;
     return slot;
 }
 
 void Bindless::Finalize(Handle<BindGroup>) {
-    if (impl_->bindless_encoder) {
-        impl_->bindless_encoder->release();
-        impl_->bindless_encoder = nullptr;
+    if (bindless_encoder_) {
+        bindless_encoder_->release();
+        bindless_encoder_ = nullptr;
     }
 }
 

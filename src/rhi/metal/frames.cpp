@@ -16,30 +16,28 @@
 #include "rhi/resource_manager.hpp"  // kFramesInFlight
 #include "rhi/swap_chain.hpp"
 #include "rhi/command_recorder.hpp"
-#include "rhi/metal/command_recorder_impl.hpp"
-#include "rhi/metal/internal/frames_impl.hpp"
 
 namespace cairns::rhi {
 
 Frames::~Frames() { Deinit(); }
 
 bool Frames::Init(Device& device, Resources& resources) {
-    if (impl_) {
+    if (inited_) {
         return true;
     }
-    impl_ = new Impl();
-    impl_->device = device.device_;
-    impl_->queue = device.queue_;
-    impl_->res = &resources;
+    device_ = device.device_;
+    queue_ = device.queue_;
+    res_ = &resources;
 
-    impl_->frame_semaphore = dispatch_semaphore_create(kFramesInFlight);
+    frame_semaphore_ = dispatch_semaphore_create(kFramesInFlight);
     {
         MTL::DepthStencilDescriptor* dsd = MTL::DepthStencilDescriptor::alloc()->init();
         dsd->setDepthCompareFunction(MTL::CompareFunctionLessEqual);
         dsd->setDepthWriteEnabled(true);
-        impl_->depth_stencil = impl_->device->newDepthStencilState(dsd);
+        depth_stencil_ = device_->newDepthStencilState(dsd);
         dsd->release();
     }
+    inited_ = true;
     return true;
 }
 
@@ -56,8 +54,8 @@ bool Frames::InitTargets(SwapChain& sc) {
         d.sample_count = kSampleCount;
         d.usage = kTexUsageColorTarget;
         d.memory = Memory::kDefault;
-        impl_->msaa_handle = impl_->res->CreateTexture(d);
-        if (impl_->msaa_handle.IsNull()) {
+        msaa_handle_ = res_->CreateTexture(d);
+        if (msaa_handle_.IsNull()) {
             return false;
         }
     }
@@ -68,73 +66,75 @@ bool Frames::InitTargets(SwapChain& sc) {
         d.sample_count = kSampleCount;
         d.usage = kTexUsageDepthTarget;
         d.memory = Memory::kDefault;
-        impl_->depth_handle = impl_->res->CreateTexture(d);
-        if (impl_->depth_handle.IsNull()) {
+        depth_handle_ = res_->CreateTexture(d);
+        if (depth_handle_.IsNull()) {
             return false;
         }
     }
-    MTL::Texture* msaa = impl_->res->GetHot(impl_->msaa_handle)->api_view;
-    MTL::Texture* depth = impl_->res->GetHot(impl_->depth_handle)->api_view;
-    return InitRenderPassDescriptor(impl_->render_pass_desc, msaa, depth, sc);
+    MTL::Texture* msaa = res_->GetHot(msaa_handle_)->api_view;
+    MTL::Texture* depth = res_->GetHot(depth_handle_)->api_view;
+    return InitRenderPassDescriptor(render_pass_desc_, msaa, depth, sc);
 }
 
 void Frames::Deinit() {
-    if (!impl_) {
+    if (!inited_) {
         return;
     }
-    if (impl_->depth_stencil) {
-        impl_->depth_stencil->release();
+    if (depth_stencil_) {
+        depth_stencil_->release();
     }
-    if (impl_->render_pass_desc) {
-        impl_->render_pass_desc->release();
+    if (render_pass_desc_) {
+        render_pass_desc_->release();
     }
-    delete impl_;
-    impl_ = nullptr;
+    inited_ = false;
 }
 
 void Frames::SetDumpPath(const std::filesystem::path& path) {
-    impl_->dump_path = path;
+    dump_path_ = path;
 }
 
 FrameContext Frames::Begin(SwapChain& sc) {
-    dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(impl_->frame_semaphore),
+    dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(frame_semaphore_),
                             DISPATCH_TIME_FOREVER);
-    impl_->res->AdvanceFrame();  // bump ring reset
+    res_->AdvanceFrame();  // bump ring reset
 
     sc.NextDrawable();
-    MTL::Texture* msaa = impl_->res->GetHot(impl_->msaa_handle)->api_view;
-    MTL::Texture* depth = impl_->res->GetHot(impl_->depth_handle)->api_view;
-    UpdateRenderPassDescriptor(impl_->render_pass_desc, msaa, depth, sc);
+    MTL::Texture* msaa = res_->GetHot(msaa_handle_)->api_view;
+    MTL::Texture* depth = res_->GetHot(depth_handle_)->api_view;
+    UpdateRenderPassDescriptor(render_pass_desc_, msaa, depth, sc);
 
-    MTL::CommandBuffer* cmd = impl_->queue->commandBuffer();
-    dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(impl_->frame_semaphore);
+    MTL::CommandBuffer* cmd = queue_->commandBuffer();
+    dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(frame_semaphore_);
     cmd->addCompletedHandler([sem](MTL::CommandBuffer*) { dispatch_semaphore_signal(sem); });
 
     FrameContext fc;
     fc.frame_index = 0;
     fc.swapchain_image_index = 0;
-    fc.cmd.impl_ = new CommandRecorder::Impl{impl_->res,    &sc,  cmd, nullptr,
-                                             impl_->render_pass_desc,
-                                             impl_->depth_stencil};
+    fc.cmd.res_ = res_;
+    fc.cmd.sc_ = &sc;
+    fc.cmd.cmd_ = cmd;
+    fc.cmd.enc_ = nullptr;
+    fc.cmd.render_pass_desc_ = render_pass_desc_;
+    fc.cmd.depth_stencil_ = depth_stencil_;
     return fc;
 }
 
 void Frames::End(FrameContext& fc) {
-    CommandRecorder::Impl* ri = fc.cmd.impl_;
-    MTL::CommandBuffer* cmd = ri->cmd;
+    CommandRecorder& ri = fc.cmd;
+    MTL::CommandBuffer* cmd = ri.cmd_;
 
-    if (!impl_->dump_path.empty()) {
-        MTL::Texture* drawableTex = ri->sc->GetDrawable()->texture();
+    if (!dump_path_.empty()) {
+        MTL::Texture* drawableTex = ri.sc_->GetDrawable()->texture();
         const NS::UInteger w = drawableTex->width();
         const NS::UInteger h = drawableTex->height();
         const NS::UInteger bytesPerRow = w * 4;
         const NS::UInteger bufSize = bytesPerRow * h;
-        MTL::Buffer* readback = impl_->device->newBuffer(bufSize, MTL::ResourceStorageModeShared);
+        MTL::Buffer* readback = device_->newBuffer(bufSize, MTL::ResourceStorageModeShared);
         MTL::BlitCommandEncoder* blitEnc = cmd->blitCommandEncoder();
         blitEnc->copyFromTexture(drawableTex, 0, 0, MTL::Origin{0, 0, 0}, MTL::Size{w, h, 1},
                                  readback, 0, bytesPerRow, 0);
         blitEnc->endEncoding();
-        cmd->presentDrawable(ri->sc->GetDrawable());
+        cmd->presentDrawable(ri.sc_->GetDrawable());
         cmd->commit();
         cmd->waitUntilCompleted();
         std::vector<uint8_t> rgba(bufSize);
@@ -145,17 +145,14 @@ void Frames::End(FrameContext& fc) {
             rgba[i * 4 + 2] = bgra[i * 4 + 0];
             rgba[i * 4 + 3] = bgra[i * 4 + 3];
         }
-        stbi_write_png(impl_->dump_path.string().c_str(), static_cast<int>(w),
+        stbi_write_png(dump_path_.string().c_str(), static_cast<int>(w),
                        static_cast<int>(h), 4, rgba.data(), static_cast<int>(bytesPerRow));
         readback->release();
-        impl_->dump_path.clear();
+        dump_path_.clear();
     } else {
-        cmd->presentDrawable(ri->sc->GetDrawable());
+        cmd->presentDrawable(ri.sc_->GetDrawable());
         cmd->commit();
     }
-
-    delete ri;
-    fc.cmd.impl_ = nullptr;
 }
 
 }  // namespace cairns::rhi

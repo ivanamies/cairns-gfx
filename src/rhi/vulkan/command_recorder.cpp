@@ -1,7 +1,6 @@
 // rhi/vulkan/command_recorder.cpp
 //
 // Vulkan backend bodies for CommandRecorder. Moved out of resource_manager.cpp
-// (Phase 0a). The Impl lives in vulkan/command_recorder_impl.hpp so BeginFrame /
 // EndFrame in resource_manager.cpp can construct/destroy it.
 
 #include "util/define.hpp"
@@ -14,7 +13,6 @@
 #include <vulkan/vulkan.h>
 
 #include "rhi/command_recorder.hpp"
-#include "rhi/vulkan/command_recorder_impl.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/resources.hpp"
 #include "rhi/swap_chain.hpp"
@@ -25,8 +23,8 @@
 namespace cairns::rhi {
 
 void CommandRecorder::Dispatch(const ComputeDispatch& d) {
-    Kernel::Hot* k = impl_->res->GetHot(d.kernel);
-    VkDescriptorSet set = impl_->compute_set;
+    Kernel::Hot* k = res_->GetHot(d.kernel);
+    VkDescriptorSet set = compute_set_;
 
     const size_t n = d.buffers.size();
     std::vector<VkDescriptorBufferInfo> infos(n);
@@ -34,7 +32,7 @@ void CommandRecorder::Dispatch(const ComputeDispatch& d) {
     for (size_t i = 0; i < n; ++i) {
         const BoundBuffer& b = d.buffers[i];
         uint32_t off = 0;
-        VkBuffer buf = impl_->res->GetVkBuffer(b.buffer, &off);
+        VkBuffer buf = res_->GetVkBuffer(b.buffer, &off);
         const bool is_ubo = (b.slot == 0);
         infos[i].buffer = buf;
         infos[i].offset = off + b.offset;
@@ -49,23 +47,23 @@ void CommandRecorder::Dispatch(const ComputeDispatch& d) {
         writes[i].pBufferInfo = &infos[i];
     }
     if (n > 0) {
-        vkUpdateDescriptorSets(impl_->device, static_cast<uint32_t>(n), writes.data(), 0,
+        vkUpdateDescriptorSets(device_, static_cast<uint32_t>(n), writes.data(), 0,
                                nullptr);
     }
 
-    vkCmdBindPipeline(impl_->comp, VK_PIPELINE_BIND_POINT_COMPUTE, k->vk_pipeline);
-    vkCmdBindDescriptorSets(impl_->comp, VK_PIPELINE_BIND_POINT_COMPUTE, k->vk_layout,
+    vkCmdBindPipeline(comp_, VK_PIPELINE_BIND_POINT_COMPUTE, k->vk_pipeline);
+    vkCmdBindDescriptorSets(comp_, VK_PIPELINE_BIND_POINT_COMPUTE, k->vk_layout,
                             0, 1, &set, 0, nullptr);
-    vkCmdDispatch(impl_->comp, d.groups_x, d.groups_y, d.groups_z);
+    vkCmdDispatch(comp_, d.groups_x, d.groups_y, d.groups_z);
 }
 
 void CommandRecorder::BeginRenderPass(const RenderPassDesc& desc) {
     VkRenderPassBeginInfo rpi{};
     rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rpi.renderPass = impl_->sc->renderPass;
-    rpi.framebuffer = impl_->sc->swapChainFramebuffers[impl_->image_index];
+    rpi.renderPass = sc_->renderPass;
+    rpi.framebuffer = sc_->swapChainFramebuffers[image_index_];
     rpi.renderArea.offset = {0, 0};
-    rpi.renderArea.extent = impl_->sc->swapChainExtent;
+    rpi.renderArea.extent = sc_->swapChainExtent;
     VkClearValue clears[2]{};
     if (!desc.color.empty()) {
         clears[0].color = {{desc.color[0].clear[0], desc.color[0].clear[1],
@@ -74,29 +72,29 @@ void CommandRecorder::BeginRenderPass(const RenderPassDesc& desc) {
     clears[1].depthStencil = {desc.depth.clear_depth, 0};
     rpi.clearValueCount = 2;
     rpi.pClearValues = clears;
-    vkCmdBeginRenderPass(impl_->gfx, &rpi, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBeginRenderPass(gfx_, &rpi, VK_SUBPASS_CONTENTS_INLINE);
 
     // Negative-height viewport flips NDC Y so the shared (Metal-convention)
     // projection renders upright on Vulkan, instead of an in-shader proj[1][1]*=-1.
     VkViewport viewport{};
     viewport.x = 0.0f;
-    viewport.y = static_cast<float>(impl_->sc->swapChainExtent.height);
-    viewport.width = static_cast<float>(impl_->sc->swapChainExtent.width);
-    viewport.height = -static_cast<float>(impl_->sc->swapChainExtent.height);
+    viewport.y = static_cast<float>(sc_->swapChainExtent.height);
+    viewport.width = static_cast<float>(sc_->swapChainExtent.width);
+    viewport.height = -static_cast<float>(sc_->swapChainExtent.height);
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(impl_->gfx, 0, 1, &viewport);
+    vkCmdSetViewport(gfx_, 0, 1, &viewport);
     VkRect2D scissor{};
     scissor.offset = {0, 0};
-    scissor.extent = impl_->sc->swapChainExtent;
-    vkCmdSetScissor(impl_->gfx, 0, 1, &scissor);
+    scissor.extent = sc_->swapChainExtent;
+    vkCmdSetScissor(gfx_, 0, 1, &scissor);
 }
 
 void CommandRecorder::DrawMeshes(const MeshDrawList& list) {
-    VkCommandBuffer cb = impl_->gfx;
-    VkDescriptorSet dyn_set = impl_->dyn_ubo_set;
+    VkCommandBuffer cb = gfx_;
+    VkDescriptorSet dyn_set = dyn_ubo_set_;
 
-    VkBuffer bump_buf = impl_->res->GetVkBumpMasterBuffer(Memory::kDynamic);
+    VkBuffer bump_buf = res_->GetVkBumpMasterBuffer(Memory::kDynamic);
     std::array<VkWriteDescriptorSet, 3> writes{};
     std::array<VkDescriptorBufferInfo, 3> buf_infos{};
     const uint32_t ranges[3] = {static_cast<uint32_t>(sizeof(RenderPassGlobals)),
@@ -114,11 +112,11 @@ void CommandRecorder::DrawMeshes(const MeshDrawList& list) {
         writes[i].descriptorCount = 1;
         writes[i].pBufferInfo = &buf_infos[i];
     }
-    vkUpdateDescriptorSets(impl_->device, 3, writes.data(), 0, nullptr);
+    vkUpdateDescriptorSets(device_, 3, writes.data(), 0, nullptr);
 
-    Shader::Hot* unlit = impl_->res->GetHot(list.pipeline);
+    Shader::Hot* unlit = res_->GetHot(list.pipeline);
     VkDescriptorSet bindless =
-        static_cast<VkDescriptorSet>(impl_->res->GetHot(list.bindless)->api_descriptor_set);
+        static_cast<VkDescriptorSet>(res_->GetHot(list.bindless)->api_descriptor_set);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_pipeline);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_layout, 0, 1,
                             &bindless, 0, nullptr);
@@ -127,12 +125,12 @@ void CommandRecorder::DrawMeshes(const MeshDrawList& list) {
         const cairns::Draw& draw = list.draws[list.sorted_indices[i]];
         uint32_t pos_off = 0;
         VkBuffer pos_buf =
-            impl_->res->GetVkBuffer(draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
+            res_->GetVkBuffer(draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
         VkDeviceSize pos_off_dev =
             pos_off + static_cast<VkDeviceSize>(draw.vertex_offset) * 16u;
         vkCmdBindVertexBuffers(cb, 0, 1, &pos_buf, &pos_off_dev);
         uint32_t idx_base = 0;
-        VkBuffer idx_buf = impl_->res->GetVkBuffer(draw.index_buffer, &idx_base);
+        VkBuffer idx_buf = res_->GetVkBuffer(draw.index_buffer, &idx_base);
         vkCmdBindIndexBuffer(cb, idx_buf, idx_base, VK_INDEX_TYPE_UINT32);
         const uint32_t first_index = (draw.index_offset - idx_base) / sizeof(uint32_t);
         std::array<uint32_t, 3> dyn_offsets = {list.globals_offset,
@@ -149,21 +147,21 @@ void CommandRecorder::DrawMeshes(const MeshDrawList& list) {
 }
 
 void CommandRecorder::DrawPoints(const PointDraw& pd) {
-    VkCommandBuffer cb = impl_->gfx;
-    Shader::Hot* p = impl_->res->GetHot(pd.pipeline);
+    VkCommandBuffer cb = gfx_;
+    Shader::Hot* p = res_->GetHot(pd.pipeline);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p->vk_pipeline);
     uint32_t ssbo_off = 0;
-    VkBuffer ssbo = impl_->res->GetVkBuffer(pd.vertex_buffer, &ssbo_off);
+    VkBuffer ssbo = res_->GetVkBuffer(pd.vertex_buffer, &ssbo_off);
     VkDeviceSize off = ssbo_off;
     vkCmdBindVertexBuffers(cb, 0, 1, &ssbo, &off);
-    VkDescriptorSet point_set = impl_->point_set;
+    VkDescriptorSet point_set = point_set_;
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p->vk_layout, 0, 1,
                             &point_set, 0, nullptr);
     vkCmdDraw(cb, pd.vertex_count, 1, 0, 0);
 }
 
 void CommandRecorder::EndRenderPass() {
-    vkCmdEndRenderPass(impl_->gfx);
+    vkCmdEndRenderPass(gfx_);
 }
 
 }  // namespace cairns::rhi

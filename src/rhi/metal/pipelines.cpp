@@ -24,11 +24,6 @@
 
 namespace cairns::rhi {
 
-struct Pipelines::Impl {
-    MTL::Device* device = nullptr;  // mirrored from Device
-    Resources* res = nullptr;       // borrowed; stores compiled Shader/Kernel
-};
-
 namespace {
 
 MTL::PixelFormat to_mtl_pixel_format(Format f) {
@@ -57,21 +52,20 @@ bool Pipelines::Init(Device& device, Resources& resources, Bindless& bindless,
                      Frames& frames) {
     (void)bindless;  // Metal pipelines don't reference bindless/frame layouts.
     (void)frames;
-    if (impl_) {
+    if (inited_) {
         return true;
     }
-    impl_ = new Impl();
-    impl_->device = device.device_;
-    impl_->res = &resources;
+    device_ = device.device_;
+    res_ = &resources;
+    inited_ = true;
     return true;
 }
 
 void Pipelines::Deinit() {
-    if (!impl_) {
+    if (!inited_) {
         return;
     }
-    delete impl_;
-    impl_ = nullptr;
+    inited_ = false;
 }
 
 namespace {
@@ -144,7 +138,7 @@ MetalShaderInfo resolve_metal_shader(const char* logical) {
 
 Handle<Shader> Pipelines::CreateGraphicsPipeline(
     const GraphicsPipelineDesc& desc) {
-    MTL::Device* device = impl_->device;
+    MTL::Device* device = device_;
     const MetalShaderInfo info = resolve_metal_shader(desc.logical_shader);
     const std::filesystem::path dir = desc.shader_dir ? desc.shader_dir : "";
     MTL::Library* lib = compile_metal_library(device, (dir / info.file).string());
@@ -213,15 +207,15 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
         return Handle<Shader>::Null;
     }
 
-    Handle<Shader> h = impl_->res->shaders.Acquire();
-    impl_->res->shaders.GetHot(h)->api_pso = pso;
-    impl_->res->shaders.GetCold(h)->debug_name = desc.debug_name;
+    Handle<Shader> h = res_->shaders.Acquire();
+    res_->shaders.GetHot(h)->api_pso = pso;
+    res_->shaders.GetCold(h)->debug_name = desc.debug_name;
     return h;
 }
 
 Handle<Kernel> Pipelines::CreateComputePipeline(
     const ComputePipelineDesc& desc) {
-    MTL::Device* device = impl_->device;
+    MTL::Device* device = device_;
     const MetalShaderInfo info = resolve_metal_shader(desc.logical_shader);
     const std::filesystem::path dir = desc.shader_dir ? desc.shader_dir : "";
     MTL::Library* lib = compile_metal_library(device, (dir / info.file).string());
@@ -242,9 +236,9 @@ Handle<Kernel> Pipelines::CreateComputePipeline(
         std::cerr << "rhi/metal: newComputePipelineState failed" << std::endl;
         return Handle<Kernel>::Null;
     }
-    Handle<Kernel> h = impl_->res->kernels.Acquire();
-    impl_->res->kernels.GetHot(h)->api_pso = cps;
-    impl_->res->kernels.GetCold(h)->debug_name = desc.debug_name;
+    Handle<Kernel> h = res_->kernels.Acquire();
+    res_->kernels.GetHot(h)->api_pso = cps;
+    res_->kernels.GetCold(h)->debug_name = desc.debug_name;
     return h;
 }
 }  // namespace cairns::rhi

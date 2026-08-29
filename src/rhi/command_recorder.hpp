@@ -10,8 +10,16 @@
 
 #include "rhi/resource_manager.hpp"
 #include "util/draw.hpp"
+#if CAIRNS_VULKAN
+#include <vulkan/vulkan.h>
+#elif CAIRNS_METAL
+#include <Metal/Metal.hpp>
+#endif
 
 namespace cairns::rhi {
+
+class Resources;
+struct SwapChain;
 
 enum class LoadOp : uint8_t { kClear, kLoad, kDontCare };
 enum class StoreOp : uint8_t { kStore, kDontCare };
@@ -82,10 +90,24 @@ public:
     void DrawPoints(const PointDraw& draw);
     void EndRenderPass();
 
-private:
-    friend class Frames;
-    struct Impl;
-    Impl* impl_ = nullptr;
+    // Per-frame recording state, populated by Frames::Begin.
+    Resources* res_ = nullptr;
+    SwapChain* sc_ = nullptr;
+#if CAIRNS_VULKAN
+    uint32_t frame_ = 0;
+    uint32_t image_index_ = 0;
+    VkCommandBuffer gfx_ = VK_NULL_HANDLE;
+    VkCommandBuffer comp_ = VK_NULL_HANDLE;
+    VkDevice device_ = VK_NULL_HANDLE;
+    VkDescriptorSet dyn_ubo_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet compute_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet point_set_ = VK_NULL_HANDLE;
+#elif CAIRNS_METAL
+    MTL::CommandBuffer* cmd_ = nullptr;
+    MTL::RenderCommandEncoder* enc_ = nullptr;
+    MTL::RenderPassDescriptor* render_pass_desc_ = nullptr;
+    MTL::DepthStencilState* depth_stencil_ = nullptr;
+#endif
 };
 
 struct FrameContext {

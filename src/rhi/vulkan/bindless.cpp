@@ -11,38 +11,36 @@
 #include "rhi/bindless.hpp"
 #include "rhi/device.hpp"
 #include "rhi/resources.hpp"
-#include "rhi/vulkan/internal/bindless_impl.hpp"
 
 namespace cairns::rhi {
 
 Bindless::~Bindless() { Deinit(); }
 
 bool Bindless::Init(Device& device, Resources& resources) {
-    if (impl_) {
+    if (inited_) {
         return true;
     }
-    impl_ = new Impl();
-    impl_->device = device.device_;
-    impl_->res = &resources;
+    device_ = device.device_;
+    res_ = &resources;
+    inited_ = true;
     return true;
 }
 
 void Bindless::Deinit() {
-    if (!impl_) {
+    if (!inited_) {
         return;
     }
-    if (impl_->bindless_pool) {
-        vkDestroyDescriptorPool(impl_->device, impl_->bindless_pool, nullptr);
+    if (bindless_pool_) {
+        vkDestroyDescriptorPool(device_, bindless_pool_, nullptr);
     }
-    if (impl_->bindless_layout) {
-        vkDestroyDescriptorSetLayout(impl_->device, impl_->bindless_layout, nullptr);
+    if (bindless_layout_) {
+        vkDestroyDescriptorSetLayout(device_, bindless_layout_, nullptr);
     }
-    delete impl_;
-    impl_ = nullptr;
+    inited_ = false;
 }
 
 Handle<BindGroup> Bindless::CreateRegistry(const BindlessRegistryDesc& desc) {
-    VkDevice device = impl_->device;
+    VkDevice device = device_;
 
     VkDescriptorBindingFlags binding_flags[3] = {
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
@@ -75,7 +73,7 @@ Handle<BindGroup> Bindless::CreateRegistry(const BindlessRegistryDesc& desc) {
     layout_info.pBindings = bindings;
     layout_info.pNext = &flags_info;
     if (vkCreateDescriptorSetLayout(device, &layout_info, nullptr,
-                                    &impl_->bindless_layout) != VK_SUCCESS) {
+                                    &bindless_layout_) != VK_SUCCESS) {
         return Handle<BindGroup>::Null;
     }
 
@@ -94,99 +92,99 @@ Handle<BindGroup> Bindless::CreateRegistry(const BindlessRegistryDesc& desc) {
     pool_info.poolSizeCount = 3;
     pool_info.pPoolSizes = pool_sizes;
     if (vkCreateDescriptorPool(device, &pool_info, nullptr,
-                               &impl_->bindless_pool) != VK_SUCCESS) {
+                               &bindless_pool_) != VK_SUCCESS) {
         return Handle<BindGroup>::Null;
     }
 
     VkDescriptorSetAllocateInfo alloc_info{};
     alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    alloc_info.descriptorPool = impl_->bindless_pool;
+    alloc_info.descriptorPool = bindless_pool_;
     alloc_info.descriptorSetCount = 1;
-    alloc_info.pSetLayouts = &impl_->bindless_layout;
+    alloc_info.pSetLayouts = &bindless_layout_;
     if (vkAllocateDescriptorSets(device, &alloc_info,
-                                 &impl_->bindless_set) != VK_SUCCESS) {
+                                 &bindless_set_) != VK_SUCCESS) {
         return Handle<BindGroup>::Null;
     }
 
-    impl_->bindless_tex_binding = desc.texture_slot;
-    impl_->bindless_attr_binding = desc.attr_buffer_slot;
-    impl_->bindless_samp_binding = desc.sampler_slot;
-    impl_->bindless_tex_infos.clear();
-    impl_->bindless_attr_infos.clear();
-    impl_->bindless_sampler_infos.clear();
+    bindless_tex_binding_ = desc.texture_slot;
+    bindless_attr_binding_ = desc.attr_buffer_slot;
+    bindless_samp_binding_ = desc.sampler_slot;
+    bindless_tex_infos_.clear();
+    bindless_attr_infos_.clear();
+    bindless_sampler_infos_.clear();
 
-    Handle<BindGroup> h = impl_->res->bind_groups.Acquire();
-    impl_->res->bind_groups.GetHot(h)->api_descriptor_set = impl_->bindless_set;
-    impl_->res->bind_groups.GetCold(h)->debug_name = desc.debug_name;
-    impl_->bindless_handle = h;
+    Handle<BindGroup> h = res_->bind_groups.Acquire();
+    res_->bind_groups.GetHot(h)->api_descriptor_set = bindless_set_;
+    res_->bind_groups.GetCold(h)->debug_name = desc.debug_name;
+    bindless_handle_ = h;
     return h;
 }
 
 uint32_t Bindless::AddTexture(Handle<BindGroup>, Handle<Texture> tex) {
-    Texture::Hot* hot = impl_->res->textures.GetHot(tex);
+    Texture::Hot* hot = res_->textures.GetHot(tex);
     VkDescriptorImageInfo img{};
     img.imageView = static_cast<VkImageView>(hot->api_view);
     img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    impl_->bindless_tex_infos.push_back(img);
-    return static_cast<uint32_t>(impl_->bindless_tex_infos.size()) - 1;
+    bindless_tex_infos_.push_back(img);
+    return static_cast<uint32_t>(bindless_tex_infos_.size()) - 1;
 }
 
 uint32_t Bindless::AddAttrBuffer(Handle<BindGroup>, Handle<Buffer> buf) {
     uint32_t off = 0;
-    VkBuffer vk = impl_->res->GetVkBuffer(buf, &off);
+    VkBuffer vk = res_->GetVkBuffer(buf, &off);
     VkDescriptorBufferInfo info{};
     info.buffer = vk;
     info.offset = off;
-    info.range = impl_->res->GetBufferByteSize(buf);
-    impl_->bindless_attr_infos.push_back(info);
-    return static_cast<uint32_t>(impl_->bindless_attr_infos.size()) - 1;
+    info.range = res_->GetBufferByteSize(buf);
+    bindless_attr_infos_.push_back(info);
+    return static_cast<uint32_t>(bindless_attr_infos_.size()) - 1;
 }
 
 uint32_t Bindless::AddSampler(Handle<BindGroup>, Handle<Sampler> samp) {
-    Sampler::Hot* hot = impl_->res->samplers.GetHot(samp);
+    Sampler::Hot* hot = res_->samplers.GetHot(samp);
     VkDescriptorImageInfo info{};
     info.sampler = static_cast<VkSampler>(hot->api_sampler);
-    impl_->bindless_sampler_infos.push_back(info);
-    return static_cast<uint32_t>(impl_->bindless_sampler_infos.size()) - 1;
+    bindless_sampler_infos_.push_back(info);
+    return static_cast<uint32_t>(bindless_sampler_infos_.size()) - 1;
 }
 
 void Bindless::Finalize(Handle<BindGroup>) {
     std::vector<VkWriteDescriptorSet> writes;
-    if (!impl_->bindless_tex_infos.empty()) {
+    if (!bindless_tex_infos_.empty()) {
         VkWriteDescriptorSet w{};
         w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w.dstSet = impl_->bindless_set;
-        w.dstBinding = impl_->bindless_tex_binding;
+        w.dstSet = bindless_set_;
+        w.dstBinding = bindless_tex_binding_;
         w.dstArrayElement = 0;
         w.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        w.descriptorCount = static_cast<uint32_t>(impl_->bindless_tex_infos.size());
-        w.pImageInfo = impl_->bindless_tex_infos.data();
+        w.descriptorCount = static_cast<uint32_t>(bindless_tex_infos_.size());
+        w.pImageInfo = bindless_tex_infos_.data();
         writes.push_back(w);
     }
-    if (!impl_->bindless_attr_infos.empty()) {
+    if (!bindless_attr_infos_.empty()) {
         VkWriteDescriptorSet w{};
         w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w.dstSet = impl_->bindless_set;
-        w.dstBinding = impl_->bindless_attr_binding;
+        w.dstSet = bindless_set_;
+        w.dstBinding = bindless_attr_binding_;
         w.dstArrayElement = 0;
         w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        w.descriptorCount = static_cast<uint32_t>(impl_->bindless_attr_infos.size());
-        w.pBufferInfo = impl_->bindless_attr_infos.data();
+        w.descriptorCount = static_cast<uint32_t>(bindless_attr_infos_.size());
+        w.pBufferInfo = bindless_attr_infos_.data();
         writes.push_back(w);
     }
-    if (!impl_->bindless_sampler_infos.empty()) {
+    if (!bindless_sampler_infos_.empty()) {
         VkWriteDescriptorSet w{};
         w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w.dstSet = impl_->bindless_set;
-        w.dstBinding = impl_->bindless_samp_binding;
+        w.dstSet = bindless_set_;
+        w.dstBinding = bindless_samp_binding_;
         w.dstArrayElement = 0;
         w.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-        w.descriptorCount = static_cast<uint32_t>(impl_->bindless_sampler_infos.size());
-        w.pImageInfo = impl_->bindless_sampler_infos.data();
+        w.descriptorCount = static_cast<uint32_t>(bindless_sampler_infos_.size());
+        w.pImageInfo = bindless_sampler_infos_.data();
         writes.push_back(w);
     }
     if (!writes.empty()) {
-        vkUpdateDescriptorSets(impl_->device,
+        vkUpdateDescriptorSets(device_,
                                static_cast<uint32_t>(writes.size()), writes.data(),
                                0, nullptr);
     }

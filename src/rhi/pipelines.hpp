@@ -33,8 +33,16 @@ public:
     Handle<Kernel> CreateComputePipeline(const ComputePipelineDesc& desc);
 
 private:
-    struct Impl;
-    Impl* impl_ = nullptr;
+    // Internal state — self-only (nothing reaches into Pipelines).
+#if CAIRNS_VULKAN
+    VkDevice device_ = VK_NULL_HANDLE;  // mirrored from Device
+    Bindless* bindless_ = nullptr;      // borrowed; graphics layout reads its set layout
+    Frames* frames_ = nullptr;          // borrowed; pipeline reads its set layouts
+#elif CAIRNS_METAL
+    MTL::Device* device_ = nullptr;     // mirrored from Device
+#endif
+    Resources* res_ = nullptr;          // borrowed; stores compiled Shader/Kernel
+    bool inited_ = false;
 };
 
 }  // namespace cairns::rhi
