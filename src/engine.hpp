@@ -103,19 +103,6 @@ struct EngineConfig {
     // CAIRNS_GLB: comma-separated list of glb names / paths. Empty =>
     // engine default (kDebugGlbs window).
     std::vector<std::string> glb_overrides;
-
-    // CAIRNS_N: total entity count override. 0 = engine default.
-    int entity_count = 0;
-
-    // CAIRNS_SCALE: per-entity scale override. 0 = engine default.
-    float entity_scale = 0.0f;
-
-    // CAIRNS_HERO_SLICES: how many entity instances to spawn per loaded
-    // GLB when entity_count is not explicitly set. 0 falls back to the
-    // engine default (1: one hero per GLB).
-    int hero_slices = 0;
-
-    uint32_t skin_probe_mode = 0;
 };
 
 class Engine {
@@ -910,49 +897,23 @@ public:
                     }
                 }
             } else {
-                // CAIRNS_N caps the GLB load count too (matches the entity
-                // count cap below): N entities should mean N GLBs loaded,
-                // not 100 GLBs and N entities. Clamped to the static
-                // kDebugGlbs window.
-                const size_t want = engine_cfg_.entity_count > 0
-                    ? std::min<size_t>(
-                          static_cast<size_t>(engine_cfg_.entity_count),
-                          cairns::kDebugGlbsToParse)
-                    : cairns::kDebugGlbsToParse;
+                // #269: env-driven entity count retired. All GLBs in the
+                // kDebugGlbs static window load; entities spawn via the
+                // cairns.world.spawnHero NDJSON op post-init.
                 for (size_t glb_idx = cairns::kDebugGlbsToParseStart;
-                     glb_idx < cairns::kDebugGlbsToParseStart + want;
+                     glb_idx < cairns::kDebugGlbsToParseStart +
+                                   cairns::kDebugGlbsToParse;
                      ++glb_idx) {
                     std::filesystem::path filepath;
                     if (!cairns::GetStaticResourceFilepath(cairns::kDebugGlbs[glb_idx],
                                                            filepath)) {
-                        fprintf(stderr, "file missing %s\n", cairns::kDebugGlbs[glb_idx]);
+                        CAIRNS_PRINT_ERR("file missing %s\n",
+                                          cairns::kDebugGlbs[glb_idx]);
                         continue;
                     }
                     glb_paths.push_back(filepath);
                 }
             }
-
-            // CAIRNS_HERO_SLICES picks the per-GLB instance fan-out for
-            // the default-count path. Default is 1 (one entity per loaded
-            // GLB) so "load N GLBs" matches "see N heroes" without
-            // surprise multiplication.
-            const int hero_slices =
-                engine_cfg_.hero_slices > 0 ? engine_cfg_.hero_slices : 1;
-            const int loaded_heroes = static_cast<int>(glb_paths.size());
-            const int instance_count = engine_cfg_.entity_count > 0
-                                            ? engine_cfg_.entity_count
-                                            : loaded_heroes * hero_slices;
-            const int grid_n = std::max(
-                1, static_cast<int>(std::ceil(std::sqrt(
-                       static_cast<float>(instance_count)))));
-            const float spacing = 4.0f / static_cast<float>(grid_n);
-            const float scale = engine_cfg_.entity_scale > 0.0f
-                                    ? engine_cfg_.entity_scale
-                                    : 0.013f / static_cast<float>(grid_n);
-            const float start = -spacing * static_cast<float>(grid_n - 1) * 0.5f;
-            debugSceneXforms_ = cairns::GenerateDebugGridTransforms(
-                glm::vec3(start, start, -3), grid_n, spacing, spacing, 1.0f, scale,
-                instance_count);
 
             for (const std::filesystem::path& filepath : glb_paths) {
                 // #220 Step 3: Acquire SceneId, write Hot+Cold via pool.
@@ -1117,82 +1078,33 @@ public:
                         pos_handle, attr_handle, idx_handle));
             }
 
+            // #269: entity creation moved off engine init. Worlds are
+            // empty after Acquire; spawn entities via the
+            // cairns.world.spawnHero NDJSON op (cairns_serve) or any
+            // in-process caller of Engine::SpawnHero.
             active_world_ = worlds_.Acquire();
-            cairns::World::Hot* wh = worlds_.GetHot(active_world_);
-            cairns::World::Cold* wc = worlds_.GetCold(active_world_);
-            if (wh && wc) {
-                // Reused-slot trap: fresh re-init in case this slot was
-                // recycled. unique_ptr<registry> + dirty get reset.
-                *wc = cairns::World::Cold{};
-                wh->proxy_slot = 0;
-                wh->dirty = true;
-
-                auto& reg = wc->registry;
-                for (size_t i = 0; i < debugSceneXforms_.size(); ++i) {
-                    const uint32_t scene_idx =
-                        static_cast<uint32_t>(i % scene_ids_.size());
-                    const entt::entity e = reg.create();
-                    cairns::WorldTransform wt;
-                    wt.world = debugSceneXforms_[i];
-                    reg.emplace<cairns::WorldTransform>(e, wt);
-                    cairns::AssetRef ar;
-                    ar.asset = per_scene_asset_[scene_idx];
-                    reg.emplace<cairns::AssetRef>(e, ar);
-                    cairns::Renderable rdr;
-                    rdr.layer_mask = 0xFFFFFFFFu;
-                    rdr.flags = cairns::kProxyVisible;
-                    reg.emplace<cairns::Renderable>(e, rdr);
-                    // #221 Phase 9: opportunistic SkinRef attach. Picks
-                    // the walking clip + first skinned mesh; stamps a
-                    // per-actor time phase so the 9 demo entities animate
-                    // out of sync (so the scene reads as alive).
-                    const float time_phase =
-                        static_cast<float>(i) * 0.137f;
-                    cairns::SkinId sid =
-                        TryCreateSkinForScene(scene_ids_[scene_idx],
-                                               time_phase);
-                    if (!sid.IsNull()) {
-                        reg.emplace<cairns::SkinRef>(e, cairns::SkinRef{sid});
-                    }
+            if (cairns::World::Hot* wh = worlds_.GetHot(active_world_)) {
+                if (cairns::World::Cold* wc =
+                        worlds_.GetCold(active_world_)) {
+                    *wc = cairns::World::Cold{};
+                    wh->proxy_slot = 0;
+                    wh->dirty = true;
                 }
             }
-            world_proxies_.resize(1);  // active_world_ uses slot 0
+            world_proxies_.resize(1);
 
-            // P6: open a SECOND world to flush single-world assumptions
-            // in the type system + pool plumbing. Populated with half
-            // the debug-grid for visible distinctness if anyone wires a
-            // second view to it. NOT rendered yet -- the active path
-            // still draws only active_world_. P6's isolation gate is
-            // satisfied by "world 0 pixels unchanged when world 1
-            // exists." Full side-by-side rendering (per-view targets +
-            // tiled composite + composite_pip variant) is the next
-            // commit on top of this seam.
+            // P6 multi-world coexistence: secondary slot is acquired but
+            // left empty. Pre-#269 it received half of the debug-grid.
             secondary_world_ = worlds_.Acquire();
-            if (auto* wh2 = worlds_.GetHot(secondary_world_)) {
-                if (auto* wc2 = worlds_.GetCold(secondary_world_)) {
+            if (cairns::World::Hot* wh2 = worlds_.GetHot(secondary_world_)) {
+                if (cairns::World::Cold* wc2 =
+                        worlds_.GetCold(secondary_world_)) {
                     *wc2 = cairns::World::Cold{};
                     wh2->proxy_slot = 1;
                     wh2->dirty = true;
-                    auto& reg2 = wc2->registry;
-                    const size_t half = debugSceneXforms_.size() / 2;
-                    for (size_t i = 0; i < half; ++i) {
-                        const uint32_t scene_idx = static_cast<uint32_t>(
-                            i % scene_ids_.size());
-                        const entt::entity e = reg2.create();
-                        cairns::WorldTransform wt;
-                        wt.world = debugSceneXforms_[i];
-                        reg2.emplace<cairns::WorldTransform>(e, wt);
-                        cairns::AssetRef ar;
-                        ar.asset = per_scene_asset_[scene_idx];
-                        reg2.emplace<cairns::AssetRef>(e, ar);
-                        cairns::Renderable rdr;
-                        rdr.layer_mask = 0xFFFFFFFFu;
-                        rdr.flags = cairns::kProxyVisible;
-                        reg2.emplace<cairns::Renderable>(e, rdr);
-                    }
                 }
             }
-            world_proxies_.resize(2);  // secondary_world_ uses slot 1
+            world_proxies_.resize(2);
         }
         // Surfaceless mode: allocate the offscreen final_target_ and CONTINUE
         // through normal init. The engine -- not the RHI -- is the one that
@@ -2412,7 +2324,7 @@ public:
                         params.instance_count = sbg.instance_count;
                         params.vertex_count = sbg.vertex_count;
                         params.joint_count = sbg.joint_count;
-                        params.mode = engine_cfg_.skin_probe_mode;
+                        params.mode = 0u;
                         uint32_t params_off = 0;
                         void* params_ptr = rhi_.alloc.BumpAllocate(
                             sizeof(SkinParamsCpu), ubo_align,
@@ -3794,8 +3706,6 @@ private:
     // until the gltf_loader API takes a buffer-handle out-param.
     rhi::Handle<rhi::Buffer> shared_skin_attrs_buf_ = rhi::Handle<rhi::Buffer>::Null;
     std::vector<int32_t> root_nodes_stack_cache_;
-
-    std::vector<glm::mat4> debugSceneXforms_;
 
     // #220 Step 1: handle-pilled pool. Bind group lives on Hot;
     // texture+sampler on Cold. Stale-slot reads fail at GetHot/GetCold

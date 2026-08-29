@@ -19,7 +19,11 @@ cd "$(dirname "$0")/.."
 
 drive=tmp/_headless_drive.ndjson
 mkdir -p tmp
+# #269: entity spawn moved off engine init to NDJSON. One script.eval
+# loops 9 spawnHero calls in a 3x3 grid (scale 0.013/3, spacing 4/3,
+# start -4/3) matching the pre-#269 default workload shape.
 {
+  echo '{"op":"cairns.script.eval","args":{"code":"for(let i=0;i<9;i++){let r=i/3|0,c=i%3;cairns.dispatch(\"cairns.world.spawnHero\",{scene_idx:i,x:-1.3333333+1.3333333*c,y:-1.3333333+1.3333333*r,z:-3,scale:0.00433333,time_phase:i*0.137})}"}}'
   for i in $(seq 1 60); do echo '{"op":"cairns.render.frame"}'; done
   echo '{"op":"cairns.io.dumpTexture","args":{"name":"final","path":"tmp/_headless_dump.png"}}'
   echo '{"op":"cairns.quit"}'
@@ -40,7 +44,7 @@ run_backend() {
   # CAIRNS_DUMP set -> FixedClock so render.frame ticks advance deterministically.
   # The CAIRNS_DUMP path is a sink we discard; the byte-gate runs against the
   # explicit cairns.io.dumpTexture output instead.
-  CAIRNS_N=9 CAIRNS_DUMP=tmp/_headless_unused.png "$serve" < "$drive" > /dev/null 2>&1 || true
+  CAIRNS_DUMP=tmp/_headless_unused.png "$serve" < "$drive" > /dev/null 2>&1 || true
   if [ ! -f tmp/_headless_dump.png ]; then
     echo "$bk: HEADLESS: no dump produced" >&2
     return 1
