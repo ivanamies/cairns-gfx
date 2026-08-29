@@ -219,6 +219,35 @@ private:
     uint32_t cap_ = 0;
 };
 
+// #229 M0b: a POINTER-FREE block-relative array -- {byte offset, count} into a
+// BumpArena. Unlike ArenaList (which stores a raw T*), ArenaSlice stores an
+// OFFSET, so a struct embedding it is raw-hashable (the pointer quarantine).
+// Resolve transiently via the backing arena; never store the pointer. Count is
+// known up-front (the glTF loader pre-passes), so Alloc-then-fill.
+template <typename T>
+struct ArenaSlice {
+    uint32_t offset = kInvalidOffset;  // byte offset into the BumpArena slab
+    uint32_t count = 0;
+
+    uint32_t size() const { return count; }
+    bool empty() const { return count == 0; }
+    bool IsNull() const { return offset == kInvalidOffset; }
+
+    T* data(BumpArena& a) const { return a.ResolveAs<T>(offset); }
+    T& operator()(BumpArena& a, uint32_t i) const { return data(a)[i]; }
+
+    // Allocate `n` elements from `a`; returns the slice (fill via data(a)[i]).
+    static ArenaSlice Alloc(BumpArena& a, uint32_t n) {
+        ArenaSlice s;
+        if (n > 0) {
+            s.offset = a.AllocateOffset(static_cast<size_t>(n) * sizeof(T),
+                                        alignof(T));
+            s.count = (s.offset == kInvalidOffset) ? 0 : n;
+        }
+        return s;
+    }
+};
+
 // STL-compatible adapter so existing std::vector<T, cairns::Allocator<T>> sites
 // can ride a BumpArena. STL mandates a pointer interface, so this is the one
 // sanctioned pointer-returning path -- it is contained: the vector is the owner,

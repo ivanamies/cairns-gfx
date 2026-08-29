@@ -192,13 +192,17 @@ struct Mesh {
         std::string name;
         // CPU load-time temporaries. Cleared post-upload by
         // Engine's mesh-pool sweep (was scene.CleanupTmps's job).
-        std::vector<glm::vec4> cpuPositions;
-        std::vector<VertexAttribute> cpuAttrs;
-        std::vector<uint32_t> cpuIndices;
+        // #229 P3: load-scratch temporaries are block-backed (cpu_block_,
+        // kRegionPersistent until kRegionLoadScratch lands) so they fall under
+        // the 1 GB cap + the per-frame hash. Re-seated onto the block in
+        // LoadMeshFromGltf (null-arena default ctor = malloc until then).
+        std::vector<glm::vec4, cairns::ChunkStdAllocator<glm::vec4>> cpuPositions;
+        std::vector<VertexAttribute, cairns::ChunkStdAllocator<VertexAttribute>> cpuAttrs;
+        std::vector<uint32_t, cairns::ChunkStdAllocator<uint32_t>> cpuIndices;
         // #221 Skinning Phase 1: per-vertex joint indices + weights aligned
         // with cpuPositions/cpuAttrs (size() == cpuPositions.size() when
         // mesh is skinned; empty when not).
-        std::vector<SkinVertex> cpuSkinAttrs;
+        std::vector<SkinVertex, cairns::ChunkStdAllocator<SkinVertex>> cpuSkinAttrs;
     };
 };
 
@@ -371,12 +375,19 @@ using PrefabId = cairns::Handle<Prefab>;
 // the pool slot and handing in fresh refs to its Hot/Cold cells.
 inline bool LoadMeshFromGltf(const fastgltf::Asset& asset,
                              const fastgltf::Mesh& gltfMesh,
-                             Mesh::Hot& outHot, Mesh::Cold& outCold) {
+                             Mesh::Hot& outHot, Mesh::Cold& outCold,
+                             cairns::ChunkAllocator& block) {
     outCold.name = std::string(gltfMesh.name);
-    outCold.cpuPositions.clear();
-    outCold.cpuAttrs.clear();
-    outCold.cpuIndices.clear();
-    outCold.cpuSkinAttrs.clear();
+    // #229 P3: re-seat the load-scratch temporaries onto cpu_block_ (POCMA
+    // move-assign adopts the block; also empties them, replacing the clears).
+    outCold.cpuPositions = decltype(outCold.cpuPositions)(
+        cairns::ChunkStdAllocator<glm::vec4>(block));
+    outCold.cpuAttrs = decltype(outCold.cpuAttrs)(
+        cairns::ChunkStdAllocator<VertexAttribute>(block));
+    outCold.cpuIndices = decltype(outCold.cpuIndices)(
+        cairns::ChunkStdAllocator<uint32_t>(block));
+    outCold.cpuSkinAttrs = decltype(outCold.cpuSkinAttrs)(
+        cairns::ChunkStdAllocator<SkinVertex>(block));
 
     // #221 Skinning Phase 1: mesh is "skinned" if ANY primitive carries
     // JOINTS_0 (per glTF spec, JOINTS_0 + WEIGHTS_0 travel together).
@@ -523,7 +534,8 @@ inline bool LoadMeshFromGltf(const fastgltf::Asset& asset,
 // land in the engine's Mesh pool via the threaded reference.
 inline bool LoadPrefabFromGltf(const std::filesystem::path& path,
                                Prefab::Hot& hot, Prefab::Cold& cold,
-                               cairns::ResourceManager<Mesh>& meshes_pool) {
+                               cairns::ResourceManager<Mesh>& meshes_pool,
+                               cairns::ChunkAllocator& block) {
     size_t byte_count = 0;
     void* file_data = SDL_LoadFile(path.string().c_str(), &byte_count);
     if (!file_data) return false;
@@ -645,7 +657,7 @@ inline bool LoadPrefabFromGltf(const std::filesystem::path& path,
         cairns::Handle<Mesh> mid = meshes_pool.Acquire();
         Mesh::Hot* mhot = meshes_pool.GetHot(mid);
         Mesh::Cold* mcold = meshes_pool.GetCold(mid);
-        LoadMeshFromGltf(asset, asset.meshes[i], *mhot, *mcold);
+        LoadMeshFromGltf(asset, asset.meshes[i], *mhot, *mcold, block);
         hot.meshes.push_back(mid);
     }
     

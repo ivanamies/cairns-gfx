@@ -433,7 +433,7 @@ public:
             cairns::Prefab::Hot* shot = prefabs_.GetHot(sid);
             cairns::Prefab::Cold* scold = prefabs_.GetCold(sid);
             if (!shot || !scold ||
-                !cairns::LoadPrefabFromGltf(p, *shot, *scold, meshes_)) {
+                !cairns::LoadPrefabFromGltf(p, *shot, *scold, meshes_, cpu_block_)) {
                 CAIRNS_PRINT_ERR("[LoadPrefabBatch] parse failed: %s\n",
                                   p.string().c_str());
                 prefabs_.Release(sid);

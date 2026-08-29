@@ -286,3 +286,167 @@ needs (a) a SAX tokenizer to skip the request-tree `json::parse` (~3-5/command)
 steady residual is **not** NDJSON: it's the surfaceless per-frame render/extract
 path (a separate concern; the real windowed app renders via `draw()`, never
 parsing NDJSON per frame). M6 took the safe, contained copy-elimination.
+
+---
+
+# Compaction plan (2026-06-21) — "all CPU state in one block + determinism hash"
+
+**Branch** `ia/26-06/gfx/compact-cpu-state-one-block`. Phases P0..P7 of
+`~/dev/plans/2026-06-21_gfx_compact-cpu-state-one-block.md`.
+
+**THERMAL CAVEAT (read this):** this is an M-series laptop under *sustained*
+load (continuous builds + golden runs keep the GPU hot). Absolute frame/GPU
+times swing **2.5–3×** with thermal state — the cold first-boot baseline (frame
+2242µs) is the coolest reading; warm steady-state is ~5000–7000µs. So **absolute
+numbers across phases are NOT comparable** unless measured back-to-back on the
+same thermal state. The durable signals are: (a) the per-pass *breakdown* shape,
+(b) `cpu_block_` live bytes per region, (c) golden green. Behavior-neutral phases
+(P0/P0b/P0c) have perf parity *by construction*.
+
+Harness: `scripts/_receipts.sh build/spec-mac-metal/Release/cairns_serve perf`
+(500 actors, 120-frame `[Timer]`).
+
+## P0 — wire `cpu_block_` ChunkAllocator (no behavior change)
+
+`Engine::cpu_block_` + `InitReserved(MemoryBudget::cpu_persistent_bytes)` (1 GB,
+fail-loud) + 4 region tags. Nothing carved from it yet. **Golden: metal 97/97;
+vk 44/45** (the 1 = known intermittent vk subject flake). Perf parity by
+construction.
+
+| reading | frame | build_draws | record | skinning_compute | forward_vp0(GPU) | swap(GPU) |
+|---|---|---|---|---|---|---|
+| cold baseline (pre-P0) | 2242 | 105 | 177 | 1385 | 310 | 53 |
+| P0 (warm/throttled) | 6231 | 468 | 505 | 3735 | 1237 | 28 |
+
+The P0 row is the same code path under thermal load, not a regression — see
+caveat. `cpu_block_` live bytes: 0 (nothing carved yet).
+
+## P0b — purge `<iostream>` (kill the static-init alloc)
+
+8 TUs dropped `#include <iostream>` (the only header that triggers
+`std::ios_base::Init` → cout/cin/cerr + locale alloc *before main*). `std::cerr`
+logs → `std::fprintf(stderr,…)`; the NDJSON stdin/stdout transport
+(`StdioTransport`, `AgentStdinDrain`) converted from `std::istream`/`std::getline`
+to C-stdio `FILE*` (new `control/stdio_lines.hpp` ReadLine/WriteLine). `src/` now
+has **0** `#include <iostream>`. **Golden: metal three_champ-flake-only (run 2
+fully clean); serve C-stdio transport verified responding `{"ok":true}`.**
+Behavior-neutral. frame ~5144µs (warm, = P0 thermal band — not a regression).
+
+| reading | frame | build_draws | skinning_compute | forward_vp0(GPU) |
+|---|---|---|---|---|
+| P0b (warm) | 5144 | 536 | 2911 | 964 |
+
+## P0c — process-globals → Engine-owned
+
+Ripped the 3 process-global `std::atomic<uint64_t>` ID counters: `g_asset_counter`
++ `g_entity_counter` were **unused** (deleted); `g_scene_counter` →
+`Engine::NextSceneId()` (per-instance, via `headless::NextSceneId`). Kills the
+two-Engine ID-sharing that would false-diverge the run-to-run hash. `Math.random`/
+`Date` aren't used by any script → hygiene is a no-op. **JsState static DEFERRED:**
+coupled to the `CommandRegistry::Instance()` singleton (a separate excision); the
+JS path resets its context per registration (`ResetJsContext` → pristine globals,
+stateless-between-dispatches *by design*) and the QuickJS heap lives outside
+`cpu_block_` / the hash, so determinism isn't blocked by it. **Golden green ×2;
+serve `scene.create` → per-Engine 0,1.** Behavior-neutral. frame ~6623µs (warm).
+
+## P1 — frame region from the block + kill vestigial vectors
+
+`PerSlot::arena` slab now carved from `cpu_block_` (`kRegionFrame`, 16 MB ×
+`kFramesInFlight=2` = **32 MB live in the block**) instead of a per-slot
+`std::vector<uint8_t> arena_storage` (deleted). The arena's `[0,Used)` (drawList,
+sorted, matrices, proxies) is now in the hashable block. Deleted the **six
+vestigial `ProxyArray<T>` std::vector slots** (lines/points/skins/lights/cameras/
+layers) + the `ProxyArray<T>` wrapper from `RenderProxyArrays` — never produced,
+escaped the hash. **Golden: metal 10/10 ×2; vk subject 1-flake; serve boot 60
+frames OK.** (16 MB > 4 MB chunk → block routes the slab to its own malloc;
+oversize-into-reservation is a follow-on. frame ~6729µs warm.)
+
+| reading | frame | build_draws | skinning_compute | forward_vp0(GPU) | cpu_block live |
+|---|---|---|---|---|---|
+| P1 (warm) | 6729 | 676 | 3937 | 1285 | ~32 MB (frame slabs) |
+
+## P2 — ResourceManager pools → cpu_block_
+
+`ChunkStdAllocator` gained a **null-arena default ctor (malloc fallback)** +
+`propagate_on_container_move_assignment=true` — so `ResourceManager` retyped to
+block-backed vectors is **behavior-identical** until Reserved (all pools,
+including the RHI ones, keep malloc). `ResourceManager::Reserve(block,cap)` fixes
+capacity (Acquire never grows → `Cold*` stable + span-hashable, no garbage tail);
+Acquire fail-loud at cap (debug). **Reserved prefabs(600)/meshes(8192)/materials
+(8192)/skins(4096)/scenes(8) onto the block** (replaced the scenes Acquire/Release
+pre-grow loop). `viewports_` stays malloc (acquired in InitInitialViewport, before
+the block exists in GreaterInit). **Validation: builds green; golden 10/10 ×2;
+serve boot loaded the full 500-actor / 100-prefab / 500-mesh / 1700-prim workload
+from the block, no abort/OOM.** frame ~7433µs (warm — thermal creep, not a
+regression; pools-in-block is alloc-source-only).
+
+| reading | frame | build_draws | skinning_compute | forward_vp0(GPU) | pools |
+|---|---|---|---|---|---|
+| P2 (warm) | 7433 | 618 | 4490 | 1461 | 5/6 in block (viewports malloc) |
+
+## P7 (MVP) — per-frame SIM determinism hash → **the three_champ verdict**
+
+`util/fnv1a.hpp` (streaming FNV-1a 64). In golden mode, before `Submit`, hash the
+**frame arena `[0,Used)`** (drawList/sorted/matrices/entity_ids/proxies — all POD,
+now in the block) + the sim drivers (`render_angle_deg_`/`accumulator_`/
+`sim_frame_`) and print `[STATEHASH] frame=N sim=<hex>`. Also restored the
+**frame-slab zero-fill** (dropped in P1 — without it the arena's alignment padding
+was fresh-malloc garbage that diverged run-to-run).
+
+**RESULT — three_champ static, 16 runs:** the SIM-hash *sequence* is **byte-
+identical every run (1 distinct digest)**. → The per-frame CPU sim input is
+**provably deterministic**; when three_champ flakes it is **NOT** the CPU sim
+varying — it is render-encode / GPU-execution side. This resolves the key unknown
+from the original flake hunt (which had only black-box pixel sampling).
+
+Side note: the pixel flake (≈20% earlier this session) did **not** reproduce in 12
+back-to-back runs here — either thermal/timing-sensitive (machine now hot) or the
+restored slab zero-fill masked an uninitialized-read. Worth a cold-machine re-check
++ the RENDER-side (kDynamic) hash to nail it.
+
+---
+
+## P3 (partial) — Mesh::Cold cpu* temporaries → block (2026-06-21)
+
+`Mesh::Cold::{cpuPositions,cpuAttrs,cpuIndices,cpuSkinAttrs}` retyped to
+`std::vector<T, ChunkStdAllocator<T>>`, re-seated onto `cpu_block_` in
+`LoadMeshFromGltf` (block threaded through `LoadPrefabFromGltf`). Behavior-neutral
+— only the allocator type changes; every `reserve`/`push_back`/`clear`/`empty`
+site untouched (POCMA move-assign adopts the block, replacing the `.clear()` head).
+Mesh load-temporaries now fall under the 1 GB cap + are hash-reachable. `ArenaSlice<T>`
+DS landed in `cpu_arena.hpp` (pure-POD `{offset,count}`) — staged for the later
+raw-span pass; loader took the behavior-neutral `ChunkStdAllocator` route.
+
+**Perf — metal, 500 actors (100 GLB × 5), 120 frames (warm, thermally-dominated):**
+
+| slot | avg µs |
+|---|---|
+| frame | 5246 |
+| build_draws | 718 |
+| record | 536 |
+| skinning_compute | 2854 |
+| particle_sim | 51 |
+| forward_vp0 | 952 |
+| swap | 21 |
+| skin_eval | 33 |
+
+In-band with prior phases (frame 5–7 ms warm, this throttling laptop). No alloc
+regression; 500-actor boot loads clean from the block, no exhaustion.
+
+---
+
+## STATUS @ autonomous run (2026-06-21, cont.)
+
+**Committed, green, tested:** P0 · P0b · P0c · P1 · P2 · P4 (loose POD engine
+vectors → block) · P6 (entt → `ChunkStdAllocator`) · P7-MVP (SIM determinism hash
+→ verdict above) · **P3-partial** (Mesh::Cold cpu* → block, above). Golden 10/10
+metal every phase; VK green except the **pre-existing** imgui-overlay font-atlas
+flake (verified: fails without P3 too); 500-actor serve boot loads from the block.
+
+**Remaining:**
+- **P3 (rest)** Prefab::Cold/Hot tables + Node/Skin/Clip nested vectors + string
+  interning → block (behavior-neutral `ChunkStdAllocator` route, as Mesh::Cold).
+- **P5** fastgltf temporary PMR (after P3 destinations are block-backed).
+- **P7 finish:** RENDER (kDynamic) hash, first-divergence dump, `tests/test_state_hash.cpp`,
+  the counting-`new` Q2 verifier. Plus the `JsState`/`CommandRegistry` de-singleton
+  (P0c deferred) before the run-to-run *test* (the run-to-run *hash* already verified).
