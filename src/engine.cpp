@@ -1115,6 +1115,75 @@ bool Engine::initRenderPipeline() {
                 std::exit(0);
             }
 
+            // Shadow machinery: 2048^2 D32F persistent target (fixed size,
+            // no resize coupling), nearest non-filtering sampler (webgpu
+            // depth-sample constraint; PCF is manual taps), slot-3 bind
+            // group, depth-only PSO (position stream only; zero color
+            // attachments).
+            {
+                rhi::TextureDesc sd{};
+                sd.debug_name = "shadow_target";
+                sd.dimensions = {2048, 2048, 1};
+                sd.format = rhi::Format::kD32F;
+                sd.usage = rhi::kTexUsageDepthTarget | rhi::kTexUsageSampled;
+                sd.memory = rhi::Memory::kDefault;
+                shadow_target_ = rhi_.resources.CreateTexture(rhi_.alloc, sd);
+                rhi::SamplerDesc smd{};
+                smd.min_filter = rhi::Filter::kNearest;
+                smd.mag_filter = rhi::Filter::kNearest;
+                // webgpu: ALL three filters must be nearest or the sampler
+                // counts as filtering and rejects the depth layout.
+                smd.mip_filter = rhi::Filter::kNearest;
+                shadow_sampler_ = rhi_.resources.CreateSampler(smd);
+                if (!shadow_target_.IsNull() && !shadow_sampler_.IsNull()) {
+                    const rhi::TextureBinding tb{0, shadow_target_};
+                    const rhi::SamplerBinding sb{0, shadow_sampler_};
+                    rhi::BindGroupDesc bgd{};
+                    bgd.textures =
+                        std::span<const rhi::TextureBinding>(&tb, 1);
+                    bgd.samplers =
+                        std::span<const rhi::SamplerBinding>(&sb, 1);
+                    bgd.depth_sample = true;
+                    shadow_bind_group_ = rhi_.resources.CreateBindGroup(bgd);
+                }
+                const rhi::VertexInputAttribute shadow_attrs[1] = {
+                    {0, cairns::kMeshPosBindSlot, rhi::Format::kRgba32F, 0},
+                };
+                const rhi::VertexBufferLayout shadow_layouts[1] = {
+                    {cairns::kMeshPosBindSlot,
+                     static_cast<uint32_t>(sizeof(glm::vec4))},
+                };
+                rhi::GraphicsPipelineDesc spd{};
+                spd.logical_shader = "shadow_depth";
+                spd.shader_dir = shader_dir.c_str();
+                spd.debug_name = "shadow_depth";
+                spd.vertex_attributes =
+                    std::span<const rhi::VertexInputAttribute>(shadow_attrs,
+                                                               1);
+                spd.vertex_buffers =
+                    std::span<const rhi::VertexBufferLayout>(shadow_layouts,
+                                                             1);
+                spd.topology = rhi::PrimitiveTopology::kTriangleList;
+                spd.cull = rhi::CullMode::kBack;
+                spd.front_face = rhi::FrontFace::kCounterClockwise;
+                spd.depth_test = true;
+                spd.depth_write = true;
+                spd.depth_compare = rhi::CompareOp::kLess;
+                spd.color_format = rhi::Format::kUndefined;
+                spd.color_count = 0;
+                spd.depth_format = rhi::Format::kD32F;
+                spd.sample_count = 1;
+                spd.swap_chain = nullptr;
+                spd.push_constant_bytes = 0;
+                shadow_pso_ = rhi_.pipelines.CreateGraphicsPipeline(
+                    rhi_.resources, rhi_.frames, spd);
+                if (shadow_pso_.IsNull()) {
+                    CAIRNS_PRINT_ERR(
+                        "[shadow] shadow_depth PSO failed -- shadow pass "
+                        "disabled\n");
+                }
+            }
+
             // composite_pip: full-screen tri, samples 1 color tex, writes the
             // swap target. Surfaceless: present_.final_target is 1-sample / no-depth,
             // so the pipeline is compat with a 1-sample / no-depth renderpass.

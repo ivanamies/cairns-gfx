@@ -217,7 +217,10 @@ Handle<Sampler> Resources::CreateSampler(const SamplerDesc& d) {
 Handle<BindGroup> Resources::CreateBindGroup(const BindGroupDesc& d) {
     // Material set (group 1): one texture+sampler. Layout is group-equivalent
     // to the unlit pipeline's group-1 layout (wgpu dedups identical descriptors).
-    WGPUBindGroupLayout layout = webgpu::MakeMaterialLayout(plat.device_);
+    // depth_sample = the shadow map: depth sampleType + non-filtering sampler.
+    WGPUBindGroupLayout layout =
+        d.depth_sample ? webgpu::MakeDepthSampleLayout(plat.device_)
+                       : webgpu::MakeMaterialLayout(plat.device_);
     WGPUBindGroupEntry entries[2] = {};
     entries[0].binding = 0;
     if (!d.textures.empty()) {

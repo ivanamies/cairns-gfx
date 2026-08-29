@@ -417,6 +417,13 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
                                         mh->arg_buf_offset,
                                         cairns::kMaterialBindSlot);
             }
+            // Shader-specific (slot 3): the shadow map's tex+sampler
+            // argument buffer, fragment-side (PCF taps).
+            if (s == 2) {
+                enc->setFragmentBuffer(mh->api_descriptor_set,
+                                        mh->arg_buf_offset,
+                                        cairns::kShaderSpecificBindSlot);
+            }
         }
         {
             uint32_t pos_off = 0;

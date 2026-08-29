@@ -245,6 +245,17 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
                 wgpuRenderPassEncoderSetBindGroup(plat.enc_, 2, dh->plat.sets[0], 1, &off);
             }
         }
+        // Group 3 (shader-specific: the shadow map). Only stamped on draws
+        // whose pipeline declares the group (webgpu validates the pair).
+        if (!draw.bind_groups[2].IsNull()) {
+            BindGroup::Hot* sh3 = res.GetHot(draw.bind_groups[2]);
+            if (sh3 && sh3->api_descriptor_set) {
+                wgpuRenderPassEncoderSetBindGroup(
+                    plat.enc_, 3,
+                    static_cast<WGPUBindGroup>(sh3->api_descriptor_set), 0,
+                    nullptr);
+            }
+        }
         uint32_t pos_off = 0;
         WGPUBuffer pos = res.plat.GetWgpuBuffer(
             alloc, draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);

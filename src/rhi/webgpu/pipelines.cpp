@@ -112,6 +112,12 @@ ShaderInfo Classify(const char* logical) {
     if (std::strcmp(logical, "lit_offscreen_noid") == 0) {
         return {Kind::kUnlit, "lit_offscreen_noid", 0};
     }
+    // Depth-only shadow pipeline: stub until the webgpu builder grows a
+    // no-fragment-target path (real handle, null PSO -- consumers no-op, so
+    // webgpu renders lit without shadows until then).
+    if (std::strcmp(logical, "shadow_depth") == 0) {
+        return {Kind::kStub, "depth_only", 0};
+    }
     if (std::strcmp(logical, "imgui") == 0) {
         return {Kind::kImgui, "imgui", 0};
     }

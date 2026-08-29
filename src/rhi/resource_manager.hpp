@@ -213,6 +213,9 @@ struct BindGroupDesc {
     std::span<const TextureBinding> textures;
     std::span<const BufferBinding> buffers;
     std::span<const SamplerBinding> samplers;
+    // Depth texture + non-filtering sampler (the shadow map). webgpu needs a
+    // distinct layout (sampleType Depth / NonFiltering); metal/vk ignore it.
+    bool depth_sample = false;
 };
 
 struct DynamicBinding {

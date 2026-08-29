@@ -1773,6 +1773,13 @@ private:
     // per-draw when the draw's material shader_key == kLit.
     ShaderHandle lit_offscreen_ = ShaderHandle::Null;
     ShaderHandle lit_offscreen_noid_ = ShaderHandle::Null;
+    // Directional shadow map: persistent fixed-size depth target (no resize
+    // coupling), rendered by the shadow pass when a light casts; lit draws
+    // sample it via the slot-3 bind group (nearest sampler, manual PCF).
+    rhi::Handle<rhi::Texture> shadow_target_;
+    rhi::Handle<rhi::Sampler> shadow_sampler_;
+    rhi::Handle<rhi::BindGroup> shadow_bind_group_;
+    ShaderHandle shadow_pso_ = ShaderHandle::Null;
     // DynamicBuffers for unlit set 0 (pass globals UBO) + set 2 (per-draw
     // drawtmp UBO). Created post-Frames::Init with backing = kDynamic
     // master. RecordFrame stamps them on MeshDrawList +

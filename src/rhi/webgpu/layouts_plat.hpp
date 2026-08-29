@@ -52,6 +52,24 @@ inline WGPUBindGroupLayout MakeMaterialLayout(WGPUDevice device) {
     return wgpuDeviceCreateBindGroupLayout(device, &d);
 }
 
+// Group 3 (shadow map): DEPTH texture at binding 0 + non-filtering sampler
+// at binding 1 (webgpu forbids filtering samplers on depth; PCF is manual
+// taps in the shader).
+inline WGPUBindGroupLayout MakeDepthSampleLayout(WGPUDevice device) {
+    WGPUBindGroupLayoutEntry e[2] = {};
+    e[0].binding = 0;
+    e[0].visibility = WGPUShaderStage_Fragment;
+    e[0].texture.sampleType = WGPUTextureSampleType_Depth;
+    e[0].texture.viewDimension = WGPUTextureViewDimension_2D;
+    e[1].binding = 1;
+    e[1].visibility = WGPUShaderStage_Fragment;
+    e[1].sampler.type = WGPUSamplerBindingType_NonFiltering;
+    WGPUBindGroupLayoutDescriptor d = {};
+    d.entryCount = 2;
+    d.entries = e;
+    return wgpuDeviceCreateBindGroupLayout(device, &d);
+}
+
 // Compute kernel set 0 (particle/skin/anim-eval): one entry per DynamicBinding.
 // kUniform -> uniform (dynamic-offset per has_dynamic_offset); kStorage ->
 // read_write storage. WGSL declares read-only storages as read_write too, so a

@@ -336,6 +336,9 @@ VkShaderFiles resolve_vk_shader(const char* logical) {
     if (std::strcmp(logical, "lit_offscreen_noid") == 0) {
         return {"lit.vert.spv", "lit_noid.frag.spv", nullptr};
     }
+    if (std::strcmp(logical, "shadow_depth") == 0) {
+        return {"depth_only.vert.spv", "depth_only.frag.spv", nullptr};
+    }
     if (std::strcmp(logical, "imgui") == 0) {
         return {"imgui.vert.spv", "imgui.frag.spv", nullptr};
     }
@@ -570,10 +573,14 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     VkDescriptorSetLayout imgui_set_layout = VK_NULL_HANDLE;
     if (ls == "unlit" || ls == "unlit_offscreen" ||
         ls == "unlit_offscreen_noid" || ls == "lit_offscreen" ||
-        ls == "lit_offscreen_noid") {
+        ls == "lit_offscreen_noid" || ls == "shadow_depth") {
+        // Set 3 (shadow map, material-shaped tex+sampler) is declared on the
+        // WHOLE forward family so the recorder's set-3 bind is always
+        // layout-compatible; shaders that never reference it ignore it.
         set_layouts = {plat.globals_set_layout_,      // set 0: globals (once/frame)
                        resources.plat.MaterialSetLayout(),   // set 1: per-material
-                       plat.drawtmp_set_layout_};     // set 2: drawtmp (per draw)
+                       plat.drawtmp_set_layout_,      // set 2: drawtmp (per draw)
+                       resources.plat.MaterialSetLayout()};  // set 3: shadow
     } else if (ls == "composite_pip" || ls == "depthviz" || ls == "outline") {
         // 2 COMBINED_IMAGE_SAMPLER frag (binding 0 = primary color, binding
         // 1 = id; only outline statically accesses binding 1). Composite and

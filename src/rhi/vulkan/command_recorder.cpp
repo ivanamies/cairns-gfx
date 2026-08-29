@@ -642,9 +642,12 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
             last_bg[s] = draw.bind_groups[s].index;
             VkDescriptorSet ms = static_cast<VkDescriptorSet>(
                 res.GetHot(draw.bind_groups[s])->api_descriptor_set);
+            // bind_groups[2] is the shader-specific slot (shadow map) and
+            // lands at SET 3 -- set 2 belongs to the drawtmp dynamic UBO.
+            const uint32_t set_index = (s == 2) ? 3u : s;
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    unlit->plat.vk_layout, s, 1, &ms, 0,
-                                    nullptr);
+                                    unlit->plat.vk_layout, set_index, 1, &ms,
+                                    0, nullptr);
         }
         uint32_t pos_off = 0;
         VkBuffer pos_buf =
