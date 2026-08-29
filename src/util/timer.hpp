@@ -71,7 +71,6 @@ class Timer {
   }
 
     static void PrintReport() {
-        CAIRNS_PRINT("==============\n");
         for ( uint32_t i = 0; i < kMaxSlots; ++i ) {
             if ( accum_itrs_[i] == 0 ) {
                 continue;
