@@ -363,6 +363,9 @@ struct Texture {
         Memory mem_type = Memory::kDefault;
         uint32_t heap_buffer_index = 0xFFFFFFFFu;  // 0xFFFFFFFF if dedicated
         const char* debug_name = nullptr;
+#if CAIRNS_VULKAN
+        VkImageLayout vk_layout = VK_IMAGE_LAYOUT_UNDEFINED;  // tracked for graph barriers
+#endif
     };
 };
 

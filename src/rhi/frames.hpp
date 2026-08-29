@@ -77,6 +77,7 @@ public:
     std::vector<VkDescriptorSet> drawtmp_sets_;
     std::vector<VkDescriptorSet> compute_sets_;
     std::vector<VkDescriptorSet> point_sets_;
+    OffscreenTargetCache offscreen_cache_;
 #elif CAIRNS_METAL
     MTL::Device* device_ = nullptr;             // mirrored from Device
     MTL::CommandQueue* queue_ = nullptr;        // mirrored from Device

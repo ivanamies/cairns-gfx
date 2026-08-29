@@ -34,13 +34,49 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
     cenc->endEncoding();
 }
 
-void CommandRecorder::BeginRenderPass(SwapChain&, const RenderPassDesc& desc) {
-    if (!desc.color.empty()) {
+namespace {
+MTL::LoadAction to_mtl_load(LoadOp op) {
+    switch (op) {
+        case LoadOp::kClear: return MTL::LoadActionClear;
+        case LoadOp::kLoad: return MTL::LoadActionLoad;
+        default: return MTL::LoadActionDontCare;
+    }
+}
+}  // namespace
+
+void CommandRecorder::BeginRenderPass(Resources& res, SwapChain&,
+                                      const RenderPassDesc& desc) {
+    // Swapchain pass: the imported target is the null handle -> reuse the
+    // prebuilt MSAA/depth descriptor (only the clear color varies).
+    const bool is_swapchain = !desc.color.empty() && desc.color[0].target.IsNull();
+    if (is_swapchain) {
         const float* c = desc.color[0].clear;
         render_pass_desc_->colorAttachments()->object(0)->setClearColor(
             MTL::ClearColor(c[0], c[1], c[2], c[3]));
+        enc_ = cmd_->renderCommandEncoder(render_pass_desc_);
+        return;
     }
-    enc_ = cmd_->renderCommandEncoder(render_pass_desc_);
+
+    // Offscreen pass: build a fresh (autoreleased) descriptor from the baked
+    // single-sample attachments.
+    MTL::RenderPassDescriptor* rpd = MTL::RenderPassDescriptor::renderPassDescriptor();
+    if (!desc.color.empty()) {
+        MTL::RenderPassColorAttachmentDescriptor* ca =
+            rpd->colorAttachments()->object(0);
+        ca->setTexture(res.GetHot(desc.color[0].target)->api_view);
+        ca->setLoadAction(to_mtl_load(desc.color[0].load));
+        const float* c = desc.color[0].clear;
+        ca->setClearColor(MTL::ClearColor(c[0], c[1], c[2], c[3]));
+        ca->setStoreAction(MTL::StoreActionStore);
+    }
+    if (!desc.depth.depth.IsNull()) {
+        MTL::RenderPassDepthAttachmentDescriptor* da = rpd->depthAttachment();
+        da->setTexture(res.GetHot(desc.depth.depth)->api_view);
+        da->setLoadAction(to_mtl_load(desc.depth.load));
+        da->setClearDepth(desc.depth.clear_depth);
+        da->setStoreAction(MTL::StoreActionStore);
+    }
+    enc_ = cmd_->renderCommandEncoder(rpd);
 }
 
 void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list) {
@@ -125,6 +161,26 @@ void CommandRecorder::DrawPoints(Resources& res, Allocator& alloc, const PointDr
     enc_->setVertexBuffer(buf, off, 0);
     enc_->drawPrimitives(MTL::PrimitiveTypePoint, NS::UInteger(pd.vertex_offset),
                                NS::UInteger(pd.vertex_count));
+}
+
+void CommandRecorder::SetViewport(float x, float y, float w, float h) {
+    MTL::Viewport vp{};
+    vp.originX = x;
+    vp.originY = y;
+    vp.width = w;
+    vp.height = h;
+    vp.znear = 0.0;
+    vp.zfar = 1.0;
+    enc_->setViewport(vp);
+}
+
+void CommandRecorder::SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) {
+    MTL::ScissorRect r{};
+    r.x = static_cast<NS::UInteger>(x < 0 ? 0 : x);
+    r.y = static_cast<NS::UInteger>(y < 0 ? 0 : y);
+    r.width = w;
+    r.height = h;
+    enc_->setScissorRect(r);
 }
 
 void CommandRecorder::EndRenderPass() {

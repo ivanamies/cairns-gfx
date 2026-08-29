@@ -147,6 +147,8 @@ private:
         std::vector<ColorAttachment> baked_color;
         DepthAttachment baked_depth;
         std::vector<Handle<Texture>> baked_inputs;
+        uint32_t baked_width = 0;
+        uint32_t baked_height = 0;
     };
 
     struct PooledTex {

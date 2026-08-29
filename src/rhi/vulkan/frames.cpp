@@ -329,6 +329,7 @@ void Frames::Deinit() {
     if (point_layout_) {
         vkDestroyDescriptorSetLayout(dev, point_layout_, nullptr);
     }
+    offscreen_cache_.Deinit();
     inited_ = false;
 }
 
@@ -376,6 +377,8 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
     fc.cmd.drawtmp_set_ = drawtmp_sets_[cf];
     fc.cmd.compute_set_ = compute_sets_[cf];
     fc.cmd.point_set_ = point_sets_[cf];
+    offscreen_cache_.device = dev;
+    fc.cmd.offscreen_ = &offscreen_cache_;
     return fc;
 }
 

@@ -57,36 +57,271 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
     vkCmdDispatch(comp_, d.groups_x, d.groups_y, d.groups_z);
 }
 
-void CommandRecorder::BeginRenderPass(SwapChain& sc, const RenderPassDesc& desc) {
-    VkRenderPassBeginInfo rpi{};
-    rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rpi.renderPass = sc.renderPass;
-    rpi.framebuffer = sc.swapChainFramebuffers[image_index_];
-    rpi.renderArea.offset = {0, 0};
-    rpi.renderArea.extent = sc.swapChainExtent;
-    VkClearValue clears[2]{};
-    if (!desc.color.empty()) {
-        clears[0].color = {{desc.color[0].clear[0], desc.color[0].clear[1],
-                            desc.color[0].clear[2], desc.color[0].clear[3]}};
+namespace {
+
+VkFormat to_vk_format(Format f) {
+    switch (f) {
+        case Format::kR8Unorm: return VK_FORMAT_R8_UNORM;
+        case Format::kRg8Unorm: return VK_FORMAT_R8G8_UNORM;
+        case Format::kRgba8Unorm: return VK_FORMAT_R8G8B8A8_UNORM;
+        case Format::kRgba8Srgb: return VK_FORMAT_R8G8B8A8_SRGB;
+        case Format::kBgra8Unorm: return VK_FORMAT_B8G8R8A8_UNORM;
+        case Format::kBgra8Srgb: return VK_FORMAT_B8G8R8A8_SRGB;
+        case Format::kR16F: return VK_FORMAT_R16_SFLOAT;
+        case Format::kRgba16F: return VK_FORMAT_R16G16B16A16_SFLOAT;
+        case Format::kR32F: return VK_FORMAT_R32_SFLOAT;
+        case Format::kRg32F: return VK_FORMAT_R32G32_SFLOAT;
+        case Format::kRgba32F: return VK_FORMAT_R32G32B32A32_SFLOAT;
+        case Format::kD32F: return VK_FORMAT_D32_SFLOAT;
+        case Format::kD24S8: return VK_FORMAT_D24_UNORM_S8_UINT;
+        default: return VK_FORMAT_R8G8B8A8_UNORM;
     }
-    clears[1].depthStencil = {desc.depth.clear_depth, 0};
-    rpi.clearValueCount = 2;
-    rpi.pClearValues = clears;
-    vkCmdBeginRenderPass(gfx_, &rpi, VK_SUBPASS_CONTENTS_INLINE);
+}
+
+bool is_depth_format(Format f) {
+    return f == Format::kD32F || f == Format::kD24S8;
+}
+
+VkAttachmentLoadOp to_vk_load(LoadOp op) {
+    switch (op) {
+        case LoadOp::kClear: return VK_ATTACHMENT_LOAD_OP_CLEAR;
+        case LoadOp::kLoad: return VK_ATTACHMENT_LOAD_OP_LOAD;
+        default: return VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    }
+}
+
+// Broad barrier: track the image's layout in its Cold record + transition. The
+// graph guarantees ordering; we over-synchronize (ALL_COMMANDS) for simplicity.
+void transition(VkCommandBuffer cb, Resources& res, Handle<Texture> h,
+                VkImageLayout new_layout) {
+    if (h.IsNull()) {
+        return;
+    }
+    Texture::Cold* c = res.textures.GetCold(h);
+    if (!c || !c->api_image || c->vk_layout == new_layout) {
+        return;
+    }
+    VkImageMemoryBarrier b{};
+    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    b.oldLayout = c->vk_layout;
+    b.newLayout = new_layout;
+    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = reinterpret_cast<VkImage>(c->api_image);
+    b.subresourceRange.aspectMask =
+        is_depth_format(c->format) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+    b.subresourceRange.levelCount = 1;
+    b.subresourceRange.layerCount = 1;
+    b.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_MEMORY_READ_BIT;
+    b.dstAccessMask = VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_MEMORY_READ_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &b);
+    c->vk_layout = new_layout;
+}
+
+VkRenderPass get_offscreen_rp(OffscreenTargetCache* cache,
+                              const OffscreenTargetCache::RpKey& key) {
+    for (const OffscreenTargetCache::RpEntry& e : cache->rps) {
+        if (e.key.color == key.color && e.key.depth == key.depth &&
+            e.key.color_load == key.color_load && e.key.depth_load == key.depth_load &&
+            e.key.has_color == key.has_color && e.key.has_depth == key.has_depth) {
+            return e.rp;
+        }
+    }
+    VkAttachmentDescription atts[2]{};
+    VkAttachmentReference color_ref{};
+    VkAttachmentReference depth_ref{};
+    uint32_t n = 0;
+    int color_idx = -1;
+    int depth_idx = -1;
+    if (key.has_color) {
+        color_idx = static_cast<int>(n);
+        atts[n].format = key.color;
+        atts[n].samples = VK_SAMPLE_COUNT_1_BIT;
+        atts[n].loadOp = key.color_load;
+        atts[n].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        atts[n].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        atts[n].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        atts[n].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        atts[n].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        ++n;
+    }
+    if (key.has_depth) {
+        depth_idx = static_cast<int>(n);
+        atts[n].format = key.depth;
+        atts[n].samples = VK_SAMPLE_COUNT_1_BIT;
+        atts[n].loadOp = key.depth_load;
+        atts[n].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        atts[n].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        atts[n].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        atts[n].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        atts[n].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        ++n;
+    }
+    VkSubpassDescription sub{};
+    sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    if (color_idx >= 0) {
+        color_ref.attachment = static_cast<uint32_t>(color_idx);
+        color_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        sub.colorAttachmentCount = 1;
+        sub.pColorAttachments = &color_ref;
+    }
+    if (depth_idx >= 0) {
+        depth_ref.attachment = static_cast<uint32_t>(depth_idx);
+        depth_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        sub.pDepthStencilAttachment = &depth_ref;
+    }
+    VkRenderPassCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    ci.attachmentCount = n;
+    ci.pAttachments = atts;
+    ci.subpassCount = 1;
+    ci.pSubpasses = &sub;
+    VkRenderPass rp = VK_NULL_HANDLE;
+    vkCreateRenderPass(cache->device, &ci, nullptr, &rp);
+    cache->rps.push_back({key, rp});
+    return rp;
+}
+
+VkFramebuffer get_offscreen_fb(OffscreenTargetCache* cache, VkRenderPass rp,
+                               VkImageView v0, VkImageView v1, uint32_t w, uint32_t h) {
+    for (const OffscreenTargetCache::FbEntry& e : cache->fbs) {
+        if (e.rp == rp && e.v0 == v0 && e.v1 == v1 && e.w == w && e.h == h) {
+            return e.fb;
+        }
+    }
+    VkImageView views[2]{};
+    uint32_t n = 0;
+    if (v0) {
+        views[n++] = v0;
+    }
+    if (v1) {
+        views[n++] = v1;
+    }
+    VkFramebufferCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    ci.renderPass = rp;
+    ci.attachmentCount = n;
+    ci.pAttachments = views;
+    ci.width = w;
+    ci.height = h;
+    ci.layers = 1;
+    VkFramebuffer fb = VK_NULL_HANDLE;
+    vkCreateFramebuffer(cache->device, &ci, nullptr, &fb);
+    cache->fbs.push_back({rp, v0, v1, w, h, fb});
+    return fb;
+}
+
+}  // namespace
+
+void OffscreenTargetCache::Deinit() {
+    for (FbEntry& e : fbs) {
+        if (e.fb) {
+            vkDestroyFramebuffer(device, e.fb, nullptr);
+        }
+    }
+    for (RpEntry& e : rps) {
+        if (e.rp) {
+            vkDestroyRenderPass(device, e.rp, nullptr);
+        }
+    }
+    fbs.clear();
+    rps.clear();
+}
+
+void CommandRecorder::BeginRenderPass(Resources& res, SwapChain& sc,
+                                      const RenderPassDesc& desc) {
+    // Sampled inputs (textures produced by a prior pass) -> shader-read, for
+    // BOTH swapchain and offscreen passes (e.g. the composite samples offscreen
+    // color+depth while rendering to the swapchain).
+    for (const Handle<Texture>& in : desc.input_textures) {
+        transition(gfx_, res, in, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    const bool is_swapchain = !desc.color.empty() && desc.color[0].target.IsNull();
+    VkExtent2D extent{desc.width, desc.height};
+
+    if (is_swapchain) {
+        VkRenderPassBeginInfo rpi{};
+        rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rpi.renderPass = sc.renderPass;
+        rpi.framebuffer = sc.swapChainFramebuffers[image_index_];
+        rpi.renderArea.offset = {0, 0};
+        rpi.renderArea.extent = sc.swapChainExtent;
+        extent = sc.swapChainExtent;
+        VkClearValue clears[2]{};
+        if (!desc.color.empty()) {
+            clears[0].color = {{desc.color[0].clear[0], desc.color[0].clear[1],
+                                desc.color[0].clear[2], desc.color[0].clear[3]}};
+        }
+        clears[1].depthStencil = {desc.depth.clear_depth, 0};
+        rpi.clearValueCount = 2;
+        rpi.pClearValues = clears;
+        vkCmdBeginRenderPass(gfx_, &rpi, VK_SUBPASS_CONTENTS_INLINE);
+    } else {
+        const bool has_color = !desc.color.empty();
+        const bool has_depth = !desc.depth.depth.IsNull();
+        VkImageView color_view = VK_NULL_HANDLE;
+        VkImageView depth_view = VK_NULL_HANDLE;
+        OffscreenTargetCache::RpKey key;
+        key.has_color = has_color;
+        key.has_depth = has_depth;
+        if (has_color) {
+            transition(gfx_, res, desc.color[0].target,
+                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            Texture::Cold* c = res.textures.GetCold(desc.color[0].target);
+            color_view = reinterpret_cast<VkImageView>(res.GetHot(desc.color[0].target)->api_view);
+            key.color = to_vk_format(c->format);
+            key.color_load = to_vk_load(desc.color[0].load);
+        }
+        if (has_depth) {
+            transition(gfx_, res, desc.depth.depth,
+                       VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+            Texture::Cold* c = res.textures.GetCold(desc.depth.depth);
+            depth_view = reinterpret_cast<VkImageView>(res.GetHot(desc.depth.depth)->api_view);
+            key.depth = to_vk_format(c->format);
+            key.depth_load = to_vk_load(desc.depth.load);
+        }
+        VkRenderPass rp = get_offscreen_rp(offscreen_, key);
+        // attachment order matches the render pass: color (if any) then depth.
+        const VkImageView v0 = has_color ? color_view : depth_view;
+        const VkImageView v1 = has_color ? depth_view : VK_NULL_HANDLE;
+        VkFramebuffer fb = get_offscreen_fb(offscreen_, rp, v0, v1, extent.width, extent.height);
+
+        VkClearValue clears[2]{};
+        uint32_t clear_n = 0;
+        if (has_color) {
+            clears[clear_n++].color = {{desc.color[0].clear[0], desc.color[0].clear[1],
+                                        desc.color[0].clear[2], desc.color[0].clear[3]}};
+        }
+        if (has_depth) {
+            clears[clear_n++].depthStencil = {desc.depth.clear_depth, 0};
+        }
+        VkRenderPassBeginInfo rpi{};
+        rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rpi.renderPass = rp;
+        rpi.framebuffer = fb;
+        rpi.renderArea.offset = {0, 0};
+        rpi.renderArea.extent = extent;
+        rpi.clearValueCount = clear_n;
+        rpi.pClearValues = clears;
+        vkCmdBeginRenderPass(gfx_, &rpi, VK_SUBPASS_CONTENTS_INLINE);
+    }
 
     // Negative-height viewport flips NDC Y so the shared (Metal-convention)
     // projection renders upright on Vulkan, instead of an in-shader proj[1][1]*=-1.
     VkViewport viewport{};
     viewport.x = 0.0f;
-    viewport.y = static_cast<float>(sc.swapChainExtent.height);
-    viewport.width = static_cast<float>(sc.swapChainExtent.width);
-    viewport.height = -static_cast<float>(sc.swapChainExtent.height);
+    viewport.y = static_cast<float>(extent.height);
+    viewport.width = static_cast<float>(extent.width);
+    viewport.height = -static_cast<float>(extent.height);
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
     vkCmdSetViewport(gfx_, 0, 1, &viewport);
     VkRect2D scissor{};
     scissor.offset = {0, 0};
-    scissor.extent = sc.swapChainExtent;
+    scissor.extent = extent;
     vkCmdSetScissor(gfx_, 0, 1, &scissor);
 }
 
@@ -191,6 +426,25 @@ void CommandRecorder::DrawPoints(Resources& res, Allocator& alloc, const PointDr
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p->vk_layout, 0, 1,
                             &point_set, 0, nullptr);
     vkCmdDraw(cb, pd.vertex_count, 1, 0, 0);
+}
+
+void CommandRecorder::SetViewport(float x, float y, float w, float h) {
+    // Negative height to keep the Metal-convention Y-flip (see BeginRenderPass).
+    VkViewport vp{};
+    vp.x = x;
+    vp.y = y + h;
+    vp.width = w;
+    vp.height = -h;
+    vp.minDepth = 0.0f;
+    vp.maxDepth = 1.0f;
+    vkCmdSetViewport(gfx_, 0, 1, &vp);
+}
+
+void CommandRecorder::SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) {
+    VkRect2D s{};
+    s.offset = {x, y};
+    s.extent = {w, h};
+    vkCmdSetScissor(gfx_, 0, 1, &s);
 }
 
 void CommandRecorder::EndRenderPass() {

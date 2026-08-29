@@ -397,6 +397,18 @@ bool RenderGraph::Bake() {
         for (uint16_t in : pass.attachment_inputs) {
             pass.baked_inputs.push_back(resolved_tex_[in]);
         }
+        // Render-area extent: the size of this pass's first output target.
+        pass.baked_width = 0;
+        pass.baked_height = 0;
+        if (!pass.color_outputs.empty()) {
+            const GraphTextureDesc& d = textures_[pass.color_outputs[0].tex].desc;
+            pass.baked_width = d.width;
+            pass.baked_height = d.height;
+        } else if (pass.has_depth) {
+            const GraphTextureDesc& d = textures_[pass.depth_output.tex].desc;
+            pass.baked_width = d.width;
+            pass.baked_height = d.height;
+        }
     }
 
     if (log) {
@@ -431,11 +443,11 @@ bool RenderGraph::Execute(FrameContext& fc, SwapChain& sc) {
         if (pass.has_depth) {
             rp.depth = pass.baked_depth;
         }
-        rp.width = sc.Width();
-        rp.height = sc.Height();
+        rp.width = pass.baked_width ? pass.baked_width : sc.Width();
+        rp.height = pass.baked_height ? pass.baked_height : sc.Height();
         rp.input_textures = std::span<const Handle<Texture>>(
             pass.baked_inputs.data(), pass.baked_inputs.size());
-        fc.cmd.BeginRenderPass(sc, rp);
+        fc.cmd.BeginRenderPass(resources_, sc, rp);
         if (pass.execute) {
             pass.execute(fc.cmd, res);
         }

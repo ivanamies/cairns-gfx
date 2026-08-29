@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <utility>
+#include <vector>
 
 #include "rhi/resource_manager.hpp"
 #include "util/draw.hpp"
@@ -84,12 +85,47 @@ struct PointDraw {
     uint32_t vertex_count = 0;
 };
 
+#if CAIRNS_VULKAN
+// Persistent (owned by Frames) cache of offscreen VkRenderPass + VkFramebuffer
+// objects keyed by attachment formats/load-ops and image views. Swapchain passes
+// keep using sc.renderPass; only graph-created offscreen targets land here.
+struct OffscreenTargetCache {
+    struct RpKey {
+        VkFormat color = VK_FORMAT_UNDEFINED;
+        VkFormat depth = VK_FORMAT_UNDEFINED;
+        VkAttachmentLoadOp color_load = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        VkAttachmentLoadOp depth_load = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        bool has_color = false;
+        bool has_depth = false;
+    };
+    struct RpEntry {
+        RpKey key;
+        VkRenderPass rp = VK_NULL_HANDLE;
+    };
+    struct FbEntry {
+        VkRenderPass rp = VK_NULL_HANDLE;
+        VkImageView v0 = VK_NULL_HANDLE;
+        VkImageView v1 = VK_NULL_HANDLE;
+        uint32_t w = 0;
+        uint32_t h = 0;
+        VkFramebuffer fb = VK_NULL_HANDLE;
+    };
+    VkDevice device = VK_NULL_HANDLE;
+    std::vector<RpEntry> rps;
+    std::vector<FbEntry> fbs;
+
+    void Deinit();
+};
+#endif
+
 class CommandRecorder {
 public:
     void Dispatch(Resources& res, Allocator& alloc, const ComputeDispatch& d);
-    void BeginRenderPass(SwapChain& sc, const RenderPassDesc& desc);
+    void BeginRenderPass(Resources& res, SwapChain& sc, const RenderPassDesc& desc);
     void DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list);
     void DrawPoints(Resources& res, Allocator& alloc, const PointDraw& draw);
+    void SetViewport(float x, float y, float w, float h);
+    void SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h);
     void EndRenderPass();
 
     // Per-frame recording state, populated by Frames::Begin.
@@ -103,6 +139,7 @@ public:
     VkDescriptorSet drawtmp_set_ = VK_NULL_HANDLE;
     VkDescriptorSet compute_set_ = VK_NULL_HANDLE;
     VkDescriptorSet point_set_ = VK_NULL_HANDLE;
+    OffscreenTargetCache* offscreen_ = nullptr;  // owned by Frames
 #elif CAIRNS_METAL
     MTL::CommandBuffer* cmd_ = nullptr;
     MTL::RenderCommandEncoder* enc_ = nullptr;
