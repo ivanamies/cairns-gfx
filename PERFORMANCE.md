@@ -5,6 +5,62 @@ Newest first.
 
 ---
 
+## `fce2ade` (2026-06-04) — game/render thread split landed; APK asset loading
+
+Workload: `100 GLBs × 33 slices = 3300 entities`, 11517 draws. Release.
+
+**Critical timer note**: `frame` (slot 0) is now the **game-thread CPU work
+post-`Acquire`** -- not wall-clock between frames. Wall-clock per frame
+(which includes Acquire backpressure waiting for the render thread) is
+reflected in the ImGui overlay's `CPU` row. In steady state CPU ≈
+render-thread frame time; `frame` shows how much CPU headroom is left.
+
+**Metal macOS (M2 Max), 1280×720 windowed:**
+```
+draws 11517 | 100 GLBs x 33 slices = 3300 entities | resolution 1280 x 720
+slot 0 (frame):        avg  2771 us over 120 frames   (game-thread CPU only)
+slot 1 (build_draws):  avg  2190 us over 120 frames
+slot 2 (record):       avg  1209 us over 118 frames   (render-thread encode)
+slot 3 (particle_sim): avg    10 us over 118 frames
+slot 4 (forward):      avg  9399 us over 117 frames
+```
+`frame` dropped 16.85 → 2.77 ms (~6× game-thread headroom) vs single-threaded.
+`forward` GPU unchanged. Vsync caps wall-clock at 16.67 ms.
+
+**iPhone 15 Pro Release (screenshot, native ~2556×1179 landscape):**
+```
+CPU 39.59 ms  |  25 FPS
+avg 33.55 ms  |  peak 39.59 ms
+gpu_frame   34.89 ms
+frame        7.45 ms        (game-thread CPU only)
+build_draws  6.71 ms
+record       4.56 ms
+```
+Threading visible: `frame` 7.45 ms (game-thread CPU work) vs wall-clock
+~40 ms (Acquire-paced behind render+GPU). gpu_frame unchanged from prior
+single-threaded reading.
+
+**Samsung S22 (SM-S901U, Adreno 730) Android Vulkan Release (screenshot, native 2115×1008 landscape):**
+```
+CPU 159.96 ms |  6 FPS
+avg 154.14 ms |  peak 176.32 ms
+gpu_frame    121.67 ms
+frame          7.58 ms       (game-thread CPU only)
+build_draws    6.66 ms
+record        18.69 ms
+```
+gpu_frame 121.67 ms (vs ~134 ms pre-split — within noise; MSAA storeOp
+change in `swap_chain.hpp` had no measurable effect, Adreno driver already
+optimizes it). Forward pass remains the bottleneck. Per-draw cost ≈
+122 ms / 11517 = 10.6 µs/draw on Adreno vs 35.5 / 11517 = 3.1 µs/draw on
+Apple Silicon — ~3.4× driver-frontend gap. Not bandwidth (MSAA samples
+are throwaway, fragment shader is trivial). Most likely candidate is
+Adreno's per-draw binner/dyn-offset cost; banned-lever-free way to test
+is mesh-primitive merging at scene load (collapses redundant draws within
+a glTF), which we haven't tried yet.
+
+---
+
 ## `c311cd7` (2026-06-04) — full readout + Android bisect
 
 Workload: `100 GLBs × 33 slices = 3300 entities`, 11517 draws. Release.
