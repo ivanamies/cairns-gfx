@@ -230,20 +230,33 @@ inline int SelectWalkingClip(const std::vector<Clip>& clips) {
     };
     int best_walk = -1;
     int best_run = -1;
+    int best_idle = -1;
+    int richest_idx = 0;
+    size_t richest_channels = 0;
     for (size_t i = 0; i < clips.size(); ++i) {
+        const size_t ch = clips[i].channels.size();
+        if (ch > richest_channels) {
+            richest_channels = ch;
+            richest_idx = static_cast<int>(i);
+        }
         if (best_walk < 0 && contains_ci(clips[i].name, "walk")) {
             best_walk = static_cast<int>(i);
         } else if (best_run < 0 && contains_ci(clips[i].name, "run")) {
             best_run = static_cast<int>(i);
+        } else if (best_idle < 0 && contains_ci(clips[i].name, "idle")) {
+            best_idle = static_cast<int>(i);
         }
     }
-    if (best_walk >= 0) {
+    if (best_walk >= 0 && clips[best_walk].channels.size() > 0) {
         return best_walk;
     }
-    if (best_run >= 0) {
+    if (best_run >= 0 && clips[best_run].channels.size() > 0) {
         return best_run;
     }
-    return 0;
+    if (best_idle >= 0 && clips[best_idle].channels.size() > 0) {
+        return best_idle;
+    }
+    return richest_idx;
 }
 
 inline void ComputeSkinningPalette(const Skin& skin,
