@@ -5,6 +5,47 @@ Newest first.
 
 ---
 
+## `b6c7785` (2026-05-31) — fragment / rasterization proof
+
+iPhone 15 Release. Two runs, same workload (`100 GLBs × 33 slices = 3300
+entities`, 11517 draws, batched upload), only the window size + hero scale
+differ. Both v-synced cap is 16.67 ms (60 Hz); both miss it.
+
+**1280×720 window, scale 0.005 (small heroes):**
+```
+draws: 11517 | 100 GLBs x 33 slices = 3300 entities
+slot 0 (frame):                          accum 3860842 us, avg 32173 us over 120 frames
+slot 1 (build_draws):                    accum  938464 us, avg  7820 us over 120 frames
+slot 2 (record):                         accum  310526 us, avg  2587 us over 120 frames
+slot 3 (set up render pass globals):     accum    2012 us, avg    16 us over 120 frames
+slot 4 (build opaque draw list):         accum  936208 us, avg  7801 us over 120 frames
+```
+
+**2400×1080 window, scale 0.01 (heroes 2× bigger):**
+```
+draws: 11517 | 100 GLBs x 33 slices = 3300 entities
+slot 0 (frame):                          accum 7739460 us, avg 64495 us over 120 frames
+slot 1 (build_draws):                    accum 1575431 us, avg 13128 us over 120 frames
+slot 2 (record):                         accum  691643 us, avg  5763 us over 120 frames
+slot 3 (set up render pass globals):     accum      90 us, avg     0 us over 120 frames
+slot 4 (build opaque draw list):         accum 1575146 us, avg 13126 us over 120 frames
+```
+
+**Interpretation — fragment / rasterization is the dominant cost.**
+
+Going from 1280×720 (922k px) + scale 0.005 → 2400×1080 (2.59M px) + scale 0.01
+is a ~2.8× pixel increase and ~2× per-hero screen size. The draw count, draw
+build, sort, and bind pattern are all identical (11517 draws, same VB/IB
+binds-once, same UBO bumps). What scales with the window+scale change is
+fragment shading + ROP / overdraw — i.e. **rasterization work**. The CPU-side
+`build_draws` going 7.82 → 13.13 ms at identical CPU workload is also part of
+the same picture — nothing in the build_draws loop changed across the two runs.
+
+Net: **the slowdown is fragment shader + rasterization work, not the draw
+arrangement / memory transfer / CPU build loop itself.**
+
+---
+
 ## `b0febf1` (2026-05-30) — `ia/26-05-30/performance_debug` (re-baseline)
 
 9d90f90 source + cherry-picked batched upload (`b0febf1`). No layout, window,
