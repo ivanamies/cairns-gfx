@@ -10,6 +10,7 @@
 #include "engine/anim_skin_system.hpp"  // AnimSkinSystem state (C2 S2)
 #include "engine/viewport_manager.hpp"  // ViewportManager + kNumViewports (C2 S5)
 #include "engine/prefab_store.hpp"  // PrefabStore state (C2 S1)
+#include "engine/present_targets.hpp"  // PresentTargets state (C2 S7)
 
 #include <array>
 #include <cmath>
@@ -199,7 +200,7 @@ public:
     }
     
     bool initSwapChain(const rhi::InitConfig& cfg) {
-        if ( !rhi_.device.InitSwapChain(swapchain_, cfg)) {
+        if ( !rhi_.device.InitSwapChain(present_.swapchain, cfg)) {
             return false;
         }
 
@@ -213,9 +214,9 @@ public:
         if (width == 0 || height == 0) {
             return true;
         }
-        resize_pending_w_ = width;
-        resize_pending_h_ = height;
-        resize_pending_ = true;
+        present_.resize_pending_w = width;
+        present_.resize_pending_h = height;
+        present_.resize_pending = true;
         return true;
     }
 
@@ -891,9 +892,9 @@ public:
         // (matches the pre-#224 GenerateDebugGridTransforms convention).
         const float fov_y = static_cast<float>(M_PI) * 0.5f;
         float aspect = 16.0f / 9.0f;
-        if (final_target_h_ > 0) {
-            aspect = static_cast<float>(final_target_w_) /
-                     static_cast<float>(final_target_h_);
+        if (present_.final_target_h > 0) {
+            aspect = static_cast<float>(present_.final_target_w) /
+                     static_cast<float>(present_.final_target_h);
         }
         const float depth = 4.0f;
         // kFitMargin shrinks the GRID extent so the outermost characters
@@ -1987,18 +1988,18 @@ public:
     void SetRandomSeed(uint32_t seed) { particles_.random_seed = seed; }
     uint32_t GetRandomSeed() const { return particles_.random_seed; }
 
-    uint32_t GetFinalTargetWidth() const { return final_target_w_; }
-    uint32_t GetFinalTargetHeight() const { return final_target_h_; }
+    uint32_t GetFinalTargetWidth() const { return present_.final_target_w; }
+    uint32_t GetFinalTargetHeight() const { return present_.final_target_h; }
 
     // Current logical frame dims. Windowed: tracks the swapchain. Surfaceless:
-    // tracks final_target_. Single source of truth for aspect / screen_params /
-    // ImGui DPI scaling -- all of which used to read swapchain_ directly and
+    // tracks present_.final_target. Single source of truth for aspect / screen_params /
+    // ImGui DPI scaling -- all of which used to read present_.swapchain directly and
     // were wrong by construction in surfaceless mode.
     uint32_t FrameWidth() const {
-        return final_target_.IsNull() ? swapchain_.Width() : final_target_w_;
+        return present_.final_target.IsNull() ? present_.swapchain.Width() : present_.final_target_w;
     }
     uint32_t FrameHeight() const {
-        return final_target_.IsNull() ? swapchain_.Height() : final_target_h_;
+        return present_.final_target.IsNull() ? present_.swapchain.Height() : present_.final_target_h;
     }
 
     // #207 (re)allocate per-viewport persistent R32U id targets if dims drift.
@@ -2068,15 +2069,15 @@ public:
         picking_.highlights_tex_rev = picking_.highlights_rev;
     }
 
-    // Reallocate final_target_ at the new dimensions. Surfaceless mode only.
+    // Reallocate present_.final_target at the new dimensions. Surfaceless mode only.
     bool ResizeFinalTarget(uint32_t w, uint32_t h) {
-        if (final_target_.IsNull()) {
+        if (present_.final_target.IsNull()) {
             return false;
         }
-        rhi_.resources.Destroy(rhi_.alloc, final_target_);
-        final_target_ = rhi::Handle<rhi::Texture>::Null;
-        final_target_w_ = w;
-        final_target_h_ = h;
+        rhi_.resources.Destroy(rhi_.alloc, present_.final_target);
+        present_.final_target = rhi::Handle<rhi::Texture>::Null;
+        present_.final_target_w = w;
+        present_.final_target_h = h;
         rhi::TextureDesc td{};
         td.debug_name = "final_target";
         td.dimensions = {static_cast<int32_t>(w), static_cast<int32_t>(h), 1};
@@ -2084,18 +2085,18 @@ public:
         td.usage = rhi::kTexUsageColorTarget | rhi::kTexUsageSampled |
                    rhi::kTexUsageTransferSrc | rhi::kTexUsageTransferDst;
         td.memory = rhi::Memory::kDefault;
-        final_target_ = rhi_.resources.CreateTexture(rhi_.alloc, td);
-        return !final_target_.IsNull();
+        present_.final_target = rhi_.resources.CreateTexture(rhi_.alloc, td);
+        return !present_.final_target.IsNull();
     }
 
     // Surfaceless (cairns_serve) one-frame render: drives the windowed draw()
-    // path once. Swap pass writes into final_target_; the engine builds a
+    // path once. Swap pass writes into present_.final_target; the engine builds a
     // SwapResolveTarget with no drawable so Frames neither acquires a
     // drawable nor presents one. Synchronous: render thread (if used)
     // drained before return; the metal/vulkan Frames::End waitUntilCompleted's
     // the render-to-texture path. Returns false if not surfaceless.
     bool RenderHeadlessFrame() {
-        if (final_target_.IsNull()) {
+        if (present_.final_target.IsNull()) {
             return false;
         }
         return draw();
@@ -2106,38 +2107,38 @@ public:
     // Mirrors DumpFinalTarget's pipeline but skips the PNG encode.
     bool ReadFinalTargetRgba(std::vector<uint8_t>& rgba, uint32_t& w,
                               uint32_t& h) {
-        if (final_target_.IsNull()) {
+        if (present_.final_target.IsNull()) {
             return false;
         }
-        return rhi_.resources.ReadBackTextureRgba(final_target_, rgba, w, h);
+        return rhi_.resources.ReadBackTextureRgba(present_.final_target, rgba, w, h);
     }
 
 #if CAIRNS_WEBGPU
-    // Browser present support: the offscreen final_target_'s native texture
+    // Browser present support: the offscreen present_.final_target's native texture
     // (WGPUTexture as void*). The web entry copies it into the canvas surface
     // each frame, reusing the whole surfaceless render path. Null if unset.
     void* FinalTargetNativeTexture() {
-        if (final_target_.IsNull()) {
+        if (present_.final_target.IsNull()) {
             return nullptr;
         }
-        rhi::Texture::Cold* cold = rhi_.resources.textures.GetCold(final_target_);
+        rhi::Texture::Cold* cold = rhi_.resources.textures.GetCold(present_.final_target);
         return cold ? cold->api_image : nullptr;
     }
 #endif
 
-    // Headless texture readback: blit final_target_ -> Shared buffer ->
+    // Headless texture readback: blit present_.final_target -> Shared buffer ->
     // PNG. Mirrors the windowed dump in metal/frames.cpp::End() but reads
     // from the offscreen target instead of the swapchain drawable. Apple
     // origin is top-left so no Y-flip needed (matches the windowed dump's
     // contract). BGRA -> RGBA swizzle on the host side.
     bool DumpFinalTarget(const std::filesystem::path& path) {
-        if (final_target_.IsNull()) {
+        if (present_.final_target.IsNull()) {
             return false;
         }
         std::vector<uint8_t> rgba;
         uint32_t w = 0;
         uint32_t h = 0;
-        if (!rhi_.resources.ReadBackTextureRgba(final_target_, rgba, w, h)) {
+        if (!rhi_.resources.ReadBackTextureRgba(present_.final_target, rgba, w, h)) {
             return false;
         }
         return stbi_write_png(path.string().c_str(), static_cast<int>(w),
@@ -2598,15 +2599,15 @@ public:
             }
         }
         scene_mgr_.proxies.resize(2);
-        // Surfaceless mode: allocate the offscreen final_target_ and CONTINUE
+        // Surfaceless mode: allocate the offscreen present_.final_target and CONTINUE
         // through normal init. The engine -- not the RHI -- is the one that
         // decides which texture the swap pass writes into each frame: in
         // surfaceless mode it builds a SwapResolveTarget pointing at
-        // final_target_; in windowed mode it pulls one out of swapchain_.
+        // present_.final_target; in windowed mode it pulls one out of present_.swapchain.
         // SwapChain and Frames have no notion of "headless" mode.
         if (cfg.surfaceless) {
-            final_target_w_ = cfg.width;
-            final_target_h_ = cfg.height;
+            present_.final_target_w = cfg.width;
+            present_.final_target_h = cfg.height;
             rhi::TextureDesc td{};
             td.debug_name = "final_target";
             td.dimensions = {static_cast<int32_t>(cfg.width),
@@ -2615,9 +2616,9 @@ public:
             td.usage = rhi::kTexUsageColorTarget | rhi::kTexUsageSampled |
                        rhi::kTexUsageTransferSrc | rhi::kTexUsageTransferDst;
             td.memory = rhi::Memory::kDefault;
-            final_target_ = rhi_.resources.CreateTexture(rhi_.alloc, td);
-            if (final_target_.IsNull()) {
-                CAIRNS_PRINT("GreaterInit: final_target_ create failed\n");
+            present_.final_target = rhi_.resources.CreateTexture(rhi_.alloc, td);
+            if (present_.final_target.IsNull()) {
+                CAIRNS_PRINT("GreaterInit: present_.final_target create failed\n");
                 return false;
             }
         }
@@ -2625,8 +2626,8 @@ public:
             CAIRNS_PRINT("GreaterInit: initRenderPipeline failed\n");
             return false;
         }
-        const uint32_t init_w = cfg.surfaceless ? cfg.width : swapchain_.Width();
-        const uint32_t init_h = cfg.surfaceless ? cfg.height : swapchain_.Height();
+        const uint32_t init_w = cfg.surfaceless ? cfg.width : present_.swapchain.Width();
+        const uint32_t init_h = cfg.surfaceless ? cfg.height : present_.swapchain.Height();
         if ( !rhi_.frames.InitTargets(rhi_.resources, rhi_.alloc, init_w, init_h) ) {
             CAIRNS_PRINT("GreaterInit: frames.InitTargets failed\n");
             return false;
@@ -3197,13 +3198,13 @@ public:
     // observed swap dims haven't drifted (Vk's WSI may auto-recreate the
     // swapchain on OUT_OF_DATE without ever calling this path).
     void ApplyPendingResize() {
-        const uint32_t cur_w = final_target_.IsNull() ? swapchain_.Width()
-                                                       : final_target_w_;
-        const uint32_t cur_h = final_target_.IsNull() ? swapchain_.Height()
-                                                       : final_target_h_;
-        const bool dims_drifted = (cur_w != last_seen_swap_w_) ||
-                                   (cur_h != last_seen_swap_h_);
-        if (!resize_pending_ && !dims_drifted) {
+        const uint32_t cur_w = present_.final_target.IsNull() ? present_.swapchain.Width()
+                                                       : present_.final_target_w;
+        const uint32_t cur_h = present_.final_target.IsNull() ? present_.swapchain.Height()
+                                                       : present_.final_target_h;
+        const bool dims_drifted = (cur_w != present_.last_seen_swap_w) ||
+                                   (cur_h != present_.last_seen_swap_h);
+        if (!present_.resize_pending && !dims_drifted) {
             return;
         }
         if (render_thread_) {
@@ -3211,17 +3212,17 @@ public:
         }
         rhi_.device.WaitIdle();
         rhi_.offscreen_targets.FlushFramebuffers();
-        if (!final_target_.IsNull() &&
-            (resize_pending_w_ != final_target_w_ ||
-             resize_pending_h_ != final_target_h_) &&
-            resize_pending_w_ != 0 && resize_pending_h_ != 0) {
-            ResizeFinalTarget(resize_pending_w_, resize_pending_h_);
+        if (!present_.final_target.IsNull() &&
+            (present_.resize_pending_w != present_.final_target_w ||
+             present_.resize_pending_h != present_.final_target_h) &&
+            present_.resize_pending_w != 0 && present_.resize_pending_h != 0) {
+            ResizeFinalTarget(present_.resize_pending_w, present_.resize_pending_h);
         }
-        last_seen_swap_w_ = final_target_.IsNull() ? swapchain_.Width()
-                                                    : final_target_w_;
-        last_seen_swap_h_ = final_target_.IsNull() ? swapchain_.Height()
-                                                    : final_target_h_;
-        resize_pending_ = false;
+        present_.last_seen_swap_w = present_.final_target.IsNull() ? present_.swapchain.Width()
+                                                    : present_.final_target_w;
+        present_.last_seen_swap_h = present_.final_target.IsNull() ? present_.swapchain.Height()
+                                                    : present_.final_target_h;
+        present_.resize_pending = false;
     }
 
     bool draw() {
@@ -3253,21 +3254,21 @@ public:
                 render_thread_->Drain();
             }
             rhi_.device.WaitIdle();
-            if (final_target_.IsNull()) {
-                swapchain_.plat.RecreateSwapChain();
+            if (present_.final_target.IsNull()) {
+                present_.swapchain.plat.RecreateSwapChain();
                 rhi_.offscreen_targets.FlushFramebuffers();
             }
             rhi_.frames.plat.recreate_pending_.store(false, std::memory_order_release);
             for (uint32_t i = 0; i < kFramesInFlight; ++i) {
                 slots_[i].present_ready = false;
             }
-            prev_present_slot_ = -1;
-            present_queue_.clear();
+            present_.prev_slot = -1;
+            present_.queue.clear();
         }
 #endif
         ApplyPendingResize();
-        if (final_target_.IsNull() &&
-            (swapchain_.Width() == 0 || swapchain_.Height() == 0)) {
+        if (present_.final_target.IsNull() &&
+            (present_.swapchain.Width() == 0 || present_.swapchain.Height() == 0)) {
             if (render_thread_) {
                 render_thread_->Drain();
             }
@@ -3301,17 +3302,17 @@ public:
         cpu_last_frame_ns_ = cpu_now_ns;
         s.pkt.request_dump = false;
         s.pkt.dump_path.clear();
-        if (dump_and_exit_ && !dump_emitted_ &&
+        if (dump_and_exit_ && !present_.dump_emitted &&
             sim_frame_ >= cairns::kGoldenDumpFrame) {
             s.pkt.request_dump = true;
             s.pkt.dump_path = engine_cfg_.dump_path.empty()
                                    ? std::filesystem::path("/tmp/cairns_dump.png")
                                    : engine_cfg_.dump_path;
-            dump_emitted_ = true;
-            dump_emit_frame_ = frame_;
+            present_.dump_emitted = true;
+            present_.dump_emit_frame = frame_;
         }
-        if (dump_and_exit_ && dump_emitted_ &&
-            frame_ >= dump_emit_frame_ + 2) {
+        if (dump_and_exit_ && present_.dump_emitted &&
+            frame_ >= present_.dump_emit_frame + 2) {
             std::exit(0);  // headless byte-gate: dump flushed, exit. Tests
                            // set use_fixed_clock without dump_path, so
                            // dump_and_exit_=false here and tests survive.
@@ -3405,13 +3406,13 @@ public:
             prefab_store_.resident_textures.data(), prefab_store_.resident_textures.size());
 
         // A.9: imgui-in-golden opt-in. The original guard skipped imgui
-        // whenever golden_=true OR when final_target_ was non-null
+        // whenever golden_=true OR when present_.final_target was non-null
         // (surfaceless). Tests now ask for imgui in golden mode (G6) via
         // SetImguiInGolden(true). The SDL3 NewFrame call still gets skipped
         // in surfaceless because cairns_serve doesn't init SDL3; ImGui
         // proper runs (CreateContext done by test harness, NewFrame on
         // ImGui itself, font atlas already built).
-        const bool surfaceless = !final_target_.IsNull();
+        const bool surfaceless = !present_.final_target.IsNull();
         // Windowed native draws imgui; surfaceless cairns_serve does NOT. The web
         // app is also surfaceless (renders offscreen then copies to the canvas)
         // but DOES want the same imgui HUD + scenario panel as native, so it opts
@@ -3589,17 +3590,17 @@ public:
         slot_lock.unlock();
         render_thread_->Submit(slot, &s.pkt);
 
-        present_queue_.push_back(static_cast<int32_t>(slot));
+        present_.queue.push_back(static_cast<int32_t>(slot));
         {
             cairns::Timer t_pw("present_wait", 9);
-            while (!present_queue_.empty()) {
-                const int32_t head = present_queue_.front();
+            while (!present_.queue.empty()) {
+                const int32_t head = present_.queue.front();
                 PerSlot& ps = slots_[head];
                 rhi::FrameContext present_fc{};
                 rhi::SwapResolveTarget present_target{};
                 bool ready = false;
                 {
-                    std::unique_lock<std::mutex> lk(present_m_);
+                    std::unique_lock<std::mutex> lk(present_.m);
                     if (ps.present_ready) {
                         present_fc = ps.present_fc;
                         present_target = ps.present_target;
@@ -3610,12 +3611,12 @@ public:
                 if (!ready) {
                     break;
                 }
-                present_queue_.pop_front();
+                present_.queue.pop_front();
                 rhi_.frames.Present(present_target, rhi_.frame_capture,
                                     present_fc);
             }
         }
-        prev_present_slot_ = static_cast<int32_t>(slot);
+        present_.prev_slot = static_cast<int32_t>(slot);
 
         // Under CAIRNS_DUMP, collapse to depth-1 pipelining: wait for the
         // render thread to fully complete this frame before the next iteration
@@ -3624,12 +3625,12 @@ public:
         //
         // Also drain in surfaceless mode (cairns_serve) so the next
         // io.dumpTexture op sees the rendered pixels rather than reading
-        // final_target_ while the render thread is still working on it.
+        // present_.final_target while the render thread is still working on it.
         // #207 also drain when a pick is pending so the id_target_ readback
         // sees the just-rendered frame -- windowed sdl-min normally lets
         // the render thread run async, but Shift+LMB stalls one frame to
         // resolve the pick (acceptable cost for an interactive event).
-        if (golden_ || !final_target_.IsNull() || picking_.pending) {
+        if (golden_ || !present_.final_target.IsNull() || picking_.pending) {
             render_thread_->Drain();
         }
 
@@ -3760,11 +3761,11 @@ public:
     // app-mode-agnostic -- the engine is the one place that knows which
     // texture the swap pass writes into this frame.
     rhi::SwapResolveTarget AcquireFrameSwapTarget() {
-        if (final_target_.IsNull()) {
-            return swapchain_.AcquireForFrame();
+        if (present_.final_target.IsNull()) {
+            return present_.swapchain.AcquireForFrame();
         }
         return rhi_.resources.MakeSurfacelessSwapResolveTarget(
-            final_target_, final_target_w_, final_target_h_);
+            present_.final_target, present_.final_target_w, present_.final_target_h);
     }
 
     // Render-thread entry point (post commit 6). Today called synchronously
@@ -3803,11 +3804,11 @@ public:
             rhi_.resources, rhi_.alloc, rhi_.gpu_profiler,
             rhi_.offscreen_targets, swap_target);
         if (fc.skip_frame) {
-            std::lock_guard<std::mutex> lk(present_m_);
+            std::lock_guard<std::mutex> lk(present_.m);
             s.present_fc = fc;
             s.present_target = swap_target;
             s.present_ready = true;
-            present_cv_.notify_all();
+            present_.cv.notify_all();
             return;
         }
 
@@ -4255,13 +4256,13 @@ public:
                 rhi::GraphTextureDesc td{};
                 td.width = fb_w;
                 td.height = fb_h;
-                // Surfaceless: import final_target_ as the swap output so
+                // Surfaceless: import present_.final_target as the swap output so
                 // BeginRenderPass routes through the offscreen-target-cache
                 // (target.IsNull() == false). Windowed: import null and let
                 // BeginRenderPass take the is_swapchain branch.
                 const rhi::Handle<rhi::Texture> swap_handle =
-                    final_target_.IsNull() ? rhi::Handle<rhi::Texture>::Null
-                                            : final_target_;
+                    present_.final_target.IsNull() ? rhi::Handle<rhi::Texture>::Null
+                                            : present_.final_target;
                 swap_tex = b.ImportTexture(swap_handle, td);
                 b.AddColorOutput("swapchain", swap_tex, rhi::LoadOp::kClear, clear);
                 for (int v = 0; v < viewport_mgr_.active_count; ++v) {
@@ -4352,12 +4353,12 @@ public:
             t_record.End();
             rhi_.frames.EndSubmit(swap_target, rhi_.frame_capture, fc);
             {
-                std::lock_guard<std::mutex> lk(present_m_);
+                std::lock_guard<std::mutex> lk(present_.m);
                 s.present_fc = fc;
                 s.present_target = swap_target;
                 s.present_ready = true;
             }
-            present_cv_.notify_all();
+            present_.cv.notify_all();
             return;
         }
         if (frame_ <= 6) {
@@ -4378,12 +4379,12 @@ public:
         t_record.End();
         rhi_.frames.EndSubmit(swap_target, rhi_.frame_capture, fc);
         {
-            std::lock_guard<std::mutex> lk(present_m_);
+            std::lock_guard<std::mutex> lk(present_.m);
             s.present_fc = fc;
             s.present_target = swap_target;
             s.present_ready = true;
         }
-        present_cv_.notify_all();
+        present_.cv.notify_all();
     }
 
     bool initRenderPipeline() {
@@ -4477,10 +4478,10 @@ public:
             }
 
             // composite_pip: full-screen tri, samples 1 color tex, writes the
-            // swap target. Surfaceless: final_target_ is 1-sample / no-depth,
+            // swap target. Surfaceless: present_.final_target is 1-sample / no-depth,
             // so the pipeline is compat with a 1-sample / no-depth renderpass.
             // Windowed: swapchain renderpass is MSAA + depth attachments.
-            const bool surfaceless_pipe = !final_target_.IsNull();
+            const bool surfaceless_pipe = !present_.final_target.IsNull();
             rhi::GraphicsPipelineDesc cpd{};
             cpd.logical_shader = "composite_pip";
             cpd.shader_dir = shader_dir.c_str();
@@ -4493,7 +4494,7 @@ public:
                                                 : rhi::Format::kD32F;
             cpd.sample_count = surfaceless_pipe ? 1u : sampleCount;
             cpd.debug_name = "composite_pip";
-            cpd.swap_chain = surfaceless_pipe ? nullptr : &swapchain_;
+            cpd.swap_chain = surfaceless_pipe ? nullptr : &present_.swapchain;
             composite_pip_ = rhi_.pipelines.CreateGraphicsPipeline(
                 rhi_.resources, rhi_.frames, cpd);
 
@@ -5526,7 +5527,7 @@ public:
             desc.sample_count = sampleCount;
             desc.push_constant_bytes = 0;
             desc.debug_name = "particle_render";
-            desc.swap_chain = &swapchain_;
+            desc.swap_chain = &present_.swapchain;
             particles_.render_shader = rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources, rhi_.frames, desc);
             if (particles_.render_shader.IsNull()) {
                 return false;
@@ -5591,14 +5592,14 @@ public:
             id.blend.dst_color = rhi::BlendFactor::kOneMinusSrcAlpha;
             id.blend.src_alpha = rhi::BlendFactor::kOne;
             id.blend.dst_alpha = rhi::BlendFactor::kOneMinusSrcAlpha;
-            const bool surfaceless_imgui = !final_target_.IsNull();
+            const bool surfaceless_imgui = !present_.final_target.IsNull();
             id.color_format = rhi::Format::kBgra8Unorm;
             id.depth_format = surfaceless_imgui ? rhi::Format::kUndefined
                                                 : rhi::Format::kD32F;
             id.sample_count = surfaceless_imgui ? 1u : sampleCount;
             id.push_constant_bytes = 16;
             id.debug_name = "imgui";
-            id.swap_chain = surfaceless_imgui ? nullptr : &swapchain_;
+            id.swap_chain = surfaceless_imgui ? nullptr : &present_.swapchain;
             imgui_ = rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources,
                                                           rhi_.frames, id);
             if (imgui_.IsNull()) {
@@ -5701,7 +5702,7 @@ public:
             render_thread_->Shutdown();
             render_thread_.reset();
         }
-        swapchain_.Deinit();
+        present_.swapchain.Deinit();
         rhi_.pipelines.Deinit(rhi_.resources);
         rhi_.frames.Deinit();
         // #222 Phase F.1/F.3: sibling subsystem teardown after frames.
@@ -5829,7 +5830,9 @@ private:
     // because Resources& / Allocator& must already be initialized.
     std::unique_ptr<rhi::RenderGraph> graph_;
 
-    cairns::rhi::SwapChain swapchain_;
+    // Swap / present / final-target / resize state grouped in PresentTargets
+    // (C2 S7); declared after rhi_ so its swapchain tears down before the device.
+    cairns::PresentTargets present_;
     // shaders
     ShaderHandle unlit_offscreen_ = ShaderHandle::Null;
     // #222 Phase A.1: id-less variant; selected when no consumer wants the
@@ -5877,27 +5880,6 @@ private:
     cairns::ParticleSystem particles_;
     std::unique_ptr<cairns::RenderThread> render_thread_;
 
-    // Present handoff. Render thread runs Frames::EndSubmit and stores
-    // (fc, target) on the slot under present_m_; main thread waits on the
-    // SAME slot it just submitted to (slot index from frame_), reads the
-    // stored values, and runs Frames::Present. One frame of present lag,
-    // not kFramesInFlight. Driver vendors don't test render-thread present
-    // (MoltenVK reaches into CALayer) so the contract is the same on every
-    // backend.
-    std::mutex present_m_;
-    std::condition_variable present_cv_;
-    [[maybe_unused]] int32_t prev_present_slot_ = -1;
-    std::deque<int32_t> present_queue_;
-    bool dump_emitted_ = false;
-    uint32_t dump_emit_frame_ = 0;
-
-    // Headless / surfaceless mode (cairns_serve): swap pass writes into this
-    // offscreen target instead of the swapchain drawable. Allocated when
-    // cfg.surfaceless == true in GreaterInit; null otherwise. P1C uses a
-    // minimal clear-only render path; P2+ wires the full scene path through it.
-    rhi::Handle<rhi::Texture> final_target_ = rhi::Handle<rhi::Texture>::Null;
-    uint32_t final_target_w_ = 0;
-    uint32_t final_target_h_ = 0;
 
     // #207 persistent per-viewport R32U id targets. Replaces the previous
     // transient id_off graph texture so end-of-frame pick readback (a
@@ -5914,16 +5896,6 @@ private:
     cairns::PickSelection picking_;
     static constexpr uint32_t kMaxHighlights = 64;
 
-    // P3 resize lifecycle. SDL fires WINDOW_PIXEL_SIZE_CHANGED on the event
-    // thread; we record intent + dims and settle on the next draw() call so
-    // GPU teardown happens with no in-flight frames. last_seen_swap_w_/h_
-    // also catches drift from Vulkan WSI auto-recreating the swapchain on
-    // OUT_OF_DATE without our resize intent path firing.
-    bool resize_pending_ = false;
-    uint32_t resize_pending_w_ = 0;
-    uint32_t resize_pending_h_ = 0;
-    uint32_t last_seen_swap_w_ = 0;
-    uint32_t last_seen_swap_h_ = 0;
 
     // Fiedler fixed-timestep accumulator state. Game-thread only -- never
     // touched by the render thread. clock_ is WallClock in live mode,
