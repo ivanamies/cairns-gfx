@@ -606,9 +606,6 @@ public:
     uint32_t BumpOffset(void* ptr) const;
     Handle<Buffer> BumpMasterBuffer(Memory mem) const;
 
-    void BeginFrame();
-    void EndFrame();
-
     // Fork C frame lifecycle: owns sync + command-buffer recording for one frame.
     FrameContext BeginFrame(SwapChain& sc);
     void EndFrame(FrameContext& fc);
@@ -634,6 +631,9 @@ public:
 #endif  // CAIRNS_METAL
 
 private:
+    // Internal bump-ring advance, called by BeginFrame(SwapChain&). Not public API.
+    void BeginFrame();
+
     struct Impl;
     Impl* impl_ = nullptr;
 };

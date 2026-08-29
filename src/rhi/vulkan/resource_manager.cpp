@@ -1805,7 +1805,6 @@ void ResourceManager::BeginFrame() {
     impl_->memory.BeginFrame(impl_->frame_index);
 }
 
-void ResourceManager::EndFrame() {}
 
 uint32_t ResourceManager::GetBufferByteSize(Handle<Buffer> h) const {
     Buffer::Cold* cold = impl_->buffers.GetCold(h);
