@@ -544,7 +544,7 @@ void Frames::Deinit() {
 }
 
 void Frames::SetDumpPath(const std::filesystem::path& path) {
-    dump_path_ = path;
+    capture_.dump_path = path;
 }
 
 // Framebuffers in the offscreen cache are sized at create-time against the
@@ -916,7 +916,7 @@ void Frames::Present(const SwapResolveTarget& target, FrameContext& fc) {
         plat.recreate_pending_.store(true, std::memory_order_release);
     }
 
-    if (!dump_path_.empty()) {
+    if (!capture_.dump_path.empty()) {
         vkQueueWaitIdle(plat.present_queue_);
         dump_swapchain_image(plat.device_, plat.physical_,
                              plat.command_pool_, plat.graphics_queue_,
@@ -924,8 +924,8 @@ void Frames::Present(const SwapResolveTarget& target, FrameContext& fc) {
                              sc.plat.swapChainImageFormat,
                              sc.plat.swapChainExtent.width,
                              sc.plat.swapChainExtent.height,
-                             dump_path_.string().c_str());
-        dump_path_.clear();
+                             capture_.dump_path.string().c_str());
+        capture_.dump_path.clear();
     }
 
 }

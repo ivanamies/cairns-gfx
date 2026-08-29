@@ -122,7 +122,7 @@ void Frames::Deinit() {
 }
 
 void Frames::SetDumpPath(const std::filesystem::path& path) {
-    dump_path_ = path;
+    capture_.dump_path = path;
 }
 
 // Metal: drawable resize is implicit per-frame (see frames.cpp:101-120 -- the
@@ -212,7 +212,7 @@ void Frames::EndSubmit(const SwapResolveTarget& target, FrameContext& fc) {
     MTL::Texture* swap_tex = target.plat.texture;
     CA::MetalDrawable* drawable = target.plat.drawable;
 
-    if (!dump_path_.empty() && swap_tex) {
+    if (!capture_.dump_path.empty() && swap_tex) {
         const NS::UInteger w = swap_tex->width();
         const NS::UInteger h = swap_tex->height();
         const NS::UInteger bytesPerRow = w * 4;
@@ -256,10 +256,10 @@ void Frames::EndSubmit(const SwapResolveTarget& target, FrameContext& fc) {
             rgba[i * 4 + 2] = bgra[i * 4 + 0];
             rgba[i * 4 + 3] = bgra[i * 4 + 3];
         }
-        stbi_write_png(dump_path_.string().c_str(), static_cast<int>(w),
+        stbi_write_png(capture_.dump_path.string().c_str(), static_cast<int>(w),
                        static_cast<int>(h), 4, rgba.data(), static_cast<int>(bytesPerRow));
         readback->release();
-        dump_path_.clear();
+        capture_.dump_path.clear();
     } else {
         if (drawable) {
             term->presentDrawable(drawable);

@@ -111,7 +111,13 @@ public:
 
     // Backend state. Pipelines reads plat.*_set_layout_ (vk pipeline layouts).
     FramesPlat plat;
-    std::filesystem::path dump_path_;
+    // #222 Phase F.2: FrameCapture nest -- the swap-image dump path. Frames
+    // checks capture_.dump_path on EndSubmit and runs the stb_image_write
+    // path when set. Grouped so the capture surface (currently one field;
+    // future: format, ROI) reads as a unit.
+    struct FrameCapture {
+        std::filesystem::path dump_path;
+    } capture_;
 
 private:
     bool inited_ = false;
