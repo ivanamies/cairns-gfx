@@ -166,48 +166,36 @@ Remaining work:
 
 ---
 
-## Render-graph gaps vs Themaister Granite (surfaced 2026-06-20)
+## Render-graph gaps vs Themaister Granite
 
 Our `src/render/render_graph` is a partial copy of Granite's render graph,
-whose headline feature is *automatic* barrier/semaphore insertion. The
-`three_champ_static` golden flake (FLAKY_TESTS #2) exposed that the copy is
-incomplete. Gaps, roughly highest-value first:
+whose headline feature is *automatic* barrier/semaphore insertion.
+**Correctness parity reached 2026-07-07** (granite-sync-port plan, G0–G2c):
+persistent per-resource `PipelineEvent` (textures AND buffers), RAW/WAW/layout
++ WAR (read-as-fake-flush), compute passes barriered via
+`BeginComputePass`/`EndComputePass`, all backends off the same graph-computed
+barriers; the ad-hoc `compute_fence_` is deleted. The historical
+`three_champ_static` flake is dead (soaked 0-fail). Remaining gaps are PERF
+items, roughly highest-value first:
 
-1. **Cross-frame / persistent-resource sync — OPEN (perf/correctness).**
-   2026-06-21: the three_champ flake is PROBABLY FIXED — it went from ~30%
-   reproduction to 0/200, cause unknown (likely a side effect of the #229
-   arena/compaction work). Ruled out as a sync issue: debug-vk synchronization
-   validation found zero hazards and the CPU sim+render hashes are byte-
-   deterministic run-to-run. Still a real Granite gap:
-   Granite tracks resources across frames + submissions and barriers persistent
-   ones (history buffers, the backbuffer). Our graph rebuilds per-frame with no
-   cross-frame dependency tracking, so the persistent `final_target_` (swap
-   output) has no barrier between frame N's write and frame N+1's reuse. On
-   Metal's untracked heaps that corrupts the host read-back ~1/8. Interim
-   mitigation: a per-frame `final_target_` blit-read (forces untracked
-   coherence). Proper fix: track imported/persistent resources' last-writer
-   across frames and emit the barrier/fence.
-2. **Metal graphics→graphics barriers — CLOSED 2026-06-20.** Granite barriers
-   any write→read pass pair. vk did this via `transition()` layout barriers;
-   Metal did NOT (untracked heaps, only `compute_fence_` for compute→graphics).
-   Closed via `gfx_fence_` (EndRenderPass updates / BeginRenderPass waits) — the
-   Metal mirror of vk's per-pass transition.
-3. **Transient-resource aliasing barriers — UNVERIFIED, likely a gap.** Granite
-   aliases transients in a pool AND barriers the aliasing (reused offset must
-   sync against the prior resource's last use). Our offset allocator aliases by
-   offset reuse; whether the graph emits the aliasing barrier on untracked Metal
-   (`makeAliasable` + fence) is unverified.
-4. **Fine-grained barrier stages — perf gap.** Granite computes precise src/dst
-   stages + access masks per dependency. Ours is brute-force ALL_COMMANDS (vk)
-   / whole-encoder fences (metal). Correct but over-syncs.
-5. **Render-pass merging / vk subpasses — perf gap.** Granite merges compatible
-   passes (tiled-GPU bandwidth). Ours runs each pass as its own render
-   pass/command buffer.
-6. **Async-compute / multi-queue — perf gap.** Granite schedules compute on a
-   separate queue + cross-queue semaphores. Ours is single-queue.
-7. **Timeline-semaphore cross-submission sync — tied to #1.** Granite uses
-   timeline semaphores for queue/frame handoff; we lean on `WaitIdle` /
-   render-thread `Drain` in golden/headless.
+1. **Transient-resource aliasing barriers — OPEN; owned by the NPR plan
+   (M0c, `alias_transfer`).** Granite aliases transients in a pool AND
+   barriers the aliasing; golden runs disable aliasing, windowed runs need
+   the boundary-layout-to-UNDEFINED semantics before the bloom/kuwahara
+   chains land.
+2. **Per-stage invalidation scoping — OPEN (granite-sync-port G3, cuttable).**
+   Granite tracks `invalidated_in_stage[64]`; ours is a coarse
+   access/stage pair. Correct but re-barriers a resource already visible to
+   a different stage.
+3. **Render-pass merging / vk subpasses — perf gap.** Granite merges
+   compatible passes (tiled-GPU bandwidth). Ours runs each pass as its own
+   render pass/command buffer. Matters most on Android.
+4. **Split barriers via VkEvent — perf gap.** Overlap work across a barrier.
+5. **Async-compute / multi-queue — perf gap.** Single-queue today. The one
+   item with a product-sized payoff parked behind it: S22 skinning_compute is
+   9.06 ms of a 16.6 ms GPU frame; overlapping it with the previous frame's
+   raster is the biggest lever on that phone.
+6. **History / feedback resources — absent.** No consumer yet.
 
 Also surfaced (not a graph gap): a **pre-existing MSAA sample-count mismatch**
 (1-sample texture vs 4-sample pipeline) aborts the red-triangle subject under

@@ -186,14 +186,14 @@ build-on-game-thread is the headliner; see there.
 
 `src/render/render_graph` is a partial copy of Themaister's Granite render graph
 (`renderer/render_graph.{cpp,hpp}`). Granite's headline feature is *automatic,
-complete* barrier/semaphore generation. Our copy stopped at scheduling and never
-ported the synchronization model, so the backends do ad-hoc barriers with gaps —
-the `three_champ_static` golden flake (FLAKY_TESTS #2) is a cross-frame
-`final_target_` write-after-write that nothing barriers. **Rule: copy Granite,
-do not re-invent.** Point-by-point:
+complete* barrier/semaphore generation — and as of 2026-07-07 the
+synchronization model is fully ported for correctness (invalidate/flush +
+WAR + buffers, all backends off the same graph-computed barriers; the
+historical cross-frame `final_target_` WAW flake is dead). **Rule: copy
+Granite, do not re-invent.** Point-by-point:
 
 **The core stray — barriers belonged in the graph with persistent per-resource
-state. PORTED 2026-06-20 (`08fccb5`); remaining caveats below.**
+state. PORTED (texture model 2026-06-20; WAR + buffers 2026-07-07).**
 
 - **Granite computes barriers in `bake()`; now we do too.** `render_graph::
   Execute` computes per-pass `invalidate` (before) + `flush` (after) barriers
