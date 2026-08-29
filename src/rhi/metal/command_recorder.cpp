@@ -101,6 +101,29 @@ void CommandRecorder::DispatchSkinBatches(
     if (!palette_buf.IsNull()) {
         pal_buf = res.plat.GetMtlBuffer(alloc, palette_buf, &pal_master_off);
     }
+    constexpr size_t kCacheCap = 16;
+    Handle<Buffer> cache_h[kCacheCap]{};
+    MTL::Buffer* cache_buf[kCacheCap]{};
+    uint32_t cache_off[kCacheCap]{};
+    size_t cache_n = 0;
+    auto resolve = [&](Handle<Buffer> h, MTL::Buffer** out_buf,
+                       uint32_t* out_off) {
+        for (size_t i = 0; i < cache_n; ++i) {
+            if (cache_h[i].index == h.index &&
+                cache_h[i].generation == h.generation) {
+                *out_buf = cache_buf[i];
+                *out_off = cache_off[i];
+                return;
+            }
+        }
+        *out_buf = res.plat.GetMtlBuffer(alloc, h, out_off);
+        if (cache_n < kCacheCap) {
+            cache_h[cache_n] = h;
+            cache_buf[cache_n] = *out_buf;
+            cache_off[cache_n] = *out_off;
+            ++cache_n;
+        }
+    };
     for (const SkinDispatchBatch& b : batches) {
         if (b.workgroups == 0 || b.pos_buffer.IsNull() ||
             b.skin_attr_buffer.IsNull()) {
@@ -114,13 +137,13 @@ void CommandRecorder::DispatchSkinBatches(
         }
         cenc->setBuffer(dyn_master, b.instance_meta_byte_offset, 2);
         cenc->setBuffer(pool_buf, pool_master_off, 3);
+        MTL::Buffer* pos_buf = nullptr;
         uint32_t pos_master_off = 0;
-        MTL::Buffer* pos_buf = res.plat.GetMtlBuffer(
-            alloc, b.pos_buffer, &pos_master_off);
+        resolve(b.pos_buffer, &pos_buf, &pos_master_off);
         cenc->setBuffer(pos_buf, pos_master_off + b.pos_byte_offset, 4);
+        MTL::Buffer* sa_buf = nullptr;
         uint32_t sa_master_off = 0;
-        MTL::Buffer* sa_buf = res.plat.GetMtlBuffer(
-            alloc, b.skin_attr_buffer, &sa_master_off);
+        resolve(b.skin_attr_buffer, &sa_buf, &sa_master_off);
         cenc->setBuffer(sa_buf, sa_master_off + b.skin_attr_byte_offset, 5);
         cenc->dispatchThreadgroups(MTL::Size{b.workgroups, b.instance_count, 1u},
                                     MTL::Size{64u, 1u, 1u});
