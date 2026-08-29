@@ -3,14 +3,18 @@
 #include "render/render_proxy_arrays.hpp"
 #include "scene/scene_world.hpp"
 
+#include <cassert>
 #include <cstdint>
-#include <vector>
 
 namespace cairns {
 
 inline void Extract(const SceneWorld& world, RenderProxyArrays& out) {
     out.Clear();
-    std::vector<int32_t> stack;
+    // Fixed-size scratch. Observed high-water across 100x33 (hw=59) and 50x66
+    // (hw=49) benches; 256 = 4x headroom. 1 KB on the stack, zero heap.
+    constexpr uint32_t kStackCap = 256;
+    int32_t stack[kStackCap];
+    uint32_t top;
     for (const SceneEntity& entity : world.entities) {
         if (entity.scene_index >= world.scene_count) {
             continue;
@@ -18,17 +22,18 @@ inline void Extract(const SceneWorld& world, RenderProxyArrays& out) {
         const Scene& scene = world.scenes[entity.scene_index];
         const glm::mat4 model_matrix = entity.transform * world.root_transform;
 
-        stack.clear();
+        top = 0;
         for (size_t j = 0; j < scene.rootNodes.size(); ++j) {
-            stack.push_back(scene.rootNodes[j]);
+            assert(top < kStackCap);
+            stack[top++] = scene.rootNodes[j];
         }
-        while (!stack.empty()) {
-            const int32_t node_idx = stack.back();
-            stack.pop_back();
+        while (top > 0) {
+            const int32_t node_idx = stack[--top];
             const Node& node = scene.nodes[node_idx];
             if (node.meshIndex < 0) {
                 for (int32_t c : node.children) {
-                    stack.push_back(c);
+                    assert(top < kStackCap);
+                    stack[top++] = c;
                 }
                 continue;
             }
@@ -55,7 +60,8 @@ inline void Extract(const SceneWorld& world, RenderProxyArrays& out) {
             out.meshes.Add(proxy);
 
             for (int32_t c : node.children) {
-                stack.push_back(c);
+                assert(top < kStackCap);
+                stack[top++] = c;
             }
         }
     }
