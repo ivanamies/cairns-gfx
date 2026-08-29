@@ -25,6 +25,8 @@
 #include "rhi/metal/command_recorder_impl.hpp"
 #include "rhi/device.hpp"
 #include "rhi/metal/internal/device_impl.hpp"
+#include "rhi/allocator.hpp"
+#include "rhi/metal/internal/allocator_impl.hpp"
 #include "rhi/swap_chain.hpp"
 #include "gpu_scene_registry.hpp"
 
@@ -32,7 +34,7 @@ namespace cairns::rhi {
 
 struct ResourceManager::Impl {
     BackendInitParams params;
-    metal::MemoryAllocator memory;
+    Allocator* alloc = nullptr;  // borrowed; owns the MemoryAllocator
     std::filesystem::path dump_path;
 
     // rhi-owned per-frame render state (was app-registered via MtlRegisterFrame).
@@ -150,23 +152,14 @@ void ResourceManager::Deinit() {
     impl_ = nullptr;
 }
 
-bool ResourceManager::Init(const BackendInitParams& params) {
-    impl_ = new Impl();
-    impl_->params = params;
-    if (!impl_->memory.Init(params.device)) {
-        return false;
-    }
-    return true;
-}
 
-bool ResourceManager::InitDevice(Device& dev) {
+bool ResourceManager::InitDevice(Device& dev, Allocator& alloc) {
     impl_ = new Impl();
-    // Mirror the device/queue owned by Device; Device owns creation + teardown.
+    // Mirror the device/queue owned by Device; borrow the Allocator (already
+    // Init'd, owns the MemoryAllocator). Device owns device/queue teardown.
     impl_->params.device = dev.impl_->device;
     impl_->params.queue = dev.impl_->queue;
-    if (!impl_->memory.Init(impl_->params.device)) {
-        return false;
-    }
+    impl_->alloc = &alloc;
     impl_->frame_semaphore = dispatch_semaphore_create(kFramesInFlight);
     {
         MTL::DepthStencilDescriptor* dsd = MTL::DepthStencilDescriptor::alloc()->init();
@@ -219,11 +212,10 @@ bool ResourceManager::InitFrameTargets(SwapChain& sc) {
     return InitRenderPassDescriptor(impl_->render_pass_desc, msaa, depth, sc);
 }
 
-uint32_t ResourceManager::UboAlign() const { return 32; }
 
 Handle<Buffer> ResourceManager::CreateBuffer(const BufferDesc& d) {
     metal::AllocResult r =
-        impl_->memory.AllocBuffer(d.byte_size, d.usage, d.memory, 16);
+        impl_->alloc->impl_->memory.AllocBuffer(d.byte_size, d.usage, d.memory, 16);
     if (!r.ok) {
         return Handle<Buffer>::Null;
     }
@@ -248,18 +240,18 @@ Handle<Buffer> ResourceManager::CreateBuffer(const BufferDesc& d) {
                 std::memcpy(dst, d.initial_data.data(), d.initial_data.size());
             }
         } else {
-            void* staging = impl_->memory.BumpAllocate(
+            void* staging = impl_->alloc->impl_->memory.BumpAllocate(
                 static_cast<uint32_t>(d.initial_data.size()), 16,
                 Memory::kUpload);
             if (staging) {
                 std::memcpy(staging, d.initial_data.data(),
                             d.initial_data.size());
-                uint32_t src_off = impl_->memory.BumpOffset(staging);
+                uint32_t src_off = impl_->alloc->impl_->memory.BumpOffset(staging);
                 uint32_t src_hi =
-                    impl_->memory.BumpMasterHeapIndex(Memory::kUpload);
-                MTL::Buffer* src = impl_->memory.HeapMasterBuffer(src_hi);
+                    impl_->alloc->impl_->memory.BumpMasterHeapIndex(Memory::kUpload);
+                MTL::Buffer* src = impl_->alloc->impl_->memory.HeapMasterBuffer(src_hi);
                 MTL::Buffer* dst_buf =
-                    impl_->memory.HeapMasterBuffer(r.heap_index);
+                    impl_->alloc->impl_->memory.HeapMasterBuffer(r.heap_index);
                 MTL::CommandBuffer* cmd =
                     impl_->params.queue->commandBuffer();
                 MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
@@ -294,7 +286,7 @@ Handle<Texture> ResourceManager::CreateTexture(const TextureDesc& d) {
 
     MTL::SizeAndAlign sa = impl_->params.device->heapTextureSizeAndAlign(td);
 
-    metal::AllocResult r = impl_->memory.AllocImage(
+    metal::AllocResult r = impl_->alloc->impl_->memory.AllocImage(
         static_cast<uint32_t>(sa.size),
         static_cast<uint32_t>(sa.align),
         d.memory);
@@ -303,11 +295,11 @@ Handle<Texture> ResourceManager::CreateTexture(const TextureDesc& d) {
         return Handle<Texture>::Null;
     }
 
-    MTL::Heap* heap = impl_->memory.HeapHandle(r.heap_index);
+    MTL::Heap* heap = impl_->alloc->impl_->memory.HeapHandle(r.heap_index);
     MTL::Texture* tex = heap->newTexture(td, r.offset);
     td->release();
     if (!tex) {
-        impl_->memory.FreeImage(r.heap_index, r.alloc, nullptr,
+        impl_->alloc->impl_->memory.FreeImage(r.heap_index, r.alloc, nullptr,
                                 impl_->frame_index + kFramesInFlight);
         return Handle<Texture>::Null;
     }
@@ -406,7 +398,7 @@ void ResourceManager::Destroy(Handle<Buffer> h) {
     if (!hot || !cold) {
         return;
     }
-    impl_->memory.FreeBuffer(hot->heap_buffer_index, cold->alloc,
+    impl_->alloc->impl_->memory.FreeBuffer(hot->heap_buffer_index, cold->alloc,
                              impl_->frame_index + kFramesInFlight);
     impl_->buffers.Release(h);
 }
@@ -417,7 +409,7 @@ void ResourceManager::Destroy(Handle<Texture> h) {
     if (!hot || !cold) {
         return;
     }
-    impl_->memory.FreeImage(cold->heap_buffer_index, cold->alloc,
+    impl_->alloc->impl_->memory.FreeImage(cold->heap_buffer_index, cold->alloc,
                             hot->api_view,
                             impl_->frame_index + kFramesInFlight);
     impl_->textures.Release(h);
@@ -669,27 +661,9 @@ Handle<Kernel> ResourceManager::CreateComputePipeline(
     return h;
 }
 
-void* ResourceManager::BumpAllocate(uint32_t bytes, uint32_t align,
-                                    Memory mem) {
-    return impl_->memory.BumpAllocate(bytes, align, mem);
-}
-
-uint32_t ResourceManager::BumpOffset(void* ptr) const {
-    return impl_->memory.BumpOffset(ptr);
-}
-
-Handle<Buffer> ResourceManager::BumpMasterBuffer(Memory mem) const {
-    Handle<Buffer> h;
-    h.index = static_cast<uint16_t>(impl_->memory.BumpMasterHeapIndex(mem));
-    h.generation = 0;
-    return h;
-}
-
 void ResourceManager::BeginFrame() {
     impl_->frame_index++;
-    uint32_t slot = impl_->frame_index % kFramesInFlight;
-    impl_->memory.RetireFrame(slot);
-    impl_->memory.BeginFrame(impl_->frame_index);
+    impl_->alloc->AdvanceFrame(impl_->frame_index);
 }
 
 
@@ -713,7 +687,7 @@ MTL::Buffer* ResourceManager::GetMtlBuffer(Handle<Buffer> h,
         if (out_offset) {
             *out_offset = 0;
         }
-        return impl_->memory.HeapMasterBuffer(h.index);
+        return impl_->alloc->impl_->memory.HeapMasterBuffer(h.index);
     }
     Buffer::Hot* hot = impl_->buffers.GetHot(h);
     if (!hot) {
@@ -725,7 +699,7 @@ MTL::Buffer* ResourceManager::GetMtlBuffer(Handle<Buffer> h,
     if (out_offset) {
         *out_offset = hot->offset_in_heap;
     }
-    return impl_->memory.HeapMasterBuffer(hot->heap_buffer_index);
+    return impl_->alloc->impl_->memory.HeapMasterBuffer(hot->heap_buffer_index);
 }
 
 uint8_t* ResourceManager::MappedPtr(Handle<Buffer> h) {
@@ -734,7 +708,7 @@ uint8_t* ResourceManager::MappedPtr(Handle<Buffer> h) {
         return nullptr;
     }
     uint8_t* base = static_cast<uint8_t*>(
-        impl_->memory.HeapMappedPtr(hot->heap_buffer_index));
+        impl_->alloc->impl_->memory.HeapMappedPtr(hot->heap_buffer_index));
     if (!base) {
         return nullptr;
     }
@@ -742,11 +716,11 @@ uint8_t* ResourceManager::MappedPtr(Handle<Buffer> h) {
 }
 
 MTL::Buffer* ResourceManager::GetBumpMasterBuffer(Memory mem) const {
-    uint32_t hi = impl_->memory.BumpMasterHeapIndex(mem);
+    uint32_t hi = impl_->alloc->impl_->memory.BumpMasterHeapIndex(mem);
     if (hi == metal::kInvalidBlock) {
         return nullptr;
     }
-    return impl_->memory.HeapMasterBuffer(hi);
+    return impl_->alloc->impl_->memory.HeapMasterBuffer(hi);
 }
 
 Handle<BindGroup> ResourceManager::CreateBindlessRegistry(

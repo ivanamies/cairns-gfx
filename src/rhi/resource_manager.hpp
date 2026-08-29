@@ -65,6 +65,7 @@ using ApiKernelHandle = void*;
 
 class ResourceManager;
 class Device;
+class Allocator;
 struct Buffer;
 struct Texture;
 struct Sampler;
@@ -530,11 +531,10 @@ public:
     ResourceManager(const ResourceManager&) = delete;
     ResourceManager& operator=(const ResourceManager&) = delete;
 
-    bool Init(const BackendInitParams& params);
-    // Mirrors the device handles owned by `device` into this manager, then
-    // initializes the memory allocator + per-frame command/sync/descriptor
-    // state. Device must be Init'd first (the engine owns construction order).
-    bool InitDevice(Device& device);
+    // Mirrors the device handles + borrows the allocator, then initializes the
+    // per-frame command/sync/descriptor state. Device + Allocator must be Init'd
+    // first (the engine owns construction order).
+    bool InitDevice(Device& device, Allocator& alloc);
     // Neutral swapchain bring-up: fills `sc` using the device objects InitDevice
     // owns (Vulkan: device/surface/queues/pool/samples; Metal: device).
     bool InitSwapChain(SwapChain& sc, SDL_Window* window);
@@ -547,9 +547,6 @@ public:
     // Request a one-shot swapchain dump on the next EndFrame (neutral; both
     // backends honor it). Cleared after the dump is written.
     void SetDumpPath(const std::filesystem::path& path);
-    // Minimum dynamic-UBO offset alignment for this backend (bump-allocate
-    // dynamic uniform data to this). Neutral.
-    uint32_t UboAlign() const;
 
     Handle<Buffer> CreateBuffer(const BufferDesc& desc);
     Handle<Texture> CreateTexture(const TextureDesc& desc);
@@ -580,12 +577,6 @@ public:
     DynamicBuffers::Hot* GetHot(Handle<DynamicBuffers> h);
     Shader::Hot* GetHot(Handle<Shader> h);
     Kernel::Hot* GetHot(Handle<Kernel> h);
-
-    // Per-frame bump ring (transient data). Returns a CPU-writable pointer that
-    // maps directly into the bump ring's master platform buffer.
-    void* BumpAllocate(uint32_t bytes, uint32_t align, Memory mem);
-    uint32_t BumpOffset(void* ptr) const;
-    Handle<Buffer> BumpMasterBuffer(Memory mem) const;
 
     // Fork C frame lifecycle: owns sync + command-buffer recording for one frame.
     FrameContext BeginFrame(SwapChain& sc);

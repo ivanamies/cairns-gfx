@@ -32,6 +32,7 @@
 #include "util/timer.hpp"
 #include "util/unique_ptr.hpp"
 #include "rhi/device.hpp"
+#include "rhi/allocator.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/command_recorder.hpp"
 
@@ -112,7 +113,10 @@ public:
         if (!device_.Init(window)) {
             return false;
         }
-        if (!rm_.InitDevice(device_)) {
+        if (!alloc_.Init(device_)) {
+            return false;
+        }
+        if (!rm_.InitDevice(device_, alloc_)) {
             return false;
         }
         if ( !initSwapChain(window)) {
@@ -237,11 +241,11 @@ public:
                 .camera_dir = glm::vec4(camera_dir, near_z),
                 .screen_params = glm::vec4(screen_width, screen_height, 1.0f / screen_width, 1.0f / screen_height)
             };
-            void* gptr = rm_.BumpAllocate(
-                sizeof(cairns::rhi::RenderPassGlobals), rm_.UboAlign(),
+            void* gptr = alloc_.BumpAllocate(
+                sizeof(cairns::rhi::RenderPassGlobals), alloc_.UboAlign(),
                 rhi::Memory::kDynamic);
             memcpy(gptr, &render_pass_globals, sizeof(render_pass_globals));
-            globals_offset_ = rm_.BumpOffset(gptr);
+            globals_offset_ = alloc_.BumpOffset(gptr);
             if (frame_ <= 6) {
                 fprintf(stderr,
                         "[FLAKE] frame=%u w=%u h=%u aspect=%.9f vp00=%.9f vp11=%.9f "
@@ -298,11 +302,11 @@ public:
                         .tex_color_id = gpu_tex_id,
                         .sampler_id = gpu_sampler_id,
                     };
-                    void* mptr = rm_.BumpAllocate(
-                        sizeof(cairns::rhi::MaterialGpu), rm_.UboAlign(),
+                    void* mptr = alloc_.BumpAllocate(
+                        sizeof(cairns::rhi::MaterialGpu), alloc_.UboAlign(),
                         rhi::Memory::kDynamic);
                     memcpy(mptr, &material_gpu, sizeof(material_gpu));
-                    const uint32_t material_offset = rm_.BumpOffset(mptr);
+                    const uint32_t material_offset = alloc_.BumpOffset(mptr);
 
                     const glm::mat4 model_matrix = scene_xform * rot_matrix;
                     const cairns::rhi::DrawTmp draw_tmp {
@@ -311,11 +315,11 @@ public:
                         .tex_id = gpu_tex_id,
                         .sampler_id = gpu_sampler_id
                     };
-                    void* tptr = rm_.BumpAllocate(
-                        sizeof(cairns::rhi::DrawTmp), rm_.UboAlign(),
+                    void* tptr = alloc_.BumpAllocate(
+                        sizeof(cairns::rhi::DrawTmp), alloc_.UboAlign(),
                         rhi::Memory::kDynamic);
                     memcpy(tptr, &draw_tmp, sizeof(draw_tmp));
-                    const uint32_t drawtmp_offset = rm_.BumpOffset(tptr);
+                    const uint32_t drawtmp_offset = alloc_.BumpOffset(tptr);
 
                     cairns::Draw draw{};
                     draw.index_buffer = index;
@@ -375,12 +379,12 @@ public:
         }
 
         float* dt_ptr = static_cast<float*>(
-            rm_.BumpAllocate(sizeof(float), rm_.UboAlign(), rhi::Memory::kDynamic));
+            alloc_.BumpAllocate(sizeof(float), alloc_.UboAlign(), rhi::Memory::kDynamic));
         *dt_ptr = delta_time;
-        const uint32_t dt_off = rm_.BumpOffset(dt_ptr);
+        const uint32_t dt_off = alloc_.BumpOffset(dt_ptr);
 
         rhi::BoundBuffer cbufs[3] = {
-            {0, rm_.BumpMasterBuffer(rhi::Memory::kDynamic), dt_off},
+            {0, alloc_.BumpMasterBuffer(rhi::Memory::kDynamic), dt_off},
             {1, particle_ssbo_[particle_parity_], 0},
             {2, particle_ssbo_[1 - particle_parity_], 0},
         };
@@ -605,6 +609,7 @@ public:
     bool deinit() {
         swapchain_.Deinit();
         rm_.Deinit();
+        alloc_.Deinit();
         device_.Deinit();
         return true;
     }
@@ -632,6 +637,7 @@ private:
     std::vector<rhi::Handle<rhi::Texture>> resident_textures_;
     
     rhi::Device device_;
+    rhi::Allocator alloc_;
     rhi::ResourceManager rm_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
     rhi::Handle<rhi::BindGroup> bindless_bg_;

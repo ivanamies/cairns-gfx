@@ -28,6 +28,8 @@
 #include "rhi/vulkan/command_recorder_impl.hpp"
 #include "rhi/device.hpp"
 #include "rhi/vulkan/internal/device_impl.hpp"
+#include "rhi/allocator.hpp"
+#include "rhi/vulkan/internal/allocator_impl.hpp"
 #include "rhi/swap_chain.hpp"
 #include "util/render_pass_globals.hpp"
 #include "util/material_gpu.hpp"
@@ -36,7 +38,7 @@ namespace cairns::rhi {
 
 struct ResourceManager::Impl {
     BackendInitParams params;
-    vulkan::MemoryAllocator memory;
+    Allocator* alloc = nullptr;  // borrowed; owns the MemoryAllocator + aligns
     std::filesystem::path dump_path;
     uint32_t recorder_frame = 0;
 
@@ -78,8 +80,6 @@ struct ResourceManager::Impl {
     Pool<Shader> shaders;
 
     uint32_t frame_index = 0;
-    uint32_t uniform_align = 256;
-    uint32_t storage_align = 256;
 
     // Bindless registry builder (one in-flight at a time).
     VkDescriptorSetLayout bindless_layout = VK_NULL_HANDLE;
@@ -520,29 +520,7 @@ void ResourceManager::Deinit() {
     impl_ = nullptr;
 }
 
-bool ResourceManager::Init(const BackendInitParams& params) {
-    impl_ = new Impl();
-    impl_->params = params;
-    if (!impl_->memory.Init(params.device, params.physical, params.enable_bda)) {
-        return false;
-    }
-
-    VkPhysicalDeviceProperties props;
-    vkGetPhysicalDeviceProperties(params.physical, &props);
-    impl_->uniform_align =
-        static_cast<uint32_t>(props.limits.minUniformBufferOffsetAlignment);
-    impl_->storage_align =
-        static_cast<uint32_t>(props.limits.minStorageBufferOffsetAlignment);
-    if (impl_->uniform_align == 0) {
-        impl_->uniform_align = 1;
-    }
-    if (impl_->storage_align == 0) {
-        impl_->storage_align = 1;
-    }
-    return true;
-}
-
-bool ResourceManager::InitDevice(Device& dev) {
+bool ResourceManager::InitDevice(Device& dev, Allocator& alloc) {
     impl_ = new Impl();
 
     // Mirror the device handles owned by Device into this manager's Impl, so the
@@ -561,17 +539,7 @@ bool ResourceManager::InitDevice(Device& dev) {
     impl_->params.queue = dev.impl_->graphics_queue;
     impl_->params.queue_family_index = dev.impl_->queue_family_index;
     impl_->msaa_samples = dev.impl_->msaa_samples;
-
-    if (!impl_->memory.Init(impl_->params.device, impl_->params.physical,
-                            impl_->params.enable_bda)) {
-        return false;
-    }
-    VkPhysicalDeviceProperties props;
-    vkGetPhysicalDeviceProperties(impl_->params.physical, &props);
-    impl_->uniform_align = std::max(
-        1u, static_cast<uint32_t>(props.limits.minUniformBufferOffsetAlignment));
-    impl_->storage_align = std::max(
-        1u, static_cast<uint32_t>(props.limits.minStorageBufferOffsetAlignment));
+    impl_->alloc = &alloc;  // Allocator owns the MemoryAllocator + aligns (Init'd already)
 
     {  // per-frame command buffers + sync
         const uint32_t n = kFramesInFlight;
@@ -719,19 +687,17 @@ bool ResourceManager::InitFrameTargets(SwapChain& sc) {
     return true;
 }
 
-uint32_t ResourceManager::UboAlign() const { return impl_->uniform_align; }
-
 Handle<Buffer> ResourceManager::CreateBuffer(const BufferDesc& d) {
     uint32_t align = 16;
     if (d.usage & kUsageUniform) {
-        align = std::max(align, impl_->uniform_align);
+        align = std::max(align, impl_->alloc->impl_->uniform_align);
     }
     if (d.usage & kUsageStorage) {
-        align = std::max(align, impl_->storage_align);
+        align = std::max(align, impl_->alloc->impl_->storage_align);
     }
 
     vulkan::AllocResult r =
-        impl_->memory.AllocBuffer(d.byte_size, d.usage, d.memory, align);
+        impl_->alloc->impl_->memory.AllocBuffer(d.byte_size, d.usage, d.memory, align);
     if (!r.ok) {
         return Handle<Buffer>::Null;
     }
@@ -757,24 +723,24 @@ Handle<Buffer> ResourceManager::CreateBuffer(const BufferDesc& d) {
             }
         } else {
             uint32_t saved_cursor =
-                impl_->memory.BumpSaveCursor(Memory::kUpload);
-            void* staging = impl_->memory.BumpAllocate(
+                impl_->alloc->impl_->memory.BumpSaveCursor(Memory::kUpload);
+            void* staging = impl_->alloc->impl_->memory.BumpAllocate(
                 static_cast<uint32_t>(d.initial_data.size()), 16,
                 Memory::kUpload);
             if (staging) {
                 std::memcpy(staging, d.initial_data.data(),
                             d.initial_data.size());
-                uint32_t src_off = impl_->memory.BumpOffset(staging);
+                uint32_t src_off = impl_->alloc->impl_->memory.BumpOffset(staging);
                 uint32_t src_hi =
-                    impl_->memory.BumpMasterHeapIndex(Memory::kUpload);
-                VkBuffer src = impl_->memory.HeapMasterBuffer(src_hi);
-                VkBuffer dst = impl_->memory.HeapMasterBuffer(r.heap_index);
+                    impl_->alloc->impl_->memory.BumpMasterHeapIndex(Memory::kUpload);
+                VkBuffer src = impl_->alloc->impl_->memory.HeapMasterBuffer(src_hi);
+                VkBuffer dst = impl_->alloc->impl_->memory.HeapMasterBuffer(r.heap_index);
                 copy_via_staging(
                     impl_->params.device, impl_->params.command_pool,
                     impl_->params.queue, src, src_off, dst, r.offset,
                     static_cast<uint32_t>(d.initial_data.size()));
             }
-            impl_->memory.BumpRestoreCursor(Memory::kUpload, saved_cursor);
+            impl_->alloc->impl_->memory.BumpRestoreCursor(Memory::kUpload, saved_cursor);
         }
     }
     return h;
@@ -810,7 +776,7 @@ Handle<Texture> ResourceManager::CreateTexture(const TextureDesc& d) {
 
     VkMemoryRequirements req;
     vkGetImageMemoryRequirements(impl_->params.device, image, &req);
-    vulkan::AllocResult r = impl_->memory.AllocImage(
+    vulkan::AllocResult r = impl_->alloc->impl_->memory.AllocImage(
         static_cast<uint32_t>(req.size), static_cast<uint32_t>(req.alignment),
         req.memoryTypeBits, Memory::kDefault);
     if (!r.ok) {
@@ -818,17 +784,17 @@ Handle<Texture> ResourceManager::CreateTexture(const TextureDesc& d) {
         return Handle<Texture>::Null;
     }
     vkBindImageMemory(impl_->params.device, image,
-                      impl_->memory.HeapDeviceMemory(r.heap_index), r.offset);
+                      impl_->alloc->impl_->memory.HeapDeviceMemory(r.heap_index), r.offset);
 
     if (!d.initial_data.empty()) {
-        uint32_t saved_cursor = impl_->memory.BumpSaveCursor(Memory::kUpload);
-        void* staging = impl_->memory.BumpAllocate(
+        uint32_t saved_cursor = impl_->alloc->impl_->memory.BumpSaveCursor(Memory::kUpload);
+        void* staging = impl_->alloc->impl_->memory.BumpAllocate(
             static_cast<uint32_t>(d.initial_data.size()), 16, Memory::kUpload);
         if (staging) {
             std::memcpy(staging, d.initial_data.data(), d.initial_data.size());
-            uint32_t src_off = impl_->memory.BumpOffset(staging);
-            uint32_t src_hi = impl_->memory.BumpMasterHeapIndex(Memory::kUpload);
-            VkBuffer src = impl_->memory.HeapMasterBuffer(src_hi);
+            uint32_t src_off = impl_->alloc->impl_->memory.BumpOffset(staging);
+            uint32_t src_hi = impl_->alloc->impl_->memory.BumpMasterHeapIndex(Memory::kUpload);
+            VkBuffer src = impl_->alloc->impl_->memory.HeapMasterBuffer(src_hi);
             transition_to_transfer_dst(impl_->params.device,
                                        impl_->params.command_pool,
                                        impl_->params.queue, image, d.mip_levels);
@@ -842,7 +808,7 @@ Handle<Texture> ResourceManager::CreateTexture(const TextureDesc& d) {
                              vk_format, d.dimensions.x, d.dimensions.y,
                              d.mip_levels);
         }
-        impl_->memory.BumpRestoreCursor(Memory::kUpload, saved_cursor);
+        impl_->alloc->impl_->memory.BumpRestoreCursor(Memory::kUpload, saved_cursor);
     }
 
     VkImageViewCreateInfo vci{};
@@ -941,7 +907,7 @@ void ResourceManager::Destroy(Handle<Buffer> h) {
     if (!hot || !cold) {
         return;
     }
-    impl_->memory.FreeBuffer(hot->heap_buffer_index, cold->alloc,
+    impl_->alloc->impl_->memory.FreeBuffer(hot->heap_buffer_index, cold->alloc,
                              impl_->frame_index + kFramesInFlight);
     impl_->buffers.Release(h);
 }
@@ -952,7 +918,7 @@ void ResourceManager::Destroy(Handle<Texture> h) {
     if (!hot || !cold) {
         return;
     }
-    impl_->memory.FreeImage(cold->heap_buffer_index, cold->alloc,
+    impl_->alloc->impl_->memory.FreeImage(cold->heap_buffer_index, cold->alloc,
                             static_cast<VkImage>(cold->api_image),
                             static_cast<VkImageView>(hot->api_view),
                             impl_->frame_index + kFramesInFlight);
@@ -1486,26 +1452,9 @@ DynamicBuffers::Hot* ResourceManager::GetHot(Handle<DynamicBuffers> h) {
     return impl_->dynamic_buffers.GetHot(h);
 }
 
-void* ResourceManager::BumpAllocate(uint32_t bytes, uint32_t align, Memory mem) {
-    return impl_->memory.BumpAllocate(bytes, align, mem);
-}
-
-uint32_t ResourceManager::BumpOffset(void* ptr) const {
-    return impl_->memory.BumpOffset(ptr);
-}
-
-Handle<Buffer> ResourceManager::BumpMasterBuffer(Memory mem) const {
-    Handle<Buffer> h;
-    h.index = static_cast<uint16_t>(impl_->memory.BumpMasterHeapIndex(mem));
-    h.generation = 0;
-    return h;
-}
-
 void ResourceManager::BeginFrame() {
     impl_->frame_index++;
-    uint32_t slot = impl_->frame_index % kFramesInFlight;
-    impl_->memory.RetireFrame(slot);
-    impl_->memory.BeginFrame(impl_->frame_index);
+    impl_->alloc->AdvanceFrame(impl_->frame_index);
 }
 
 
@@ -1518,10 +1467,10 @@ uint32_t ResourceManager::GetBufferByteSize(Handle<Buffer> h) const {
 }
 
 VkBuffer ResourceManager::GetVkBumpMasterBuffer(Memory mem) {
-    void* p = BumpAllocate(1, 1, mem);
+    void* p = impl_->alloc->BumpAllocate(1, 1, mem);
     (void)p;
-    uint32_t hi = impl_->memory.BumpMasterHeapIndex(mem);
-    return impl_->memory.HeapMasterBuffer(hi);
+    uint32_t hi = impl_->alloc->impl_->memory.BumpMasterHeapIndex(mem);
+    return impl_->alloc->impl_->memory.HeapMasterBuffer(hi);
 }
 
 uint32_t ResourceManager::BufferBaseOffset(Handle<Buffer> h) {
@@ -1535,7 +1484,7 @@ VkBuffer ResourceManager::GetVkBuffer(Handle<Buffer> h, uint32_t* out_offset) {
         if (out_offset) {
             *out_offset = 0;
         }
-        return impl_->memory.HeapMasterBuffer(h.index);
+        return impl_->alloc->impl_->memory.HeapMasterBuffer(h.index);
     }
     Buffer::Hot* hot = impl_->buffers.GetHot(h);
     if (!hot) {
@@ -1547,7 +1496,7 @@ VkBuffer ResourceManager::GetVkBuffer(Handle<Buffer> h, uint32_t* out_offset) {
     if (out_offset) {
         *out_offset = hot->offset_in_heap;
     }
-    return impl_->memory.HeapMasterBuffer(hot->heap_buffer_index);
+    return impl_->alloc->impl_->memory.HeapMasterBuffer(hot->heap_buffer_index);
 }
 
 uint8_t* ResourceManager::MappedPtr(Handle<Buffer> h) {
@@ -1556,7 +1505,7 @@ uint8_t* ResourceManager::MappedPtr(Handle<Buffer> h) {
         return nullptr;
     }
     uint8_t* base =
-        static_cast<uint8_t*>(impl_->memory.HeapMappedPtr(hot->heap_buffer_index));
+        static_cast<uint8_t*>(impl_->alloc->impl_->memory.HeapMappedPtr(hot->heap_buffer_index));
     if (!base) {
         return nullptr;
     }
