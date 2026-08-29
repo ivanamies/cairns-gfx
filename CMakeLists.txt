@@ -24,6 +24,15 @@ if(MSVC)
     endif()
 endif()
 
+# run.js is a MANDATORY bundled asset on every platform. boot_run.cpp aborts
+# at launch if it can't load it, so we fail fast at configure time instead.
+if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/run.js")
+    message(FATAL_ERROR
+        "assets/run.js is missing -- it is the bundled boot script that "
+        "loadBatch + instantiateGrid through cairns.dispatch on every "
+        "platform. Add it to assets/ or fix the asset pipeline.")
+endif()
+
 # GPU backend is a true compile-time feature: pick exactly one.
 # No silent default -- forgetting the flag once cost a chunk-bisect session
 # (built metal while debugging a vk regression). Hard-fail at configure time.
@@ -130,6 +139,7 @@ target_compile_options(quickjs PRIVATE -Wno-everything)
 # cairns_render_thread / Taskflow pattern below.
 add_library(cairns_control STATIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/agent_stdin_drain.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/control/boot_run.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/command_registry.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/transport_stdio.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/lifecycle_ops.cpp"
@@ -335,6 +345,7 @@ if (NOT ANDROID AND NOT IOS AND NOT EMSCRIPTEN)
     # sdl-min path puts them inside the .app bundle's Resources/ dir, but
     # cairns_serve is unbundled and SDL_GetBasePath returns the binary's dir.
     set(_cairns_serve_assets
+        "run.js"                                 # mandatory boot script
         "unlit.vert.spv" "unlit.frag.spv"
         "unlit_noid.frag.spv"                    # #222 Phase A.1
         "particle.vert.spv" "particle.frag.spv" "particle.comp.spv"
@@ -405,6 +416,7 @@ if (APPLE)
     endmacro()
 
     # 1. Add specific known files
+    add_resource("${input_root}/run.js")  # mandatory boot script
     add_resource("${input_root}/Inter-VariableFont.ttf")
     add_resource("${input_root}/the_entertainer.ogg")
     add_resource("${input_root}/gs_tiger.svg")
@@ -464,6 +476,7 @@ else()
             COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_LIST_DIR}/assets/${filename}" "${outname}"
         )
     endmacro()
+    copy_helper("run.js")  # mandatory boot script
     copy_helper("unlit.vert.spv")
     copy_helper("unlit.frag.spv")
     copy_helper("unlit_noid.frag.spv") # #222 Phase A.1

@@ -848,7 +848,14 @@ public:
                      static_cast<float>(final_target_h_);
         }
         const float depth = 4.0f;
-        const float visible_h = 2.0f * std::tan(fov_y * 0.5f) * depth;
+        // kFitMargin shrinks the GRID extent so the outermost characters
+        // get margin between their bind-pose AABB edge and the viewport
+        // edge. (Animated poses extend beyond bind extent; at large N the
+        // pre-margin grid spanned the full viewport and characters at the
+        // edges clipped.) cell_size's 0.85 scales the CHARACTER within
+        // its cell, independent of this.
+        const float kFitMargin = 0.85f;
+        const float visible_h = 2.0f * std::tan(fov_y * 0.5f) * depth * kFitMargin;
         const float visible_w = visible_h * aspect;
         const float cell_w = visible_w / static_cast<float>(cols);
         const float cell_h = visible_h / static_cast<float>(rows);

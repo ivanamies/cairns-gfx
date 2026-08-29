@@ -19,6 +19,7 @@
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 
+#include "control/boot_run.hpp"
 #include "engine.hpp"
 #include "rhi/init_config.hpp"
 #include "shell/env_config.hpp"
@@ -152,6 +153,8 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     // Script ops LAST so tools.list inside script.eval reflects every
     // other op already registered. Mirrors serve_main's ordering.
     cairns::control::RegisterScriptOps(registry);
+    // Bundled boot script. Aborts if assets/run.js isn't in the bundle.
+    cairns::control::RunBootScript(registry);
     app_ctx->agent_drain.Start(cairns::shell::AgentStdinEnabledFromEnv());
     if (app_ctx->agent_drain.Enabled()) {
         std::fprintf(stderr,

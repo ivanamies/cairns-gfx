@@ -30,6 +30,7 @@
 
 #include "imgui.h"
 
+#include "control/boot_run.hpp"
 #include "control/command_registry.hpp"
 #include "control/handlers/lifecycle_ops.hpp"
 #include "control/handlers/perf_ops.hpp"
@@ -80,6 +81,10 @@ int main() {
     // Script ops must come LAST so tools.list inside script.eval reflects
     // every other op already registered.
     cairns::control::RegisterScriptOps(registry);
+    // Bundled boot script. Aborts if assets/run.js isn't in the bundle.
+    if (engine_ok) {
+        cairns::control::RunBootScript(registry);
+    }
 
     // W1 watchdog: monitor the transport's heartbeat. The transport
     // stamps steady_clock ns BEFORE Dispatch and AFTER the response is
