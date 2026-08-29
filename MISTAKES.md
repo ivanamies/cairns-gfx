@@ -170,3 +170,61 @@ look for an existing handle pool / typed pool / parallel arrays
 pattern in the codebase. Reach for PMR only with explicit per-instance
 user approval, and only after explaining why the engine's existing
 allocator discipline can't cover the case.
+
+## Added a field to a per-draw / per-dispatch struct (counter: 1)
+
+### Incident 1 — 2026-06-11, `SkinDispatchBatch::palette_buffer`
+
+Wiring up Phase 5b GPU palette eval, the skin kernel's Group B binding 1
+(palettes) needed to point at the persistent `palette_out_buf_` instead
+of the kDynamic ring. On Vulkan I routed this through
+`WriteSkinGroupBDescriptors(palette_buf)` — descriptor write at init
+time, one channel, clean. On Metal, instead of doing the same — bind
+the persistent palette buffer at dispatch time via a recorder/engine
+parameter that doesn't ride per-batch — I added a `Handle<Buffer>
+palette_buffer` field to `SkinDispatchBatch` itself (src/rhi/command_recorder.hpp).
+Every batch then carried the same buffer handle (it's a frame-wide
+binding, not per-batch state), and the metal recorder branched on
+`b.palette_buffer.IsNull() ? dyn_master : ...`. Visual output ended up
+broken; haven't confirmed the field add is the proximate cause, but
+the architecture was already wrong before any debugging.
+
+**Why this was wrong:**
+
+Per-batch / per-dispatch / per-draw structs are the hottest CPU
+artifact in the frame: built every frame on the arena, copied into
+spans, walked by the recorder, often hashed for sort keys. Every
+field on them costs memory bandwidth on the producer AND consumer
+side, makes the sort/cache footprint worse, and — the load-bearing
+problem — encodes "this is per-batch state" into the type. The next
+person reading `SkinDispatchBatch` sees `palette_buffer` next to
+`pos_buffer` / `skin_attr_buffer` and reasonably concludes palettes
+vary per batch. They don't; the field lies about its own scope.
+
+The right shape is the same as Vulkan's: bind the persistent palette
+buffer ONCE, channel it to the recorder via a stable path (member on
+the recorder, a parameter to `DispatchSkinBatches`, or an engine-side
+setter called before dispatch), and keep `SkinDispatchBatch` to fields
+that actually vary across batches in the same frame.
+
+**Rule:** before adding a field to `Draw`, `SkinDispatchBatch`,
+`SkinBatchGpu`, `MeshDrawList`, `PointDraw`, `ComputeDispatch`, or any
+sibling per-frame struct, ask:
+
+1. Does this value vary across instances of the struct in the same
+   frame? If no, it doesn't belong here — bind it once at a wider
+   scope (recorder member, frames-level cache, engine field threaded
+   into the dispatch call).
+2. Is the same value already plumbed on the other backend through a
+   different mechanism? If yes, mirror that mechanism; don't introduce
+   a second path on the new backend. Two paths means two places to
+   keep in sync.
+3. Can I justify the byte cost on every batch in the frame? At 500
+   actors × N batches, every uint64 handle on the batch costs Nx8B
+   of bandwidth that has nothing to do with what the batch describes.
+
+A `Handle<Buffer>` field that's constant for the whole frame fails
+all three checks. Default move: add a `void DispatchSkinBatches(...,
+Handle<Buffer> palette_buffer, ...)` parameter, or attach it to the
+recorder via a setter before the dispatch loop. The struct stays
+honest about its scope.
