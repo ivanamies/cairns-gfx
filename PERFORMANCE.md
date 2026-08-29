@@ -5,6 +5,83 @@ Newest first.
 
 ---
 
+## `52d5d16` (2026-06-05) — headless editor mode P0–P5 + 0xCC heap garbage init
+
+Full headless-editor-mode plan landed P0–P5: CMake split (`cairns_core` +
+`sdl-min` + `cairns_serve`), RHI surface lift via `InitConfig`,
+`CommandRegistry` + NDJSON stdio + `[Timer]` prefix on stderr, surfaceless
+`Device::Init`, `Engine::GreaterInit({.surfaceless=true})` end-to-end,
+`final_target_` + `render.frame` (clear-only) + `io.dumpTexture`,
+`perf.last` + `rng.seed` engine-bound + stdin agent transport on
+`cairns_app`, QuickJS vendored + `script.eval` + `cairns.dispatch`, P2
+scene/viewport/window ops (stub-first surface; `window.resize` real),
+windowed `io.dumpTexture target=window`. Plus defensive 0xCC garbage
+init on every allocated GPU heap byte (Metal + Vulkan; `CAIRNS_HEAP_ZERO=1`
+falls back to 0x00).
+
+Workload: `100 GLBs × 33 slices = 3300 entities`, 11517 draws. Release.
+Steady-state medians over multiple 120-frame windows (warmup window
+dropped).
+
+### macOS Metal Release — M2 Max, 1280×720 (2560×1440 HiDPI)
+| Pass            | avg     |
+|-----------------|---------|
+| `frame`         |  2.87 ms |
+| `build_draws`   |  2.23 ms |
+| `record`        |  1.46 ms |
+| `particle_sim`  |  0.011 ms (GPU) |
+| `forward`       |  9.27 ms (GPU, offscreen) |
+| `swap`          |  0.46 ms (GPU, composite + PIP + ImGui) |
+| GPU total       | ~9.74 ms |
+
+vs `c90a43b`: `frame` +0.08 ms, `build_draws` +0.06 ms, `record` +0.03 ms
+— all within thermal noise. `forward` 10.3 → 9.27 ms (~1.0 ms drop; this
+is a real win, attributing to the 0xCC pre-fill on heap blocks
+sometimes nudging the driver to commit pages eagerly — unproven, may be
+noise). `swap` 0.31 → 0.46 ms (~0.15 ms regression; possibly the
+init-time blit fillBuffer side effect noted in the V-METAL memory
+file). Headless-editor-mode commits are all gated to `cfg.surfaceless`
+in the windowed code path, so they shouldn't touch `sdl-min`'s steady
+state. Net: GPU total -0.9 ms, CPU total +0.17 ms.
+
+### macOS Vulkan (MoltenVK) Release — M2 Max, 1280×720 (2560×1440 HiDPI)
+| Pass            | avg     |
+|-----------------|---------|
+| `frame`         |  4.42 ms |
+| `build_draws`   |  3.52 ms |
+| `record`        |  1.00 ms |
+| `particle_sim`  |  0.015 ms (GPU) |
+| `forward`       |  9.38 ms (GPU) |
+| `swap`          |  0.12 ms (GPU) |
+| GPU total       | ~9.52 ms |
+
+vs `c90a43b`: `frame` 3.20 → 4.42 ms (+1.22 ms); `build_draws` 2.55 →
+3.52 ms (+0.97 ms); `record` 0.72 → 1.00 ms (+0.28 ms). **CPU-side
+regression** on vk; `forward`/`swap` GPU within thermals (forward
+9.07 → 9.38 ms, swap 0.036 → 0.12 ms). vk run had visibly higher
+variance window-to-window (frame ranged 3.93–4.96 ms across 4 windows).
+Possible explanations to chase: the 0xCC fill of the 88MB Vulkan bump
+heap at allocation (one-time, shouldn't affect steady), the wider
+include surface in cairns_core after the CMake split widening
+compilation-unit boundaries that the linker handles differently, or
+genuine thermal/system noise from the heavier headless-editor TUs.
+Worth a focused investigation when the next round of vk work lands.
+
+### Samsung S22 Vulkan Release — not captured this round
+Android device not attached during this measurement. Re-run from
+`scripts/regenerate_perf.sh android` (or push + on-device run) when the
+device is back online.
+
+### cairns_serve headless smoke (not a perf gate, for record)
+NDJSON-driven `render.frame` (clear-only) + `io.dumpTexture("final")`
+at 1280×720 produces a byte-identical 36970-byte PNG on metal and vk in
+~25 ms wall round-trip (single command-buffer submit + waitUntilCompleted /
+vkQueueWaitIdle + readback + stbi_write_png). Not directly comparable
+to the windowed numbers — separate code path through
+`Engine::RenderHeadlessFrame` / `DumpFinalTarget`, no render thread.
+
+---
+
 ## `c90a43b` (2026-06-04) — EnTT scene layer landed (P0–P8 done; iOS Debug refreshed)
 
 Full P0–P8 sequence of the EnTT scene-layer plan is in. Engine drives
