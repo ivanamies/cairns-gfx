@@ -62,8 +62,12 @@ void CommandRecorder::DispatchSkinBatches(
     if (plat.cmd_ == nullptr) {
         plat.cmd_ = plat.queue_->commandBuffer();
     }
+    Kernel::Hot* khot = res.GetHot(kernel);
+    if (!khot) {
+        return;
+    }
     MTL::ComputeCommandEncoder* cenc = plat.cmd_->computeCommandEncoder();
-    cenc->setComputePipelineState(res.GetHot(kernel)->api_pso);
+    cenc->setComputePipelineState(khot->api_pso);
     MTL::Buffer* dyn_master =
         res.plat.GetBumpMasterBuffer(alloc, Memory::kDynamic);
     uint32_t pool_master_off = 0;
@@ -126,8 +130,12 @@ void CommandRecorder::DispatchAnimEval(
     if (plat.cmd_ == nullptr) {
         plat.cmd_ = plat.queue_->commandBuffer();
     }
+    Kernel::Hot* khot = res.GetHot(kernel);
+    if (!khot) {
+        return;
+    }
     MTL::ComputeCommandEncoder* cenc = plat.cmd_->computeCommandEncoder();
-    cenc->setComputePipelineState(res.GetHot(kernel)->api_pso);
+    cenc->setComputePipelineState(khot->api_pso);
     Handle<Buffer> hs[12] = {
         scene_headers, parent_buf, topo_buf, bind_pose_buf,
         channels_buf, samplers_buf, times_buf, values_buf,
@@ -207,7 +215,11 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
 
 void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list) {
     MTL::RenderCommandEncoder* enc = plat.enc_;
-    enc->setRenderPipelineState(res.GetHot(list.pipeline)->api_pso);
+    Shader::Hot* shot = res.GetHot(list.pipeline);
+    if (!shot) {
+        return;
+    }
+    enc->setRenderPipelineState(shot->api_pso);
     enc->setDepthStencilState(plat.depth_stencil_);
     enc->setFrontFacingWinding(MTL::WindingCounterClockwise);
     enc->setCullMode(MTL::CullModeBack);

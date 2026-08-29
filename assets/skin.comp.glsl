@@ -13,8 +13,10 @@
 //     binding 0: SSBO  positions slice (vec4[]; mesh-local mesh vertex positions)
 //     binding 1: SSBO  skin attrs slice (uvec4 joints + vec4 weights per vertex)
 //
-// Dispatch: workgroup_x = instance_count * ceil(vertex_count / 64). Thread
-// maps to (instance, vid) via integer divide.
+// Dispatch (post #221 P1): vkCmdDispatch(ceil(vertex_count/64),
+// instance_count, 1). Each workgroup is one instance; gl_WorkGroupID.y
+// selects the instance, gl_GlobalInvocationID.x selects the vid. The old
+// 1D integer-divide mapping was retired by Phase 1's instanced batching.
 
 #version 450
 

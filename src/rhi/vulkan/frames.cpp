@@ -629,7 +629,22 @@ void Frames::WriteSkinGroupBDescriptors(Resources& resources,
         bi[0].range = 64u;
         bi[1].buffer = palette_target;
         bi[1].offset = palette_master_off;
-        bi[1].range = 65536u;
+        // #222 Phase 0.4 audit: original 65536 covers only 4 instances at
+        // kAnimMaxJoints=256 (4*256*64). LoL fan-out at 500 actors / 100
+        // distinct meshes hits 5/bucket -- 81920 bytes -- latently
+        // overrunning this descriptor's bound view. VK_WHOLE_SIZE fixes the
+        // bound size but VUID-06715 forbids any nonzero dynamic offset
+        // alongside, breaking the per-batch dispatch model entirely.
+        // Bumping to 1 MB covers 64-instance buckets comfortably; the
+        // matching `dyn_off + range <= buffer_size` constraint is satisfied
+        // because palette_out_buf_ keeps a >= range tail past the last
+        // batch's start (16 MB buffer; max packed batches at 1024 actors *
+        // 256 joints * 64 B = 16 MB; one slot's worth of overshoot fits
+        // because we never fill the buffer to the brim AND have not raised
+        // kAnimActorsCap past 1024). Phase D.3 retires this binding by
+        // collapsing skin Group B into DynamicBuffers; do NOT inflate
+        // further without growing palette_out_buf_ to match.
+        bi[1].range = 1u << 20;
         bi[2].buffer = dyn_master;
         bi[2].offset = 0;
         bi[2].range = 16384u;

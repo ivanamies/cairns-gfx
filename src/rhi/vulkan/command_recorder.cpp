@@ -520,6 +520,9 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     // VUID-vkUpdateDescriptorSets-None-03047 (set in use by pending cmd).
 
     Shader::Hot* unlit = res.GetHot(list.pipeline);
+    if (!unlit) {
+        return;
+    }
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->plat.vk_pipeline);
 
     // set 0 globals: bind once for the whole pass.

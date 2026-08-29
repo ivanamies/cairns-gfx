@@ -140,6 +140,7 @@ layout(set = 0, binding = 12, std430) writeonly buffer PaletteOut {
 };
 
 shared GpuTRS s_trs[kMaxNodesPerScene];
+shared mat4 s_mesh_world_inv;
 
 // Binary search the upper key. Mirror of CPU SampleSampler.
 uint upper_key(uint times_off, uint count, float t) {
@@ -284,8 +285,14 @@ void main() {
     if (sh.mesh_node < 0 || uint(sh.mesh_node) >= sh.node_count) {
         return;
     }
-    mat4 mesh_world = world_scratch[rec.world_scratch_base + uint(sh.mesh_node)];
-    mat4 mesh_world_inv = inverse(mesh_world);
+    // #222 Phase 0.4: hoist inverse(mesh_world) to thread 0 + LDS. Was
+    // 64 redundant inverses per workgroup.
+    if (lid == 0u) {
+        mat4 mesh_world =
+            world_scratch[rec.world_scratch_base + uint(sh.mesh_node)];
+        s_mesh_world_inv = inverse(mesh_world);
+    }
+    barrier();
     for (uint j = lid; j < sh.joint_count; j += 64u) {
         int jn = joint_nodes[sh.joint_nodes_off + j];
         if (jn < 0 || uint(jn) >= sh.node_count) {
@@ -294,6 +301,6 @@ void main() {
         }
         mat4 jw = world_scratch[rec.world_scratch_base + uint(jn)];
         mat4 ib = inverse_binds[sh.inverse_binds_off + j];
-        palette_out[rec.palette_out_base + j] = mesh_world_inv * jw * ib;
+        palette_out[rec.palette_out_base + j] = s_mesh_world_inv * jw * ib;
     }
 }

@@ -233,46 +233,52 @@ kernel void anim_eval(uint3 gid [[thread_position_in_grid]],
     if (sh.mesh_node < 0 || uint(sh.mesh_node) >= sh.node_count) {
         return;
     }
-    float4x4 mesh_world = world_scratch[rec.world_scratch_base + uint(sh.mesh_node)];
-    // Metal MSL has no built-in inverse; do it inline for a 4x4.
-    // Use float3x3 inverse for the rotation+scale part, transpose-based for orthonormal cases.
-    // For general affine: compute cofactor inverse.
-    float4x4 mw = mesh_world;
-    float a00 = mw[0].x, a01 = mw[1].x, a02 = mw[2].x, a03 = mw[3].x;
-    float a10 = mw[0].y, a11 = mw[1].y, a12 = mw[2].y, a13 = mw[3].y;
-    float a20 = mw[0].z, a21 = mw[1].z, a22 = mw[2].z, a23 = mw[3].z;
-    float a30 = mw[0].w, a31 = mw[1].w, a32 = mw[2].w, a33 = mw[3].w;
-    float b00 = a00*a11 - a01*a10;
-    float b01 = a00*a12 - a02*a10;
-    float b02 = a00*a13 - a03*a10;
-    float b03 = a01*a12 - a02*a11;
-    float b04 = a01*a13 - a03*a11;
-    float b05 = a02*a13 - a03*a12;
-    float b06 = a20*a31 - a21*a30;
-    float b07 = a20*a32 - a22*a30;
-    float b08 = a20*a33 - a23*a30;
-    float b09 = a21*a32 - a22*a31;
-    float b10 = a21*a33 - a23*a31;
-    float b11 = a22*a33 - a23*a32;
-    float det = b00*b11 - b01*b10 + b02*b09 + b03*b08 - b04*b07 + b05*b06;
-    float inv_det = (det != 0.0) ? 1.0 / det : 0.0;
-    float4x4 mesh_world_inv;
-    mesh_world_inv[0] = float4( a11*b11 - a12*b10 + a13*b09,
-                                -a10*b11 + a12*b08 - a13*b07,
-                                 a10*b10 - a11*b08 + a13*b06,
-                                -a10*b09 + a11*b07 - a12*b06) * inv_det;
-    mesh_world_inv[1] = float4(-a01*b11 + a02*b10 - a03*b09,
-                                 a00*b11 - a02*b08 + a03*b07,
-                                -a00*b10 + a01*b08 - a03*b06,
-                                 a00*b09 - a01*b07 + a02*b06) * inv_det;
-    mesh_world_inv[2] = float4( a31*b05 - a32*b04 + a33*b03,
-                                -a30*b05 + a32*b02 - a33*b01,
-                                 a30*b04 - a31*b02 + a33*b00,
-                                -a30*b03 + a31*b01 - a32*b00) * inv_det;
-    mesh_world_inv[3] = float4(-a21*b05 + a22*b04 - a23*b03,
-                                 a20*b05 - a22*b02 + a23*b01,
-                                -a20*b04 + a21*b02 - a23*b00,
-                                 a20*b03 - a21*b01 + a22*b00) * inv_det;
+    // #222 Phase 0.4: hoist 4x4 cofactor-inverse of mesh_world to thread 0
+    // + threadgroup memory. Was 64 redundant inverses per workgroup.
+    threadgroup float4x4 s_mesh_world_inv;
+    if (tid == 0u) {
+        float4x4 mw =
+            world_scratch[rec.world_scratch_base + uint(sh.mesh_node)];
+        float a00 = mw[0].x, a01 = mw[1].x, a02 = mw[2].x, a03 = mw[3].x;
+        float a10 = mw[0].y, a11 = mw[1].y, a12 = mw[2].y, a13 = mw[3].y;
+        float a20 = mw[0].z, a21 = mw[1].z, a22 = mw[2].z, a23 = mw[3].z;
+        float a30 = mw[0].w, a31 = mw[1].w, a32 = mw[2].w, a33 = mw[3].w;
+        float b00 = a00*a11 - a01*a10;
+        float b01 = a00*a12 - a02*a10;
+        float b02 = a00*a13 - a03*a10;
+        float b03 = a01*a12 - a02*a11;
+        float b04 = a01*a13 - a03*a11;
+        float b05 = a02*a13 - a03*a12;
+        float b06 = a20*a31 - a21*a30;
+        float b07 = a20*a32 - a22*a30;
+        float b08 = a20*a33 - a23*a30;
+        float b09 = a21*a32 - a22*a31;
+        float b10 = a21*a33 - a23*a31;
+        float b11 = a22*a33 - a23*a32;
+        float det = b00*b11 - b01*b10 + b02*b09 + b03*b08 - b04*b07 + b05*b06;
+        float inv_det = (det != 0.0) ? 1.0 / det : 0.0;
+        s_mesh_world_inv[0] =
+            float4( a11*b11 - a12*b10 + a13*b09,
+                    -a10*b11 + a12*b08 - a13*b07,
+                     a10*b10 - a11*b08 + a13*b06,
+                    -a10*b09 + a11*b07 - a12*b06) * inv_det;
+        s_mesh_world_inv[1] =
+            float4(-a01*b11 + a02*b10 - a03*b09,
+                     a00*b11 - a02*b08 + a03*b07,
+                    -a00*b10 + a01*b08 - a03*b06,
+                     a00*b09 - a01*b07 + a02*b06) * inv_det;
+        s_mesh_world_inv[2] =
+            float4( a31*b05 - a32*b04 + a33*b03,
+                    -a30*b05 + a32*b02 - a33*b01,
+                     a30*b04 - a31*b02 + a33*b00,
+                    -a30*b03 + a31*b01 - a32*b00) * inv_det;
+        s_mesh_world_inv[3] =
+            float4(-a21*b05 + a22*b04 - a23*b03,
+                     a20*b05 - a22*b02 + a23*b01,
+                    -a20*b04 + a21*b02 - a23*b00,
+                     a20*b03 - a21*b01 + a22*b00) * inv_det;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
     for (uint j = tid; j < sh.joint_count; j += 64u) {
         int jn = joint_nodes[sh.joint_nodes_off + j];
@@ -282,6 +288,6 @@ kernel void anim_eval(uint3 gid [[thread_position_in_grid]],
         }
         float4x4 jw = world_scratch[rec.world_scratch_base + uint(jn)];
         float4x4 ib = inverse_binds[sh.inverse_binds_off + j];
-        palette_out[rec.palette_out_base + j] = mesh_world_inv * jw * ib;
+        palette_out[rec.palette_out_base + j] = s_mesh_world_inv * jw * ib;
     }
 }
