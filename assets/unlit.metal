@@ -2,18 +2,13 @@
 #include <metal_stdlib>
 using namespace metal;
 
-#define CUBE_MAX_SCENE_REGISTRY_TEXTURES 1024
-#define CUBE_MAX_SCENE_REGISTRY_MESHES 1024
-#define CUBE_MAX_SCENE_REGISTRY_SAMPLERS 128
-#define CUBE_TEXTURES_START_OFFSET 0
-#define CUBE_VERTEX_ATTR_START_OFFSET (CUBE_TEXTURES_START_OFFSET + CUBE_MAX_SCENE_REGISTRY_TEXTURES)
-#define CUBE_VERTEX_SAMPLERS_START_OFFSET (CUBE_VERTEX_ATTR_START_OFFSET + CUBE_MAX_SCENE_REGISTRY_MESHES)
-
+// No bindless: each draw binds its own material (MaterialArg) at the material
+// slot. Globals/DrawTmp ride dynamic-offset UBOs. (Bindless scene-registry
+// removed -- it was declared but never referenced.)
 #define CUBE_GLOBALS_BUFFER_SLOT 1
 #define CUBE_MATERIAL_BUFFER_SLOT 2
 #define CUBE_SHADER_SPECIFIC_BUFFER_SLOT 3
 #define CUBE_DRAW_TMP_BUFFER_SLOT 4
-#define CUBE_SCENE_REGISTRY_BUFFER_SLOT 5
 
 namespace cube {
 
@@ -23,12 +18,6 @@ struct VertexAttribute {
     float4 normal;
     float2 uv;
     float2 pad1;
-};
-    
-struct SceneRegistry {
-    texture2d<float> textures [[id(CUBE_TEXTURES_START_OFFSET)]] [CUBE_MAX_SCENE_REGISTRY_TEXTURES];
-    device VertexAttribute* vertex_attrs [[id(CUBE_VERTEX_ATTR_START_OFFSET)]] [CUBE_MAX_SCENE_REGISTRY_MESHES];
-    sampler samplers [[id(CUBE_VERTEX_SAMPLERS_START_OFFSET)]] [CUBE_MAX_SCENE_REGISTRY_SAMPLERS];
 };
     
 struct VertexInput {

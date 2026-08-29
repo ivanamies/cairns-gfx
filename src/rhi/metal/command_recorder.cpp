@@ -17,7 +17,6 @@
 #include "rhi/allocator.hpp"
 #include "rhi/swap_chain.hpp"
 #include "rhi/swap_resolve_target.hpp"
-#include "gpu_scene_registry.hpp"
 #include "util/draw.hpp"
 #include "util/timer.hpp"
 

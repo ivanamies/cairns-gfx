@@ -37,7 +37,6 @@
 #include "gfx_api.hpp"
 #include "rhi/init_config.hpp"
 #include "rhi/swap_chain.hpp"
-#include "gpu_scene_registry.hpp"
 #include "util/misc.hpp"
 #include "util/render_pass_globals.hpp"
 #include "util/offset_allocator.hpp"
