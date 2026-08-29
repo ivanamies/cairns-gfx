@@ -1062,6 +1062,84 @@ public:
         return n;
     }
 
+    // #228 F2: Evict. Manifest 'remove' verb over the WHOLE batch span --
+    // drops every currently resident prefab, defer-frees its GPU
+    // resources (textures, samplers, meshes' position/index/attr buffers,
+    // materials' bind groups), releases pool slots, and resets every
+    // state array touched by the manifest (per_prefab_asset_, glb_paths_,
+    // resident_textures_, per_batch_shared_skin_) plus the anim cursors
+    // so the next load triggers a clean full-rebuild. Returns the
+    // number of prefabs dropped.
+    //
+    // **Caller contract**: clear any entities referencing these prefabs
+    // first via cairns.scene.clear. UnloadAllPrefabs does NOT clear
+    // entities itself; cross-frame in-flight proxies that captured the
+    // entity's prefab handle pre-clear would race with the descriptor
+    // updates here, hanging the render thread on the next frame.
+    // ClearActiveScene first, THEN UnloadAllPrefabs.
+    //
+    // Selective UnloadPrefabBatch(span<index>) is the follow-up; this
+    // wholesale Unload covers the remixer "wipe + repopulate" beat and
+    // proves F1's DeferFree path under bulk eviction.
+    uint32_t UnloadAllPrefabs() {
+        const uint32_t n = static_cast<uint32_t>(prefab_ids_.size());
+        if (n == 0) {
+            return 0;
+        }
+        for (cairns::PrefabId pid : prefab_ids_) {
+            cairns::Prefab::Hot* phot = prefabs_.GetHot(pid);
+            cairns::Prefab::Cold* pcold = prefabs_.GetCold(pid);
+            if (pcold) {
+                for (rhi::Handle<rhi::Texture> th : pcold->textureHandles) {
+                    rhi_.resources.DeferFree(rhi_.alloc, th);
+                }
+                for (rhi::Handle<rhi::Sampler> sh : pcold->samplerHandles) {
+                    rhi_.resources.DeferFree(sh);
+                }
+            }
+            if (phot) {
+                for (cairns::Handle<cairns::Mesh> mh : phot->meshes) {
+                    cairns::Mesh::Hot* mhot = meshes_.GetHot(mh);
+                    if (mhot) {
+                        rhi_.resources.DeferFree(rhi_.alloc, mhot->posHandle);
+                        rhi_.resources.DeferFree(rhi_.alloc, mhot->attrHandle);
+                        rhi_.resources.DeferFree(rhi_.alloc, mhot->indexHandle);
+                        if (!mhot->skin_group_a.IsNull()) {
+                            rhi_.resources.DeferFree(mhot->skin_group_a);
+                        }
+                    }
+                    meshes_.Release(mh);
+                }
+                for (cairns::Handle<cairns::Material> matid : phot->materials) {
+                    cairns::Material::Hot* mathot = materials_.GetHot(matid);
+                    if (mathot && !mathot->set2.IsNull()) {
+                        rhi_.resources.DeferFree(mathot->set2);
+                    }
+                    materials_.Release(matid);
+                }
+            }
+            prefabs_.Release(pid);
+        }
+        for (rhi::Handle<rhi::Buffer> sb : per_batch_shared_skin_) {
+            if (!sb.IsNull()) {
+                rhi_.resources.DeferFree(rhi_.alloc, sb);
+            }
+        }
+        per_batch_shared_skin_.clear();
+        prefab_ids_.clear();
+        per_prefab_asset_.clear();
+        glb_paths_.clear();
+        resident_textures_.clear();
+        // Anim: reset cursors so the next upload starts fresh against
+        // unallocated capacity. The 4x growth pad still holds so the
+        // first post-Unload load triggers FULL once, then DELTA after.
+        anim_uploaded_prefab_count_ = 0;
+        anim_cur_ = {};
+        anim_eval_tables_uploaded_ = false;
+        anim_dyn_dirty_ = true;
+        return n;
+    }
+
     // P1 input surface for main.cpp. Both no-op under CAIRNS_CAM_POSE so a
     // byte-gate dump can't be perturbed by an event that snuck through.
 

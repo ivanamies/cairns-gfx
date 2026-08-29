@@ -103,6 +103,12 @@ bool SetEntityTransform(Engine* engine, uint32_t entity_int,
                          float x, float y, float z, float scale);
 uint32_t ClearActiveScene(Engine* engine);
 
+// #228 F2: drop every resident prefab + DeferFree their GPU resources
+// through the F1 ring. Calls ClearActiveScene internally so the post-
+// state is "engine empty, ready for fresh loads." Returns the number
+// of prefabs that were dropped (0 if already empty).
+uint32_t UnloadAllPrefabs(Engine* engine);
+
 // #224 L3: the instrument.
 LoadTrace LastLoadTrace(Engine* engine);
 LoaderCounters Counters(Engine* engine);

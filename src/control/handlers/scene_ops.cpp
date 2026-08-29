@@ -56,6 +56,20 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         });
 
     registry.Register(
+        "cairns.prefab.unloadAll",
+        json::object(),
+        "#228 F2: drop every resident prefab. DeferFrees each prefab's "
+        "textures/samplers/meshes/materials through the F1 ring (released "
+        "kFIF frames later, no GPU drain). ClearActiveScene runs first "
+        "so post-Unload the active scene is empty. Returns {unloaded:N}. "
+        "Engine is fully ready for fresh loads immediately after.",
+        [&engine](const json&) -> json {
+            const uint32_t n =
+                cairns::headless::UnloadAllPrefabs(&engine);
+            return {{"unloaded", n}};
+        });
+
+    registry.Register(
         "cairns.scene.instantiate",
         json::object(),
         "Instantiate a Prefab into the active Scene at a transform. "

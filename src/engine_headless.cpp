@@ -209,6 +209,10 @@ uint32_t ClearActiveScene(Engine* engine) {
     return engine ? engine->ClearActiveScene() : 0;
 }
 
+uint32_t UnloadAllPrefabs(Engine* engine) {
+    return engine ? engine->UnloadAllPrefabs() : 0;
+}
+
 LoadTrace LastLoadTrace(Engine* engine) {
     return engine ? engine->LastLoadTrace() : LoadTrace{};
 }

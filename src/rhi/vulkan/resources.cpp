@@ -332,9 +332,16 @@ void Resources::Destroy(Allocator& alloc, Handle<Buffer> h) {
     if (!hot || !cold) {
         return;
     }
-    alloc.plat.memory_.FreeBuffer(
-        hot->heap_buffer_index, cold->alloc,
-        plat.frame_index_ + kFramesInFlight);
+    // Alias buffers (e.g. attrHandle / attr_skinned_alias / index alias)
+    // share their owning buffer's memory; cold->alloc was never populated
+    // so its metadata stays at NO_SPACE. Releasing the pool slot is
+    // correct, but calling FreeBuffer with a NO_SPACE Allocation asserts
+    // inside offset_allocator. Skip the heap free for aliases.
+    if (cold->alloc.metadata != OffsetAllocator::Allocation::NO_SPACE) {
+        alloc.plat.memory_.FreeBuffer(
+            hot->heap_buffer_index, cold->alloc,
+            plat.frame_index_ + kFramesInFlight);
+    }
     buffers.Release(h);
 }
 
