@@ -49,6 +49,13 @@
 #include <unordered_map>
 
 #include "rhi/resource_manager.hpp"
+#include "util/debug_asset.hpp"
+#include "util/gltf_loader.hpp"
+#include "util/material_gpu.hpp"
+#include "util/misc.hpp"
+#include "util/scene_gpu.hpp"
+#include "util/std_allocator.hpp"
+#include "util/frame_transient_cache.hpp"
 
 namespace cairns {
 
@@ -202,6 +209,12 @@ static bool readFile(const std::string& filename, std::vector<char>& buffer) {
 
 class Engine2 {
 public:
+    Engine2() :
+        hot_arena_mem_(malloc(kHotArenaMemorySize)),
+        hot_arena_(hot_arena_mem_, kHotArenaMemorySize),
+        scenes_(Allocator<Scene>(hot_arena_))
+    {}
+
     bool GreaterInit(SDL_Window* window) {
         window_ = window;
         return initVulkan();
@@ -222,6 +235,31 @@ public:
 
 private:
 
+    bool loadScenes() {
+        debugSceneXforms_ = cairns::GenerateDebugGridTransforms(
+            glm::vec3(-1, -1, -3), 3, 1, 1, 1, 0.005f, 9);
+        for (size_t glb_idx = cairns::kDebugGlbsToParseStart;
+             glb_idx < cairns::kDebugGlbsToParseStart + cairns::kDebugGlbsToParse;
+             ++glb_idx) {
+            scenes_.push_back(cairns::Scene(hot_arena_));
+            cairns::Scene& scene = scenes_.back();
+            std::string_view file = cairns::kDebugGlbs[glb_idx];
+            std::filesystem::path filepath;
+            if (!cairns::GetStaticResourceFilepath(file, filepath)) {
+                return false;
+            }
+            if (!cairns::LoadSceneFromGltf(filepath, scene)) {
+                return false;
+            }
+            cairns::PrepareSceneResources(scene, rm_, materials_);
+            if (!cairns::rhi::LoadSceneGpu(scene, rm_)) {
+                return false;
+            }
+            scene.CleanupTmps();
+        }
+        return true;
+    }
+
     bool initVulkan() {
         if (!createInstance()) return false;
         if (!setupDebugMessenger()) return false;
@@ -233,17 +271,13 @@ private:
         if (!createRenderPass()) return false;
         if (!createCommandPool()) return false;
         if (!initResourceManager()) return false;
+        if (!loadScenes()) return false;
         if (!createDescriptorSetLayout()) return false;
         if (!createComputePipeline()) return false;
         if (!createGraphicsPipeline()) return false;
         if (!createColorResources()) return false;
         if (!createDepthResources()) return false;
         if (!createFramebuffers()) return false;
-        if (!createTextureImage()) return false;
-        if (!createTextureSampler()) return false;
-        if (!loadModel()) return false;
-        if (!createVertexBuffer()) return false;
-        if (!createIndexBuffer()) return false;
         if (!createUniformBuffers()) return false;
         if (!createShaderStorageBuffers()) return false;
         if (!createDescriptorPool()) return false;
@@ -439,23 +473,17 @@ private:
     }
 
     bool createDescriptorPool() {
-        std::array<VkDescriptorPoolSize, 3> poolSizes{};
+        std::array<VkDescriptorPoolSize, 2> poolSizes{};
         poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        // 1 uniform in the viking room material, 1 uniform in the particle shader
-        poolSizes[0].descriptorCount = 2 * static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-        poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-        poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        // we need two SSBOs for the particle shader
-        poolSizes[2].descriptorCount = 2 * static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+        poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+        poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        poolSizes[1].descriptorCount = 2 * static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
         poolInfo.pPoolSizes = poolSizes.data();
-        // MAX_FRAMES_IN_FLIGHT for the viking room, MAX_FRAMES_IN_FLIGHT for particles,
-        // MAX_FRAMES_IN_FLIGHT for the particle points
-        poolInfo.maxSets = 3*static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+        poolInfo.maxSets = 2 * static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
         if ( vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
             return false;
         }
@@ -463,53 +491,6 @@ private:
     }
 
     bool createDescriptorSets() {
-        {
-            std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
-            VkDescriptorSetAllocateInfo allocInfo{};
-            allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            allocInfo.descriptorPool = descriptorPool;
-            allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-            allocInfo.pSetLayouts = layouts.data();
-
-            descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
-            if ( vkAllocateDescriptorSets(device, &allocInfo, descriptorSets.data())) {
-                return false;
-            }
-
-            for ( size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
-                uint32_t uboOffset = 0;
-                VkDescriptorBufferInfo bufferInfo{};
-                bufferInfo.buffer = rm_.GetVkBuffer(uniform_buffers_[i], &uboOffset);
-                bufferInfo.offset = uboOffset;
-                bufferInfo.range = sizeof(UniformBufferObject);
-
-                VkDescriptorImageInfo imageInfo{};
-                imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                imageInfo.imageView = static_cast<VkImageView>(rm_.GetHot(texture_)->api_view);
-                imageInfo.sampler = static_cast<VkSampler>(rm_.GetHot(sampler_)->api_sampler);
-
-                std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
-                descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                descriptorWrites[0].dstSet = descriptorSets[i];
-                descriptorWrites[0].dstBinding = 0;
-                descriptorWrites[0].dstArrayElement = 0;
-                descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-                descriptorWrites[0].descriptorCount = 1;
-                descriptorWrites[0].pBufferInfo = &bufferInfo;
-                descriptorWrites[0].pImageInfo = nullptr;
-                descriptorWrites[0].pTexelBufferView = nullptr;
-
-                descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                descriptorWrites[1].dstSet = descriptorSets[i];
-                descriptorWrites[1].dstBinding = 1;
-                descriptorWrites[1].dstArrayElement = 0;
-                descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                descriptorWrites[1].descriptorCount = 1;
-                descriptorWrites[1].pImageInfo = &imageInfo;
-
-                vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
-            }
-        }
         {
             std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout2);
             VkDescriptorSetAllocateInfo allocInfo{};
@@ -1153,26 +1134,6 @@ private:
             scissor.extent = swapChainExtent;
             vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
         }
-        {
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-
-            uint32_t vbOffset = 0;
-            VkBuffer vb = rm_.GetVkBuffer(vertex_buffer_, &vbOffset);
-            VkBuffer vertexBuffers[] = {vb};
-            VkDeviceSize offsets[] = { vbOffset };
-            vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-
-            uint32_t ibOffset = 0;
-            VkBuffer ib = rm_.GetVkBuffer(index_buffer_, &ibOffset);
-            vkCmdBindIndexBuffer(commandBuffer, ib, ibOffset, VK_INDEX_TYPE_UINT32);
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[currentFrame], 0, nullptr);
-
-            vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
-        }
-//        {
-//            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline3);
-//            vkCmdDraw(commandBuffer, 3, 1, 0, 0);
-//        }
         {
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline2);
 
@@ -2499,6 +2460,15 @@ private:
 
     const uint32_t WIDTH = 800;
     const uint32_t HEIGHT = 600;
+
+    static constexpr uint32_t kHotArenaMemorySize = 1 << 29;
+    void* hot_arena_mem_;
+    cairns::Arena hot_arena_;
+    std::vector<cairns::Scene, cairns::Allocator<cairns::Scene>> scenes_;
+    std::vector<cairns::LoadedMaterial> materials_;
+    std::vector<glm::mat4> debugSceneXforms_;
+    std::unordered_map<uint32_t, uint32_t> mesh_attr_id_map_;
+    std::unordered_map<uint32_t, uint32_t> sampler_id_map_;
 
     const std::string MODEL_PATH = "/Users/ivanamies/dev/gfx/assets/debug/viking_room.glb";
     const std::string TEXTURE_PATH = "/Users/ivanamies/dev/gfx/Vulkan/vulkan-tutorial-dot-com/src/VulkanTesting/VulkanTesting/viking_room.png";

@@ -132,6 +132,19 @@ public:
 
     size_t Size() const { return hot_.size(); }
 
+    template <typename Fn>
+    void ForEachLive(Fn fn) {
+        std::vector<bool> is_free(hot_.size(), false);
+        for (uint16_t fi : freelist_) {
+            is_free[fi] = true;
+        }
+        for (size_t i = 0; i < hot_.size(); ++i) {
+            if (!is_free[i]) {
+                fn(hot_[i], cold_[i]);
+            }
+        }
+    }
+
 private:
     std::vector<typename T::Hot> hot_;
     std::vector<typename T::Cold> cold_;
