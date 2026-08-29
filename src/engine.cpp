@@ -3401,3 +3401,1135 @@ bool Engine::initSwapChain(const rhi::InitConfig& cfg) {
     }
 
 }  // namespace cairns
+
+namespace cairns {
+
+cairns::SkinId Engine::TryCreateSkinForScene(cairns::PrefabId scene_id,
+                                          float time_offset) {
+        // #222: loud reason for every Null return so we don't silently
+        // drop heroes to bind pose. Names the scene so the user can map
+        // back to a GLB filename via prefab_store_.prefab_ids[scene_idx].
+        auto fail = [&](const char* why) -> cairns::SkinId {
+            CAIRNS_PRINT_ERR(
+                "[SKIN-FAIL] scene_id=(idx=%u,gen=%u) reason=%s\n",
+                static_cast<unsigned>(scene_id.index),
+                static_cast<unsigned>(scene_id.generation), why);
+            return cairns::SkinId::Null;
+        };
+        cairns::Prefab::Hot* shot = prefab_store_.prefabs.GetHot(scene_id);
+        cairns::Prefab::Cold* scold = prefab_store_.prefabs.GetCold(scene_id);
+        if (!shot || !scold) {
+            return fail("scene handle dead");
+        }
+        if (scold->skins.empty()) {
+            return fail("scold.skins empty");
+        }
+        if (scold->clips.empty()) {
+            return fail("scold.clips empty");
+        }
+        const int clip_idx =
+            cairns::SelectWalkingClip(scold->clips, prefab_arena_);
+        if (clip_idx < 0) {
+            return fail("SelectWalkingClip returned -1");
+        }
+        cairns::Handle<cairns::Mesh> skinned_mesh;
+        uint32_t vert_count = 0;
+        for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
+            cairns::Mesh::Hot* mhot = prefab_store_.meshes.GetHot(mid);
+            if (mhot && !mhot->attr_skinned_alias.IsNull() &&
+                mhot->vert_count > 0) {
+                skinned_mesh = mid;
+                vert_count = mhot->vert_count;
+                break;
+            }
+        }
+        if (skinned_mesh.IsNull() || vert_count == 0) {
+            return fail("no mesh with attr_skinned_alias + vert_count");
+        }
+        cairns::PoolSlice slice = skinning_.output_pool.Alloc(vert_count);
+        if (!slice.IsValid()) {
+            CAIRNS_PRINT_ERR(
+                "[FATAL] skinning_.output_pool exhausted at 256 MB cap "
+                "(Adreno maxStorageBufferRange floor). vert_count=%u. "
+                "Reduce hero count or bake skin output offline.\n",
+                vert_count);
+            std::abort();
+        }
+        cairns::SkinId sid = skinning_.skins.Acquire();
+        cairns::Prefab::Hot* scene_hot = prefab_store_.prefabs.GetHot(scene_id);
+        // #222 Phase E.6: build the per-actor pos_stream alias of
+        // skinning_.output_pool_buffer, pre-offset to slice.offset * 16 B.
+        // Skinned draws point Draw::vertex_buffers[0] at this handle;
+        // Draw::pos_buffer_byte_offset retires.
+        rhi::Handle<rhi::Buffer> pos_stream_h =
+            rhi::Handle<rhi::Buffer>::Null;
+        if (!skinning_.output_pool_buffer.IsNull()) {
+            // CRITICAL: snapshot pool fields BEFORE the next Acquire.
+            // ResourceManager::Acquire does hot_.emplace_back() which may
+            // reallocate the underlying std::vector -- any Hot* fetched
+            // earlier becomes dangling. The skinned-rendering "exploded
+            // triangles" regression was exactly this UB read.
+            uint16_t pool_heap_idx = 0;
+            uint32_t pool_off = 0;
+            {
+                rhi::Buffer::Hot* pool_hot =
+                    rhi_.resources.GetHot(skinning_.output_pool_buffer);
+                if (!pool_hot) {
+                    return cairns::SkinId::Null;
+                }
+                pool_heap_idx = pool_hot->heap_buffer_index;
+                pool_off = pool_hot->offset_in_heap;
+            }
+            pos_stream_h = rhi_.resources.buffers.Acquire();
+            rhi::Buffer::Hot* alias_hot =
+                rhi_.resources.buffers.GetHot(pos_stream_h);
+            alias_hot->heap_buffer_index = pool_heap_idx;
+            alias_hot->offset_in_heap =
+                pool_off +
+                slice.offset * static_cast<uint32_t>(sizeof(glm::vec4));
+        }
+        if (auto* h = skinning_.skins.GetHot(sid)) {
+            *h = cairns::SkinnedAttachment::Hot{};
+            h->slice_offset = slice.offset;
+            h->joint_count =
+                static_cast<uint32_t>(scold->skins[0].jointNodes.size());
+            h->time_offset = time_offset;
+            h->time_scale = 1.0f;
+            h->mesh = skinned_mesh;
+            // #222 Phase H.5: cache the per-frame double-resolve.
+            h->gpu_prefab_header_idx =
+                scene_hot ? scene_hot->gpu_prefab_header_idx : UINT32_MAX;
+            h->gpu_clip_duration =
+                (scold->gpu_clip_duration > 0.0f) ? scold->gpu_clip_duration
+                                                   : 1.0f;
+            h->pos_stream = pos_stream_h;
+        }
+        if (auto* c = skinning_.skins.GetCold(sid)) {
+            *c = cairns::SkinnedAttachment::Cold{};
+            c->scene = scene_id;
+            c->skin_index = 0;
+            c->clip_index = clip_idx;
+            c->slice = slice;  // #222 Phase H.5 finish: Free metadata here.
+        }
+        return sid;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+void Engine::ApplyPendingResize() {
+        const uint32_t cur_w = present_.final_target.IsNull() ? present_.swapchain.Width()
+                                                       : present_.final_target_w;
+        const uint32_t cur_h = present_.final_target.IsNull() ? present_.swapchain.Height()
+                                                       : present_.final_target_h;
+        const bool dims_drifted = (cur_w != present_.last_seen_swap_w) ||
+                                   (cur_h != present_.last_seen_swap_h);
+        if (!present_.resize_pending && !dims_drifted) {
+            return;
+        }
+        if (render_thread_) {
+            render_thread_->Drain();
+        }
+        rhi_.device.WaitIdle();
+        rhi_.offscreen_targets.FlushFramebuffers();
+        if (!present_.final_target.IsNull() &&
+            (present_.resize_pending_w != present_.final_target_w ||
+             present_.resize_pending_h != present_.final_target_h) &&
+            present_.resize_pending_w != 0 && present_.resize_pending_h != 0) {
+            ResizeFinalTarget(present_.resize_pending_w, present_.resize_pending_h);
+        }
+        present_.last_seen_swap_w = present_.final_target.IsNull() ? present_.swapchain.Width()
+                                                    : present_.final_target_w;
+        present_.last_seen_swap_h = present_.final_target.IsNull() ? present_.swapchain.Height()
+                                                    : present_.final_target_h;
+        present_.resize_pending = false;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+bool Engine::ResizeFinalTarget(uint32_t w, uint32_t h) {
+        if (present_.final_target.IsNull()) {
+            return false;
+        }
+        rhi_.resources.Destroy(rhi_.alloc, present_.final_target);
+        present_.final_target = rhi::Handle<rhi::Texture>::Null;
+        present_.final_target_w = w;
+        present_.final_target_h = h;
+        rhi::TextureDesc td{};
+        td.debug_name = "final_target";
+        td.dimensions = {static_cast<int32_t>(w), static_cast<int32_t>(h), 1};
+        td.format = rhi::Format::kBgra8Unorm;
+        td.usage = rhi::kTexUsageColorTarget | rhi::kTexUsageSampled |
+                   rhi::kTexUsageTransferSrc | rhi::kTexUsageTransferDst;
+        td.memory = rhi::Memory::kDefault;
+        present_.final_target = rhi_.resources.CreateTexture(rhi_.alloc, td);
+        return !present_.final_target.IsNull();
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+void Engine::EnsureHighlightsTex() {
+        if (!picking_.highlights_tex.IsNull() &&
+            picking_.highlights_tex_rev == picking_.highlights_rev) {
+            return;
+        }
+        if (!picking_.highlights_tex.IsNull()) {
+            rhi_.resources.Destroy(rhi_.alloc, picking_.highlights_tex);
+            picking_.highlights_tex = rhi::Handle<rhi::Texture>::Null;
+        }
+        std::array<uint32_t, kMaxHighlights + 1> pack{};
+        const uint32_t n =
+            static_cast<uint32_t>(std::min<size_t>(picking_.highlights.size(),
+                                                   kMaxHighlights));
+        pack[0] = n;
+        for (uint32_t i = 0; i < n; ++i) {
+            pack[i + 1] = picking_.highlights[i].id;
+        }
+        rhi::TextureDesc td{};
+        td.debug_name = "highlights_tex";
+        td.dimensions = {static_cast<int32_t>(kMaxHighlights + 1), 1, 1};
+        td.format = rhi::Format::kR32Uint;
+        td.usage = rhi::kTexUsageSampled | rhi::kTexUsageTransferDst;
+        td.memory = rhi::Memory::kDefault;
+        td.initial_data = std::span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(pack.data()),
+            sizeof(uint32_t) * pack.size());
+        picking_.highlights_tex = rhi_.resources.CreateTexture(rhi_.alloc, td);
+        picking_.highlights_tex_rev = picking_.highlights_rev;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+void Engine::EnsureIdTargets(uint32_t w, uint32_t h) {
+        if (w == id_target_w_ && h == id_target_h_ &&
+            !id_target_[0].IsNull()) {
+            return;
+        }
+        for (int v = 0; v < kNumViewports; ++v) {
+            if (!id_target_[v].IsNull()) {
+                rhi_.resources.Destroy(rhi_.alloc, id_target_[v]);
+                id_target_[v] = rhi::Handle<rhi::Texture>::Null;
+            }
+        }
+        id_target_w_ = w;
+        id_target_h_ = h;
+        for (int v = 0; v < kNumViewports; ++v) {
+            rhi::TextureDesc td{};
+            td.debug_name = "id_target";
+            td.dimensions = {static_cast<int32_t>(w),
+                             static_cast<int32_t>(h), 1};
+            td.format = rhi::Format::kR32Uint;
+            td.usage = rhi::kTexUsageColorTarget | rhi::kTexUsageSampled |
+                       rhi::kTexUsageTransferSrc;
+            td.memory = rhi::Memory::kDefault;
+            id_target_[v] = rhi_.resources.CreateTexture(rhi_.alloc, td);
+        }
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+uint32_t Engine::ResolvePickRaycast(int vp, uint32_t px, uint32_t py,
+                                const glm::mat4& inv_view_proj) {
+        cairns::Scene::Cold* wc = scene_mgr_.pool.GetCold(scene_mgr_.active);
+        if (!wc) { return 0u; }
+        const float fw = static_cast<float>(FrameWidth());
+        const float fh = static_cast<float>(FrameHeight());
+        if (fw <= 0.0f || fh <= 0.0f) { return 0u; }
+        (void)vp;
+        const float ndc_x = (static_cast<float>(px) / fw) * 2.0f - 1.0f;
+        const float ndc_y = 1.0f - (static_cast<float>(py) / fh) * 2.0f;
+        // WebGPU/Metal clip space is z in [0,1]: near plane z=0, far z=1.
+        const glm::vec4 nc = inv_view_proj * glm::vec4(ndc_x, ndc_y, 0.0f, 1.0f);
+        const glm::vec4 fc = inv_view_proj * glm::vec4(ndc_x, ndc_y, 1.0f, 1.0f);
+        const glm::vec3 ro = glm::vec3(nc) / nc.w;
+        const glm::vec3 rf = glm::vec3(fc) / fc.w;
+        const glm::vec3 rd = glm::normalize(rf - ro);
+        const glm::vec3 inv_d = 1.0f / rd;  // 0-component -> inf, slab test handles it
+        float best_t = 1.0e30f;
+        uint32_t best_id1 = 0u;
+        auto pick_view = wc->registry.view<const cairns::WorldTransform,
+                                           const cairns::AssetRef>();
+        for (entt::entity e : pick_view) {
+            const cairns::AssetRef& ref = pick_view.get<const cairns::AssetRef>(e);
+            cairns::Asset::Cold* ac = scene_mgr_.assets.Pool().GetCold(ref.asset);
+            if (!ac) { continue; }
+            cairns::Prefab::Hot* sh = prefab_store_.prefabs.GetHot(ac->cpu_graph);
+            if (!sh || sh->meshes.empty()) { continue; }
+            cairns::Mesh::Hot* mh = prefab_store_.meshes.GetHot(sh->meshes[0]);
+            if (!mh || mh->bind_aabb_min.x > mh->bind_aabb_max.x) { continue; }
+            const glm::mat4& world =
+                pick_view.get<const cairns::WorldTransform>(e).world;
+            glm::vec3 wmin(1.0e30f);
+            glm::vec3 wmax(-1.0e30f);
+            for (int i = 0; i < 8; ++i) {
+                const glm::vec3 corner(
+                    (i & 1) ? mh->bind_aabb_max.x : mh->bind_aabb_min.x,
+                    (i & 2) ? mh->bind_aabb_max.y : mh->bind_aabb_min.y,
+                    (i & 4) ? mh->bind_aabb_max.z : mh->bind_aabb_min.z);
+                const glm::vec4 wc4 = world * glm::vec4(corner, 1.0f);
+                const glm::vec3 wcv = glm::vec3(wc4) / wc4.w;
+                wmin = glm::min(wmin, wcv);
+                wmax = glm::max(wmax, wcv);
+            }
+            const glm::vec3 t0 = (wmin - ro) * inv_d;
+            const glm::vec3 t1 = (wmax - ro) * inv_d;
+            const glm::vec3 tmn = glm::min(t0, t1);
+            const glm::vec3 tmx = glm::max(t0, t1);
+            const float tnear = glm::max(glm::max(tmn.x, tmn.y), tmn.z);
+            const float tfar = glm::min(glm::min(tmx.x, tmx.y), tmx.z);
+            if (tnear <= tfar && tfar >= 0.0f) {
+                const float t = tnear >= 0.0f ? tnear : tfar;
+                if (t < best_t) {
+                    best_t = t;
+                    best_id1 = entt::to_integral(e) + 1u;
+                }
+            }
+        }
+        return best_id1;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+cairns::ViewportId Engine::ResolveViewportName(uint32_t counter) const {
+        int lo = 0;
+        int hi = static_cast<int>(viewport_mgr_.names_count);
+        while (lo < hi) {
+            const int mid = (lo + hi) / 2;
+            const uint32_t k = viewport_mgr_.names[mid].counter;
+            if (k == counter) {
+                return viewport_mgr_.names[mid].id;
+            }
+            if (k < counter) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return cairns::ViewportId::Null;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+bool Engine::CloseViewport() {
+        if (viewport_mgr_.active_count <= 1) {
+            return false;
+        }
+        const int last_idx = viewport_mgr_.active_count - 1;
+        cairns::ViewportId id = viewport_mgr_.ids[last_idx];
+        viewport_mgr_.pool.GetHot(id)->layout_rect = glm::vec4(0.0f);
+        viewport_mgr_.ids[last_idx] = cairns::ViewportId::Null;
+        --viewport_mgr_.active_count;
+        // Drop the name table entry for this id. The counter itself
+        // remains burned (never reused) per the locked sub-decision.
+        for (uint8_t i = 0; i < viewport_mgr_.names_count; ++i) {
+            if (viewport_mgr_.names[i].id.index == id.index &&
+                viewport_mgr_.names[i].id.generation == id.generation) {
+                for (uint8_t j = i; j + 1 < viewport_mgr_.names_count; ++j) {
+                    viewport_mgr_.names[j] = viewport_mgr_.names[j + 1];
+                }
+                --viewport_mgr_.names_count;
+                break;
+            }
+        }
+        viewport_mgr_.pool.Release(id);
+        const float w = 1.0f / static_cast<float>(viewport_mgr_.active_count);
+        for (int v = 0; v < viewport_mgr_.active_count; ++v) {
+            viewport_mgr_.pool.GetHot(viewport_mgr_.ids[v])->layout_rect =
+                glm::vec4(w * static_cast<float>(v), 0.0f, w, 1.0f);
+        }
+        return true;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+uint32_t Engine::OpenViewport() {
+        if (viewport_mgr_.active_count >= kNumViewports) {
+            return UINT32_MAX;
+        }
+        cairns::ViewportId id = viewport_mgr_.pool.Acquire();
+        // Reused-slot trap: re-init both halves so a previously-released
+        // slot doesn't carry over.
+        if (auto* h = viewport_mgr_.pool.GetHot(id)) {
+            *h = cairns::Viewport::Hot{};
+            h->scene = scene_mgr_.active;
+        }
+        if (auto* c = viewport_mgr_.pool.GetCold(id)) {
+            *c = cairns::Viewport::Cold{};
+        }
+        const int idx = viewport_mgr_.active_count++;
+        viewport_mgr_.ids[idx] = id;
+        // Default rect: uniform tile across the swap pane until the agent
+        // calls setLayout. Tiles add up to the full pane.
+        const float w = 1.0f / static_cast<float>(viewport_mgr_.active_count);
+        for (int v = 0; v < viewport_mgr_.active_count; ++v) {
+            viewport_mgr_.pool.GetHot(viewport_mgr_.ids[v])->layout_rect =
+                glm::vec4(w * static_cast<float>(v), 0.0f, w, 1.0f);
+        }
+        const uint32_t name = viewport_mgr_.next_name++;
+        // Append-sorted: viewport_mgr_.next_name is monotonic so the new
+        // counter is always the largest seen.
+        viewport_mgr_.names[viewport_mgr_.names_count++] = ViewportName{name, id};
+        return name;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+bool Engine::SpawnFitted(const std::vector<std::string>& glbs, uint32_t instances,
+                     bool animated) {
+        if (glbs.empty() || instances == 0) {
+            return true;
+        }
+        std::vector<uint32_t> pidx;
+        pidx.reserve(glbs.size());
+        for (const std::string& name : glbs) {
+            const uint32_t idx =
+                cairns::headless::RuntimeLoadGlbPath(this, name);
+            if (idx == UINT32_MAX) {
+                return false;
+            }
+            pidx.push_back(idx);
+        }
+        std::vector<float> extents(instances);
+        for (uint32_t i = 0; i < instances; ++i) {
+            extents[i] = PrefabExtentMax(pidx[i % pidx.size()]);
+        }
+        const std::vector<glm::mat4> worlds =
+            FitGridToViewport(instances, extents);
+        for (uint32_t i = 0; i < instances; ++i) {
+            const uint32_t scene_idx = pidx[i % pidx.size()];
+            const glm::vec3 center = PrefabAabbCenter(scene_idx);
+            const glm::mat4 world =
+                worlds[i] * glm::translate(glm::mat4(1.0f), -center);
+            const uint32_t out = animated
+                ? InstantiatePrefab(scene_idx, world, /*time_phase=*/0.0f)
+                : InstantiatePrefabNoSkin(scene_idx, world);
+            if (out == UINT32_MAX) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+void Engine::ApplyFlyMovement(const glm::vec3& move_input) {
+        if (viewport_mgr_.cam_pose_override) {
+            return;
+        }
+        cairns::FlyController& fc =
+            viewport_mgr_.pool.GetCold(viewport_mgr_.active)->fly;
+        const float cy = std::cos(fc.yaw);
+        const float sy = std::sin(fc.yaw);
+        const float cp = std::cos(fc.pitch);
+        const float sp = std::sin(fc.pitch);
+        const glm::vec3 forward(-cp * sy, sp, -cp * cy);
+        // right = normalize(cross(forward, world_up)). Closed-form with
+        // world_up=(0,1,0): right = (cy, 0, -sy) (independent of pitch).
+        // At yaw=0,pitch=0 this is (1,0,0): +X is screen-right while looking
+        // down -Z. Backend-agnostic -- vk's negative-height viewport flips
+        // only Y, not X, so metal and vk see the same horizontal motion.
+        const glm::vec3 right(cy, 0.0f, -sy);
+        const glm::vec3 up(0.0f, 1.0f, 0.0f);
+        fc.position += right * move_input.x + up * move_input.y +
+                        forward * move_input.z;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+uint32_t Engine::UnloadAllPrefabs() {
+        const uint32_t n = static_cast<uint32_t>(prefab_store_.prefab_ids.size());
+        if (n == 0) {
+            return 0;
+        }
+        // Quiesce the render thread + GPU before releasing pool slots and
+        // freeing resources. Otherwise an in-flight frame records draws against
+        // the meshes we Release here -- the render thread crashes in
+        // drawIndexedPrimitives on a freed index buffer (cairns_serve exit 139
+        // on the load+reload+unload path). Same guard RuntimeLoadBatch uses
+        // before mutating the pools.
+        if (render_thread_) {
+            render_thread_->Drain();
+        }
+        rhi_.device.WaitIdle();
+        for (cairns::PrefabId pid : prefab_store_.prefab_ids) {
+            cairns::Prefab::Hot* phot = prefab_store_.prefabs.GetHot(pid);
+            cairns::Prefab::Cold* pcold = prefab_store_.prefabs.GetCold(pid);
+            if (pcold) {
+                for (rhi::Handle<rhi::Texture> th : pcold->textureHandles) {
+                    rhi_.resources.DeferFree(rhi_.alloc, th);
+                }
+                for (rhi::Handle<rhi::Sampler> sh : pcold->samplerHandles) {
+                    rhi_.resources.DeferFree(sh);
+                }
+            }
+            if (phot) {
+                for (cairns::Handle<cairns::Mesh> mh : phot->meshes) {
+                    cairns::Mesh::Hot* mhot = prefab_store_.meshes.GetHot(mh);
+                    if (mhot) {
+                        rhi_.resources.DeferFree(rhi_.alloc, mhot->posHandle);
+                        rhi_.resources.DeferFree(rhi_.alloc, mhot->attrHandle);
+                        rhi_.resources.DeferFree(rhi_.alloc, mhot->indexHandle);
+                        if (!mhot->skin_group_a.IsNull()) {
+                            rhi_.resources.DeferFree(mhot->skin_group_a);
+                        }
+                    }
+                    prefab_store_.meshes.Release(mh);
+                }
+                for (cairns::Handle<cairns::Material> matid : phot->materials) {
+                    cairns::Material::Hot* mathot = prefab_store_.materials.GetHot(matid);
+                    if (mathot && !mathot->set2.IsNull()) {
+                        rhi_.resources.DeferFree(mathot->set2);
+                    }
+                    prefab_store_.materials.Release(matid);
+                }
+            }
+            prefab_store_.prefabs.Release(pid);
+        }
+        for (rhi::Handle<rhi::Buffer> sb : prefab_store_.per_batch_shared_skin) {
+            if (!sb.IsNull()) {
+                rhi_.resources.DeferFree(rhi_.alloc, sb);
+            }
+        }
+        prefab_store_.per_batch_shared_skin.clear();
+        prefab_store_.prefab_ids.clear();
+        prefab_store_.per_prefab_asset.clear();
+        prefab_store_.glb_paths.clear();
+        prefab_store_.resident_textures.clear();
+        // Anim: reset cursors so the next upload starts fresh against
+        // unallocated capacity. The 4x growth pad still holds so the
+        // first post-Unload load triggers FULL once, then DELTA after.
+        skinning_.uploaded_prefab_count = 0;
+        skinning_.cur = {};
+        skinning_.eval_tables_uploaded = false;
+        skinning_.dyn_dirty = true;
+        prefab_arena_.Reset();  // monotonic; else repeated loads overflow it
+        return n;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+bool Engine::ReloadPipelineByName(const std::string& name) {
+        const std::string shader_dir = cairns::GetBasePathSafe();
+        if (name == "anim_eval") {
+            rhi::ComputePipelineDesc desc{};
+            desc.logical_shader = "anim_eval";
+            desc.shader_dir = shader_dir.c_str();
+            desc.debug_name = "anim_eval";
+            desc.layout = rhi::ComputePipelineLayout::kAnimEval;
+            rhi::Handle<rhi::Kernel> next =
+                rhi_.pipelines.CreateComputePipeline(rhi_.resources,
+                                                       rhi_.frames, desc);
+            if (next.IsNull()) {
+                CAIRNS_PRINT_ERR("[R2] anim_eval reload failed -- keeping "
+                                 "last-good\n");
+                return false;
+            }
+            if (!skinning_.eval_kernel.IsNull()) {
+                rhi_.resources.DeferFree(skinning_.eval_kernel);
+            }
+            skinning_.eval_kernel = next;
+            return true;
+        }
+        if (name == "skin") {
+            rhi::ComputePipelineDesc desc{};
+            desc.logical_shader = "skin";
+            desc.shader_dir = shader_dir.c_str();
+            desc.debug_name = "skin_compute";
+            desc.layout = rhi::ComputePipelineLayout::kSkin;
+            rhi::Handle<rhi::Kernel> next =
+                rhi_.pipelines.CreateComputePipeline(rhi_.resources,
+                                                       rhi_.frames, desc);
+            if (next.IsNull()) {
+                CAIRNS_PRINT_ERR("[R2] skin reload failed -- keeping "
+                                 "last-good\n");
+                return false;
+            }
+            if (!skinning_.skin_kernel.IsNull()) {
+                rhi_.resources.DeferFree(skinning_.skin_kernel);
+            }
+            skinning_.skin_kernel = next;
+            return true;
+        }
+        if (name == "particle") {
+            rhi::ComputePipelineDesc desc{};
+            desc.logical_shader = "particle";
+            desc.shader_dir = shader_dir.c_str();
+            desc.debug_name = "particle_compute";
+            desc.layout = rhi::ComputePipelineLayout::kParticle;
+            desc.dyn_set_0 = dyn_particle_parity_[0];
+            rhi::Handle<rhi::Kernel> next =
+                rhi_.pipelines.CreateComputePipeline(rhi_.resources,
+                                                       rhi_.frames, desc);
+            if (next.IsNull()) {
+                CAIRNS_PRINT_ERR("[R2] particle reload failed -- keeping "
+                                 "last-good\n");
+                return false;
+            }
+            if (!particles_.kernel.IsNull()) {
+                rhi_.resources.DeferFree(particles_.kernel);
+            }
+            particles_.kernel = next;
+            return true;
+        }
+        return false;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+bool Engine::ReloadPrefab(uint32_t idx, const std::filesystem::path& path) {
+        if (idx >= prefab_store_.prefab_ids.size()) {
+            return false;
+        }
+        // Phase D / R1 instrumentation. Pair with the Instruments
+        // signpost so the time profiler bands reload work distinctly
+        // from steady-state frames.
+        CAIRNS_PRINT_ERR("[RELOAD] begin idx=%u path=%s\n", idx,
+                          path.filename().c_str());
+        CAIRNS_SIGNPOST_INTERVAL_SCOPED("reload_prefab",
+                                         path.filename().c_str());
+#if CAIRNS_ALLOC_TRACE
+        const cairns::alloc_count::Snapshot alloc_reload_begin =
+            cairns::alloc_count::Now();
+#endif
+        cairns::PrefabId oldId = prefab_store_.prefab_ids[idx];
+        // Snapshot the old prefab's owned resources BEFORE LoadPrefabBatch
+        // -- it may grow the prefab_store_.prefabs/prefab_store_.meshes/prefab_store_.materials pools' backing
+        // vectors and invalidate held Hot/Cold pointers.
+        std::vector<cairns::Handle<cairns::Mesh>> old_meshes;
+        std::vector<cairns::Handle<cairns::Material>> old_materials;
+        std::vector<rhi::Handle<rhi::Texture>> old_textures;
+        std::vector<rhi::Handle<rhi::Sampler>> old_samplers;
+        {
+            cairns::Prefab::Hot* oldH = prefab_store_.prefabs.GetHot(oldId);
+            cairns::Prefab::Cold* oldC = prefab_store_.prefabs.GetCold(oldId);
+            if (!oldH || !oldC) {
+                return false;
+            }
+            // #229 P3: pool vectors are now block-backed (ChunkStdAllocator);
+            // copy element-wise into the std-allocator snapshot locals.
+            old_meshes.assign(oldH->meshes.begin(), oldH->meshes.end());
+            old_materials.assign(oldH->materials.begin(), oldH->materials.end());
+            old_textures.assign(oldC->textureHandles.begin(), oldC->textureHandles.end());
+            old_samplers.assign(oldC->samplerHandles.begin(), oldC->samplerHandles.end());
+        }
+        std::array<std::filesystem::path, 1> single_path{path};
+        LoadPrefabBatchResult r = RuntimeLoadBatch(single_path);
+        if (r.count != 1) {
+            return false;
+        }
+        cairns::PrefabId newId = prefab_store_.prefab_ids.back();
+        // Re-fetch after the load: the pool's backing vector may have
+        // grown, invalidating any pointer obtained pre-RuntimeLoadBatch.
+        cairns::Prefab::Hot* oldH = prefab_store_.prefabs.GetHot(oldId);
+        cairns::Prefab::Cold* oldC = prefab_store_.prefabs.GetCold(oldId);
+        cairns::Prefab::Hot* newH = prefab_store_.prefabs.GetHot(newId);
+        cairns::Prefab::Cold* newC = prefab_store_.prefabs.GetCold(newId);
+        if (!oldH || !oldC || !newH || !newC) {
+            return false;
+        }
+        *oldH = std::move(*newH);
+        *oldC = std::move(*newC);
+        prefab_store_.prefabs.Release(newId);
+        prefab_store_.prefab_ids.pop_back();
+        prefab_store_.per_prefab_asset.pop_back();
+        prefab_store_.glb_paths.pop_back();
+        prefab_store_.glb_paths[idx] = path;
+        // DeferFree the snapshotted old resources. F1 (v2) stamps
+        // retire_frame = current_frame_index + kFIF; drain happens at
+        // frame >= retire_frame's start, after the fence proves the
+        // last-referencing frame is GPU-done.
+        for (rhi::Handle<rhi::Texture> th : old_textures) {
+            rhi_.resources.DeferFree(rhi_.alloc, th);
+        }
+        for (rhi::Handle<rhi::Sampler> sh : old_samplers) {
+            rhi_.resources.DeferFree(sh);
+        }
+        for (cairns::Handle<cairns::Mesh> mh : old_meshes) {
+            cairns::Mesh::Hot* mhot = prefab_store_.meshes.GetHot(mh);
+            if (mhot) {
+                rhi_.resources.DeferFree(rhi_.alloc, mhot->posHandle);
+                rhi_.resources.DeferFree(rhi_.alloc, mhot->attrHandle);
+                rhi_.resources.DeferFree(rhi_.alloc, mhot->indexHandle);
+                if (!mhot->skin_group_a.IsNull()) {
+                    rhi_.resources.DeferFree(mhot->skin_group_a);
+                }
+            }
+            prefab_store_.meshes.Release(mh);
+        }
+        for (cairns::Handle<cairns::Material> matid : old_materials) {
+            cairns::Material::Hot* mathot = prefab_store_.materials.GetHot(matid);
+            if (mathot && !mathot->set2.IsNull()) {
+                rhi_.resources.DeferFree(mathot->set2);
+            }
+            prefab_store_.materials.Release(matid);
+        }
+        // prefab_store_.resident_textures was populated by AppendGlbPaths' sibling
+        // BuildResidentTextures during boot/load. The old prefab's
+        // texture handles are now stale (Release happens at F1 drain
+        // kFIF frames later); per-frame draw uses prefab_store_.resident_textures
+        // verbatim, so we must rebuild it from the current set of live
+        // prefab textureHandles before the next render reads it.
+        prefab_store_.resident_textures.clear();
+        for (cairns::PrefabId pid : prefab_store_.prefab_ids) {
+            cairns::Prefab::Cold* pc = prefab_store_.prefabs.GetCold(pid);
+            if (!pc) {
+                continue;
+            }
+            for (rhi::Handle<rhi::Texture> th : pc->textureHandles) {
+                prefab_store_.resident_textures.push_back(th);
+            }
+        }
+        CAIRNS_PRINT_ERR("[RELOAD] end idx=%u path=%s ok\n", idx,
+                          path.filename().c_str());
+#if CAIRNS_ALLOC_TRACE
+        cairns::alloc_count::PrintDelta("[RELOAD]", alloc_reload_begin);
+#endif
+        return true;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+bool Engine::SetEntityTransform(uint32_t entity_int, const glm::mat4& world) {
+        cairns::Scene::Cold* wc = scene_mgr_.pool.GetCold(scene_mgr_.active);
+        if (!wc) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!reg.valid(e) || !reg.all_of<cairns::WorldTransform>(e)) {
+            return false;
+        }
+        reg.get<cairns::WorldTransform>(e).world = world;
+        if (auto* wh = scene_mgr_.pool.GetHot(scene_mgr_.active)) {
+            wh->dirty = true;
+        }
+        return true;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+glm::vec3 Engine::PrefabAabbCenter(uint32_t scene_idx) {
+        if (scene_idx >= prefab_store_.prefab_ids.size()) {
+            return glm::vec3(0.0f);
+        }
+        cairns::Prefab::Hot* shot = prefab_store_.prefabs.GetHot(prefab_store_.prefab_ids[scene_idx]);
+        if (!shot) {
+            return glm::vec3(0.0f);
+        }
+        for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
+            cairns::Mesh::Hot* mh = prefab_store_.meshes.GetHot(mid);
+            if (!mh) {
+                continue;
+            }
+            if (mh->bind_aabb_min.x > mh->bind_aabb_max.x) {
+                continue;
+            }
+            return (mh->bind_aabb_min + mh->bind_aabb_max) * 0.5f;
+        }
+        return glm::vec3(0.0f);
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+float Engine::PrefabExtentMax(uint32_t scene_idx) {
+        if (scene_idx >= prefab_store_.prefab_ids.size()) {
+            return 0.0f;
+        }
+        cairns::Prefab::Hot* shot = prefab_store_.prefabs.GetHot(prefab_store_.prefab_ids[scene_idx]);
+        if (!shot) {
+            return 0.0f;
+        }
+        for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
+            cairns::Mesh::Hot* mh = prefab_store_.meshes.GetHot(mid);
+            if (!mh) {
+                continue;
+            }
+            if (mh->bind_aabb_min.x > mh->bind_aabb_max.x) {
+                continue;
+            }
+            const glm::vec3 ext = mh->bind_aabb_max - mh->bind_aabb_min;
+            return std::max(ext.x, std::max(ext.y, ext.z));
+        }
+        return 0.0f;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+uint32_t Engine::CountAppendOnlyMismatches(
+            std::span<const PrefabHandleSnapshot> prior) {
+        uint32_t mismatches = 0;
+        for (const PrefabHandleSnapshot& p : prior) {
+            if (p.prefab_idx >= prefab_store_.prefab_ids.size()) {
+                ++mismatches; continue;
+            }
+            cairns::Prefab::Hot* shot =
+                prefab_store_.prefabs.GetHot(prefab_store_.prefab_ids[p.prefab_idx]);
+            if (!shot || p.mesh_idx >= shot->meshes.size()) {
+                ++mismatches; continue;
+            }
+            cairns::Mesh::Hot* mhot =
+                prefab_store_.meshes.GetHot(shot->meshes[p.mesh_idx]);
+            if (!mhot) {
+                ++mismatches; continue;
+            }
+            if (mhot->posHandle.index != p.pos_idx ||
+                mhot->posHandle.generation != p.pos_gen ||
+                mhot->attrHandle.index != p.attr_idx ||
+                mhot->attrHandle.generation != p.attr_gen ||
+                mhot->indexHandle.index != p.idx_idx ||
+                mhot->indexHandle.generation != p.idx_gen ||
+                mhot->batch_id != p.batch_id ||
+                mhot->global_base_vertex != p.global_base_vertex) {
+                ++mismatches;
+            }
+        }
+        return mismatches;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+std::vector<glm::mat4> Engine::FitGridToViewport(
+            uint32_t n_total,
+            std::span<const float> per_actor_extents) {
+        std::vector<glm::mat4> out;
+        if (n_total == 0) {
+            return out;
+        }
+        out.reserve(n_total);
+        const uint32_t cols = static_cast<uint32_t>(
+            std::max(1.0f, std::ceil(std::sqrt(
+                              static_cast<float>(n_total)))));
+        const uint32_t rows = (n_total + cols - 1u) / cols;
+        // Camera: y-axis FOV default 90deg (matches engine.hpp:~1370).
+        // Aspect = active viewport target dims; depth Z = -4 world units
+        // (matches the pre-#224 GenerateDebugGridTransforms convention).
+        const float fov_y = static_cast<float>(M_PI) * 0.5f;
+        float aspect = 16.0f / 9.0f;
+        if (present_.final_target_h > 0) {
+            aspect = static_cast<float>(present_.final_target_w) /
+                     static_cast<float>(present_.final_target_h);
+        }
+        const float depth = 4.0f;
+        // kFitMargin shrinks the GRID extent so the outermost characters
+        // get margin between their bind-pose AABB edge and the viewport
+        // edge. (Animated poses extend beyond bind extent; at large N the
+        // pre-margin grid spanned the full viewport and characters at the
+        // edges clipped.) cell_size's 0.85 scales the CHARACTER within
+        // its cell, independent of this.
+        const float kFitMargin = 0.85f;
+        const float visible_h = 2.0f * std::tan(fov_y * 0.5f) * depth * kFitMargin;
+        const float visible_w = visible_h * aspect;
+        const float cell_w = visible_w / static_cast<float>(cols);
+        const float cell_h = visible_h / static_cast<float>(rows);
+        const float cell_size = std::min(cell_w, cell_h) * 0.85f;
+        const float start_x = -cell_w * (static_cast<float>(cols - 1u) * 0.5f);
+        const float start_y = -cell_h * (static_cast<float>(rows - 1u) * 0.5f);
+        for (uint32_t i = 0; i < n_total; ++i) {
+            const uint32_t row = i / cols;
+            const uint32_t col = i % cols;
+            const float x = start_x + static_cast<float>(col) * cell_w;
+            const float y = start_y + static_cast<float>(row) * cell_h;
+            // Per-actor scale: cell_size / extent so each model fills the
+            // same on-screen cell regardless of its raw GLB size. Extent
+            // 0 (unknown / missing AABB) falls back to a small fixed scale.
+            const float extent = (i < per_actor_extents.size() &&
+                                   per_actor_extents[i] > 0.0f)
+                                     ? per_actor_extents[i] : 100.0f;
+            const float scale = cell_size / extent;
+            glm::mat4 m(1.0f);
+            m = glm::translate(m, glm::vec3(x, y, -depth));
+            m = glm::scale(m, glm::vec3(scale));
+            out.push_back(m);
+        }
+        return out;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+void Engine::StampPerPrefabAsset(std::span<const cairns::PrefabId> new_span) {
+        prefab_store_.per_prefab_asset.reserve(prefab_store_.prefab_ids.size());
+        for (cairns::PrefabId sid : new_span) {
+            cairns::Prefab::Hot* shot = prefab_store_.prefabs.GetHot(sid);
+            if (!shot || shot->meshes.empty()) {
+                prefab_store_.per_prefab_asset.push_back(cairns::AssetId{});
+                continue;
+            }
+            const cairns::Mesh::Hot* m0 =
+                prefab_store_.meshes.GetHot(shot->meshes[0]);
+            if (!m0) {
+                prefab_store_.per_prefab_asset.push_back(cairns::AssetId{});
+                continue;
+            }
+            const uint32_t prefab_idx =
+                static_cast<uint32_t>(prefab_store_.per_prefab_asset.size());
+            prefab_store_.per_prefab_asset.push_back(scene_mgr_.assets.RegisterExistingScene(
+                prefab_idx, sid,
+                m0->posHandle, m0->attrHandle, m0->indexHandle));
+        }
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+void Engine::ValidateAndCleanupTmps(
+            std::span<const cairns::PrefabId> new_span,
+            uint32_t first_prefab_idx,
+            cairns::ValidationReport& vreport) {
+        for (uint32_t pi = 0;
+             pi < static_cast<uint32_t>(new_span.size()); ++pi) {
+            const uint32_t prefab_idx = first_prefab_idx + pi;
+            cairns::Prefab::Hot* shot =
+                prefab_store_.prefabs.GetHot(prefab_store_.prefab_ids[prefab_idx]);
+            if (!shot) {
+                continue;
+            }
+            for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
+                if (cairns::Mesh::Cold* mc = prefab_store_.meshes.GetCold(mid)) {
+                    ValidateMeshWeights(*mc, vreport, prefab_idx);
+                }
+            }
+        }
+        for (cairns::PrefabId sid : new_span) {
+            if (cairns::Prefab::Cold* sc = prefab_store_.prefabs.GetCold(sid)) {
+                sc->CleanupTmps();
+            }
+        }
+        for (cairns::PrefabId sid : new_span) {
+            cairns::Prefab::Hot* shot = prefab_store_.prefabs.GetHot(sid);
+            if (!shot) {
+                continue;
+            }
+            for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
+                if (cairns::Mesh::Cold* mc = prefab_store_.meshes.GetCold(mid)) {
+                    mc->cpuPositions.clear();
+                    mc->cpuAttrs.clear();
+                    mc->cpuIndices.clear();
+                }
+            }
+        }
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+void Engine::BuildGroupABindGroups(
+            std::span<const cairns::PrefabId> new_span,
+            rhi::Handle<rhi::Buffer> batch_shared_skin) {
+        for (cairns::PrefabId sid : new_span) {
+            cairns::Prefab::Hot* shot = prefab_store_.prefabs.GetHot(sid);
+            if (!shot) {
+                continue;
+            }
+            for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
+                cairns::Mesh::Hot* mhot = prefab_store_.meshes.GetHot(mid);
+                if (!mhot || mhot->attr_skinned_alias.IsNull() ||
+                    batch_shared_skin.IsNull() || mhot->vert_count == 0) {
+                    continue;
+                }
+                cairns::rhi::BufferBinding bb[2]{};
+                bb[0].slot = 0;
+                bb[0].buffer = mhot->posHandle;
+                bb[0].offset = mhot->global_base_vertex *
+                    static_cast<uint32_t>(sizeof(glm::vec4));
+                bb[0].range = mhot->vert_count *
+                    static_cast<uint32_t>(sizeof(glm::vec4));
+                bb[0].kind = cairns::rhi::BufferKind::kStorage;
+                bb[1].slot = 1;
+                bb[1].buffer = batch_shared_skin;
+                bb[1].offset = mhot->skin_attr_base_vertex *
+                    static_cast<uint32_t>(sizeof(cairns::PackedSkinVertex));
+                bb[1].range = mhot->vert_count *
+                    static_cast<uint32_t>(sizeof(cairns::PackedSkinVertex));
+                bb[1].kind = cairns::rhi::BufferKind::kStorage;
+                cairns::rhi::BindGroupDesc bgd{};
+                bgd.debug_name = "skin_group_a";
+                bgd.buffers = std::span<const cairns::rhi::BufferBinding>(
+                    bb, 2);
+                mhot->skin_group_a = rhi_.resources.CreateSkinGroupA(
+                    rhi_.alloc, rhi_.frames, rhi_.pipelines, bgd);
+            }
+        }
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+void Engine::StampBatchSkinAndMeshIds(
+            std::span<const cairns::PrefabId> new_span,
+            rhi::Handle<rhi::Buffer> batch_shared_skin,
+            uint32_t& batch_mesh_count_out) {
+        const uint16_t batch_id =
+            static_cast<uint16_t>(prefab_store_.per_batch_shared_skin.size());
+        prefab_store_.per_batch_shared_skin.push_back(batch_shared_skin);
+        for (cairns::PrefabId sid : new_span) {
+            cairns::Prefab::Hot* shot = prefab_store_.prefabs.GetHot(sid);
+            if (!shot) {
+                continue;
+            }
+            for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
+                if (cairns::Mesh::Hot* mhot = prefab_store_.meshes.GetHot(mid)) {
+                    mhot->batch_id = batch_id;
+                    ++batch_mesh_count_out;
+                }
+            }
+        }
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+uint32_t Engine::CheckPrefabStateInvariants(
+            std::vector<std::string>* out_msgs) {
+        uint32_t v = 0;
+        auto fail = [&](const char* what) {
+            ++v;
+            if (out_msgs) {
+                out_msgs->emplace_back(what);
+            }
+        };
+        const size_t n_prefabs = prefab_store_.prefab_ids.size();
+        // (1) StampBatchSkinAndMeshIds:
+        //     prefab_store_.per_batch_shared_skin has at least one entry whenever any
+        //     prefab is resident; every Mesh::Hot::batch_id indexes it.
+        if (n_prefabs > 0 && prefab_store_.per_batch_shared_skin.empty()) {
+            fail("prefab_store_.per_batch_shared_skin empty but prefabs are resident");
+        }
+        const size_t n_batches = prefab_store_.per_batch_shared_skin.size();
+        prefab_store_.meshes.ForEachLive(
+            [&](cairns::Mesh::Hot& mh, cairns::Mesh::Cold&) {
+                if (mh.batch_id >= n_batches) {
+                    fail("Mesh::Hot::batch_id >= prefab_store_.per_batch_shared_skin.size()");
+                }
+            });
+        // (2) BuildGroupABindGroups -- vk only; on metal skin_group_a is
+        //     Null by design. Skip; not a portable invariant.
+        // (3) ValidateAndCleanupTmps:
+        //     every live Mesh::Cold has empty cpuPositions/cpuAttrs/
+        //     cpuIndices after the batch finished.
+        prefab_store_.meshes.ForEachLive(
+            [&](cairns::Mesh::Hot&, cairns::Mesh::Cold& mc) {
+                if (!mc.cpuPositions.empty() || !mc.cpuAttrs.empty() ||
+                    !mc.cpuIndices.empty()) {
+                    fail("Mesh::Cold cpu temporaries not cleared");
+                }
+            });
+        // (4) BuildMaterialSet2:
+        //     every live Material::Hot has non-null set2.
+        prefab_store_.materials.ForEachLive(
+            [&](cairns::Material::Hot& mat, cairns::Material::Cold&) {
+                if (mat.set2.IsNull()) {
+                    fail("Material::Hot::set2 is Null");
+                }
+            });
+        // (5) BuildResidentTextures:
+        //     prefab_store_.resident_textures.size() == sum of every live prefab's
+        //     Cold.textureHandles.size().
+        size_t sum_tex = 0;
+        prefab_store_.prefabs.ForEachLive(
+            [&](cairns::Prefab::Hot&, cairns::Prefab::Cold& pc) {
+                sum_tex += pc.textureHandles.size();
+            });
+        if (prefab_store_.resident_textures.size() != sum_tex) {
+            fail("prefab_store_.resident_textures.size() != sum_of_prefab_textureHandles");
+        }
+        // (6) StampPerPrefabAsset:
+        //     prefab_store_.per_prefab_asset.size() == prefab_store_.prefab_ids.size().
+        if (prefab_store_.per_prefab_asset.size() != n_prefabs) {
+            fail("prefab_store_.per_prefab_asset.size() != prefab_store_.prefab_ids.size()");
+        }
+        // (7) AppendGlbPaths:
+        //     prefab_store_.glb_paths.size() == prefab_store_.prefab_ids.size(). [PICK] log
+        //     resolves prefab_idx -> filename via this.
+        if (prefab_store_.glb_paths.size() != n_prefabs) {
+            fail("prefab_store_.glb_paths.size() != prefab_store_.prefab_ids.size()");
+        }
+        // (8) AcquireSceneCells:
+        //     scene_mgr_.active valid (entt registry exists for instantiate).
+        if (scene_mgr_.active.IsNull()) {
+            fail("scene_mgr_.active is Null (no entt container)");
+        }
+        return v;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+uint32_t Engine::InstantiatePrefabImpl(uint32_t scene_idx, const glm::mat4& world,
+                                    float time_phase, bool attach_skin) {
+        if (scene_idx >= prefab_store_.prefab_ids.size() ||
+            scene_idx >= prefab_store_.per_prefab_asset.size()) {
+            return UINT32_MAX;
+        }
+        cairns::Scene::Cold* wc = scene_mgr_.pool.GetCold(scene_mgr_.active);
+        if (!wc) {
+            return UINT32_MAX;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = reg.create();
+        cairns::WorldTransform wt;
+        wt.world = world;
+        reg.emplace<cairns::WorldTransform>(e, wt);
+        cairns::AssetRef ar;
+        ar.asset = prefab_store_.per_prefab_asset[scene_idx];
+        reg.emplace<cairns::AssetRef>(e, ar);
+        cairns::Renderable rdr;
+        rdr.layer_mask = 0xFFFFFFFFu;
+        rdr.flags = cairns::kProxyVisible;
+        reg.emplace<cairns::Renderable>(e, rdr);
+        if (attach_skin) {
+            cairns::SkinId sid =
+                TryCreateSkinForScene(prefab_store_.prefab_ids[scene_idx], time_phase);
+            if (!sid.IsNull()) {
+                reg.emplace<cairns::SkinRef>(e, cairns::SkinRef{sid});
+            }
+        }
+        // Mark world dirty so the proxy extract picks up the new entity.
+        if (auto* wh = scene_mgr_.pool.GetHot(scene_mgr_.active)) {
+            wh->dirty = true;
+        }
+        return static_cast<uint32_t>(entt::to_integral(e));
+    }
+
+}  // namespace cairns
