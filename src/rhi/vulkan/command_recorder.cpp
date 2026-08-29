@@ -533,32 +533,37 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     // Pack-meshes (Aaltonen slide 26): bind each stream at its mesh-region base
     // and select the primitive via baseVertex/baseIndex in the draw call, so the
     // VB/IB binds are emitted only when the mesh buffer actually changes.
-    uint32_t last_mat_bg = 0xFFFFFFFFu;
     VkBuffer last_pos_buf = VK_NULL_HANDLE;
     uint32_t last_pos_off = 0xFFFFFFFFu;
     VkBuffer last_attr_buf = VK_NULL_HANDLE;
     uint32_t last_attr_off = 0xFFFFFFFFu;
     VkBuffer last_idx_buf = VK_NULL_HANDLE;
     uint32_t last_idx_off = 0xFFFFFFFFu;
+    // #222 Phase E.0: generic loops over bind_groups[0..2] and
+    // vertex_buffers[0..2]. Null = skip. bind_groups[1] is material today
+    // (only non-null seat); E.1/E.2/E.4 will fill [0] and [2]. stream 0
+    // still adds Draw::pos_buffer_byte_offset until E.6 retires that
+    // field; static draws set it to 0 so the net offset is unchanged.
+    uint32_t last_bg[3] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
     for (size_t i = 0; i < list.sorted_draws.size(); ++i) {
         const cairns::Draw& draw = list.draws[list.sorted_draws[i].second];
-        // set 2: per-material bind group, bound only when the material changes
-        // (DrawKey sorts by material, so equal-material draws are adjacent).
-        const uint32_t mat_bg = draw.bind_groups[1].index;
-        if (mat_bg != last_mat_bg) {
-            last_mat_bg = mat_bg;
+        for (uint32_t s = 0; s < 3; ++s) {
+            if (draw.bind_groups[s].IsNull()) {
+                continue;
+            }
+            if (draw.bind_groups[s].index == last_bg[s]) {
+                continue;
+            }
+            last_bg[s] = draw.bind_groups[s].index;
             VkDescriptorSet ms = static_cast<VkDescriptorSet>(
-                res.GetHot(draw.bind_groups[1])->api_descriptor_set);
+                res.GetHot(draw.bind_groups[s])->api_descriptor_set);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    unlit->plat.vk_layout, 1, 1, &ms, 0, nullptr);
+                                    unlit->plat.vk_layout, s, 1, &ms, 0,
+                                    nullptr);
         }
         uint32_t pos_off = 0;
         VkBuffer pos_buf =
             res.plat.GetVkBuffer(alloc,draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
-        // #221 Skinning F5: skinned draws carry a per-actor byte offset
-        // into the shared pos buffer (skin_output_pool_'s actor slice).
-        // Static draws keep pos_buffer_byte_offset = 0 -- net stream-0
-        // bind for them is unchanged.
         const uint32_t pos_off_total = pos_off + draw.pos_buffer_byte_offset;
         if (pos_buf != last_pos_buf || pos_off_total != last_pos_off) {
             last_pos_buf = pos_buf;
@@ -574,6 +579,14 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
             last_attr_off = attr_off;
             VkDeviceSize off = attr_off;
             vkCmdBindVertexBuffers(cb, cairns::kMeshAttrVertexBindSlot, 1, &attr_buf, &off);
+        }
+        // Slot 2 (E.4 velocity stream consumer; null today): generic bind.
+        if (!draw.vertex_buffers[2].IsNull()) {
+            uint32_t v2_off = 0;
+            VkBuffer v2_buf =
+                res.plat.GetVkBuffer(alloc, draw.vertex_buffers[2], &v2_off);
+            VkDeviceSize off = v2_off;
+            vkCmdBindVertexBuffers(cb, 2, 1, &v2_buf, &off);
         }
         uint32_t idx_base = 0;
         VkBuffer idx_buf = res.plat.GetVkBuffer(alloc,draw.index_buffer, &idx_base);
