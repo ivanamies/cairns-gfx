@@ -129,6 +129,13 @@ public:
 
     static constexpr uint32_t kFramesInFlight = 2;
 
+    // #222 Phase 0.2: caps for the GPU anim_eval kernel + its persistent
+    // buffers. KEEP IN SYNC with assets/anim_eval.comp.glsl (records[1024],
+    // kMaxNodesPerScene, kMaxJointsPerSkin) and assets/anim_eval.metal.
+    static constexpr uint32_t kAnimActorsCap = 1024u;
+    static constexpr uint32_t kAnimMaxNodes = 256u;
+    static constexpr uint32_t kAnimMaxJoints = 256u;
+
     // Per-slot storage. drawList / drawListSorted / proxies / resident_textures
     // / draw_world_matrices live here so the game thread can fill slot S while
     // the render thread reads slot ~S. Capacity grows on demand; .clear()/
@@ -756,10 +763,8 @@ public:
         }
         // #221 Phase 5b: persistent palette out + world scratch for GPU
         // palette eval. 1024 actors * 256 mat4 = 16 MB each.
+        // #222 Phase 0.2: caps hoisted to class scope (kAnimActorsCap etc).
         {
-            static constexpr uint32_t kAnimActorsCap = 1024u;
-            static constexpr uint32_t kAnimMaxNodes = 256u;
-            static constexpr uint32_t kAnimMaxJoints = 256u;
             rhi::BufferDesc bd{};
             bd.usage = rhi::kUsageStorage;
             bd.memory = rhi::Memory::kDefault;
@@ -2059,6 +2064,10 @@ public:
                         static_cast<uint32_t>(pkt.actor_records.size());
                     if (n_actors > 0 && !anim_eval_kernel_.IsNull() &&
                         anim_eval_tables_uploaded_) {
+                        // #222 Phase 0.2: belt-and-braces. BuildSkinFrame
+                        // clamps; this catches any future caller that skips
+                        // the clamp.
+                        assert(n_actors <= kAnimActorsCap);
                         const uint32_t records_bytes = n_actors *
                             static_cast<uint32_t>(sizeof(cairns::GpuActorRecord));
                         uint32_t records_off = 0;
@@ -2682,6 +2691,7 @@ public:
                     sizeof(uint32_t) * kBucketCap);
 
         uint32_t total_actors = 0;
+        bool capped_this_frame = false;
         for (auto e : view) {
             const cairns::SkinRef& sr = view.get<const cairns::SkinRef>(e);
             auto* sh = skins_.GetHot(sr.id);
@@ -2691,8 +2701,18 @@ public:
             if (sh->mesh.index >= kBucketCap) {
                 continue;
             }
+            if (total_actors >= kAnimActorsCap) {
+                capped_this_frame = true;
+                break;
+            }
             ++mesh_actor_count[sh->mesh.index];
             ++total_actors;
+        }
+        if (capped_this_frame && !anim_actors_cap_warned_) {
+            anim_actors_cap_warned_ = true;
+            CAIRNS_PRINT("BuildSkinFrame: skinned actors exceeded "
+                         "kAnimActorsCap=%u; clamping (latched once).\n",
+                         kAnimActorsCap);
         }
         if (total_actors == 0) {
             return;
@@ -2758,8 +2778,6 @@ public:
         cairns::GpuActorRecord* actor_records =
             s.arena.AllocateArray<cairns::GpuActorRecord>(meta_running);
 
-        constexpr uint32_t kAnimMaxNodesPerScene = 256u;
-
         const float anim_t = static_cast<float>(sim_frame_) *
                               static_cast<float>(cairns::kFixedDt);
         for (auto e : view) {
@@ -2785,6 +2803,9 @@ public:
                 continue;
             }
             const uint32_t cursor = bucket_inst_cursor[bi];
+            if (cursor >= b.instance_count) {
+                continue;
+            }
             const uint32_t actor_idx = b.first_meta + cursor;
             const uint32_t palette_slot_base =
                 b.first_palette_mat4 + cursor * b.joint_count;
@@ -2794,7 +2815,7 @@ public:
 
             cairns::GpuActorRecord& rec = actor_records[actor_idx];
             rec.scene_idx = shot->gpu_scene_header_idx;
-            rec.world_scratch_base = actor_idx * kAnimMaxNodesPerScene;
+            rec.world_scratch_base = actor_idx * kAnimMaxNodes;
             rec.palette_out_base = palette_slot_base;
             rec.time = anim_t * sh->time_scale + sh->time_offset;
 
@@ -3247,6 +3268,9 @@ private:
     rhi::Handle<rhi::Buffer> world_scratch_buf_;
     rhi::Handle<rhi::Buffer> palette_out_buf_;
     bool anim_eval_tables_uploaded_ = false;
+    // #222 Phase 0.2: latched once-per-process warning when skinned-actor
+    // count exceeded kAnimActorsCap in any frame.
+    bool anim_actors_cap_warned_ = false;
 
     // Per-slot frame buffers (drawList / drawListSorted / proxies /
     // resident_textures / draw_world_matrices / pending_globals / globals_offset
