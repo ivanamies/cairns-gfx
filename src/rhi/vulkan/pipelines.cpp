@@ -307,7 +307,8 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     std::vector<VkDescriptorSetLayout> set_layouts;
     if (desc.logical_shader && std::string(desc.logical_shader) == "unlit") {
         set_layouts = {bindless.bindless_layout_,
-                       frames.dyn_ubo_layout_};
+                       frames.dyn_ubo_layout_,
+                       resources.MaterialSetLayout()};  // set 2: per-material
     } else {
         set_layouts = {frames.point_layout_};
     }

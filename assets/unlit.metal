@@ -77,6 +77,13 @@ struct DrawTmp {
     uint yolo_padding;
 };
 
+// set 2: per-material argument buffer (texture @ id 0, sampler @ id 1),
+// bound at CUBE_MATERIAL_BUFFER_SLOT (fragment) on material change.
+struct MaterialArg {
+    texture2d<float> tex [[id(0)]];
+    sampler samp [[id(1)]];
+};
+
 vertex VertexOut vertexShader(uint vertexID [[vertex_id]],
                               VertexInput in [[stage_in]],
                               constant RenderPassGlobals& globals [[buffer(CUBE_GLOBALS_BUFFER_SLOT)]],
@@ -92,12 +99,8 @@ vertex VertexOut vertexShader(uint vertexID [[vertex_id]],
     return out;
 }
 
-fragment float4 fragmentShader(VertexOut in [[stage_in]], constant SceneRegistry& scene [[buffer(CUBE_SCENE_REGISTRY_BUFFER_SLOT)]]) {
-    texture2d<float> color_texture = scene.textures[in.tex_color_id];
-    sampler s = scene.samplers[in.sampler_id];
-    const float4 colorSample = color_texture.sample(s, in.textureCoordinate);
-//    const float4 colorSample = float4(1, 0, 0, 1);
-    return colorSample;
+fragment float4 fragmentShader(VertexOut in [[stage_in]], constant MaterialArg& material [[buffer(CUBE_MATERIAL_BUFFER_SLOT)]]) {
+    return material.tex.sample(material.samp, in.textureCoordinate);
 }
     
 } // namespace cube

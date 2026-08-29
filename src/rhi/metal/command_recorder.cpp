@@ -68,8 +68,17 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     enc->setVertexBuffer(dyn_master, 0, cairns::kDrawTmpBindSlot);
 
     uint32_t last_mat_off = std::numeric_limits<uint32_t>::max();
+    uint32_t last_mat_bg = std::numeric_limits<uint32_t>::max();
     for (size_t i = 0; i < list.sorted_draws.size(); ++i) {
         const cairns::Draw& draw = list.draws[list.sorted_draws[i].second];
+        // set 2: per-material argument buffer, bound (fragment) on material change.
+        const uint32_t mat_bg = draw.bind_groups[1].index;
+        if (mat_bg != last_mat_bg) {
+            last_mat_bg = mat_bg;
+            BindGroup::Hot* mh = res.GetHot(draw.bind_groups[1]);
+            enc->setFragmentBuffer(mh->api_descriptor_set, mh->arg_buf_offset,
+                                   cairns::kMaterialBindSlot);
+        }
         {
             uint32_t pos_off = 0;
             MTL::Buffer* pos_buf = res.GetMtlBuffer(

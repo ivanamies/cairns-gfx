@@ -121,8 +121,19 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_layout, 0, 1,
                             &bindless, 0, nullptr);
 
+    uint32_t last_mat_bg = 0xFFFFFFFFu;
     for (size_t i = 0; i < list.sorted_draws.size(); ++i) {
         const cairns::Draw& draw = list.draws[list.sorted_draws[i].second];
+        // set 2: per-material bind group, bound only when the material changes
+        // (DrawKey sorts by material, so equal-material draws are adjacent).
+        const uint32_t mat_bg = draw.bind_groups[1].index;
+        if (mat_bg != last_mat_bg) {
+            last_mat_bg = mat_bg;
+            VkDescriptorSet ms = static_cast<VkDescriptorSet>(
+                res.GetHot(draw.bind_groups[1])->api_descriptor_set);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    unlit->vk_layout, 2, 1, &ms, 0, nullptr);
+        }
         uint32_t pos_off = 0;
         VkBuffer pos_buf =
             res.GetVkBuffer(alloc,draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
