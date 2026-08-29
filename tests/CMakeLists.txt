@@ -156,11 +156,14 @@ if(CAIRNS_GFX_BUILD_GOLDEN_TESTS)
     set(_cairns_assets_root "${CMAKE_SOURCE_DIR}/assets")
     set(_cairns_ext_glbs_root
         "/Users/ivanamies/dev/gfx/assets/riot/lol_champions/staging")
-    file(GLOB _cairns_metal_shaders "${_cairns_assets_root}/*.metal")
-    file(GLOB _cairns_spv_shaders   "${_cairns_assets_root}/*.spv")
-    file(GLOB _cairns_wgsl_shaders  "${_cairns_assets_root}/*.wgsl")
-    file(GLOB _cairns_glbs          "${_cairns_assets_root}/*.glb")
-    file(GLOB _cairns_ext_glbs      "${_cairns_ext_glbs_root}/*.glb")
+    # CONFIGURE_DEPENDS: re-glob when the asset/staging dirs change (a swapped
+    # champion GLB would otherwise leave a stale copy-list -> build fails
+    # copying a now-missing file).
+    file(GLOB _cairns_metal_shaders CONFIGURE_DEPENDS "${_cairns_assets_root}/*.metal")
+    file(GLOB _cairns_spv_shaders   CONFIGURE_DEPENDS "${_cairns_assets_root}/*.spv")
+    file(GLOB _cairns_wgsl_shaders  CONFIGURE_DEPENDS "${_cairns_assets_root}/*.wgsl")
+    file(GLOB _cairns_glbs          CONFIGURE_DEPENDS "${_cairns_assets_root}/*.glb")
+    file(GLOB _cairns_ext_glbs      CONFIGURE_DEPENDS "${_cairns_ext_glbs_root}/*.glb")
     set(_cairns_misc_assets
         "${_cairns_assets_root}/run.js"
         "${_cairns_assets_root}/Inter-VariableFont.ttf")

@@ -35,7 +35,6 @@ static constexpr std::array kDebugGlbs = {
     "aatrox_prestige_drx.glb",
     "aatrox_primordian.glb",
     "aatrox_sea_hunter.glb",
-    "aatrox_victorious.glb",
     "ahri.glb",
     "ahri_2022_prestige_k_da.glb",
     "ahri_academy.glb",
@@ -123,6 +122,7 @@ static constexpr std::array kDebugGlbs = {
     "anivia_noxus_hunter.glb",
     "anivia_papercraft.glb",
     "anivia_prehistoric.glb",
+    "anivia_team_spirit.glb",
 };
 
 static_assert(kDebugGlbsToParseStart + kDebugGlbsToParse <= kDebugGlbs.size(),

@@ -544,7 +544,7 @@ if (NOT ANDROID AND NOT IOS AND NOT EMSCRIPTEN)
     # kDebugGlbs[3..103) loop finds them. Without this the headless byte
     # gate renders empty (entities=0) and is meaningless.
     set(EXTERNAL_ASSETS_DIR "/Users/ivanamies/dev/gfx/assets/riot/lol_champions/staging")
-    file(GLOB _cairns_serve_glbs "${EXTERNAL_ASSETS_DIR}/*.glb")
+    file(GLOB _cairns_serve_glbs CONFIGURE_DEPENDS "${EXTERNAL_ASSETS_DIR}/*.glb")
     foreach(_glb ${_cairns_serve_glbs})
         get_filename_component(_glb_name "${_glb}" NAME)
         add_custom_command(POST_BUILD
@@ -618,14 +618,14 @@ if (APPLE)
     endforeach()
 
     # 3. Add GLB Models (*.glb)
-    file(GLOB GLB_FILES "${input_root}/*.glb")
+    file(GLOB GLB_FILES CONFIGURE_DEPENDS "${input_root}/*.glb")
     foreach(GLB_FILE ${GLB_FILES})
         add_resource("${GLB_FILE}")
     endforeach()
 
     # 4. Hack in copying all of my league of legends assets
     set(EXTERNAL_ASSETS_DIR "/Users/ivanamies/dev/gfx/assets/riot/lol_champions/staging")
-    file(GLOB EXTERNAL_GLB_FILES "${EXTERNAL_ASSETS_DIR}/*.glb")
+    file(GLOB EXTERNAL_GLB_FILES CONFIGURE_DEPENDS "${EXTERNAL_ASSETS_DIR}/*.glb")
     foreach(EXT_GLB ${EXTERNAL_GLB_FILES})
         add_resource("${EXT_GLB}")
     endforeach()

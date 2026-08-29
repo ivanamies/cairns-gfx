@@ -294,15 +294,17 @@ image that its body material references; victorious is a bad export. Verified by
 parsing the GLB JSON chunk directly and by per-draw probes (mats 109/110/111 ->
 images 0/1/1 exactly as the glTF says). The engine binds and samples faithfully
 -- other viewers show the same pale wings-on-body mapping. Non-bug for the
-renderer; `nested.color.*` refs stay as-is. Options if the white bothers us:
-re-export/replace the asset, or swap kDebugGlbs[12] (full nested rebake).
-Still open (separate, latent): the loader's material loop
-(`gltf_loader.hpp` "Material Mapping") silently SKIPS a material when
-baseColorTexture is absent or its texture lacks image/sampler indices, desyncing
-`hot.materials` positions from glTF material indices -- any GLB with an
-untextured material would bind neighbors' materials off-by-N. None of the 20
-debug GLBs trigger it today; fix by pushing a placeholder entry instead of
-skipping.
+renderer. RESOLVED by asset swap: kDebugGlbs[12] aatrox_victorious.glb ->
+anivia_team_spirit.glb (slid down; array stays 1:1 with the staging dir).
+nested.color.* + hundred_champ_anim.* rebaked (macos metal/vk/webgpu); the
+android-vk-emu / ios-sim-metal hundred_champ refs were REMOVED (no on-platform
+access) and will auto-bake on next run there -- eyeball those bakes.
+FIXED (separate, latent): the loader's material loop (`gltf_loader.hpp`
+"Material Mapping") used to SKIP a material with no resolvable baseColorTexture,
+desyncing `hot.materials` from glTF material indices (off-by-N binds). Now pushes
+one entry per glTF material (kNoMaterialTexture sentinel -> placeholder in
+PreparePrefabResources; set2 builders skip null-color slots). No roster GLB has
+an untextured material, so zero golden movement -- pure safety net.
 
 ---
 
