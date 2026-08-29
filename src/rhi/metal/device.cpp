@@ -30,6 +30,21 @@ bool Device::Init(const InitConfig& cfg) {
     }
     plat.queue_ = plat.device_->newCommandQueue();
     inited_ = (plat.queue_ != nullptr);
+
+    // DeviceCaps (boot invariant feed) -- see util/device_caps.hpp.
+    // Metal's per-buffer cap is the MTLDevice maxBufferLength; the recommended
+    // working set is the closest analogue to the vk resident budget. Both are
+    // 64-bit; we clamp the storage range field to uint32 since that is the
+    // shape of the vk limit, and our predicate accepts uint32.
+    if (inited_) {
+        const uint64_t max_buf = plat.device_->maxBufferLength();
+        caps.max_storage_buffer_range =
+            static_cast<uint32_t>(max_buf > 0xFFFFFFFFull ? 0xFFFFFFFFull
+                                                          : max_buf);
+        caps.max_uniform_buffer_range = caps.max_storage_buffer_range;
+        caps.resident_budget_bytes =
+            plat.device_->recommendedMaxWorkingSetSize();
+    }
     return inited_;
 }
 

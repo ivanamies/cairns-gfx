@@ -406,6 +406,22 @@ bool Device::Init(const InitConfig& cfg) {
         }
     }
 
+    {  // DeviceCaps (boot invariant feed) -- see util/device_caps.hpp.
+        VkPhysicalDeviceProperties pp{};
+        vkGetPhysicalDeviceProperties(plat.physical_, &pp);
+        caps.max_storage_buffer_range = pp.limits.maxStorageBufferRange;
+        caps.max_uniform_buffer_range = pp.limits.maxUniformBufferRange;
+        VkPhysicalDeviceMemoryProperties mp{};
+        vkGetPhysicalDeviceMemoryProperties(plat.physical_, &mp);
+        uint64_t device_local_bytes = 0;
+        for (uint32_t i = 0; i < mp.memoryHeapCount; ++i) {
+            if (mp.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+                device_local_bytes += mp.memoryHeaps[i].size;
+            }
+        }
+        caps.resident_budget_bytes = device_local_bytes;
+    }
+
     inited_ = true;
     return true;
 }

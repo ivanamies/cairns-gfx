@@ -25,6 +25,8 @@
 #include "render/worker_context.hpp"
 #include "util/cpu_arena.hpp"
 #include "util/cpu_pool.hpp"  // #221 Phase 3: RangePool for skin_output_pool_.
+#include "util/device_caps.hpp"  // boot-invariant + HUD/skin fit predicates
+#include "util/hud_stats.hpp"
 #include "util/animation_runtime.hpp"  // #221 Phase 9: SelectWalkingClip + sampler.
 #include "render/render_proxy.hpp"  // #221 Phase 3: SkinnedAttachment Hot/Cold.
 
@@ -106,6 +108,14 @@ struct EngineConfig {
     // CAIRNS_GLB: comma-separated list of glb names / paths. Empty =>
     // engine default (kDebugGlbs window).
     std::vector<std::string> glb_overrides;
+
+    // Run the engine with a FixedClock (deterministic frame dt) WITHOUT the
+    // CLI dump_path side effect of "dump at kGoldenDumpFrame then exit(0)."
+    // The golden test harness needs the determinism without the exit -- it
+    // can't be killed mid-suite. dump_path != "" still implies fixed clock
+    // (CLI behaviour preserved); this bool is the only way to ask for fixed
+    // clock without the dump+exit path.
+    bool use_fixed_clock = false;
 };
 
 class Engine {
@@ -1410,6 +1420,18 @@ public:
 
     bool CamPoseOverridden() const { return cam_pose_override_; }
 
+    // HUD stat injection seam (Tier G scenario 6: imgui stability). When set,
+    // the imgui HUD draws from this value instead of live Timer accumulators
+    // so the captured screen is byte-stable. The golden test feeds
+    // cairns::HudStats::Mock() (16.6 ms / 60 fps / flat graph).
+    void SetInjectedHudStats(const cairns::HudStats& s) {
+        injected_hud_stats_ = s;
+    }
+    void ClearInjectedHudStats() { injected_hud_stats_.reset(); }
+    const std::optional<cairns::HudStats>& InjectedHudStats() const {
+        return injected_hud_stats_;
+    }
+
     // #194 runtime viewport management. #220 Step 4: handle-pilled +
     // vpN wire-name layer.
     int ActiveViewportCount() const { return active_viewport_count_; }
@@ -1834,8 +1856,13 @@ public:
             n = 4u;
         }
         build_pool_ = std::make_unique<cairns::WorkerPool>(n);
-        // Clock selection: a dump_path => FixedClock (golden); else WallClock.
-        golden_ = !engine_cfg_.dump_path.empty();
+        // Clock selection: a dump_path OR an explicit use_fixed_clock => the
+        // engine runs with FixedClock + readback enabled (golden_=true). Only
+        // a non-empty dump_path also turns on the dump-frame-then-exit(0)
+        // path (dump_and_exit_) -- so the test harness can ask for the
+        // determinism without being killed.
+        dump_and_exit_ = !engine_cfg_.dump_path.empty();
+        golden_ = engine_cfg_.use_fixed_clock || dump_and_exit_;
         tiny_quad_test_ = engine_cfg_.tiny_quad;
 
         // #220 Step 4: viewport pool must be set up BEFORE the cam_pose
@@ -1885,6 +1912,32 @@ public:
             CAIRNS_PRINT("GreaterInit: device.Init failed\n");
             return false;
         }
+        // Boot device-cap invariant. The 2026-06-17 S22 garble (Adreno 730
+        // maxStorageBufferRange = 256 MB, 1 GB pool bound past it -> silent
+        // no-op writes) would have aborted right here with the exact log
+        // line the bisect spent ~4 hours speculating toward. Android already
+        // sizes kSkinOutputBytes at 256 MB (the landed fix); this is the
+        // belt-and-braces check that survives a desktop-pool slip onto a
+        // mobile device.
+        {
+#ifdef __ANDROID__
+            constexpr uint32_t kSkinOutputBytesCheck = 256u * 1024u * 1024u;
+#else
+            constexpr uint32_t kSkinOutputBytesCheck = 1024u * 1024u * 1024u;
+#endif
+            if (!cairns::SkinPoolFitsDevice(kSkinOutputBytesCheck,
+                                            rhi_.device.caps)) {
+                CAIRNS_PRINT_ERR(
+                    "[FATAL] kSkinOutputBytes=%u exceeds device "
+                    "max_storage_buffer_range=%u. The skin pool would "
+                    "be bound past the addressable range and writes "
+                    "past it would silently no-op (Adreno 730 floor "
+                    "is 256 MB).\n",
+                    kSkinOutputBytesCheck,
+                    rhi_.device.caps.max_storage_buffer_range);
+                std::abort();
+            }
+        }
         if (!rhi_.alloc.Init(rhi_.device)) {
             CAIRNS_PRINT("GreaterInit: alloc.Init failed\n");
             return false;
@@ -1917,6 +1970,10 @@ public:
                 return false;
             }
             // Slices in vec4 units (16 B). Capacity = total / 16.
+            static_assert(sizeof(glm::vec4) == cairns::kSkinVertexStride,
+                          "skin vertex stride must equal sizeof(glm::vec4); "
+                          "RangePool offsets are scaled by kSkinVertexStride "
+                          "on bind.");
             skin_output_pool_.Init(kSkinOutputBytes / 16u);
         }
         // #221 Phase 5b: persistent palette out + world scratch for GPU
@@ -2738,7 +2795,8 @@ public:
         cpu_last_frame_ns_ = cpu_now_ns;
         s.pkt.request_dump = false;
         s.pkt.dump_path.clear();
-        if (golden_ && !dump_emitted_ && sim_frame_ >= cairns::kGoldenDumpFrame) {
+        if (dump_and_exit_ && !dump_emitted_ &&
+            sim_frame_ >= cairns::kGoldenDumpFrame) {
             s.pkt.request_dump = true;
             s.pkt.dump_path = engine_cfg_.dump_path.empty()
                                    ? std::filesystem::path("/tmp/cairns_dump.png")
@@ -2746,8 +2804,11 @@ public:
             dump_emitted_ = true;
             dump_emit_frame_ = frame_;
         }
-        if (dump_emitted_ && frame_ >= dump_emit_frame_ + 2) {
-            std::exit(0);  // headless byte-gate: dump frame flushed, now quit
+        if (dump_and_exit_ && dump_emitted_ &&
+            frame_ >= dump_emit_frame_ + 2) {
+            std::exit(0);  // headless byte-gate: dump flushed, exit. Tests
+                           // set use_fixed_clock without dump_path, so
+                           // dump_and_exit_=false here and tests survive.
         }
 
         cairns::Timer t_frame("frame", 0);
@@ -5329,6 +5390,14 @@ private:
     float render_angle_deg_ = 0.0f;
     uint32_t sim_steps_this_frame_ = 0;
     bool golden_ = false;
+    // Subset of golden_: only true when dump_path != "" (the CLI byte-gate
+    // path). Tests use use_fixed_clock => golden_=true, dump_and_exit_=false.
+    bool dump_and_exit_ = false;
+    // Optional override for HUD numbers (HudStats::Mock used by the imgui
+    // overlay golden so the captured screen is byte-stable). When present,
+    // the HUD draw path reads from this instead of HudFromTimer. Set via
+    // SetInjectedHudStats from the golden test harness.
+    std::optional<cairns::HudStats> injected_hud_stats_;
     // Diagnostic: pin every draw to 2 triangles. Draw count + submission
     // identical, geometry throughput ~700x smaller. Isolates draw-submission
     // overhead vs geometry-throughput in the forward pass cost.
