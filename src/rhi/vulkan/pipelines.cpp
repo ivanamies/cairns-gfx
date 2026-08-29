@@ -525,11 +525,21 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
             ? static_cast<uint32_t>(desc.color_count)
             : (desc.color_format != Format::kUndefined ? 1u : 0u);
     VkPipelineColorBlendAttachmentState blend_atts[GraphicsPipelineDesc::kMaxColorFormats]{};
+    // #242: shader may write fewer outputs than n_color_atts. Attachments
+    // [frag_outs, n_color_atts) get colorWriteMask=0 so validation knows
+    // we're intentionally not writing them (avoids
+    // Undefined-Value-ShaderInputNotProduced).
+    const uint32_t frag_outs = desc.frag_color_output_count > 0
+        ? static_cast<uint32_t>(desc.frag_color_output_count)
+        : n_color_atts;
     for (uint32_t i = 0; i < n_color_atts; ++i) {
         blend_atts[i] = blend_attachment;
         if (i > 0) {
             // Secondary attachments: blend off (UINT formats can't blend).
             blend_atts[i].blendEnable = VK_FALSE;
+        }
+        if (i >= frag_outs) {
+            blend_atts[i].colorWriteMask = 0;
         }
     }
     VkPipelineColorBlendStateCreateInfo color_blending{};

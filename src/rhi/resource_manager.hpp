@@ -395,6 +395,13 @@ struct GraphicsPipelineDesc {
                                                 Format::kUndefined,
                                                 Format::kUndefined};
     uint8_t color_count = 0;
+    // #242: when the fragment shader writes fewer outputs than
+    // color_count (e.g. particle frag writes 1, but the offscreen PSO
+    // has 2 attachments to match the id-MRT renderpass), tell the
+    // pipeline to set colorWriteMask=0 on attachments
+    // [frag_color_output_count, color_count). 0 means "auto: match
+    // color_count" -- the common case where shader writes match exactly.
+    uint8_t frag_color_output_count = 0;
     Format color_format = Format::kBgra8Unorm;
     Format depth_format = Format::kD32F;
     uint32_t sample_count = 1;

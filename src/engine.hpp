@@ -2749,12 +2749,12 @@ public:
             desc.depth_format = rhi::Format::kD32F;
             desc.sample_count = sampleCount;
             desc.push_constant_bytes = 0;  // base_vertex no longer needed (attrs are a vertex stream)
-            desc.debug_name = "unlit";
-            desc.swap_chain = &swapchain_;
-            unlit_ = rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources, rhi_.frames, desc);
-            if (unlit_.IsNull()) {
-                std::exit(0);
-            }
+            // #242: unlit_ swap-PSO retired -- it used the swapchain
+            // renderpass (1 color) with unlit.frag (writes outId at
+            // location 1), tripping VUID Undefined-Value-ShaderOutputNotConsumed.
+            // The forward pass uses the offscreen variants
+            // (unlit_offscreen_ / unlit_offscreen_noid_) instead; this
+            // PSO never made it to a vkCmdDraw.
 
             // Offscreen variant: single-sample, no swapchain compat. Same shaders
             // + vertex layout as unlit; targets a render-graph color_off+depth_off.
@@ -3529,6 +3529,10 @@ public:
             opd.color_formats[0] = rhi::Format::kBgra8Unorm;
             opd.color_formats[1] = rhi::Format::kR32Uint;
             opd.color_count = 2;
+            // #242: particle frag writes only outColor (location 0); the
+            // R32U id attachment exists for renderpass-compat but gets
+            // colorWriteMask=0 so we don't undef-stomp it.
+            opd.frag_color_output_count = 1;
             opd.debug_name = "particle_render_offscreen";
             particle_render_offscreen_ = rhi_.pipelines.CreateGraphicsPipeline(
                 rhi_.resources, rhi_.frames, opd);
@@ -3845,7 +3849,6 @@ private:
 
     cairns::rhi::SwapChain swapchain_;
     // shaders
-    ShaderHandle unlit_ = ShaderHandle::Null;
     ShaderHandle unlit_offscreen_ = ShaderHandle::Null;
     // #222 Phase A.1: id-less variant; selected when no consumer wants the
     // R32U id attachment this frame.
