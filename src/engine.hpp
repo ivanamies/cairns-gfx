@@ -871,6 +871,47 @@ public:
                         rhi_.alloc, rhi_.frames, bgd);
                 });
 
+            {
+                uint64_t total_skin_verts = 0;
+                uint32_t skin_mesh_count = 0;
+                uint32_t max_vert_per_mesh = 0;
+                meshes_.ForEachLive(
+                    [&](cairns::Mesh::Hot& mhot, cairns::Mesh::Cold&) {
+                        if (mhot.attr_skinned_alias.IsNull() ||
+                            mhot.skin_attrs_buffer.IsNull() ||
+                            mhot.vert_count == 0) {
+                            return;
+                        }
+                        total_skin_verts += mhot.vert_count;
+                        ++skin_mesh_count;
+                        if (mhot.vert_count > max_vert_per_mesh) {
+                            max_vert_per_mesh = mhot.vert_count;
+                        }
+                    });
+                uint32_t max_joints = 0;
+                uint32_t max_nodes = 0;
+                uint32_t scene_count = 0;
+                scenes_.ForEachLive(
+                    [&](cairns::Scene::Hot&, cairns::Scene::Cold& c) {
+                        ++scene_count;
+                        if (c.nodes.size() > max_nodes) {
+                            max_nodes = static_cast<uint32_t>(c.nodes.size());
+                        }
+                        for (const cairns::Skin& s : c.skins) {
+                            if (s.jointNodes.size() > max_joints) {
+                                max_joints = static_cast<uint32_t>(
+                                    s.jointNodes.size());
+                            }
+                        }
+                    });
+                CAIRNS_PRINT(
+                    "[WORKLOAD] scenes=%u skinned_meshes=%u total_skin_verts=%llu "
+                    "max_vert_per_mesh=%u max_joints=%u max_nodes=%u\n",
+                    scene_count, skin_mesh_count,
+                    static_cast<unsigned long long>(total_skin_verts),
+                    max_vert_per_mesh, max_joints, max_nodes);
+            }
+
             // #220 Step 3: per-Scene Cold CleanupTmps via the pool sweep.
             scenes_.ForEachLive(
                 [](cairns::Scene::Hot&, cairns::Scene::Cold& c) {
