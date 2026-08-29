@@ -28,9 +28,6 @@
 #include "util/draw_key.hpp"
 #include "util/material_gpu.hpp"
 #include "util/scene_gpu.hpp"
-#include "util/frame_transient_cache.hpp"
-#include "util/timer.hpp"
-#include "util/unique_ptr.hpp"
 #include "rhi/device.hpp"
 #include "rhi/allocator.hpp"
 #include "rhi/resources.hpp"
@@ -269,18 +266,15 @@ public:
             }
         }
 
-        //        cairns::Timer timer2("timer2", 2);
         for ( size_t scene_xform_idx = 0; scene_xform_idx < debugSceneXforms_.size(); ++scene_xform_idx ) {
             size_t scene_idx = scene_xform_idx % scenes_.size();
             const glm::mat4& scene_xform = debugSceneXforms_[scene_xform_idx];
-            //            cairns::Timer timer3("timer3", 3);
             cairns::Scene& scene = scenes_[scene_idx];
             root_nodes_stack_cache_.clear();
             for ( size_t j = 0; j < scene.rootNodes.size(); ++j ) {
                 root_nodes_stack_cache_.push_back(scene.rootNodes[j]);
             }
             while(!root_nodes_stack_cache_.empty()) {
-                //                cairns::Timer timer3("timer4", 4);
                 int32_t nodeIdx = root_nodes_stack_cache_.back();
                 root_nodes_stack_cache_.pop_back();
                 const auto& node = scene.nodes[nodeIdx];
@@ -296,11 +290,9 @@ public:
                 [[maybe_unused]] const BufHandle attr = mesh.attrHandle;
                 const BufHandle index = mesh.indexHandle;
                 
-                //                cairns::Timer timer5("timer5", 5);
                 // warning @iamies alot of time is being lost between timers 2 and 3 and timers 5 and 6.
                 // I am pretty sure this means cache misses.
                 for(const auto& prim : mesh.primitives) {
-                    //                    cairns::Timer timer6("timer6", 6);
                     const uint32_t scene_mat_idx = prim.materialIndex;
                     const MatId mat_id = scene.materialIds[scene_mat_idx];
                     const rhi::Handle<rhi::Texture> tex_handle = materials_[mat_id].color;
@@ -310,7 +302,6 @@ public:
                     const uint32_t gpu_sampler_id = sampler_id_map_[sampler_handle.index];
                     const uint32_t gpu_attr_idx = mesh_attr_id_map_[mesh.attrHandle.index];
                     
-                    //                    cairns::Timer timer7("timer7", 7);
                     const cairns::rhi::MaterialGpu material_gpu {
                         .tex_color_id = gpu_tex_id,
                         .sampler_id = gpu_sampler_id,

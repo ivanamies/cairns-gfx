@@ -12,8 +12,6 @@ static constexpr uint32_t kMaterialBindSlot = 2;
 static constexpr uint32_t kShaderSpecificBindSlot = 3;
 static constexpr uint32_t kDrawTmpBindSlot = 4;
 
-static constexpr uint32_t kInvalidBindGroupId = 0xFFFFFFFFu;
-
 // "Hypehype Modern Mobile Rendering Architecture" slide 21-22, page 34-36
 // the draw packet around which all rendering revolves
 struct Draw {
