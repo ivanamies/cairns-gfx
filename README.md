@@ -451,6 +451,143 @@ before touching adjacent code so they don't get re-introduced.
   ALWAYS ask before introducing a hash map. Even when "the keyspace is
   small" — that's exactly when the flat-array win is biggest.
 
+## Bisecting a vk regression on a moving op-surface (the L9-era hell)
+
+The vk wedge bisect (9737baa..ia/dev) **cost a session** because the NDJSON
+op surface mutates inside the bisect range. Every time you jump commits
+the spawn/instantiate plumbing changes shape — `prefab.loadBatch` doesn't
+exist before `26a1af7`, `scene.instantiateGrid` is a stub at `f8af786`,
+the engine's auto-spawn from `CAIRNS_N`/`CAIRNS_GLB` is killed at
+`bd617d3`. Repeat **before** you start the Android re-bisect.
+
+### The five op-surface eras (newest first)
+
+| commit range                             | how to spawn N actors                                              | notes                                                                                                       |
+|------------------------------------------|--------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------|
+| `73ce3c4`..`HEAD` (bundled run.js)       | edit `assets/run.js` then rebuild — boot runs it                  | mandatory asset; `boot_run.cpp` aborts if missing; identical content on every platform                       |
+| `26a1af7`..`73ce3c4~1`                   | `prefab.loadBatch(cursor,count)` + N× `scene.instantiateGrid`     | both ops real; `instantiate` returns `UINT32_MAX` on fail (post-`bc826b0`)                                  |
+| `bc826b0`..`26a1af7~1`                   | same ops but textures render as white silhouettes                | bc826b0 fixes the L9 strands; 26a1af7 (L10b) builds material set2 inside LoadPrefabBatch                    |
+| `bd617d3`..`bc826b0~1` (3 commits, **untestable**) | `prefab.loadBatch` works but `InstantiatePrefab` silently returns entity=0 | per_prefab_asset_ / active_scene_ / resident_textures_ stranded by L9; skip these commits in the bisect      |
+| `e9ac791`..`bd617d3~1`                   | engine auto-loads 100 GLBs at boot → drive entity spawn via `scene.clear` + N× `scene.instantiate(prefab,x,y,z,scale,time_phase)` | `instantiateGrid` is a STUB (returns synthetic id only); `prefab.load*` are STUBS too                       |
+| ..`e9ac791~1` (pre-#224 L4)              | engine auto-spawns from `CAIRNS_N` + `CAIRNS_GLB` env vars        | no NDJSON ops; `kHeroSlices=33` default-multiplier; **`9737baa` was last known-good S22 vk row** in PERFORMANCE.md |
+
+### Driving each era
+
+```jsonc
+// era 5 (HEAD, run.js): edit assets/run.js, rebuild, launch.
+// Same NDJSON-ish shape but via cairns.dispatch in JS:
+cairns.dispatch("cairns.prefab.loadBatch", { cursor: 0, count: 100 });
+for (let k = 0; k < 5; ++k) {
+    cairns.dispatch("cairns.scene.instantiateGrid",
+                    { first_prefab_idx: 0, prefab_count: 100 });
+}
+```
+
+```ndjson
+// era 4 (post-26a1af7): pipe to sdl-min via CAIRNS_AGENT_STDIN=1, or to
+// cairns_serve via stdin.
+{"op":"cairns.scene.clear"}
+{"op":"cairns.prefab.loadBatch","args":{"cursor":0,"count":9}}
+{"op":"cairns.scene.instantiateGrid","args":{"first_prefab_idx":0,"prefab_count":9}}
+```
+
+```ndjson
+// era 2 (e9ac791..bd617d3~1): the engine auto-loaded 100 GLBs at boot. To
+// spawn 9 explicitly:
+{"op":"cairns.scene.clear"}
+{"op":"cairns.scene.instantiate","args":{"prefab":0,"x":-1.6,"y":-1.6,"z":-4.0,"scale":0.005,"time_phase":0.0}}
+{"op":"cairns.scene.instantiate","args":{"prefab":1,"x":0.0, "y":-1.6,"z":-4.0,"scale":0.005,"time_phase":0.137}}
+// ... 7 more, prefab indices 2..8
+```
+
+```sh
+# era 1 (..e9ac791): no NDJSON. Engine spawns from env vars at GreaterInit.
+CAIRNS_N=500 ./sdl-min                                                     # default 100 GLBs, 500 actors
+CAIRNS_N=9 CAIRNS_GLB="aatrox.glb,aatrox_blood_moon.glb,…" ./sdl-min        # 9 distinct GLBs, 9 actors
+```
+
+### Build + run loops
+
+**Desktop vk Release** (always pass `-DCAIRNS_GFX_BACKEND=vulkan` — the
+cmake default is metal and the silent-pick has burned hours):
+
+```sh
+cmake -S . -B build/vk -G Xcode -DCAIRNS_GFX_BACKEND=vulkan
+cmake --build build/vk --target sdl-min --config Release -j8
+
+CAIRNS_AGENT_STDIN=1 \
+  ./build/vk/Release/sdl-min.app/Contents/MacOS/sdl-min \
+  < driver.ndjson 2>tmp/stderr.log &
+
+# wait, check pid, eyeball window
+pgrep -af sdl-min
+grep -E '\[Timer\] slot|draws |entities=' tmp/stderr.log | tail -20
+```
+
+For headless dump-and-compare runs (faster bisect iteration than the
+windowed app): append `cairns.render.frame` ×4 + `cairns.io.dumpTexture`
++ `cairns.app.quit` to the driver and pipe into `cairns_serve` instead
+of `sdl-min`.
+
+**Android (S22) vk Release** — Android needs the windowed app
+(`sdl-min` AAR is what gets built). No NDJSON transport, so eras 4/5 need
+the NDJSON to come from `assets/run.js`; era 1 uses env-var auto-spawn
+in `main.cpp`'s `__ANDROID__` block.
+
+```sh
+# Build + install. Gradle drives cmake; the cmake POST_BUILD copies
+# assets/run.js into the APK assets dir. If you only changed run.js,
+# force the copy:
+cp assets/run.js third_party/SDL/android-project/app/src/main/assets/run.js
+
+cd third_party/SDL/android-project
+./gradlew :app:assembleRelease
+adb -s <serial> install -r app/build/outputs/apk/release/app-release.apk
+
+# Run + wait + capture.
+adb -s <serial> logcat -c
+adb -s <serial> shell am force-stop org.libsdl.app
+adb -s <serial> shell am start -n org.libsdl.app/.SDLActivity
+
+# Wait ~30s for steady state, then either eyeball the device or pull:
+adb -s <serial> logcat -d | grep -E 'cairns|\[Timer\] slot|draws ' | tail -40
+
+# Sanity-check process still alive (silent OOM-kill if not):
+adb -s <serial> shell pidof org.libsdl.app
+```
+
+### Per-commit verification signal
+
+The stderr / logcat line you grep for after each bisect step:
+
+```
+draws 1700 | 100 GLBs x 5 slices = 500 entities | resolution 1280 x 720
+[Timer] slot 0 (frame): accum NNN us, avg NNN us over 120 frames
+[Timer] slot 3 (skinning_compute): accum NNN us, avg NNN us over 120 frames
+```
+
+For the visual signal (wedge vs clean) on desktop you can `screencapture
+-x tmp/shot.png`. On Android, eyeball the device or use `adb exec-out
+screencap -p > tmp/shot.png`.
+
+### Skipping the untestable strands
+
+`bd617d3`..`bc826b0~1` is three commits where `cairns.scene.instantiate`
+silently returns entity:0 because L9 stranded `per_prefab_asset_` /
+`active_scene_` / `resident_textures_`. Don't try to verify them
+individually; treat the whole block as "the bug is at one end of the
+block, you can't tell which without surgery." Test `e9ac791` (good
+side) and `bc826b0` (bad side) and conclude the regression is in one
+of `{bd617d3, 64e1de0, 7cbac96, bc826b0}` — only `bd617d3` and
+`bc826b0` have code changes (the other two are golden rebake + script
+add), so the culprit is one of those two. The fix sat at the closer
+match — once `bc826b0` made instantiate work, the wedge was already
+present, so the introducing commit was `bd617d3` (kill the boot
+bulk-load) and the eventual fix was to recreate the stranded
+descriptor sets after the first runtime `loadBatch` (commit `a273119`
+on `ia/dev` adds `recreateSkinGroupB`; H4b's `recreateAnimDynBindings`
+was the other half).
+
 ## Known deferrals (acknowledged, not bugs)
 
 Moved to `TODO.md`. README carries architecture, not work items.

@@ -5,6 +5,28 @@ Newest first.
 
 ---
 
+## `73ce3c4` (2026-06-17) — run.js boot, 500 actors / 100 distinct GLBs
+
+### macOS, M2 Max, vk Release, 2560×1440, 30s capture, 120-frame window
+
+| Pass               | avg     |
+|--------------------|---------|
+| `frame`            | 20.66 ms |
+| `build_draws`      |  0.59 ms |
+| `record`           |  0.19 ms |
+| `skinning_compute` |  5.00 ms |
+| `particle_sim`     |  0.01 ms |
+| `forward_vp0`      |  1.99 ms |
+| `swap`             |  0.13 ms |
+| `skin_eval`        |  0.03 ms |
+| `present_wait`     |  0.01 ms |
+| `acquire_wait`     |  0.01 ms |
+| `fence_wait`       |  0.00 ms |
+
+### Samsung S22 vk Release — BROKEN
+
+---
+
 ## `c78ed77` (2026-06-15) — revert S.1 LDS palette; 500 actors / 100 distinct GLBs
 
 ### macOS, M2 Max, 2560×1440, vsync, CAIRNS_AGENT_STDIN + spawnTotal(500)
