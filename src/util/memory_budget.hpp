@@ -59,7 +59,10 @@ struct MemoryBudget {
 #else
         b.cpu_persistent_bytes = 1024ull * 1024 * 1024;  // 1 GB
         b.gpu_resident_bytes = 1024ull * 1024 * 1024;    // 1 GB
-        b.gpu_skin_pool_bytes = 1024ull * 1024 * 1024;   // 1 GB
+        // Capped at 256 MB (was 1 GB): a whole-pool storage bind of 1 GB is 8x
+        // the WebGPU 128 MB floor and only ~88% of devices can bind it; 256 MB
+        // is the boot floor we require (device_caps.hpp) so the bind always fits.
+        b.gpu_skin_pool_bytes = 256ull * 1024 * 1024;    // 256 MB (SSBO bind cap)
 #endif
         b.cpu_frame_slab_bytes = 16ull * 1024 * 1024;    // 16 MB / slot (existing)
         b.gpu_staging_ring_bytes = 64ull * 1024 * 1024;  // 64 MB / slot (existing)

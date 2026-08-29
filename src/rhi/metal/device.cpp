@@ -42,6 +42,10 @@ bool Device::Init(const InitConfig& cfg) {
             static_cast<uint32_t>(max_buf > 0xFFFFFFFFull ? 0xFFFFFFFFull
                                                           : max_buf);
         caps.max_uniform_buffer_range = caps.max_storage_buffer_range;
+        // Metal binds buffers via the 31-entry per-stage argument table (indices
+        // 0..30); no runtime query in metal-cpp, so the table size is the
+        // storage-buffer ceiling.
+        caps.max_storage_buffers_per_stage = 31u;
         caps.resident_budget_bytes =
             plat.device_->recommendedMaxWorkingSetSize();
     }

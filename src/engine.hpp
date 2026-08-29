@@ -2288,6 +2288,21 @@ public:
             CAIRNS_PRINT("GreaterInit: device.Init failed\n");
             return false;
         }
+        // Boot compute floor: refuse devices below the 10-SSBO / 256 MB
+        // storage-binding minimums (device_caps.hpp). WebGPU's spec floor is 8
+        // storage buffers and 128 MB; we demand 10 + 256 MB across all backends
+        // so the packed anim set + whole-pool skin bind always fit rather than
+        // silently garble (the 2026-06-17 S22 class of bug).
+        if (!cairns::DeviceMeetsComputeRequirements(rhi_.device.caps)) {
+            CAIRNS_PRINT_ERR(
+                "[FATAL] device below compute floor: storage_buffers_per_stage=%u "
+                "(need >=%u), max_storage_buffer_range=%u (need >=%u bytes).\n",
+                rhi_.device.caps.max_storage_buffers_per_stage,
+                cairns::kMinStorageBuffersPerStage,
+                rhi_.device.caps.max_storage_buffer_range,
+                cairns::kMinStorageBufferRangeBytes);
+            std::abort();
+        }
         // Boot device-cap invariant. The 2026-06-17 S22 garble (Adreno 730
         // maxStorageBufferRange = 256 MB, 1 GB pool bound past it -> silent
         // no-op writes) would have aborted right here with the exact log

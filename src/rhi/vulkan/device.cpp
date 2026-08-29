@@ -428,6 +428,8 @@ bool Device::Init(const InitConfig& cfg) {
         vkGetPhysicalDeviceProperties(plat.physical_, &pp);
         caps.max_storage_buffer_range = pp.limits.maxStorageBufferRange;
         caps.max_uniform_buffer_range = pp.limits.maxUniformBufferRange;
+        caps.max_storage_buffers_per_stage =
+            pp.limits.maxPerStageDescriptorStorageBuffers;
         VkPhysicalDeviceMemoryProperties mp{};
         vkGetPhysicalDeviceMemoryProperties(plat.physical_, &mp);
         uint64_t device_local_bytes = 0;

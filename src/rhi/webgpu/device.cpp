@@ -47,9 +47,12 @@ bool Device::Init(const InitConfig& cfg) {
                 sb > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(sb);
             caps.max_uniform_buffer_range =
                 ub > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(ub);
+            caps.max_storage_buffers_per_stage =
+                limits.maxStorageBuffersPerShaderStage;
         } else {
             caps.max_storage_buffer_range = 128u * 1024u * 1024u;
             caps.max_uniform_buffer_range = 64u * 1024u;
+            caps.max_storage_buffers_per_stage = 8u;
         }
         caps.resident_budget_bytes = 8ull * 1024 * 1024 * 1024;
         inited_ = true;
@@ -69,8 +72,10 @@ bool Device::Init(const InitConfig& cfg) {
     plat.adapter = areq.adapter;
     if (!plat.adapter) { return false; }
 
-    // WebGPU defaults storage-buffer binding to 128 MB; the desktop skin pool
-    // needs ~1 GB. Request the adapter's full limits at device creation.
+    // WebGPU defaults storage-buffer binding to 128 MB + 8 storage buffers/stage;
+    // the skin pool needs a 256 MB binding and we standardize on a 10-SSBO floor.
+    // Request the adapter's full limits at device creation (the boot guard refuses
+    // the device if the adapter can't meet kMin* in device_caps.hpp).
     WGPULimits adapter_limits = WGPU_LIMITS_INIT;
     wgpuAdapterGetLimits(plat.adapter, &adapter_limits);
     WGPUDeviceDescriptor dev_desc = {};
@@ -97,9 +102,12 @@ bool Device::Init(const InitConfig& cfg) {
             sb > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(sb);
         caps.max_uniform_buffer_range =
             ub > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(ub);
+        caps.max_storage_buffers_per_stage =
+            limits.maxStorageBuffersPerShaderStage;
     } else {
         caps.max_storage_buffer_range = 128u * 1024u * 1024u;
         caps.max_uniform_buffer_range = 64u * 1024u;
+        caps.max_storage_buffers_per_stage = 8u;
     }
     caps.resident_budget_bytes = 8ull * 1024 * 1024 * 1024;
 

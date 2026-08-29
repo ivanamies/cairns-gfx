@@ -47,11 +47,30 @@ struct DeviceCaps {
     uint32_t max_storage_buffer_range = 0;
     // VkPhysicalDeviceLimits::maxUniformBufferRange. UBO-bound data must fit this.
     uint32_t max_uniform_buffer_range = 0;
+    // Storage buffers bindable in ONE shader stage. vk
+    // maxPerStageDescriptorStorageBuffers / metal buffer-arg table /
+    // webgpu maxStorageBuffersPerShaderStage. WebGPU's spec FLOOR is 8 and there
+    // is no portable tier at 12 (next is 16 @ ~80% of devices), so the anim_eval
+    // kernel is packed to <=4; we still demand a 10-SSBO floor as headroom and
+    // refuse to boot below it (see DeviceMeetsComputeRequirements).
+    uint32_t max_storage_buffers_per_stage = 0;
     // How much device-local memory we are allowed to occupy before the OS
     // reclaims us. On Android this is informed by the lmkd budget, NOT the
     // physical heap size -- a 12 GB phone will still kill a 1.6 GB app.
     uint64_t resident_budget_bytes = 0;
 };
+
+// Boot floors. A device below either of these is refused at GreaterInit rather
+// than left to garble (the 256 MB range is the Adreno-730 storage-buffer floor;
+// the 10-SSBO count is the WebGPU-driven minimum we standardize on across all
+// backends so the skin pool binds whole + the packed anim set always fits).
+inline constexpr uint32_t kMinStorageBuffersPerStage = 10u;
+inline constexpr uint32_t kMinStorageBufferRangeBytes = 256u * 1024u * 1024u;
+
+constexpr bool DeviceMeetsComputeRequirements(const DeviceCaps& caps) {
+    return caps.max_storage_buffers_per_stage >= kMinStorageBuffersPerStage &&
+           caps.max_storage_buffer_range >= kMinStorageBufferRangeBytes;
+}
 
 // THE garble invariant. A storage buffer must fit entirely within the
 // addressable range, because the engine binds the whole pool and indexes into
