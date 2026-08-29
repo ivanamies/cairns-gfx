@@ -46,20 +46,37 @@ MoltenVK is faster than native Metal here: slimmer recorder path
 within thermals.
 
 ### Samsung S22 Vulkan Release — on-device, 2115×1008
-| Pass            | avg     |
-|-----------------|---------|
-| `frame`         |  8.7 ms |
-| `build_draws`   |  7.6 ms |
-| `record`        | 11.5 ms |
-| `particle_sim`  |  n/a (Android Vulkan timestamps disabled, see f2625d1) |
-| `forward`       | 60 ms (offscreen, geometry-bound per 6386768 diagnosis) |
-| `swap`          |  0.46 ms |
-| GPU total       | ~60.5 ms |
 
-Forward stays ~60 ms — same per-triangle binner cost the tiny-quad
-diagnostic isolated at `6386768`. The graph's extra offscreen write +
-sample-back is hidden under that. Swap is tiny (~0.5 ms) — the
-composite+PIP+ImGui content fits cleanly in tile residency.
+S22 forward is thermally noisy. Across multiple back-to-back launches
+of the same APK, `forward` settled at one of two regimes:
+
+- **Cold/transient**: ~60 ms forward, ~0.46 ms swap, total ~60.5 ms.
+  Observed several times in the minutes after a fresh launch. Looked
+  stable for 5–10 timer windows (~10 s each) before drifting.
+- **Steady-state**: ~120 ms forward, ~0.98 ms swap, total ~121 ms.
+  This is the rate the device holds once thermals settle, and matches
+  the pre-graph `6386768` baseline within noise.
+
+| Pass            | cold (~10 s window) | steady-state |
+|-----------------|---------------------|--------------|
+| `frame`         |  8.7 ms             |  9.0 ms      |
+| `build_draws`   |  7.6 ms             |  7.7 ms      |
+| `record`        | 11.5 ms             | 12.1 ms      |
+| `particle_sim`  |  n/a (Android Vulkan timestamps disabled, see f2625d1) |  n/a   |
+| `forward`       | 60 ms               | 121 ms       |
+| `swap`          |  0.46 ms            |  0.98 ms     |
+| GPU total       | ~60.5 ms            | ~122 ms      |
+
+The original entry in this section reported only the cold reading.
+Treat S22 forward as a range, not a point — quoting one number without
+the warmup state attached is misleading on this device.
+
+The graph routing itself is GPU-time-neutral on S22 within thermal
+noise. An A/B that bumped `unlit_offscreen_` + `particle_render_offscreen_`
+pipelines and the offscreen color/depth attachments back to MSAA-4
+(same shape as the pre-graph swap renderpass) produced forward ≈ 62 ms
+in the cold regime — same window as single-sample. MSAA is not the
+load-bearing factor on Adreno here either.
 
 ### Observations
 - New GPU rows (`particle_sim`, `forward`, `swap`) replace the
@@ -71,6 +88,13 @@ composite+PIP+ImGui content fits cleanly in tile residency.
   storeOp=DONT_CARE / StoreActionMultisampleResolve constraint). The
   graph still expresses it as the read-from-`color_off`/`depth_off`
   consumer; the encoder boundary is the merge point.
+- The `6386768` "geometry-bound" attribution should be read with a
+  grain of salt — the tiny-quad test reduced both triangle count AND
+  pixel coverage simultaneously, so it doesn't cleanly separate binner
+  from per-pixel rasterizer work. Cost on this scene is likely a mix of
+  both plus the ~30 ms submission floor; future levers (LOD, instancing
+  if/when we allow it, deferred culling) attack the per-triangle term
+  and should each be re-measured rather than assumed.
 
 ---
 
