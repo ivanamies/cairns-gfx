@@ -19,3 +19,8 @@ assets/a.out.dSYM/
 *spv
 !assets/*.spv
 PERFORMANCE_THROWAWAY.md
+
+# stray compile output (repo root) + android asset staging (build.gradle MOBILE_ASSETS_DIR)
+a.out
+a.out.dSYM/
+app/src/main/assets/
