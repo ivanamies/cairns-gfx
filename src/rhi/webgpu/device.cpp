@@ -38,6 +38,7 @@ bool Device::Init(const InitConfig& cfg) {
         plat.queue = cfg.plat.queue ? cfg.plat.queue
                                     : wgpuDeviceGetQueue(cfg.plat.device);
         plat.surface = cfg.plat.surface;
+        plat.surface_format = cfg.plat.surface_format;
         plat.owns_handles = false;
         WGPULimits limits = {};
         if (wgpuDeviceGetLimits(plat.device, &limits) == WGPUStatus_Success) {

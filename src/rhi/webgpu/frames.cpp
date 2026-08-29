@@ -73,7 +73,49 @@ void Frames::EndSubmit(const SwapResolveTarget& target, FrameCapture& frame_capt
     ri.plat.transient_bind_groups_.clear();
 }
 void Frames::Present(const SwapResolveTarget& target, FrameCapture& frame_capture, FrameContext& fc) {
-    (void)target; (void)frame_capture; (void)fc;
+    (void)frame_capture; (void)fc;
+    // Headless (cairns_serve): no surface -> the frame stays in the offscreen
+    // final_target_ (golden readback / dump). Windowed + web copy it into the
+    // surface's current texture, reusing the whole surfaceless render path.
+    if (!plat.surface_ || !target.plat.texture) { return; }
+    // Lazy (re)configure -- first frame + any resize both route through here.
+    if (target.width != plat.surface_w_ || target.height != plat.surface_h_) {
+        WGPUSurfaceConfiguration sc = {};
+        sc.device = plat.device_;
+        sc.format = plat.surface_format_;
+        sc.usage = static_cast<WGPUTextureUsage>(WGPUTextureUsage_RenderAttachment |
+                                                 WGPUTextureUsage_CopyDst);
+        sc.width = target.width;
+        sc.height = target.height;
+        sc.alphaMode = WGPUCompositeAlphaMode_Auto;
+        sc.presentMode = WGPUPresentMode_Fifo;
+        wgpuSurfaceConfigure(plat.surface_, &sc);
+        plat.surface_w_ = target.width;
+        plat.surface_h_ = target.height;
+    }
+    WGPUSurfaceTexture st = {};
+    wgpuSurfaceGetCurrentTexture(plat.surface_, &st);
+    if (!st.texture) { return; }
+    WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(plat.device_, nullptr);
+    WGPUTexelCopyTextureInfo src = {};
+    src.texture = target.plat.texture;
+    src.aspect = WGPUTextureAspect_All;
+    WGPUTexelCopyTextureInfo dst = {};
+    dst.texture = st.texture;
+    dst.aspect = WGPUTextureAspect_All;
+    WGPUExtent3D ext = {target.width, target.height, 1};
+    wgpuCommandEncoderCopyTextureToTexture(enc, &src, &dst, &ext);
+    WGPUCommandBuffer cb = wgpuCommandEncoderFinish(enc, nullptr);
+    wgpuQueueSubmit(plat.queue_, 1, &cb);
+    wgpuCommandBufferRelease(cb);
+    wgpuCommandEncoderRelease(enc);
+#ifndef __EMSCRIPTEN__
+    wgpuSurfacePresent(plat.surface_);  // native; browser auto-presents on rAF return
+#endif
+    // emdawnwebgpu mints a fresh refcounted texture per GetCurrentTexture; without
+    // this release it leaks one per frame until the WASM heap scribbles the stack
+    // cookie (~frame 450) -> "corrupted heap (address zero)" abort.
+    wgpuTextureRelease(st.texture);
 }
 void Frames::WriteUnlitDescriptors(Resources& resources, Allocator& alloc) {
     (void)resources; (void)alloc;
