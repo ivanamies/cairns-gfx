@@ -2048,7 +2048,11 @@ public:
         }
 
         rhi::PointDraw pd{};
-        pd.pipeline = particle_render_offscreen_;
+        // #222 Phase A.1 fix: particle PSO must match the forward pass's
+        // attachment count -- the id_path branch already swapped the
+        // forward unlit PSO; mirror it for the points pipeline.
+        pd.pipeline = id_path ? particle_render_offscreen_
+                              : particle_render_offscreen_noid_;
         pd.vertex_buffer = particle_ssbo_[pkt.particle_parity_out];
         pd.vertex_offset = 0;
         pd.vertex_count = kParticleCount;
@@ -3188,6 +3192,19 @@ public:
             if (particle_render_offscreen_.IsNull()) {
                 return false;
             }
+            // #222 Phase A.1 fix: id-less variant for the no-id forward
+            // pass. Same shaders; the frag's location-1 write to the id
+            // attachment becomes a no-op write to a discarded location.
+            rhi::GraphicsPipelineDesc npd = opd;
+            npd.color_formats[1] = rhi::Format::kBgra8Unorm;  // unused
+            npd.color_count = 1;
+            npd.debug_name = "particle_render_offscreen_noid";
+            particle_render_offscreen_noid_ =
+                rhi_.pipelines.CreateGraphicsPipeline(
+                    rhi_.resources, rhi_.frames, npd);
+            if (particle_render_offscreen_noid_.IsNull()) {
+                return false;
+            }
         }
 
         {
@@ -3500,6 +3517,8 @@ private:
     rhi::Handle<rhi::Kernel> skin_kernel_;
     rhi::Handle<rhi::Shader> particle_render_shader_;
     rhi::Handle<rhi::Shader> particle_render_offscreen_;
+    // #222 Phase A.1 fix: id-less variant for the no-id forward pass.
+    rhi::Handle<rhi::Shader> particle_render_offscreen_noid_;
     rhi::Handle<rhi::Buffer> particle_ssbo_[2];
     std::unique_ptr<cairns::RenderThread> render_thread_;
     // Render thread writes back particle_parity_out under parity_m_ so the
