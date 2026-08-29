@@ -245,18 +245,6 @@ diagnosed source of drift:
 
 ## Active
 
-### webgpu ignores per-draw draw.shader (lit/tam variants fall back to unlit)
-`webgpu/command_recorder.cpp DrawMeshes` binds `list.pipeline` once and never
-rebinds per-draw `draw.shader` (metal + vk have the last_shader rebind loop).
-So the NPR material variants (lit, and later tam_hatch/stroke, stamped into
-`draw.shader` by EncodeDraws) are IGNORED on webgpu -- it renders every draw
-with the pass PSO (unlit). Consequence: lit shading + shadows are metal+vk
-only; webgpu silently renders unlit. Fix = port the per-draw pipeline rebind
-into the webgpu DrawMeshes loop (a distinct-pipeline set-cache, like the
-material bind-group cache already there). Until then webgpu is unlit for
-lit/tam materials; goldens are per-platform so webgpu bakes its unlit result.
-NOTE: this masked an M1 bug -- see below.
-
 ### Shadow-map visual correctness needs interactive verification
 M2b wired directional shadows on metal+vk (shadow_vp0 depth pass + 3x3 PCF);
 goldens PROVE shadows change pixels (lit_primitives != shadow_primitives) and
