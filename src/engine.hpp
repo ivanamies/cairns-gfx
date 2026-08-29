@@ -16,6 +16,7 @@
 #include <variant>
 
 #include <condition_variable>
+#include <deque>
 #include <mutex>
 
 #include <stb_image_write.h>
@@ -139,6 +140,9 @@ public:
         uint32_t dt_off = 0;
         cairns::ImDrawDataSnapshot imgui_snapshot;
         cairns::FramePacket pkt{};
+        rhi::FrameContext present_fc{};
+        rhi::SwapResolveTarget present_target{};
+        bool present_ready = false;
 
         PerSlot() {
             pending_view_matrix.fill(glm::mat4(1.0f));
@@ -1084,6 +1088,22 @@ public:
 
         render_thread_->Submit(slot, &s.pkt);
 
+        // MAIN-THREAD present. Render thread ran Frames::EndSubmit and
+        // stashed (fc, target) on THIS slot under present_m_. Lock the
+        // slot, wait for present_ready, run Frames::Present on main.
+        // Driver vendors don't test render-thread present -- on MoltenVK
+        // vkQueuePresentKHR reaches into CALayer (main-thread-only) and
+        // aborts under CA_ASSERT_MAIN_THREAD_TRANSACTIONS.
+        {
+            std::unique_lock<std::mutex> lk(present_m_);
+            present_cv_.wait(lk, [&] { return s.present_ready; });
+            rhi::FrameContext present_fc = s.present_fc;
+            rhi::SwapResolveTarget present_target = s.present_target;
+            s.present_ready = false;
+            lk.unlock();
+            rhi_.frames.Present(present_target, present_fc);
+        }
+
         // Under CAIRNS_DUMP, collapse to depth-1 pipelining: wait for the
         // render thread to fully complete this frame before the next iteration
         // queues another. Keeps frame 5's dump output byte-identical regardless
@@ -1331,7 +1351,14 @@ public:
         graph_->SetOutput(swap_tex);
         if (!graph_->Bake() || !graph_->Execute(fc, swap_target)) {
             t_record.End();
-            rhi_.frames.End(swap_target, fc);
+            rhi_.frames.EndSubmit(swap_target, fc);
+            {
+                std::lock_guard<std::mutex> lk(present_m_);
+                s.present_fc = fc;
+                s.present_target = swap_target;
+                s.present_ready = true;
+            }
+            present_cv_.notify_all();
             return;
         }
         if (frame_ <= 6) {
@@ -1350,9 +1377,16 @@ public:
             fprintf(stderr, "\n");
         }
         t_record.End();
-        rhi_.frames.End(swap_target, fc);
+        rhi_.frames.EndSubmit(swap_target, fc);
+        {
+            std::lock_guard<std::mutex> lk(present_m_);
+            s.present_fc = fc;
+            s.present_target = swap_target;
+            s.present_ready = true;
+        }
+        present_cv_.notify_all();
     }
-    
+
     bool initRenderPipeline() {
         {
             // set-2 per-material bind groups (portable path). Dense, indexed by
@@ -1726,6 +1760,16 @@ private:
     std::condition_variable parity_cv_;
     uint32_t latest_parity_out_ = 0;
     uint64_t latest_parity_frame_ = 0;
+
+    // Present handoff. Render thread runs Frames::EndSubmit and stores
+    // (fc, target) on the slot under present_m_; main thread waits on the
+    // SAME slot it just submitted to (slot index from frame_), reads the
+    // stored values, and runs Frames::Present. One frame of present lag,
+    // not kFramesInFlight. Driver vendors don't test render-thread present
+    // (MoltenVK reaches into CALayer) so the contract is the same on every
+    // backend.
+    std::mutex present_m_;
+    std::condition_variable present_cv_;
     bool dump_emitted_ = false;
     uint32_t dump_emit_frame_ = 0;
 

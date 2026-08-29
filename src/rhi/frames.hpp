@@ -50,7 +50,24 @@ public:
     // CALLER: ENGINE (per-frame draw loop).
     FrameContext Begin(Resources& resources, Allocator& alloc,
                        const SwapResolveTarget& target);
-    void End(const SwapResolveTarget& target, FrameContext& fc);
+
+    // Two-phase frame end. EndSubmit runs on the render thread: it commits
+    // command buffers and submits work to the GPU queue. Present runs on the
+    // MAIN thread: it calls the platform present primitive
+    // (vkQueuePresentKHR / [CAMetalDrawable present]). Driver vendors don't
+    // test render-thread present -- on macOS MoltenVK's vkQueuePresentKHR
+    // reaches into CALayer which is main-thread-only and aborts under
+    // CA_ASSERT_MAIN_THREAD_TRANSACTIONS. Same contract on every backend so
+    // future backends (WebGPU) don't have to relearn it.
+    //
+    // Metal: presentDrawable is enqueued into a command buffer and is
+    // thread-safe per Apple's command-buffer threading rules. EndSubmit does
+    // the work; Present is a no-op kept for contract symmetry.
+    //
+    // Vulkan: vkQueueSubmit is thread-safe; vkQueuePresentKHR on MoltenVK
+    // touches CALayer and MUST run on main.
+    void EndSubmit(const SwapResolveTarget& target, FrameContext& fc);
+    void Present(const SwapResolveTarget& target, FrameContext& fc);
 
     // Request a one-shot swapchain dump on the next End(). CALLER: ENGINE.
     void SetDumpPath(const std::filesystem::path& path);

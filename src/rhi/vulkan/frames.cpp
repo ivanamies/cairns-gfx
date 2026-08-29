@@ -530,8 +530,9 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     return fc;
 }
 
-void Frames::End(const SwapResolveTarget& target, FrameContext& fc) {
-    SwapChain& sc = *target.plat.swap_chain;
+// Render-thread safe. End all open command buffers + vkQueueSubmit both
+// queues. Does NOT call vkQueuePresentKHR -- see Present below.
+void Frames::EndSubmit(const SwapResolveTarget& /*target*/, FrameContext& fc) {
     CommandRecorder& ri = fc.cmd;
     const uint32_t cf = fc.frame_index;
 
@@ -559,6 +560,15 @@ void Frames::End(const SwapResolveTarget& target, FrameContext& fc) {
     gsi.signalSemaphoreCount = 1;
     gsi.pSignalSemaphores = &plat.render_finished_[cf];
     vkQueueSubmit(plat.graphics_queue_, 1, &gsi, plat.in_flight_[cf]);
+}
+
+// MAIN-THREAD ONLY. vkQueuePresentKHR on MoltenVK calls into CALayer
+// (-[CALayer setNeedsDisplayInRect:]) which is documented main-thread-only.
+// Calling from a render-thread worker fires CA_ASSERT_MAIN_THREAD_TRANSACTIONS
+// under Instruments (and is undefined behavior otherwise).
+void Frames::Present(const SwapResolveTarget& target, FrameContext& fc) {
+    SwapChain& sc = *target.plat.swap_chain;
+    const uint32_t cf = fc.frame_index;
 
     VkPresentInfoKHR pi{};
     pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;

@@ -168,7 +168,15 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     return fc;
 }
 
-void Frames::End(const SwapResolveTarget& target, FrameContext& fc) {
+void Frames::Present(const SwapResolveTarget& /*target*/,
+                       FrameContext& /*fc*/) {
+    // Metal presentDrawable is enqueued via the command buffer in
+    // EndSubmit (thread-safe per Apple's command-buffer rules). No
+    // main-thread-only work to do here. Kept for contract symmetry with
+    // the vk path -- the engine calls this on the main thread regardless.
+}
+
+void Frames::EndSubmit(const SwapResolveTarget& target, FrameContext& fc) {
     CommandRecorder& ri = fc.cmd;
     if (ri.plat.cmd_ != nullptr) {
         // Encoded work without a PassTimerEnd -- commit the orphan so the GPU
