@@ -251,9 +251,6 @@ public:
         
         const glm::mat4 proj_matrix = glm::perspectiveRH_ZO(fov, aspect_ratio, near_z, far_z);
         
-        const ShaderHandle shader = unlit_;
-        
-        const BindGroupId bg_globals = getBindGroup();
         { // set up render pass globals
             // set up camera
             const float screen_width = swapChain_->Width();
@@ -266,10 +263,8 @@ public:
                 .camera_dir = glm::vec4(camera_dir, near_z),
                 .screen_params = glm::vec4(screen_width, screen_height, 1.0f / screen_width, 1.0f / screen_height)
             };
-            const uint32_t dyn_align =
-                kUboAlign;
             void* gptr = rm_.BumpAllocate(
-                sizeof(cairns::rhi::RenderPassGlobals), dyn_align,
+                sizeof(cairns::rhi::RenderPassGlobals), rm_.UboAlign(),
                 rhi::Memory::kDynamic);
             memcpy(gptr, &render_pass_globals, sizeof(render_pass_globals));
             globals_offset_ = rm_.BumpOffset(gptr);
@@ -317,53 +312,30 @@ public:
                     const uint32_t gpu_attr_idx = mesh_attr_id_map_[mesh.attrHandle.index];
                     
                     //                    cairns::Timer timer7("timer7", 7);
-                    const BindGroupId bg_material = getBindGroup();
-                    auto& mat_obj = bindGroups_.At(bg_material);
-                    { // material set up
-                        const cairns::rhi::MaterialGpu material_gpu {
-                            .tex_color_id = gpu_tex_id,
-                            .sampler_id = gpu_sampler_id,
-                        };
-                        const uint32_t dyn_align =
-                            kUboAlign;
-                        void* mptr = rm_.BumpAllocate(
-                            sizeof(cairns::rhi::MaterialGpu), dyn_align,
-                            rhi::Memory::kDynamic);
-                        memcpy(mptr, &material_gpu, sizeof(material_gpu));
-                        mat_obj.material_offset = rm_.BumpOffset(mptr);
-                        mat_obj.material = mat_id;
-                    }
-                    
-                    //                    cairns::Timer timer8("timer8", 8);
-                    const DynBufId tmp_handle = getDynamicBuffers();
-                    auto& tmp_obj = dynBufs_.At(tmp_handle);
+                    const cairns::rhi::MaterialGpu material_gpu {
+                        .tex_color_id = gpu_tex_id,
+                        .sampler_id = gpu_sampler_id,
+                    };
+                    void* mptr = rm_.BumpAllocate(
+                        sizeof(cairns::rhi::MaterialGpu), rm_.UboAlign(),
+                        rhi::Memory::kDynamic);
+                    memcpy(mptr, &material_gpu, sizeof(material_gpu));
+                    const uint32_t material_offset = rm_.BumpOffset(mptr);
+
                     const glm::mat4 model_matrix = scene_xform * rot_matrix;
-                    { // tmp draws set up
-                        const cairns::rhi::DrawTmp draw_tmp {
-                            .model_matrix = node.globalTransform * model_matrix,
-                            .mesh_id = gpu_attr_idx,
-                            .tex_id = gpu_tex_id,
-                            .sampler_id = gpu_sampler_id
-                        };
-                        const uint32_t dyn_align =
-                            kUboAlign;
-                        void* tptr = rm_.BumpAllocate(
-                            sizeof(cairns::rhi::DrawTmp), dyn_align,
-                            rhi::Memory::kDynamic);
-                        memcpy(tptr, &draw_tmp, sizeof(draw_tmp));
-                        tmp_obj.offset = rm_.BumpOffset(tptr);
-                    }
-                    
-                    //                    cairns::Timer timer9("timer9", 9);
-                    cairns::Draw draw;
-                    draw.shader = shader;
-                    // todo @iamies
-                    // should this be -1??
-                    // did I mess up making vertex attributes bind slot 0?
-                    draw.bind_groups[cairns::kRenderPassGlobalBindSlot-1] = bg_globals;
-                    draw.bind_groups[cairns::kMaterialBindSlot-1] = bg_material;
-                    draw.bind_groups[cairns::kShaderSpecificBindSlot-1] = cairns::kInvalidBindGroupId;
-                    draw.dynamic_buffers = tmp_handle;
+                    const cairns::rhi::DrawTmp draw_tmp {
+                        .model_matrix = node.globalTransform * model_matrix,
+                        .mesh_id = gpu_attr_idx,
+                        .tex_id = gpu_tex_id,
+                        .sampler_id = gpu_sampler_id
+                    };
+                    void* tptr = rm_.BumpAllocate(
+                        sizeof(cairns::rhi::DrawTmp), rm_.UboAlign(),
+                        rhi::Memory::kDynamic);
+                    memcpy(tptr, &draw_tmp, sizeof(draw_tmp));
+                    const uint32_t drawtmp_offset = rm_.BumpOffset(tptr);
+
+                    cairns::Draw draw{};
                     draw.index_buffer = index;
                     const uint32_t index_base_off = rm_.BufferBaseOffset(index);
                     draw.index_offset = index_base_off + (prim.firstIndex * sizeof(uint32_t));
@@ -371,8 +343,8 @@ public:
                     draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot] = pos;
                     draw.instance_offset = 0;
                     draw.instance_count = 1;
-                    draw.dynamic_buffer_offsets[0] = mat_obj.material_offset;
-                    draw.dynamic_buffer_offsets[1] = tmp_obj.offset;
+                    draw.dynamic_buffer_offsets[0] = material_offset;
+                    draw.dynamic_buffer_offsets[1] = drawtmp_offset;
                     assert(prim.indexCount % 3 == 0);
                     draw.triangle_count = prim.indexCount / 3;
                     
