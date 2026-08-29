@@ -17,7 +17,35 @@
 namespace cairns::rhi {
 
 void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDispatch& d) {
-    (void)res; (void)alloc; (void)d;
+    (void)alloc;
+    if (d.dyn_set_0.IsNull() || !plat.cmd_) { return; }
+    Kernel::Hot* kh = res.GetHot(d.kernel);
+    if (!kh || !kh->api_pso) { return; }
+    DynamicBuffers::Hot* dh = res.dynamic_buffers.GetHot(d.dyn_set_0);
+    if (!dh || !dh->plat.sets[0]) { return; }
+    // Compute is its own pass; a render pass must not be open on this encoder
+    // (webgpu forbids overlapping passes -- the graph closes it between nodes).
+    if (plat.enc_) { wgpuRenderPassEncoderEnd(plat.enc_); plat.enc_ = nullptr; }
+
+    // dt is the only dynamic-offset binding (count from the cold layout so
+    // storage-only sets pass zero offsets).
+    uint32_t dyn_count = 0;
+    if (DynamicBuffers::Cold* cold = res.dynamic_buffers.GetCold(d.dyn_set_0)) {
+        for (const DynamicBinding& b : cold->layout) {
+            if (b.has_dynamic_offset) { ++dyn_count; }
+        }
+    }
+    const uint32_t dyn = d.dyn_offset_0;
+    WGPUComputePassEncoder cenc =
+        wgpuCommandEncoderBeginComputePass(plat.cmd_, nullptr);
+    wgpuComputePassEncoderSetPipeline(
+        cenc, static_cast<WGPUComputePipeline>(kh->api_pso));
+    wgpuComputePassEncoderSetBindGroup(cenc, 0, dh->plat.sets[0], dyn_count,
+                                       dyn_count ? &dyn : nullptr);
+    wgpuComputePassEncoderDispatchWorkgroups(cenc, d.groups_x, d.groups_y,
+                                             d.groups_z);
+    wgpuComputePassEncoderEnd(cenc);
+    wgpuComputePassEncoderRelease(cenc);
 }
 void CommandRecorder::DispatchSkinBatches(Resources& res, Allocator& alloc, Handle<Kernel> kernel,
                                           Handle<Buffer> output_pool_buffer, Handle<Buffer> palette_buf,

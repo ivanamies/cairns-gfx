@@ -284,9 +284,64 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(Resources& resources, Frames& f
 
 Handle<Kernel> Pipelines::CreateComputePipeline(Resources& resources, Frames& frames,
                                                 const ComputePipelineDesc& desc) {
-    (void)frames; (void)desc;
+    (void)frames;
     Handle<Kernel> h = resources.kernels.Acquire();
-    if (Kernel::Hot* hot = resources.kernels.GetHot(h)) { hot->api_pso = nullptr; }
+    Kernel::Hot* hot = resources.kernels.GetHot(h);
+    if (hot) { hot->api_pso = nullptr; }
+    if (!hot || !desc.shader_dir || !desc.logical_shader) { return h; }
+
+    std::string wgsl;
+    const std::string path =
+        std::string(desc.shader_dir) + "/" + desc.logical_shader + ".wgsl";
+    if (!ReadFile(path, wgsl)) {
+        std::fprintf(stderr, "[webgpu] missing compute wgsl: %s\n", path.c_str());
+        return h;
+    }
+    WGPUShaderSourceWGSL src = {};
+    src.chain.sType = WGPUSType_ShaderSourceWGSL;
+    src.code = Sv(wgsl.c_str());
+    WGPUShaderModuleDescriptor smd = {};
+    smd.nextInChain = &src.chain;
+    WGPUShaderModule module = wgpuDeviceCreateShaderModule(plat.device_, &smd);
+    if (!module) {
+        std::fprintf(stderr, "[webgpu] compute module failed: %s\n", path.c_str());
+        return h;
+    }
+
+    // Pipeline layout = the dyn-set's prebuilt group-0 layout (CreateDynamicBuffers
+    // built it from the same bindings, so they are group-equivalent).
+    WGPUBindGroupLayout bgl = nullptr;
+    if (!desc.dyn_set_0.IsNull()) {
+        if (DynamicBuffers::Hot* dh =
+                resources.dynamic_buffers.GetHot(desc.dyn_set_0)) {
+            bgl = dh->plat.layout;
+        }
+    }
+    if (!bgl) {
+        std::fprintf(stderr, "[webgpu] compute %s: no dyn_set_0 layout\n",
+                     desc.logical_shader);
+        wgpuShaderModuleRelease(module);
+        return h;
+    }
+    WGPUPipelineLayoutDescriptor pld = {};
+    pld.bindGroupLayoutCount = 1;
+    pld.bindGroupLayouts = &bgl;
+    WGPUPipelineLayout pl = wgpuDeviceCreatePipelineLayout(plat.device_, &pld);
+
+    WGPUComputePipelineDescriptor cpd = {};
+    cpd.label = Sv(desc.debug_name ? desc.debug_name : desc.logical_shader);
+    cpd.layout = pl;
+    cpd.compute.module = module;
+    cpd.compute.entryPoint = Sv("cs_main");
+    WGPUComputePipeline cps = wgpuDeviceCreateComputePipeline(plat.device_, &cpd);
+    wgpuShaderModuleRelease(module);
+    if (!cps) {
+        std::fprintf(stderr, "[webgpu] compute pipeline failed: %s\n",
+                     desc.logical_shader);
+        return h;
+    }
+    hot->api_pso = static_cast<void*>(cps);
+    hot->plat.layout = pl;
     return h;
 }
 

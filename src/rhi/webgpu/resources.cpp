@@ -254,13 +254,49 @@ Handle<DynamicBuffers> Resources::CreateDynamicBuffers(Allocator& a, Frames& f, 
     (void)f;
     Handle<DynamicBuffers> h = CreateDynamicBuffers(d);
     // Real bind group for the single dynamic-offset uniform case (globals +
-    // drawtmp, both backed by the kDynamic bump master). Multi-binding /
-    // storage / explicitly-backed dyn buffers feed compute pipelines that are
-    // still stubbed -- they keep layout metadata only.
+    // drawtmp, both backed by the kDynamic bump master).
     const bool simple = d.bindings.size() == 1 &&
                         d.bindings[0].kind == BufferKind::kUniform &&
                         d.bindings[0].has_dynamic_offset;
-    if (!simple) { return h; }
+    if (!simple) {
+        // Multi-binding compute set (particle/skin/anim-eval): build the bind
+        // group once -- storages over their persistent backing, the dynamic
+        // uniform over the kDynamic bump master (dynamic offset supplied per
+        // dispatch). Mirrors the metal per-slot setBuffer walk.
+        WGPUBindGroupLayout layout = webgpu::MakeComputeSetLayout(
+            plat.device_, d.bindings.data(), d.bindings.size());
+        WGPUBindGroupEntry entries[webgpu::kMaxComputeBindings] = {};
+        const size_t n = d.bindings.size() < webgpu::kMaxComputeBindings
+                             ? d.bindings.size()
+                             : webgpu::kMaxComputeBindings;
+        bool ok = true;
+        for (size_t i = 0; i < n; ++i) {
+            const DynamicBinding& b = d.bindings[i];
+            entries[i].binding = b.slot;
+            if (b.backing.IsNull()) {
+                entries[i].buffer = plat.GetBumpMasterBuffer(a, Memory::kDynamic);
+                entries[i].offset = 0;
+                entries[i].size = b.max_range ? b.max_range : 16u;
+            } else {
+                uint32_t off = 0;
+                entries[i].buffer = plat.GetWgpuBuffer(a, b.backing, &off);
+                entries[i].offset = off;
+                Buffer::Cold* bc = buffers.GetCold(b.backing);
+                entries[i].size =
+                    b.max_range ? b.max_range : (bc ? bc->size_bytes : 0u);
+            }
+            if (!entries[i].buffer) { ok = false; break; }
+        }
+        if (!ok) { return h; }
+        WGPUBindGroupDescriptor cbgd = {};
+        cbgd.layout = layout;
+        cbgd.entryCount = n;
+        cbgd.entries = entries;
+        DynamicBuffers::Hot* chot = dynamic_buffers.GetHot(h);
+        chot->plat.layout = layout;
+        chot->plat.sets[0] = wgpuDeviceCreateBindGroup(plat.device_, &cbgd);
+        return h;
+    }
     WGPUBuffer buf = d.bindings[0].backing.IsNull()
                          ? plat.GetBumpMasterBuffer(a, Memory::kDynamic)
                          : plat.GetWgpuBuffer(a, d.bindings[0].backing, nullptr);
