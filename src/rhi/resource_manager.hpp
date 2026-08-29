@@ -550,10 +550,6 @@ struct BackendInitParams {
 // App-owned per-frame Vulkan resources, registered once so BeginFrame/EndFrame +
 // CommandRecorder can drive them. Pointers are to MAX_FRAMES_IN_FLIGHT arrays.
 struct VkFrameResources {
-    const VkDescriptorSet* dyn_ubo_sets = nullptr;
-    const VkDescriptorSet* compute_sets = nullptr;
-    const VkDescriptorSet* point_sets = nullptr;
-    uint32_t compute_ubo_range = 0;
     std::filesystem::path* dump_path = nullptr;
 };
 #elif CAIRNS_METAL
@@ -672,6 +668,10 @@ public:
     VkQueue GetVkPresentQueue() const;
     VkCommandPool GetVkCommandPool() const;
     VkSampleCountFlagBits GetVkMsaaSamples() const;
+    // rhi-owned non-bindless set layouts, for app pipeline-layout creation.
+    VkDescriptorSetLayout GetDynUboLayout() const;
+    VkDescriptorSetLayout GetComputeLayout() const;
+    VkDescriptorSetLayout GetPointLayout() const;
 #endif  // CAIRNS_VULKAN
 
 #if CAIRNS_METAL

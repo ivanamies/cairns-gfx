@@ -57,6 +57,15 @@ struct ResourceManager::Impl {
     std::vector<VkFence> in_flight;
     std::vector<VkFence> compute_in_flight;
 
+    // Descriptor pool + non-bindless layouts/sets, owned by InitDevice.
+    VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+    VkDescriptorSetLayout dyn_ubo_layout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout compute_layout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout point_layout = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> dyn_ubo_sets;
+    std::vector<VkDescriptorSet> compute_sets;
+    std::vector<VkDescriptorSet> point_sets;
+
     Pool<Buffer> buffers;
     Pool<Texture> textures;
     Pool<Sampler> samplers;
@@ -605,6 +614,18 @@ void ResourceManager::Deinit() {
         vkDestroyFence(dev, impl_->in_flight[i], nullptr);
         vkDestroyFence(dev, impl_->compute_in_flight[i], nullptr);
     }
+    if (impl_->descriptor_pool) {
+        vkDestroyDescriptorPool(dev, impl_->descriptor_pool, nullptr);
+    }
+    if (impl_->dyn_ubo_layout) {
+        vkDestroyDescriptorSetLayout(dev, impl_->dyn_ubo_layout, nullptr);
+    }
+    if (impl_->compute_layout) {
+        vkDestroyDescriptorSetLayout(dev, impl_->compute_layout, nullptr);
+    }
+    if (impl_->point_layout) {
+        vkDestroyDescriptorSetLayout(dev, impl_->point_layout, nullptr);
+    }
     const VkInstance inst = impl_->instance;
     const VkDebugUtilsMessengerEXT dbg = impl_->debug_messenger;
     const VkSurfaceKHR surf = impl_->surface;
@@ -852,7 +873,106 @@ bool ResourceManager::InitDevice(SDL_Window* window) {
             }
         }
     }
+
+    {  // descriptor layouts + pool + per-frame sets (non-bindless)
+        VkDevice dev = impl_->params.device;
+        const uint32_t n = kFramesInFlight;
+
+        {  // point layout (empty: particle render reads ssbo as a vertex buffer)
+            VkDescriptorSetLayoutCreateInfo li{};
+            li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &impl_->point_layout) !=
+                VK_SUCCESS) {
+                return false;
+            }
+        }
+        {  // compute layout: UBO(dt)@0, SSBO read@1, SSBO write@2
+            VkDescriptorSetLayoutBinding b[3]{};
+            b[0].binding = 0;
+            b[0].descriptorCount = 1;
+            b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[1].binding = 1;
+            b[1].descriptorCount = 1;
+            b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[2].binding = 2;
+            b[2].descriptorCount = 1;
+            b[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            b[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            VkDescriptorSetLayoutCreateInfo li{};
+            li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            li.bindingCount = 3;
+            li.pBindings = b;
+            if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &impl_->compute_layout) !=
+                VK_SUCCESS) {
+                return false;
+            }
+        }
+        {  // dynamic-UBO layout: globals@0, material@1, drawtmp@2
+            VkDescriptorSetLayoutBinding b[3]{};
+            for (uint32_t i = 0; i < 3; ++i) {
+                b[i].binding = i;
+                b[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+                b[i].descriptorCount = 1;
+                b[i].stageFlags =
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+            }
+            VkDescriptorSetLayoutCreateInfo li{};
+            li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            li.bindingCount = 3;
+            li.pBindings = b;
+            if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &impl_->dyn_ubo_layout) !=
+                VK_SUCCESS) {
+                return false;
+            }
+        }
+
+        VkDescriptorPoolSize sizes[3]{};
+        sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        sizes[0].descriptorCount = n;
+        sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        sizes[1].descriptorCount = 2 * n;
+        sizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        sizes[2].descriptorCount = 3 * n;
+        VkDescriptorPoolCreateInfo pci{};
+        pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pci.poolSizeCount = 3;
+        pci.pPoolSizes = sizes;
+        pci.maxSets = 3 * n;
+        if (vkCreateDescriptorPool(dev, &pci, nullptr, &impl_->descriptor_pool) !=
+            VK_SUCCESS) {
+            return false;
+        }
+
+        auto alloc_sets = [&](VkDescriptorSetLayout layout,
+                              std::vector<VkDescriptorSet>& out) -> bool {
+            std::vector<VkDescriptorSetLayout> layouts(n, layout);
+            VkDescriptorSetAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            ai.descriptorPool = impl_->descriptor_pool;
+            ai.descriptorSetCount = n;
+            ai.pSetLayouts = layouts.data();
+            out.resize(n);
+            return vkAllocateDescriptorSets(dev, &ai, out.data()) == VK_SUCCESS;
+        };
+        if (!alloc_sets(impl_->point_layout, impl_->point_sets) ||
+            !alloc_sets(impl_->compute_layout, impl_->compute_sets) ||
+            !alloc_sets(impl_->dyn_ubo_layout, impl_->dyn_ubo_sets)) {
+            return false;
+        }
+    }
     return true;
+}
+
+VkDescriptorSetLayout ResourceManager::GetDynUboLayout() const {
+    return impl_->dyn_ubo_layout;
+}
+VkDescriptorSetLayout ResourceManager::GetComputeLayout() const {
+    return impl_->compute_layout;
+}
+VkDescriptorSetLayout ResourceManager::GetPointLayout() const {
+    return impl_->point_layout;
 }
 
 VkInstance ResourceManager::GetVkInstance() const { return impl_->instance; }
@@ -1739,17 +1859,19 @@ void ResourceManager::VkRegisterFrame(const VkFrameResources& res) {
 struct CommandRecorder::Impl {
     ResourceManager* rm = nullptr;
     SwapChain* sc = nullptr;
-    VkFrameResources fr;
     uint32_t frame = 0;
     uint32_t image_index = 0;
     VkCommandBuffer gfx = VK_NULL_HANDLE;
     VkCommandBuffer comp = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;
+    VkDescriptorSet dyn_ubo_set = VK_NULL_HANDLE;
+    VkDescriptorSet compute_set = VK_NULL_HANDLE;
+    VkDescriptorSet point_set = VK_NULL_HANDLE;
 };
 
 void CommandRecorder::Dispatch(const ComputeDispatch& d) {
     Kernel::Hot* k = impl_->rm->GetHot(d.kernel);
-    VkDescriptorSet set = impl_->fr.compute_sets[impl_->frame];
+    VkDescriptorSet set = impl_->compute_set;
 
     const size_t n = d.buffers.size();
     std::vector<VkDescriptorBufferInfo> infos(n);
@@ -1761,7 +1883,7 @@ void CommandRecorder::Dispatch(const ComputeDispatch& d) {
         const bool is_ubo = (b.slot == 0);
         infos[i].buffer = buf;
         infos[i].offset = off + b.offset;
-        infos[i].range = is_ubo ? impl_->fr.compute_ubo_range : VK_WHOLE_SIZE;
+        infos[i].range = is_ubo ? static_cast<VkDeviceSize>(sizeof(float)) : VK_WHOLE_SIZE;
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = set;
         writes[i].dstBinding = b.slot;
@@ -1815,7 +1937,7 @@ void CommandRecorder::BeginRenderPass(const RenderPassDesc& desc) {
 
 void CommandRecorder::DrawMeshes(const MeshDrawList& list) {
     VkCommandBuffer cb = impl_->gfx;
-    VkDescriptorSet dyn_set = impl_->fr.dyn_ubo_sets[impl_->frame];
+    VkDescriptorSet dyn_set = impl_->dyn_ubo_set;
 
     VkBuffer bump_buf = impl_->rm->GetVkBumpMasterBuffer(Memory::kDynamic);
     std::array<VkWriteDescriptorSet, 3> writes{};
@@ -1877,7 +1999,7 @@ void CommandRecorder::DrawPoints(const PointDraw& pd) {
     VkBuffer ssbo = impl_->rm->GetVkBuffer(pd.vertex_buffer, &ssbo_off);
     VkDeviceSize off = ssbo_off;
     vkCmdBindVertexBuffers(cb, 0, 1, &ssbo, &off);
-    VkDescriptorSet point_set = impl_->fr.point_sets[impl_->frame];
+    VkDescriptorSet point_set = impl_->point_set;
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p->vk_layout, 0, 1,
                             &point_set, 0, nullptr);
     vkCmdDraw(cb, pd.vertex_count, 1, 0, 0);
@@ -1888,7 +2010,6 @@ void CommandRecorder::EndRenderPass() {
 }
 
 FrameContext ResourceManager::BeginFrame(SwapChain& sc) {
-    VkFrameResources& fr = impl_->frame_res;
     const uint32_t cf = impl_->recorder_frame;
     VkDevice dev = impl_->params.device;
 
@@ -1913,9 +2034,10 @@ FrameContext ResourceManager::BeginFrame(SwapChain& sc) {
     FrameContext fc;
     fc.frame_index = cf;
     fc.swapchain_image_index = image_index;
-    fc.cmd.impl_ = new CommandRecorder::Impl{this, &sc, fr, cf, image_index,
-                                             impl_->graphics_cmds[cf],
-                                             impl_->compute_cmds[cf], dev};
+    fc.cmd.impl_ = new CommandRecorder::Impl{
+        this, &sc, cf, image_index, impl_->graphics_cmds[cf],
+        impl_->compute_cmds[cf], dev, impl_->dyn_ubo_sets[cf],
+        impl_->compute_sets[cf], impl_->point_sets[cf]};
     return fc;
 }
 
