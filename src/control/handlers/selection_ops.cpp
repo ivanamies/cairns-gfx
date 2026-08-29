@@ -176,10 +176,9 @@ void RegisterSelectionOps(CommandRegistry& registry, cairns::Engine& engine) {
         "cairns.pick",
         /*schema=*/json::object(),
         /*doc=*/"Schedule a pick at (viewport, x, y) in viewport-local pixel "
-                "coords. Records intent; the GPU ID-buffer + readback path is "
-                "a follow-up. Today returns {pending:true}; once the GPU side "
-                "lands, returns the resolved {type, id, world} of whatever was "
-                "rendered at that texel.",
+                "coords. Records intent; the engine resolves it the next time "
+                "draw() completes a frame after this request. Poll "
+                "cairns.pick.consume to retrieve the resolved {type, id, raw}.",
         [engine = &engine](const json& args) -> json {
             const int vp = static_cast<int>(args.value("viewport", int64_t{0}));
             const uint32_t x = static_cast<uint32_t>(args.value("x", uint64_t{0}));
@@ -190,6 +189,30 @@ void RegisterSelectionOps(CommandRegistry& registry, cairns::Engine& engine) {
                     {"x", x},
                     {"y", y}};
         });
+
+    registry.Register(
+        "cairns.pick.consume",
+        /*schema=*/json::object(),
+        /*doc=*/"Poll for the most recent resolved pick. {resolved:false} "
+                "until the engine has run a frame post-request. On success: "
+                "{resolved:true, viewport, x, y, type, id, raw}. raw is the "
+                "stub source value (BGRA at the texel) until the R32U ID "
+                "buffer lands; id swaps to the decoded value with #206.",
+        [engine = &engine](const json&) -> json {
+            cairns::headless::PickResultExport r =
+                cairns::headless::ConsumePickResult(engine);
+            if (!r.resolved) {
+                return {{"resolved", false}};
+            }
+            return {{"resolved", true},
+                    {"viewport", r.viewport},
+                    {"x", r.x},
+                    {"y", r.y},
+                    {"type", TypeName(r.type)},
+                    {"id", r.id},
+                    {"raw", r.raw}};
+        });
+    registry.RegisterAlias("pick.consume", "cairns.pick.consume");
 }
 
 }  // namespace cairns::control

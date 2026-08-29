@@ -58,5 +58,20 @@ void SetHighlights(Engine* engine, std::vector<SelectionTarget>&& targets);
 void ClearHighlights(Engine* engine);
 void RequestPick(Engine* engine, int viewport, uint32_t x, uint32_t y);
 
+// #208: poll the most recent resolved pick. resolved=false until the
+// engine has run a frame after RequestPick + completed the readback.
+struct PickResultExport {
+    bool resolved = false;
+    int viewport = 0;
+    uint32_t x = 0;
+    uint32_t y = 0;
+    SelectionType type = SelectionType::kEntity;
+    uint32_t id = 0;
+    // Stub value (final_target_ BGRA at the click texel) until #206 lands
+    // the dedicated R32U ID buffer; id decoder swaps with the buffer.
+    uint32_t raw = 0;
+};
+PickResultExport ConsumePickResult(Engine* engine);
+
 }  // namespace headless
 }  // namespace cairns

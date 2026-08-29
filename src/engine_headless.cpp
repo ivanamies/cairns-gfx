@@ -123,4 +123,20 @@ void RequestPick(Engine* engine, int viewport, uint32_t x, uint32_t y) {
     engine->RequestPick(viewport, x, y);
 }
 
+PickResultExport ConsumePickResult(Engine* engine) {
+    PickResultExport out;
+    if (!engine || !engine->PickResolved()) {
+        return out;
+    }
+    Engine::PickResult r = engine->ConsumePickResult();
+    out.resolved = true;
+    out.viewport = r.viewport;
+    out.x = r.x;
+    out.y = r.y;
+    out.type = r.type;
+    out.id = r.id;
+    out.raw = r.raw;
+    return out;
+}
+
 }  // namespace cairns::headless

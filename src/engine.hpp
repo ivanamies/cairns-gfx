@@ -290,6 +290,27 @@ public:
     uint32_t PendingPickX() const { return pick_x_; }
     uint32_t PendingPickY() const { return pick_y_; }
 
+    // Last resolved pick. Updated by ResolvePendingPick once per frame when
+    // pick_pending_ was true at the top of the frame. PickResolved() flips
+    // true on the frame the readback completes; ConsumePickResult()
+    // atomically reads + clears so each request returns exactly one result.
+    struct PickResult {
+        int viewport = 0;
+        uint32_t x = 0;
+        uint32_t y = 0;
+        cairns::SelectionType type = cairns::SelectionType::kEntity;
+        uint32_t id = 0;
+        // Today's stub source: final_target_ BGRA at (x, y). Swap to the
+        // R32U id_target once #206 lands the dedicated ID buffer; the
+        // {type, id} decode swaps with it.
+        uint32_t raw = 0;
+    };
+    bool PickResolved() const { return pick_resolved_; }
+    PickResult ConsumePickResult() {
+        pick_resolved_ = false;
+        return last_pick_result_;
+    }
+
     // Click-to-focus: caller passes the window-x of the LMB click. Engine
     // picks the half of the swap target the click lands in. fly_/keyboard
     // input is then routed to that viewport on subsequent iterates.
@@ -1174,6 +1195,36 @@ public:
             render_thread_->Drain();
         }
 
+        // #208 stub: if a RequestPick fired this frame, readback
+        // final_target_ at the click coord. Today we sample BGRA (cheap
+        // visible check) and treat the raw color as the pick value;
+        // {type, id} swap with the R32U ID buffer once #206 lands.
+        // Surfaceless-only for now -- windowed dump path uses swapchain
+        // image readback (different code path) and isn't wired here.
+        if (pick_pending_ && !final_target_.IsNull()) {
+            std::vector<uint8_t> rgba;
+            uint32_t rw = 0;
+            uint32_t rh = 0;
+            if (rhi_.resources.ReadBackTextureRgba(final_target_, rgba, rw, rh)
+                && pick_x_ < rw && pick_y_ < rh) {
+                const size_t idx = (static_cast<size_t>(pick_y_) * rw +
+                                     pick_x_) * 4;
+                const uint32_t raw =
+                    (static_cast<uint32_t>(rgba[idx + 0])      ) |
+                    (static_cast<uint32_t>(rgba[idx + 1]) <<  8) |
+                    (static_cast<uint32_t>(rgba[idx + 2]) << 16) |
+                    (static_cast<uint32_t>(rgba[idx + 3]) << 24);
+                last_pick_result_.viewport = pick_viewport_;
+                last_pick_result_.x = pick_x_;
+                last_pick_result_.y = pick_y_;
+                last_pick_result_.type = cairns::SelectionType::kEntity;
+                last_pick_result_.id = 0;  // R32U decoder lands with #206
+                last_pick_result_.raw = raw;
+                pick_resolved_ = true;
+            }
+            pick_pending_ = false;
+        }
+
         t_frame.End();
         if (frame_ % 120 == 0) {
             const size_t loaded = scenes_.size();
@@ -1866,6 +1917,8 @@ private:
     int pick_viewport_ = 0;
     uint32_t pick_x_ = 0;
     uint32_t pick_y_ = 0;
+    bool pick_resolved_ = false;
+    PickResult last_pick_result_{};
 
     // P3 resize lifecycle. SDL fires WINDOW_PIXEL_SIZE_CHANGED on the event
     // thread; we record intent + dims and settle on the next draw() call so
