@@ -4,6 +4,14 @@
 // thread. Owns no GPU data: spans point into per-slot storage on Engine, plain
 // scalars are by value. See the "Architecture -- Acquire the SLOT before
 // writing a byte" section of the threading plan.
+//
+// TODO(frame-packet): replace the span<> handles with a per-slot arena +
+// {first_draw_idx, num_draws} as plain ints (NOT pointers, NOT arrays).
+// Recording owns the arena; the packet just names a range into it. No
+// allocations on the per-frame path. The current FramePacket is small but
+// every span<> drag-attaches a pointer + count; what we want is a fully
+// trivially-copyable POD that carries indices into a slot-owned scratchpad
+// so memcpying the packet cross-thread is the whole handoff.
 
 #pragma once
 

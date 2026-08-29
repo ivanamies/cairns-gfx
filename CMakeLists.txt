@@ -348,6 +348,21 @@ if (NOT ANDROID AND NOT IOS AND NOT EMSCRIPTEN)
             )
         endif()
     endforeach()
+    # Mirror the sdl-min asset bundle for cairns_serve: every glb under
+    # EXTERNAL_ASSETS_DIR lands next to the binary so the engine's
+    # kDebugGlbs[3..103) loop finds them. Without this the headless byte
+    # gate renders empty (entities=0) and is meaningless.
+    set(EXTERNAL_ASSETS_DIR "/Users/ivanamies/dev/gfx/assets/riot/lol_champions/staging")
+    file(GLOB _cairns_serve_glbs "${EXTERNAL_ASSETS_DIR}/*.glb")
+    foreach(_glb ${_cairns_serve_glbs})
+        get_filename_component(_glb_name "${_glb}" NAME)
+        add_custom_command(POST_BUILD
+            TARGET cairns_serve
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_glb}"
+                "${CMAKE_BINARY_DIR}/$<CONFIGURATION>/${_glb_name}"
+        )
+    endforeach()
 endif()
 
 # Also link cairns_control into the SDL app so ImGui-routed registry dispatch
