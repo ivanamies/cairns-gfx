@@ -1263,6 +1263,8 @@ read live via `cairns.perf.last` after ~12 s of rendering. State = end of the #2
 arena work (all CPU state in `cpu_block_`, prefab tables interned to `prefab_arena_`).
 Windowed teardown now exits 0 (the 100-GLB oversize-Free use-after-free is fixed).
 
+**Measured on commit `792998b`** (`perf: note skinning_compute 5.4ms is idle-clock`).
+
 NOTE: the `frame` slot here is **CPU frame work only** (build+record+dispatch),
 NOT the old vsync-inclusive frame time — present pacing is a separate slot now.
 Thermally sensitive (±2–3× across runs on this throttling laptop); single snapshot.
@@ -1317,6 +1319,9 @@ Different present model: MoltenVK swapchain (`present_wait`+`acquire_wait`+`fenc
 platform-aware `cairns.instancePasses`; the Adreno tile budget can't take 500
 skinned actors). Read from logcat `[Timer]` after settle. Same 100 GLBs loaded as
 desktop. The GLB load took **9.1 s** on the phone.
+
+**Measured on commit `4a5e39d`** (`mobile: cpu_persistent 256->512MB; cpu* stay
+malloc`) — the native `.so` deployed to the device was built from that tree.
 ```
 slot 0  frame              9108 us    (CPU frame -- but mostly GPU-fence-bound, below)
 slot 1  build_draws        2992 us
