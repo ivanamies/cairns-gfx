@@ -255,17 +255,15 @@ cairns_serve -> stale binaries silently pass ctest (bit me twice on 2026-07-09;
 worked around with `--target cairns_golden_tests`). Either fix the inits per
 header or drop the target from the default build (CAIRNS_BUILD_WGPU_SMOKE off).
 
-### Shadow-map visual correctness needs interactive verification
-M2b wired directional shadows on metal+vk (shadow_vp0 depth pass + 3x3 PCF);
-goldens PROVE shadows change pixels (lit_primitives != shadow_primitives) and
-are deterministic per-platform. NOT proven headless: that the shadow lands on
-the correct side (shadow-map UV vs the vk negative-height viewport Y-flip) and
-is acne/peter-panning free (bias tuning). Same class of limit as M5 native
-windowed -- drive `dev_drive.sh start metal`, add a cast_shadows light +
-`setMaterialShaderAll lit` over a receiver, and eyeball. If flipped, it's a
-one-line UV fix in the 3 lit shaders' shadow_factor; if acne, tune the bias.
-Also: the golden scene has no ground plane (primitives self/inter-shadow only);
-a receiver scene would demo it better.
+### Shadow-map visual correctness: side-polarity PROVEN, acne/bias still eyeball
+2026-07-09: tests/test_npr_properties.cpp now proves headlessly (metal+vk)
+that shadows (a) only darken, (b) toggle with castShadows, (c) land on the
+geometrically correct side -- the darkened-region centroid tracks the light's
+X-tilt symmetrically (occluder-over-ground scene). The Y-flip/UV-side fear is
+closed. STILL needs interactive eyeball: acne / peter-panning at grazing
+angles (bias tuning) -- drive `dev_drive.sh start metal` per the original
+note. The lit-side and intensity-monotonicity of M1 lighting are also
+property-tested there.
 
 ### C7 resize — path DONE, verification artifacts deferred
 The unified resize PATH landed + is golden-tested (`Engine::ApplyResize` single
