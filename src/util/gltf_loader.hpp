@@ -97,6 +97,14 @@ struct Mesh {
         // path reads this to size the kernel dispatch + the
         // skin_output_pool_ slice (cpuPositions itself is gone by then).
         uint32_t vert_count = 0;
+        // #222 Phase S.3: bind-pose AABB in mesh-local space. Computed at
+        // load over cpuPositions; persists past CleanupTmps. Per-actor
+        // frustum cull transforms this by the actor's world xform, pads
+        // by 1.5x for animation motion, and tests against the camera's
+        // 6 planes (skip the actor's anim_eval + skin dispatch when
+        // fully outside).
+        glm::vec3 bind_aabb_min = glm::vec3(0.0f);
+        glm::vec3 bind_aabb_max = glm::vec3(0.0f);
         // #221 Skinning F5: per-skinned-mesh alias of the shared attr region
         // pre-offset by global_base_vertex * sizeof(VertexAttribute). Stream
         // 1 binds this for skinned draws; mesh-local vertex_offset then
@@ -310,6 +318,9 @@ inline bool LoadMeshFromGltf(const fastgltf::Asset& asset,
         }
     }
 
+    // #222 Phase S.3: accumulate bind-pose AABB across all primitives.
+    glm::vec3 aabb_min(std::numeric_limits<float>::max());
+    glm::vec3 aabb_max(std::numeric_limits<float>::lowest());
     for (const auto& primitive : gltfMesh.primitives) {
         Primitive outPrim;
         outPrim.materialIndex = static_cast<uint32_t>(primitive.materialIndex.value_or(0));
@@ -327,6 +338,8 @@ inline bool LoadMeshFromGltf(const fastgltf::Asset& asset,
             vertexCount = accessor.count;
             fastgltf::iterateAccessorWithIndex<glm::vec3>(asset, accessor, [&](glm::vec3 v, [[maybe_unused]] size_t i) {
                 outCold.cpuPositions.push_back(glm::vec4(v, 1.0f));
+                aabb_min = glm::min(aabb_min, v);
+                aabb_max = glm::max(aabb_max, v);
             });
         }
 
@@ -404,6 +417,14 @@ inline bool LoadMeshFromGltf(const fastgltf::Asset& asset,
         }
 
         outHot.primitives.push_back(outPrim);
+    }
+    // #222 Phase S.3: bake AABB on Hot. Empty meshes (no POSITION accessor)
+    // leave the AABB at the sentinel; consumers must gate on the inverted
+    // case (min > max) and treat them as "always visible" to avoid culling
+    // by accident.
+    if (aabb_min.x <= aabb_max.x) {
+        outHot.bind_aabb_min = aabb_min;
+        outHot.bind_aabb_max = aabb_max;
     }
     return true;
 }
