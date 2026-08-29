@@ -3680,12 +3680,20 @@ namespace cairns {
 
 uint32_t Engine::ResolvePickRaycast(int vp, uint32_t px, uint32_t py,
                                 const glm::mat4& inv_view_proj) {
-        cairns::Scene::Cold* wc = scene_mgr_.pool.GetCold(scene_mgr_.active);
+        // #229 C6 [N-node]: pick the CLICKED viewport's bound scene, not the
+        // globally-active one -- clicking node J must resolve against node J's
+        // document. Falls back to active for an out-of-range vp.
+        cairns::SceneId pick_scene = scene_mgr_.active;
+        if (vp >= 0 && vp < viewport_mgr_.active_count) {
+            if (auto* vh = viewport_mgr_.pool.GetHot(viewport_mgr_.ids[vp])) {
+                pick_scene = vh->scene;
+            }
+        }
+        cairns::Scene::Cold* wc = scene_mgr_.pool.GetCold(pick_scene);
         if (!wc) { return 0u; }
         const float fw = static_cast<float>(FrameWidth());
         const float fh = static_cast<float>(FrameHeight());
         if (fw <= 0.0f || fh <= 0.0f) { return 0u; }
-        (void)vp;
         const float ndc_x = (static_cast<float>(px) / fw) * 2.0f - 1.0f;
         const float ndc_y = 1.0f - (static_cast<float>(py) / fh) * 2.0f;
         // WebGPU/Metal clip space is z in [0,1]: near plane z=0, far z=1.
@@ -3705,17 +3713,29 @@ uint32_t Engine::ResolvePickRaycast(int vp, uint32_t px, uint32_t py,
             if (!ac) { continue; }
             cairns::Prefab::Hot* sh = prefab_store_.prefabs.GetHot(ac->cpu_graph);
             if (!sh || sh->meshes.empty()) { continue; }
-            cairns::Mesh::Hot* mh = prefab_store_.meshes.GetHot(sh->meshes[0]);
-            if (!mh || mh->bind_aabb_min.x > mh->bind_aabb_max.x) { continue; }
+            // #229 C6: union EVERY mesh's bind AABB (was meshes[0] only, so a
+            // multi-mesh prefab's picking box was just its first mesh -> the
+            // rest were unclickable). Local-space union; transformed below.
+            glm::vec3 lmin(1.0e30f);
+            glm::vec3 lmax(-1.0e30f);
+            for (cairns::Handle<cairns::Mesh> mid : sh->meshes) {
+                cairns::Mesh::Hot* mh = prefab_store_.meshes.GetHot(mid);
+                if (!mh || mh->bind_aabb_min.x > mh->bind_aabb_max.x) {
+                    continue;
+                }
+                lmin = glm::min(lmin, mh->bind_aabb_min);
+                lmax = glm::max(lmax, mh->bind_aabb_max);
+            }
+            if (lmin.x > lmax.x) { continue; }  // no mesh had a valid AABB
             const glm::mat4& world =
                 pick_view.get<const cairns::WorldTransform>(e).world;
             glm::vec3 wmin(1.0e30f);
             glm::vec3 wmax(-1.0e30f);
             for (int i = 0; i < 8; ++i) {
                 const glm::vec3 corner(
-                    (i & 1) ? mh->bind_aabb_max.x : mh->bind_aabb_min.x,
-                    (i & 2) ? mh->bind_aabb_max.y : mh->bind_aabb_min.y,
-                    (i & 4) ? mh->bind_aabb_max.z : mh->bind_aabb_min.z);
+                    (i & 1) ? lmax.x : lmin.x,
+                    (i & 2) ? lmax.y : lmin.y,
+                    (i & 4) ? lmax.z : lmin.z);
                 const glm::vec4 wc4 = world * glm::vec4(corner, 1.0f);
                 const glm::vec3 wcv = glm::vec3(wc4) / wc4.w;
                 wmin = glm::min(wmin, wcv);
