@@ -8,14 +8,22 @@ Newest first.
 ## bisect (2026-06-15) — skinning_compute regression 2026-06-09 → 2026-06-11
 
 Bisect run today on `bisect/skinning-perf` to chase the bad animation GPU numbers.
-500 actors / 100 distinct GLBs, metal Release, M2 Max, 2560×1440, vsync.
+500 actors / 100 distinct GLBs, metal Release, M2 Max, 2560×1440, vsync (frame locked ~20.84 ms).
+Bisect threshold: skinning_compute < 8 ms = good, ≥ 8 ms = bad.
 
-| commit | date | skinning_compute | forward_vp0 | record | build_draws | frame |
-|---|---|---|---|---|---|---|
-| `c838f5f` | EOD 2026-06-09 (P9 walking-clip + SkinRef attach) | — (slot not present) | 1.72 ms | 0.40 ms | 0.52 ms | 20.84 ms |
-| `302f58c` | EOD 2026-06-10 (imgui flicker fix) | 5.18 ms | 3.87 ms | 0.60 ms | 0.64 ms | 20.84 ms |
-| `9a94846` | EOD 2026-06-11 (Phase S.2 pack skin attrs) | 11.09 ms | 1.49 ms | 0.48 ms | 0.53 ms | 20.84 ms |
-| `577938e` | 2026-06-15 known-good rewind = `984dae1` | 14.11 ms | 1.51 ms | 0.42 ms | 0.47 ms | 20.84 ms |
+| date          | commit       | description                                | skinning_compute    | forward_vp0 | record  | build_draws | verdict |
+|---------------|--------------|--------------------------------------------|---------------------|-------------|---------|-------------|---------|
+| 2026-06-09 23:56 | `c838f5f` | EOD 6/9 — P9 walking-clip + SkinRef attach | — (slot not present)| 1.72 ms     | 0.40 ms | 0.52 ms     | —       |
+| 2026-06-10 23:56 | `302f58c` | EOD 6/10 — imgui flicker fix               | 5.18 ms             | 3.87 ms     | 0.60 ms | 0.64 ms     | good    |
+| 2026-06-11 21:11 | `9737baa` | phase A.1 conditional id MRT               | 4.97 ms             | —           | —       | —           | good    |
+| 2026-06-11 21:50 | `a82c326` | windowed crash fix (ImDrawData bypass)     | 4.86 ms             | —           | —       | —           | good    |
+| 2026-06-11 21:57 | `2694662` | phase H.6 hoist resident_textures          | 4.84 ms             | —           | —       | —           | good    |
+| 2026-06-11 22:03 | `a155ac9` | phase E.0 vk generic recorder loops        | 4.94 ms             | —           | —       | —           | good    |
+| **2026-06-11 22:08** | **`b5495c4`** | **phase S.1 LDS palette in skin.comp** | **11.70 ms**    | —           | —       | —           | **first BAD** |
+| 2026-06-11 23:26 | `9a94846` | EOD 6/11 — Phase S.2 pack skin attrs       | 11.09 ms            | 1.49 ms     | 0.48 ms | 0.53 ms     | bad     |
+| 2026-06-15 21:23 | `577938e` | known-good rewind = `984dae1`              | 14.11 ms            | 1.51 ms     | 0.42 ms | 0.47 ms     | bad     |
+
+First bad commit: `b5495c4`. `shared mat4 s_palette[256]` (16 KB threadgroup memory per workgroup); metal mirror stores palette as 4-rows-per-joint with rebuild-on-read.
 
 ---
 
