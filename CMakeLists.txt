@@ -84,13 +84,10 @@ if(CAIRNS_GFX_BACKEND_METAL)
     # Point to the metal-cpp directory in the root of your project
     target_include_directories(${EXECUTABLE_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/metal-cpp")
     
-    # Find system frameworks required by Metal
-    find_library(METAL_LIB Metal REQUIRED)
-    find_library(FOUNDATION_LIB Foundation REQUIRED)
-    find_library(QUARTZ_LIB QuartzCore REQUIRED)
-    
-    # Link the frameworks
-    target_link_libraries(${EXECUTABLE_NAME} PRIVATE ${METAL_LIB} ${FOUNDATION_LIB} ${QUARTZ_LIB})
+    target_link_libraries(${EXECUTABLE_NAME} PRIVATE
+        "-framework Metal"
+        "-framework Foundation"
+        "-framework QuartzCore")
     # --- END METAL-CPP CONFIGURATION ---    
 endif()
 if(CAIRNS_GFX_BACKEND_VULKAN)
@@ -176,12 +173,12 @@ target_link_libraries(${EXECUTABLE_NAME} PUBLIC
 
 # SDL_Image bug: https://github.com/libsdl-org/SDL_image/issues/506
 if (APPLE AND NOT BUILD_SHARED_LIBS)
-    find_library(IO_LIB ImageIO REQUIRED)
-    find_library(CS_LIB CoreServices REQUIRED)
-    find_library(CT_LIB CoreText REQUIRED)
-    find_library(CG_LIB CoreGraphics REQUIRED)
-    find_library(CF_LIB CoreFoundation REQUIRED)
-    target_link_libraries(${EXECUTABLE_NAME} PUBLIC ${CF_LIB} ${CT_LIB} ${IO_LIB} ${CS_LIB} ${CG_LIB})
+    target_link_libraries(${EXECUTABLE_NAME} PUBLIC
+        "-framework CoreFoundation"
+        "-framework CoreText"
+        "-framework ImageIO"
+        "-framework CoreServices"
+        "-framework CoreGraphics")
 endif()
 
 # Dealing with assets
