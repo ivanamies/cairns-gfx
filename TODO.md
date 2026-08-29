@@ -203,6 +203,46 @@ Also surfaced (not a graph gap): a **pre-existing MSAA sample-count mismatch**
 
 ---
 
+## Deterministic imgui rendering (per-pixel hash gates for the UI work)
+
+The imgui overlay IS bit-stable per process run today (proven 2026-07-07:
+identical MD5 across standalone runs). The heavy JS/imgui editor work
+(`~/dev/plans/2026-07-08_gfx_js-imgui-editor-ui.md`) keeps per-pixel goldens
+viable by holding these invariants -- each one, when violated, is a
+diagnosed source of drift:
+
+1. **Fixed clock.** Golden mode pins `io.DeltaTime = kFixedDt` (never wall
+   time): cursor blink, scroll easing, tooltip fades, and any style
+   animation are all clocked off DeltaTime. Belt+braces: set
+   `io.ConfigInputTextCursorBlink = false` and use no imgui animations.
+2. **No imgui.ini.** `io.IniFilename = nullptr` in golden/headless hosts --
+   persisted window pos/size/dock state is cross-run state, the #1
+   nondeterminism source once docking lands.
+3. **Fixed layout inputs.** DisplaySize comes from the fixed golden
+   resolution (already true headless); window placement uses
+   `ImGuiCond_Always` with constants in golden scenarios, never
+   `FirstUseEver` + runtime-derived positions.
+4. **Per-platform refs absorb the font atlas.** The atlas rasterizes
+   identically per platform but NOT across metal/vk/webgpu -- keep
+   `{name}.{platform}.imghash` refs (already the convention); never share an
+   imgui ref across backends.
+5. **Mocked data + scripted input.** UI goldens feed mocked numbers (the
+   existing `imgui overlay ... mocked numbers` golden is the template) and
+   drive interaction through deterministic synthetic event scripts
+   (`io.AddMousePosEvent/...` from a JS-declared list), never real input.
+6. **Suite-order bleed.** Cross-SCENARIO imgui state (shared context/font
+   atlas from the first engine) is the one remaining flake class:
+   destroy+recreate the ImGui context per SCENARIO (`ResetImguiContextImpl`
+   in test_seams makes it pass; the first-engine atlas case is the last
+   gap). Until then, run `[imgui]` isolated -- and after any picker-visible
+   change (adding/renaming assets/scripts/*.js!), REBAKE `imgui.overlay`:
+   the overlay renders the scenario button list, so a stable-but-new image
+   is expected, not a flake (exactly the 2026-07-07 incident).
+7. **Content rule for UI scripts.** No `Date.now()`/random in draw paths;
+   text is fixed or mocked; scrolling starts pinned (`SetScrollY(0)`).
+
+---
+
 ## Active
 
 ### No global mutable state (no globals, no singletons, no thread-locals)
