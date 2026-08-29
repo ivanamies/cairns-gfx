@@ -40,11 +40,14 @@ struct HeapBlock {
     bool is_image_pool = false;
 };
 
-struct BumpRing {
-    std::array<uint32_t, kFramesInFlight> block_indices{};
-    std::array<uint32_t, kFramesInFlight> cursors{};
+// Bump region layout inside the single master buffer.
+// region_base[m] + slot * slot_size[m] is the slot's start offset; cursors
+// advance inside [0, slot_size[m]).
+struct BumpLayout {
+    std::array<uint32_t, kMemoryCount> region_base{};
+    std::array<uint32_t, kMemoryCount> slot_size{};
+    uint32_t cursors[kMemoryCount][kFramesInFlight]{};
     uint32_t current_slot = 0;
-    uint32_t block_bytes = 0;
 };
 
 struct PendingFree {
@@ -129,7 +132,14 @@ private:
     std::vector<uint32_t> buffer_pools_[kMemoryCount];
     std::vector<uint32_t> image_pools_[kMemoryCount];
 
-    BumpRing rings_[kMemoryCount]{};
+    BumpLayout bump_{};
+
+public:
+    // The single bump heap lives at this fixed index in blocks_.
+    static constexpr uint32_t kBumpHeapIndex = 0;
+
+private:
+    bool CreateBumpHeap();
 
     std::vector<PendingFree> pending_frees_[kFramesInFlight];
 };
