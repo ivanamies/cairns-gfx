@@ -98,6 +98,24 @@ target_compile_features(imgui PUBLIC cxx_std_20)
 target_compile_options(imgui PRIVATE -fno-exceptions -fno-rtti)
 target_link_libraries(imgui PUBLIC SDL3::SDL3)
 
+# nlohmann/json uses exceptions internally + has compile-time warnings that
+# trip the app's -Werror. Wrap the control-plane TUs (registry + transport +
+# handlers) in their own static lib with relaxed flags. Mirrors the
+# cairns_render_thread / Taskflow pattern below.
+add_library(cairns_control STATIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/control/command_registry.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/control/transport_stdio.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/lifecycle_ops.cpp")
+target_include_directories(cairns_control PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_BINARY_DIR}/generated"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+target_compile_features(cairns_control PUBLIC cxx_std_20)
+target_compile_options(cairns_control PRIVATE -Wall -Wextra)
+target_compile_definitions(cairns_control PRIVATE
+    $<$<BOOL:${CAIRNS_GFX_BACKEND_METAL}>:CAIRNS_METAL=1>
+    $<$<BOOL:${CAIRNS_GFX_BACKEND_VULKAN}>:CAIRNS_VULKAN=1>)
+
 # Taskflow needs exceptions + has size_t->int narrowing in its headers, so the
 # one TU that includes it lives in its own static library with relaxed flags.
 add_library(cairns_render_thread STATIC
@@ -135,6 +153,9 @@ list(REMOVE_ITEM CAIRNS_CORE_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/serve_main.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/render/render_thread.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/control/command_registry.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/control/transport_stdio.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/lifecycle_ops.cpp"
 )
 
 add_library(cairns_core STATIC ${CAIRNS_CORE_SOURCES})
@@ -247,8 +268,12 @@ if (NOT ANDROID AND NOT IOS AND NOT EMSCRIPTEN)
     add_executable(cairns_serve
         "${CMAKE_CURRENT_SOURCE_DIR}/src/serve_main.cpp"
     )
-    target_link_libraries(cairns_serve PRIVATE cairns_core)
+    target_link_libraries(cairns_serve PRIVATE cairns_core cairns_control)
 endif()
+
+# Also link cairns_control into the SDL app so ImGui-routed registry dispatch
+# (planned P5) and the agent transport (P4) can share the same registry.
+target_link_libraries(${EXECUTABLE_NAME} PRIVATE cairns_control)
 
 # =============================================================================
 # Asset packaging -- attaches to sdl-min only (cairns_serve does its own asset

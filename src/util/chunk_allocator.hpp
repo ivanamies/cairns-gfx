@@ -282,7 +282,7 @@ public:
         assert(bytes <= 0xFFFFFFFFu && "ChunkStdAllocator: allocation > 4 GB");
         void* p = alloc_->Allocate(static_cast<uint32_t>(bytes), alignof(T));
         if (p == nullptr) {
-            std::printf("ChunkStdAllocator: out of memory\n");
+            std::fprintf(stderr, "ChunkStdAllocator: out of memory\n");
             std::abort();
         }
         return static_cast<T*>(p);

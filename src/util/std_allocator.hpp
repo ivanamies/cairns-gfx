@@ -60,7 +60,7 @@ public:
     T* allocate(size_t n) {
         T* res = static_cast<T*>(arena_.allocate(n * sizeof(T)));
         if ( !res ) {
-            printf("std::bad alloc\n");
+            fprintf(stderr, "std::bad alloc\n");
             std::terminate();
         }
         return res;

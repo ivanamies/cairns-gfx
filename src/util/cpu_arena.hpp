@@ -199,7 +199,7 @@ public:
     T* allocate(size_t n) {
         T* p = arena_->AllocateArray<T>(n);
         if (!p) {
-            printf("BumpStdAllocator: out of arena (std::bad_alloc)\n");
+            fprintf(stderr, "BumpStdAllocator: out of arena (std::bad_alloc)\n");
             std::terminate();
         }
         return p;

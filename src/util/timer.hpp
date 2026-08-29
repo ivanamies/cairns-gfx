@@ -77,7 +77,7 @@ class Timer {
             if ( accum_itrs_[i] == 0 ) {
                 continue;
             }
-            CAIRNS_PRINT("slot %d (%s): accum %lld us, avg %lld us over %lld frames\n", i,
+            CAIRNS_PRINT("[Timer] slot %d (%s): accum %lld us, avg %lld us over %lld frames\n", i,
                    slot_names_[i] ? slot_names_[i] : "?", (long long)accum_times_[i],
                    (long long)(accum_times_[i] / accum_itrs_[i]), (long long)accum_itrs_[i]);
         }

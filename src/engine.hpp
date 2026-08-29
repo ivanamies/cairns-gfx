@@ -235,7 +235,7 @@ public:
                     std::filesystem::path filepath;
                     if (!cairns::GetStaticResourceFilepath(cairns::kDebugGlbs[glb_idx],
                                                            filepath)) {
-                        printf("file missing %s\n", cairns::kDebugGlbs[glb_idx]);
+                        fprintf(stderr, "file missing %s\n", cairns::kDebugGlbs[glb_idx]);
                         continue;
                     }
                     glb_paths.push_back(filepath);
