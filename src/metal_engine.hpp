@@ -33,6 +33,7 @@
 #include "util/timer.hpp"
 #include "util/unique_ptr.hpp"
 #include "rhi/resource_manager.hpp"
+#include "rhi/command_recorder.hpp"
 
 namespace cairns {
 

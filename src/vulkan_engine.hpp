@@ -51,6 +51,7 @@
 #include "gpu_scene_registry.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/swap_chain.hpp"
+#include "rhi/command_recorder.hpp"
 #include "util/debug_asset.hpp"
 #include "util/draw.hpp"
 #include "util/draw_key.hpp"
