@@ -52,15 +52,10 @@ layout(set = 1, binding = 0) readonly buffer Positions {
 };
 
 layout(set = 1, binding = 1) readonly buffer SkinAttrs {
-    // Packed: joints in .xyzw of first vec4, weights in .xyzw of second.
-    // We bind it as uvec4 joints @ even index + vec4 weights @ odd index by
-    // declaring as 32-byte stride structured access.
-    uvec4 skin_joints_then_weights[];  // 2 reads per vertex: [2*vid] = joints, [2*vid+1] = weights bitcast
+    uvec4 skin_joints_then_weights[];
 };
 
 vec4 skin_weights_at(uint vid) {
-    // skin_joints_then_weights[2*vid+1] holds the 4 weight floats as uvec4
-    // bits; convert per-lane via uintBitsToFloat.
     uvec4 raw = skin_joints_then_weights[2u * vid + 1u];
     return vec4(uintBitsToFloat(raw.x), uintBitsToFloat(raw.y),
                 uintBitsToFloat(raw.z), uintBitsToFloat(raw.w));
