@@ -205,10 +205,11 @@ state. PORTED 2026-06-20 (`08fccb5`); remaining caveats below.**
   `Buffer::Cold`), so it survives the per-frame graph rebuild and the cross-frame
   `final_target_` WAW is tracked. We collapse Granite's `invalidated_in_stage[64]`
   to a coarse `invalidated_access`/`_stages` pair (gap 1 below).
-- **RAW + WAW + layout are modeled; WAR is not yet.** Inputs → invalidate (RAW),
-  outputs → flush (WAW + layout). Granite's "fake flush, access=0" for read-only
-  resources (WAR) is unported — fine for today's graph (no in-graph
-  read-then-write of a persistent resource) but a real gap.
+- **RAW + WAW + layout + WAR are all modeled.** Inputs → invalidate (RAW),
+  outputs → flush (WAW + layout), and Granite's "fake flush, access=0" for
+  read-only resources is ported: reads join `src_stages`, a later writer emits
+  an execution-only barrier and resets the accumulation
+  (`AccessResource`, `rhi/barrier.hpp` — pure, spec-driven).
 - **Both backends now execute the SAME graph-computed barriers** (no mismatch —
   see the no-metal-vulkan-mismatch standard): metal via a per-resource
   `MTLFence` (`sync_fence_` on `TextureColdPlat`, replacing the ad-hoc
@@ -223,8 +224,13 @@ state. PORTED 2026-06-20 (`08fccb5`); remaining caveats below.**
   host-read target) is allocated as a DEDICATED TRACKED `MTLTexture` (outside the
   untracked placement heap) so Metal auto-coheres it. Granite never needs this;
   it's a consequence of our untracked-by-default heaps.
-- **Buffers** still go un-barriered (compute→graphics leans on `compute_fence_`);
-  Granite routes buffers through the same invalidate/flush.
+- **Buffers ride the same invalidate/flush** (no layouts). Passes declare
+  `ReadBuffer`/`WriteBuffer`; compute passes get the barrier walk via
+  `BeginComputePass`/`EndComputePass`. Leaves: vk = one global
+  `VkMemoryBarrier` per boundary; metal = per-buffer `MTLFence`
+  (`BufferColdPlat`, stash/drain around dispatch encoders); webgpu = implicit.
+  The anim_eval → skin → forward vertex-fetch chain runs on these graph
+  barriers alone — the ad-hoc `compute_fence_` is deleted.
 
 **Granite features we lack entirely (rough value order):**
 
@@ -245,14 +251,13 @@ state. PORTED 2026-06-20 (`08fccb5`); remaining caveats below.**
 7. **History / feedback resources** (`history_inputs`,
    `physical_history_events` — read the previous frame's version). Absent.
 
-**Done (2026-06-20):** persistent `PipelineEvent` + graph-computed invalidate/
-flush, executed by both backends off the same barriers. **In progress:**
-`final_target_` as a dedicated tracked target so Metal *coheres* (not just
-orders) the host read-back — the untracked-heap caveat above. **Remaining
-parity:** WAR (read-only fake-flush), buffer barriers, then the perf items
-(per-stage scoping, split-barrier events, pass reorder, subpass merge, transient
-aliasing barriers, async compute, history resources). See TODO "Render-graph
-gaps vs Granite".
+**Correctness parity: done** — persistent `PipelineEvent`, graph-computed
+invalidate/flush on textures AND buffers, WAR fake-flush, all backends off the
+same barriers, `final_target_` dedicated-tracked for Metal coherence.
+**Remaining = perf items only** (per-stage scoping, split-barrier events, pass
+reorder, subpass merge, transient aliasing barriers [NPR plan M0c], async
+compute, history resources). Plan:
+`~/dev/plans/2026-07-07_gfx_granite-sync-port.md`.
 
 ---
 
