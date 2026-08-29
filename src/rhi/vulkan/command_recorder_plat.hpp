@@ -16,8 +16,12 @@ inline constexpr uint32_t kMaxPasses = 16;
 inline constexpr uint32_t kMaxComputePasses = 4;
 // Per-frame ring of composite descriptor sets. Lets a single pass issue
 // multiple DrawFullscreen calls with different texture bindings without
-// last-bound-wins aliasing.
-inline constexpr uint32_t kCompositeRingSize = 4;
+// last-bound-wins aliasing. MUST exceed the fullscreen draws in one frame:
+// wrapping within a frame vkUpdateDescriptorSets a set an earlier draw in
+// the same command buffer still references (invalid + visibly corrupt --
+// bloom's 9-draw chain caught this at ring size 4). 32 covers the
+// kMaxPasses=16 pass cap with swap composites to spare.
+inline constexpr uint32_t kCompositeRingSize = 32;
 // Persistent (owned by Frames) cache of offscreen VkRenderPass + VkFramebuffer
 // objects keyed by attachment formats/load-ops and image views. Swapchain
 // passes keep using sc.renderPass; only graph-created offscreen targets land
