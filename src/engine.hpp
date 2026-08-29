@@ -390,7 +390,11 @@ public:
     bool draw() {
         frame_++;
         if (frame_ == 5) {
-            rhi_.frames.SetDumpPath("/tmp/cairns_dump.png");
+            const char* dump = std::getenv("CAIRNS_DUMP");
+            rhi_.frames.SetDumpPath(dump ? dump : "/tmp/cairns_dump.png");
+        }
+        if (frame_ >= 7 && std::getenv("CAIRNS_DUMP")) {
+            std::exit(0);  // headless byte-gate: frame 5 dumped, now quit
         }
 
         cairns::Timer t_frame("frame", 0);
@@ -399,11 +403,11 @@ public:
 
         const uint64_t now_ticks = SDL_GetTicks();
         float delta_time = 0.016f;
-#if !defined(CAIRNS_FREEZE_ROT) || !CAIRNS_FREEZE_ROT
-        if (last_ticks_ > 0) {
-            delta_time = static_cast<float>(now_ticks - last_ticks_) / 1000.0f;
+        if (!std::getenv("CAIRNS_FREEZE_ROT")) {
+            if (last_ticks_ > 0) {
+                delta_time = static_cast<float>(now_ticks - last_ticks_) / 1000.0f;
+            }
         }
-#endif
         last_ticks_ = now_ticks;
 
         cairns::Timer t_build("build_draws", 1);
