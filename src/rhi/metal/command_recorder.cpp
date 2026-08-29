@@ -87,6 +87,13 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
             enc->setVertexBuffer(pos_buf, pos_off, 0);
         }
         {
+            uint32_t attr_off = 0;
+            MTL::Buffer* attr_buf = res.GetMtlBuffer(
+                alloc, draw.vertex_buffers[cairns::Draw::kVertexBufferAttrSlot], &attr_off);
+            enc->useResource(attr_buf, MTL::ResourceUsageRead, MTL::RenderStageVertex);
+            enc->setVertexBuffer(attr_buf, attr_off, cairns::kMeshAttrVertexBindSlot);
+        }
+        {
             const uint32_t mat_off = draw.dynamic_buffer_offsets[0];
             if (mat_off != last_mat_off) {
                 last_mat_off = mat_off;

@@ -359,6 +359,7 @@ public:
                     draw.index_offset = index_base_off + (prim.firstIndex * sizeof(uint32_t));
                     draw.vertex_offset = prim.vertexOffset;
                     draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot] = pos;
+                    draw.vertex_buffers[cairns::Draw::kVertexBufferAttrSlot] = attr;  // stream 1
                     draw.instance_offset = 0;
                     draw.instance_count = 1;
                     draw.dynamic_buffer_offsets[0] = material_offset;
@@ -563,17 +564,22 @@ public:
         {  // unlit graphics pipeline via rhi
             const char* base = SDL_GetBasePath();
             const std::string shader_dir = base ? base : "";
-            const rhi::VertexInputAttribute pos_attr{
-                0, cairns::kMeshPosBindSlot, rhi::Format::kRgba32F, 0};
-            const rhi::VertexBufferLayout pos_layout{
-                cairns::kMeshPosBindSlot, static_cast<uint32_t>(sizeof(glm::vec4))};
+            const rhi::VertexInputAttribute vtx_attrs[2] = {
+                {0, cairns::kMeshPosBindSlot, rhi::Format::kRgba32F, 0},
+                // stream 1: uv at offset 48 in the 64-byte VertexAttribute.
+                {1, cairns::kMeshAttrVertexBindSlot, rhi::Format::kRg32F, 48},
+            };
+            const rhi::VertexBufferLayout vtx_layouts[2] = {
+                {cairns::kMeshPosBindSlot, static_cast<uint32_t>(sizeof(glm::vec4))},
+                {cairns::kMeshAttrVertexBindSlot, 64},
+            };
             rhi::GraphicsPipelineDesc desc{};
             desc.logical_shader = "unlit";
             desc.shader_dir = shader_dir.c_str();
             desc.vertex_attributes =
-                std::span<const rhi::VertexInputAttribute>(&pos_attr, 1);
+                std::span<const rhi::VertexInputAttribute>(vtx_attrs, 2);
             desc.vertex_buffers =
-                std::span<const rhi::VertexBufferLayout>(&pos_layout, 1);
+                std::span<const rhi::VertexBufferLayout>(vtx_layouts, 2);
             desc.topology = rhi::PrimitiveTopology::kTriangleList;
             desc.cull = rhi::CullMode::kBack;
             desc.front_face = rhi::FrontFace::kCounterClockwise;
@@ -583,7 +589,7 @@ public:
             desc.color_format = rhi::Format::kBgra8Unorm;
             desc.depth_format = rhi::Format::kD32F;
             desc.sample_count = sampleCount;
-            desc.push_constant_bytes = sizeof(uint32_t);
+            desc.push_constant_bytes = 0;  // base_vertex no longer needed (attrs are a vertex stream)
             desc.debug_name = "unlit";
             desc.swap_chain = &swapchain_;
             unlit_ = rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources, rhi_.bindless, rhi_.frames, desc);

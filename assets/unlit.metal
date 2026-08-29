@@ -33,6 +33,7 @@ struct SceneRegistry {
     
 struct VertexInput {
     float4 pos [[attribute(0)]];
+    float2 uv [[attribute(1)]];   // stream 1: VertexAttribute.uv (offset 48, stride 64)
 };
 
 struct VertexOut {
@@ -93,7 +94,7 @@ vertex VertexOut vertexShader(uint vertexID [[vertex_id]],
                               constant SceneRegistry& scene [[buffer(CUBE_SCENE_REGISTRY_BUFFER_SLOT)]]) {
     VertexOut out;
     out.position = globals.view_proj * draw_tmp.model_matrix * in.pos;
-    out.textureCoordinate = scene.vertex_attrs[draw_tmp.mesh_id][vertexID].uv;
+    out.textureCoordinate = in.uv;
     out.tex_color_id = material.tex_color_id;
     out.sampler_id = material.sampler_id;
     return out;

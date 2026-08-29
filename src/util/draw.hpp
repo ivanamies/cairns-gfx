@@ -11,6 +11,11 @@ static constexpr uint32_t kRenderPassGlobalBindSlot = 1;
 static constexpr uint32_t kMaterialBindSlot = 2;
 static constexpr uint32_t kShaderSpecificBindSlot = 3;
 static constexpr uint32_t kDrawTmpBindSlot = 4;
+// Backend vertex-buffer binding index for the attribute stream (distinct from the
+// vertex_buffers[] array index). 6 clears Metal's constant-buffer slots 0..5
+// (0=pos, 1=globals, 2=material, 3=shader-specific, 4=draw-tmp, 5=scene), which
+// share index space with [[stage_in]] vertex buffers on Metal.
+static constexpr uint32_t kMeshAttrVertexBindSlot = 6;
 
 // The draw packet around which all rendering revolves. Taken from Sebastian
 // Aaltonen's "Modern Mobile Rendering Architecture" presentation, slide 22.
@@ -29,7 +34,8 @@ struct Draw {
     rhi::Handle<rhi::Buffer> index_buffer;
     // slot 1: position
     static constexpr uint32_t kVertexBufferPosSlot = 0;
-    // slot 2: ??
+    // slot 2: per-vertex VertexAttribute stream (color/tangent/normal/uv, stride 64)
+    static constexpr uint32_t kVertexBufferAttrSlot = 1;
     std::array<rhi::Handle<rhi::Buffer>,3> vertex_buffers = {};
     uint32_t index_offset = 0;
     uint32_t vertex_offset = 0;

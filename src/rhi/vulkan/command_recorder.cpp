@@ -137,9 +137,15 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
         uint32_t pos_off = 0;
         VkBuffer pos_buf =
             res.GetVkBuffer(alloc,draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot], &pos_off);
+        uint32_t attr_off = 0;
+        VkBuffer attr_buf =
+            res.GetVkBuffer(alloc,draw.vertex_buffers[cairns::Draw::kVertexBufferAttrSlot], &attr_off);
         VkDeviceSize pos_off_dev =
             pos_off + static_cast<VkDeviceSize>(draw.vertex_offset) * 16u;
+        VkDeviceSize attr_off_dev =
+            attr_off + static_cast<VkDeviceSize>(draw.vertex_offset) * 64u;
         vkCmdBindVertexBuffers(cb, 0, 1, &pos_buf, &pos_off_dev);
+        vkCmdBindVertexBuffers(cb, cairns::kMeshAttrVertexBindSlot, 1, &attr_buf, &attr_off_dev);
         uint32_t idx_base = 0;
         VkBuffer idx_buf = res.GetVkBuffer(alloc,draw.index_buffer, &idx_base);
         vkCmdBindIndexBuffer(cb, idx_buf, idx_base, VK_INDEX_TYPE_UINT32);
@@ -149,9 +155,6 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
                                                draw.dynamic_buffer_offsets[1]};
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_layout, 1, 1,
                                 &dyn_set, 3, dyn_offsets.data());
-        const uint32_t base_vertex = draw.vertex_offset;
-        vkCmdPushConstants(cb, unlit->vk_layout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                           sizeof(uint32_t), &base_vertex);
         vkCmdDrawIndexed(cb, draw.triangle_count * 3, draw.instance_count, first_index, 0,
                          draw.instance_offset);
     }
