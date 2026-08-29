@@ -224,27 +224,92 @@ static void transition(VkCommandBuffer cb, Resources& res, Handle<Texture> h,
 }
 
 void CommandRecorder::DispatchSkinBatches(
-    Resources& res, Allocator& /*alloc*/, Handle<Kernel> kernel,
+    Resources& res, Allocator& alloc, Handle<Kernel> kernel,
     Handle<Buffer> output_pool_buffer,
     std::span<const SkinDispatchBatch> batches) {
-    if (batches.empty() || kernel.IsNull() || output_pool_buffer.IsNull()) {
+    if (batches.empty() || kernel.IsNull() ||
+        output_pool_buffer.IsNull() ||
+        plat.skin_group_b_set_ == VK_NULL_HANDLE) {
         return;
     }
-    // #221 Skinning Phase 5: Vulkan dispatch path. Plumbing TODO -- needs
-    // (i) Frames to publish skin_group_b_sets_[frame_] onto
-    // CommandRecorderPlat alongside compute_sets_; (ii) Allocator to
-    // expose the kDynamic master buffer (a small helper around the
-    // existing MemoryAllocator::HeapMasterBuffer). Bind pipeline + write
-    // Group B (master kDynamic ranges + output_pool whole), loop:
-    //   vkCmdBindDescriptorSets(sets={B,A}, 3 dyn offsets) + vkCmdDispatch.
-    // Routes into plat.comp_ (free vertex-fetch sync via the existing
-    // compute -> graphics semaphore @ VERTEX_INPUT). For now: kernel +
-    // batches are both Null/empty across the static-only paths, so we
-    // never reach the body. Guarded so a non-empty call doesn't crash.
-    (void)res;
-    (void)kernel;
-    (void)output_pool_buffer;
-    (void)batches;
+    // Route onto plat.comp_ (free vertex-fetch sync via the existing
+    // compute -> graphics semaphore @ VERTEX_INPUT in EndSubmit).
+    if (plat.pending_pass_idx_ != UINT32_MAX &&
+        plat.pass_cb_ == VK_NULL_HANDLE) {
+        plat.pass_cb_ = plat.comp_;
+        vkCmdWriteTimestamp(plat.pass_cb_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                            plat.ts_pool_,
+                            2 * kMaxPasses * plat.frame_ +
+                                2 * plat.pending_pass_idx_);
+    }
+
+    Kernel::Hot* k = res.GetHot(kernel);
+    if (!k) {
+        return;
+    }
+    VkBuffer dyn_master =
+        res.plat.GetVkBumpMasterBuffer(alloc, Memory::kDynamic);
+    uint32_t pool_master_off = 0;
+    VkBuffer pool_buf = res.plat.GetVkBuffer(alloc, output_pool_buffer,
+                                                &pool_master_off);
+
+    // Group B writes (once per call). Dynamic bindings use a SAFE per-batch
+    // upper bound for `range`; the per-dispatch dynamic offset selects the
+    // active window starting at that byte. Params 64B, Palettes 64KB (1024
+    // joints * mat4), InstanceMeta 16KB (1024 instances * uvec2). The pool
+    // is bound whole at its master base offset.
+    VkDescriptorBufferInfo bi[4]{};
+    VkWriteDescriptorSet w[4]{};
+    bi[0].buffer = dyn_master;
+    bi[0].offset = 0;
+    bi[0].range = 64u;
+    bi[1].buffer = dyn_master;
+    bi[1].offset = 0;
+    bi[1].range = 65536u;
+    bi[2].buffer = dyn_master;
+    bi[2].offset = 0;
+    bi[2].range = 16384u;
+    bi[3].buffer = pool_buf;
+    bi[3].offset = pool_master_off;
+    bi[3].range = VK_WHOLE_SIZE;
+    for (uint32_t i = 0; i < 4; ++i) {
+        w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[i].dstSet = plat.skin_group_b_set_;
+        w[i].dstBinding = i;
+        w[i].descriptorCount = 1;
+        w[i].pBufferInfo = &bi[i];
+    }
+    w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+    w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+    w[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    vkUpdateDescriptorSets(plat.device_, 4, w, 0, nullptr);
+
+    vkCmdBindPipeline(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE,
+                       k->plat.vk_pipeline);
+
+    for (const SkinDispatchBatch& b : batches) {
+        if (b.workgroups == 0 || b.mesh_set.IsNull()) {
+            continue;
+        }
+        BindGroup::Hot* bg = res.bind_groups.GetHot(b.mesh_set);
+        if (!bg || bg->api_descriptor_set == nullptr) {
+            continue;
+        }
+        VkDescriptorSet sets[2] = {
+            plat.skin_group_b_set_,
+            static_cast<VkDescriptorSet>(bg->api_descriptor_set),
+        };
+        const uint32_t dyn_offsets[3] = {
+            b.params_byte_offset,
+            b.palettes_byte_offset,
+            b.instance_meta_byte_offset,
+        };
+        vkCmdBindDescriptorSets(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                 k->plat.vk_layout, 0, 2, sets,
+                                 3, dyn_offsets);
+        vkCmdDispatch(plat.comp_, b.workgroups, 1, 1);
+    }
 }
 
 void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDispatch& d) {

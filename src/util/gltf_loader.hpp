@@ -97,6 +97,11 @@ struct Mesh {
         // unskinned meshes. Compute kernel binds this + skin_attr_base_vertex
         // as buffer(5) to read uvec4 joints / vec4 weights.
         rhi::Handle<rhi::Buffer> skin_attrs_buffer;
+        // #221 Skinning Phase 9 (vk): Group A descriptor set for this
+        // skinned mesh (positions slice + skin-attrs slice). Allocated at
+        // scene load via Resources::CreateSkinGroupA. Null on Metal (Metal's
+        // compute path binds buffers directly per batch).
+        rhi::Handle<rhi::BindGroup> skin_group_a;
     };
     struct Cold {
         std::string name;

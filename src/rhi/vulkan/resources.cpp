@@ -13,6 +13,7 @@
 #include "rhi/resources.hpp"
 #include "rhi/device.hpp"
 #include "rhi/allocator.hpp"
+#include "rhi/frames.hpp"
 #include "rhi/resource_manager.hpp"
 
 namespace cairns::rhi {
@@ -663,6 +664,45 @@ Handle<BindGroup> Resources::CreateBindGroup(const BindGroupDesc& desc) {
     w.pImageInfo = &img;
     vkUpdateDescriptorSets(plat.device_, 1, &w, 0, nullptr);
 
+    Handle<BindGroup> h = bind_groups.Acquire();
+    bind_groups.GetHot(h)->api_descriptor_set = set;
+    bind_groups.GetCold(h)->debug_name = desc.debug_name;
+    return h;
+}
+
+Handle<BindGroup> Resources::CreateSkinGroupA(Allocator& alloc,
+                                                Frames& frames,
+                                                const BindGroupDesc& desc) {
+    if (desc.buffers.size() != 2) {
+        return Handle<BindGroup>::Null;
+    }
+    VkDescriptorSetAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool = frames.plat.descriptor_pool_;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &frames.plat.skin_group_a_layout_;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    if (vkAllocateDescriptorSets(plat.device_, &ai, &set) != VK_SUCCESS) {
+        return Handle<BindGroup>::Null;
+    }
+    VkDescriptorBufferInfo bi[2]{};
+    VkWriteDescriptorSet w[2]{};
+    for (uint32_t i = 0; i < 2; ++i) {
+        const BufferBinding& bb = desc.buffers[i];
+        uint32_t master_off = 0;
+        VkBuffer vk_buf = plat.GetVkBuffer(alloc, bb.buffer, &master_off);
+        bi[i].buffer = vk_buf;
+        bi[i].offset = master_off + bb.offset;
+        bi[i].range = (bb.range == 0) ? VK_WHOLE_SIZE
+                                       : static_cast<VkDeviceSize>(bb.range);
+        w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[i].dstSet = set;
+        w[i].dstBinding = bb.slot;
+        w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w[i].descriptorCount = 1;
+        w[i].pBufferInfo = &bi[i];
+    }
+    vkUpdateDescriptorSets(plat.device_, 2, w, 0, nullptr);
     Handle<BindGroup> h = bind_groups.Acquire();
     bind_groups.GetHot(h)->api_descriptor_set = set;
     bind_groups.GetCold(h)->debug_name = desc.debug_name;

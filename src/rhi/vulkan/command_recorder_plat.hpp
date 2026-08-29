@@ -77,6 +77,10 @@ struct CommandRecorderPlat {
     VkDescriptorSet globals_set_ = VK_NULL_HANDLE;
     VkDescriptorSet drawtmp_set_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, kMaxStepsPerFrame> compute_sets_{};
+    // #221 Phase 9 (vk): per-frame skin Group B set (Params/Palettes/
+    // InstanceMeta as DYNAMIC + OutputPool whole). Frames::Begin publishes
+    // this from FramesPlat::skin_group_b_sets_[current_frame_].
+    VkDescriptorSet skin_group_b_set_ = VK_NULL_HANDLE;
     VkDescriptorSet point_set_ = VK_NULL_HANDLE;
     // Composite descriptor ring for DrawFullscreen (multiple per-pass draws
     // with distinct textures). Advanced by composite_next_idx_ on each

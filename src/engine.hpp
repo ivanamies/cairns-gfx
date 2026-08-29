@@ -837,6 +837,40 @@ public:
                 return false;
             }
 
+            // #221 Phase 9 (vk): per-skinned-mesh Group A descriptor set.
+            // Allocates one set + writes 2 SSBO descriptors per skinned
+            // mesh from the resources descriptor pool. Metal returns Null
+            // (binds buffers directly per batch in DispatchSkinBatches).
+            meshes_.ForEachLive(
+                [&](cairns::Mesh::Hot& mhot, cairns::Mesh::Cold&) {
+                    if (mhot.attr_skinned_alias.IsNull() ||
+                        mhot.skin_attrs_buffer.IsNull() ||
+                        mhot.vert_count == 0) {
+                        return;
+                    }
+                    cairns::rhi::BufferBinding bb[2]{};
+                    bb[0].slot = 0;
+                    bb[0].buffer = mhot.posHandle;
+                    bb[0].offset = mhot.global_base_vertex *
+                        static_cast<uint32_t>(sizeof(glm::vec4));
+                    bb[0].range = mhot.vert_count *
+                        static_cast<uint32_t>(sizeof(glm::vec4));
+                    bb[0].kind = cairns::rhi::BufferKind::kStorage;
+                    bb[1].slot = 1;
+                    bb[1].buffer = mhot.skin_attrs_buffer;
+                    bb[1].offset = mhot.skin_attr_base_vertex *
+                        static_cast<uint32_t>(sizeof(cairns::SkinVertex));
+                    bb[1].range = mhot.vert_count *
+                        static_cast<uint32_t>(sizeof(cairns::SkinVertex));
+                    bb[1].kind = cairns::rhi::BufferKind::kStorage;
+                    cairns::rhi::BindGroupDesc bgd{};
+                    bgd.debug_name = "skin_group_a";
+                    bgd.buffers = std::span<const cairns::rhi::BufferBinding>(
+                        bb, 2);
+                    mhot.skin_group_a = rhi_.resources.CreateSkinGroupA(
+                        rhi_.alloc, rhi_.frames, bgd);
+                });
+
             // #220 Step 3: per-Scene Cold CleanupTmps via the pool sweep.
             scenes_.ForEachLive(
                 [](cairns::Scene::Hot&, cairns::Scene::Cold& c) {
@@ -1950,7 +1984,8 @@ public:
                                    meta_bytes);
                         }
 
-                        db.mesh_set = sbg.mesh_set;
+                        // Group A descriptor set (Vulkan); null on Metal.
+                        db.mesh_set = mhot->skin_group_a;
                         db.pos_buffer = mhot->posHandle;
                         db.pos_byte_offset =
                             mhot->global_base_vertex *

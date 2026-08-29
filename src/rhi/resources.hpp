@@ -28,6 +28,7 @@ namespace cairns::rhi {
 
 class Device;
 class Allocator;
+class Frames;
 
 // Compile-time backend capability flag. Today: metal renders the full scene
 // into final_target_ via the swap pass; vk's render-to-texture (#199) isn't
@@ -51,6 +52,14 @@ public:
     Handle<Texture> CreateTexture(Allocator& alloc, const TextureDesc& desc);
     Handle<Sampler> CreateSampler(const SamplerDesc& desc);
     Handle<BindGroup> CreateBindGroup(const BindGroupDesc& desc);
+    // #221 Phase 9 (vk): per-skinned-mesh Group A bind group. desc.buffers
+    // must carry exactly two BufferBindings (slot 0 = positions slice w/
+    // mesh-local element-aligned byte offset + range, slot 1 = skin-attrs
+    // slice). Vulkan: allocates from the descriptor_pool + writes both
+    // SSBO descriptors. Metal: returns Null (Metal compute binds buffers
+    // directly per-batch via setBuffer:offset:atIndex:).
+    Handle<BindGroup> CreateSkinGroupA(Allocator& alloc, Frames& frames,
+                                        const BindGroupDesc& desc);
     Handle<DynamicBuffers> CreateDynamicBuffers(const DynamicBuffersDesc& desc);
 
     // Typed generational pools — public; walk them directly for debug/iteration.

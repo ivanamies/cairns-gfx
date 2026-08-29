@@ -373,7 +373,10 @@ bool Frames::Init(Device& device) {
         sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = n + n * kMaxStepsPerFrame;
         sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        sizes[1].descriptorCount = 2 * n * kMaxStepsPerFrame + n;
+        // #221 Phase 9 (vk): + skin Group A (2 SSBO per skinned mesh,
+        // independent of frame-in-flight count; 1024 budget per plan v7).
+        sizes[1].descriptorCount =
+            2 * n * kMaxStepsPerFrame + n + 2 * kMaxSkinnedMeshes;
         sizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         sizes[2].descriptorCount = 2 * n + n;
         sizes[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -388,8 +391,10 @@ bool Frames::Init(Device& device) {
         pci.poolSizeCount = 5;
         pci.pPoolSizes = sizes;
         // 3 single-set layouts + compute (kMaxStepsPerFrame) + composite
-        // (kCompositeRingSize) + skin_group_b (1) per slot.
-        pci.maxSets = 3 * n + n * kMaxStepsPerFrame + n * kCompositeRingSize + n;
+        // (kCompositeRingSize) + skin_group_b (1) per slot. Plus skin
+        // Group A: one set per loaded skinned mesh (1024 budget).
+        pci.maxSets = 3 * n + n * kMaxStepsPerFrame +
+                       n * kCompositeRingSize + n + kMaxSkinnedMeshes;
         if (vkCreateDescriptorPool(dev, &pci, nullptr, &plat.descriptor_pool_) !=
             VK_SUCCESS) {
             return false;
@@ -603,6 +608,7 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     fc.cmd.plat.globals_set_ = plat.globals_sets_[cf];
     fc.cmd.plat.drawtmp_set_ = plat.drawtmp_sets_[cf];
     fc.cmd.plat.compute_sets_ = plat.compute_sets_[cf];
+    fc.cmd.plat.skin_group_b_set_ = plat.skin_group_b_sets_[cf];
     fc.cmd.plat.point_set_ = plat.point_sets_[cf];
     fc.cmd.plat.composite_sets_ = plat.composite_sets_[cf];
     fc.cmd.plat.composite_next_idx_ = 0;
