@@ -124,7 +124,7 @@ one small op still to add so "left" composes from the current pose.)
 | **macOS Vulkan** | ✅ identical (one binary per backend) | ✅ identical | identical |
 | **iOS (sim/device, Metal)** | ✅ goldens on the simulator (xcodebuild) | ⚠ transport gap — no on-device stdin; needs a socket/USB NDJSON bridge | in-test PNG dump |
 | **Android (Vulkan)** | ✅ goldens via `adb` on AVD/device | ⚠ transport gap — `adb forward` socket NDJSON not yet wired | PNG pulled via `adb` |
-| **WebGPU native (macOS)** | 🔭 planned — surfaceless wgpu-native + NDJSON (`CAIRNS_GFX_BACKEND=webgpu`); the headless golden gate | — no native window / no SDL; windowed WebGPU lives in the browser (next row) | offscreen readback → PNG |
+| **WebGPU native (macOS)** | ✅ surfaceless wgpu-native + NDJSON (`CAIRNS_GFX_BACKEND=webgpu`); golden gate renders triangle + die/two-die/viking, matches macos-metal | — no native window / no SDL; windowed WebGPU lives in the browser (next row) | offscreen readback → PNG |
 | **Web / Chrome (WASM)** | 🔭 planned — headless Chrome `--remote-debugging-port=9222` + CDP `Page.captureScreenshot` (+ `Runtime.evaluate`); no human | 🔭 planned — user clicks canvas; I `Runtime.evaluate("window.cairns.dispatch(...)")` → `selection.get` + `setTransform` | CDP `Page.captureScreenshot` → PNG |
 
 ✅ wired · ⚠ partial (transport gap) · 🔭 planned (see `~/dev/plans/2026-06-21_gfx_webgpu-wgpu-native-standup.md`).
@@ -633,14 +633,33 @@ third_party/wgpu-native/fetch.sh   # macOS-arm64 prebuilt, pinned v29.0.0.0
 cmake -S . -B build/spec-mac-webgpu -DCAIRNS_GFX_BACKEND=webgpu -DCMAKE_BUILD_TYPE=Release -G Ninja
 cmake --build build/spec-mac-webgpu --target cairns_serve
 
-# render one frame + dump final_target_ to a PNG (the W3 verify):
+# render the red triangle (W4) + dump final_target_ to a PNG:
 cd build/spec-mac-webgpu/Release
-( echo '{"op":"cairns.render.frame"}'
+( echo '{"op":"cairns.render.tinyTriangle","args":{"on":true}}'
+  echo '{"op":"cairns.render.frame"}'
   echo '{"op":"cairns.io.dumpTexture","args":{"target":"final","path":"out.png"}}'
   echo '{"op":"cairns.app.quit"}'; sleep 4 ) | timeout 30 ./cairns_serve
-# -> out.png (1280x720). Read it to verify. Today it's the bare clear color
-#    (draws no-op until W4 wires real pipelines).
+# -> out.png (1280x720): a centered red triangle on the clear color.
+
+# W5 forward goldens (die / two-die / viking). Build the golden test, then bake
+# or compare the macos-webgpu refs. CAIRNS_DUMP_PNGS=<dir> also writes per-frame
+# PNGs (eyeball them); they should visually match the macos-metal renders.
+cmake -S . -B build/spec-mac-webgpu -DCAIRNS_GFX_BACKEND=webgpu \
+  -DCMAKE_BUILD_TYPE=Release -G Ninja -DCAIRNS_GFX_BUILD_TESTS=ON \
+  -DCAIRNS_GFX_BUILD_GOLDEN_TESTS=ON
+cmake --build build/spec-mac-webgpu --target cairns_golden_tests
+cd build/spec-mac-webgpu/Release
+./cairns_golden_tests "Scenario: subject: one die (single static textured mesh)"
+# Catch2 ANDs multiple name args -- run scenarios one at a time, not in one call.
+# CAIRNS_GFX_BAKE_REFS=1 overwrites; a missing macos-webgpu ref auto-bakes once.
 ```
+
+> W-state: W0–W5 done. Headless renders triangle + die/two-die/viking,
+> matching macos-metal. NOT yet ported (consumers no-op): the id-MRT unlit
+> variant (pick/outline), particle/compute, imgui, skinning. After adding a new
+> `assets/*.wgsl`, RE-RUN cmake configure -- `file(GLOB)` only re-globs at
+> configure time, so a freshly added shader isn't copied next to the binary
+> until you reconfigure (a "missing wgsl" stderr line is this).
 
 ### Smokes (de-risk, off by default; binaries land in the build-dir ROOT, not Release/)
 
