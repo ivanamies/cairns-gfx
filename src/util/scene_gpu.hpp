@@ -101,6 +101,8 @@ inline bool LoadScenesGpu(std::span<const cairns::SceneId> scene_ids,
             mhot->global_base_vertex = static_cast<uint32_t>(running_vert);
             mhot->skin_attr_base_vertex =
                 static_cast<uint32_t>(running_skin_vert);
+            mhot->vert_count =
+                static_cast<uint32_t>(mcold->cpuPositions.size());
             for (Primitive& prim : mhot->primitives) {
                 prim.vertexOffset += base_vertex;
                 prim.firstIndex += base_index;
@@ -210,10 +212,10 @@ inline bool LoadScenesGpu(std::span<const cairns::SceneId> scene_ids,
                     mhot->global_base_vertex *
                         static_cast<uint32_t>(sizeof(VertexAttribute));
                 mhot->attr_skinned_alias = skinned_attr_alias;
+                mhot->skin_attrs_buffer = shared_skin;
             }
         }
     }
-    (void)shared_skin;  // bound at Phase 4 (Group A); kept resident here.
     return true;
 }
 

@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "core/handle.hpp"
 #include "rhi/resources.hpp"
 #include "util/draw.hpp"
 #include "util/draw_key.hpp"
@@ -22,6 +23,8 @@ struct ImDrawData;
 
 namespace cairns {
 
+struct Mesh;
+
 // #221 Skinning Phase 5: per-mesh skin dispatch unit. The game thread
 // buckets visible skinned actors by MeshId (flat array via prefix sum,
 // no map) and emits one SkinBatchGpu per mesh. Render thread feeds the
@@ -30,7 +33,8 @@ namespace cairns {
 // are arena-relative (palettes/InstanceMeta), converted to kDynamic
 // byte offsets render-side before binding.
 struct SkinBatchGpu {
-    rhi::Handle<rhi::BindGroup> mesh_set;  // Group A (positions + skin-attrs slices)
+    rhi::Handle<rhi::BindGroup> mesh_set;  // Group A (positions + skin-attrs slices) -- Vulkan path
+    cairns::Handle<Mesh> mesh;               // Metal/render-side path: resolve buffers + base verts
     uint32_t first_palette_mat4 = 0;        // element index into palettes span
     uint32_t first_meta = 0;                 // element index into instance_meta span
     uint32_t instance_count = 0;

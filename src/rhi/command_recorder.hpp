@@ -99,7 +99,12 @@ struct PointDraw {
 // mesh's Group A set, sets 3 dynamic offsets on the persistent Group B
 // set, and issues one vkCmdDispatch.
 struct SkinDispatchBatch {
-    Handle<BindGroup> mesh_set;            // Group A
+    Handle<BindGroup> mesh_set;            // Group A (Vulkan path)
+    // Metal path: resolved mesh buffer handles + base-vertex byte offsets.
+    Handle<Buffer> pos_buffer;
+    uint32_t pos_byte_offset = 0;          // = global_base_vertex * sizeof(vec4)
+    Handle<Buffer> skin_attr_buffer;
+    uint32_t skin_attr_byte_offset = 0;    // = skin_attr_base_vertex * sizeof(SkinVertex 32B)
     uint32_t params_byte_offset = 0;       // dynamic offset for Group B binding 0
     uint32_t palettes_byte_offset = 0;     // dynamic offset for Group B binding 1
     uint32_t instance_meta_byte_offset = 0; // dynamic offset for Group B binding 2

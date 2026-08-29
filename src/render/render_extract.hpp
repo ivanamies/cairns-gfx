@@ -48,6 +48,19 @@ inline void ExtractFromWorld(World::Cold& wc, const glm::mat4& root,
         const AssetRef& ref = view.get<const AssetRef>(entity);
         const Renderable& rdr = view.get<const Renderable>(entity);
 
+        // #221 Phase 9a: per-entity SkinRef -> packed SkinId for the
+        // skinned mesh nodes below. {generation,index} packed into the
+        // uint32 proxy.skin field; kInvalidSkin (0xFFFFFFFF) means
+        // "static draw path", matching the unskinned default.
+        uint32_t packed_skin = kInvalidSkin;
+        if (const SkinRef* sr = wc.registry.try_get<const SkinRef>(entity)) {
+            if (!sr->id.IsNull()) {
+                packed_skin =
+                    (static_cast<uint32_t>(sr->id.generation) << 16) |
+                    static_cast<uint32_t>(sr->id.index);
+            }
+        }
+
         Asset::Cold* ac = assets.Pool().GetCold(ref.asset);
         if (!ac || ac->cpu_graph.IsNull()) {
             continue;
@@ -90,7 +103,7 @@ inline void ExtractFromWorld(World::Cold& wc, const glm::mat4& root,
             proxy.index = mhot->indexHandle;
             proxy.first_primitive = static_cast<uint32_t>(out.primitives.size());
             proxy.primitive_count = static_cast<uint32_t>(mhot->primitives.size());
-            proxy.skin = kInvalidSkin;
+            proxy.skin = (node.skinIndex >= 0) ? packed_skin : kInvalidSkin;
             proxy.layer_mask = rdr.layer_mask;
             proxy.flags = rdr.flags;
             // #207 +1 so the value 0 (the id_off clear color) means

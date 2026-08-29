@@ -82,11 +82,21 @@ struct Mesh {
         // for this mesh's slice (0 for unskinned meshes, which contribute
         // nothing to the shared skin buffer).
         uint32_t skin_attr_base_vertex = 0;
+        // #221 Skinning Phase 9: snapshot of cpuPositions.size() taken at
+        // upload, before CleanupTmps clears the CPU temporaries. Skinning
+        // path reads this to size the kernel dispatch + the
+        // skin_output_pool_ slice (cpuPositions itself is gone by then).
+        uint32_t vert_count = 0;
         // #221 Skinning F5: per-skinned-mesh alias of the shared attr region
         // pre-offset by global_base_vertex * sizeof(VertexAttribute). Stream
         // 1 binds this for skinned draws; mesh-local vertex_offset then
         // indexes correctly. Null for unskinned meshes (they use attrHandle).
         rhi::Handle<rhi::Buffer> attr_skinned_alias;
+        // #221 Skinning Phase 9d: shared skin-attr SSBO. Same handle on
+        // every skinned mesh from one LoadScenesGpu call; null for
+        // unskinned meshes. Compute kernel binds this + skin_attr_base_vertex
+        // as buffer(5) to read uvec4 joints / vec4 weights.
+        rhi::Handle<rhi::Buffer> skin_attrs_buffer;
     };
     struct Cold {
         std::string name;

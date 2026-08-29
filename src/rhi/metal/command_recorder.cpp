@@ -53,8 +53,8 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
 // records the encoder if batches is non-empty. Empty path returns
 // immediately and is a no-op.
 void CommandRecorder::DispatchSkinBatches(
-    Resources& res, Allocator& /*alloc*/, Handle<Kernel> kernel,
-    Handle<Buffer> /*output_pool_buffer*/,
+    Resources& res, Allocator& alloc, Handle<Kernel> kernel,
+    Handle<Buffer> output_pool_buffer,
     std::span<const SkinDispatchBatch> batches) {
     if (batches.empty() || kernel.IsNull()) {
         return;
@@ -64,11 +64,31 @@ void CommandRecorder::DispatchSkinBatches(
     }
     MTL::ComputeCommandEncoder* cenc = plat.cmd_->computeCommandEncoder();
     cenc->setComputePipelineState(res.GetHot(kernel)->api_pso);
-    // Per-batch buffer binds + dispatch land in Phase 8 once the Metal
-    // path resolves master kDynamic buffer + Group A mesh sets the same
-    // way Vulkan does. For now, the encoder boundary alone is what makes
-    // an unloaded kernel + non-empty batch list path safe.
-    (void)batches;
+    MTL::Buffer* dyn_master =
+        res.plat.GetBumpMasterBuffer(alloc, Memory::kDynamic);
+    uint32_t pool_master_off = 0;
+    MTL::Buffer* pool_buf =
+        res.plat.GetMtlBuffer(alloc, output_pool_buffer, &pool_master_off);
+    for (const SkinDispatchBatch& b : batches) {
+        if (b.workgroups == 0 || b.pos_buffer.IsNull() ||
+            b.skin_attr_buffer.IsNull()) {
+            continue;
+        }
+        cenc->setBuffer(dyn_master, b.params_byte_offset, 0);
+        cenc->setBuffer(dyn_master, b.palettes_byte_offset, 1);
+        cenc->setBuffer(dyn_master, b.instance_meta_byte_offset, 2);
+        cenc->setBuffer(pool_buf, pool_master_off, 3);
+        uint32_t pos_master_off = 0;
+        MTL::Buffer* pos_buf = res.plat.GetMtlBuffer(
+            alloc, b.pos_buffer, &pos_master_off);
+        cenc->setBuffer(pos_buf, pos_master_off + b.pos_byte_offset, 4);
+        uint32_t sa_master_off = 0;
+        MTL::Buffer* sa_buf = res.plat.GetMtlBuffer(
+            alloc, b.skin_attr_buffer, &sa_master_off);
+        cenc->setBuffer(sa_buf, sa_master_off + b.skin_attr_byte_offset, 5);
+        cenc->dispatchThreadgroups(MTL::Size{b.workgroups, 1u, 1u},
+                                    MTL::Size{64u, 1u, 1u});
+    }
     cenc->endEncoding();
 }
 

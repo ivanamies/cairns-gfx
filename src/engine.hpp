@@ -1221,6 +1221,42 @@ public:
                 const glm::mat4& world_mat = mp.world_matrix;
                 const uint32_t index_base_off =
                     rhi_.resources.BufferBaseOffset(rhi_.alloc, index);
+                // #221 Phase 9c: skinned-branch resolves once per proxy.
+                // mp.skin packs {generation, index} into uint32; resolve via
+                // skins_ pool. F5 fix: pos stream rebinds to the per-actor
+                // skin_output_pool_ slice (mesh-local), attr stream rebinds
+                // to mhot->attr_skinned_alias (pre-offset by
+                // global_base_vertex * sizeof(VertexAttribute)), and
+                // draw.vertex_offset becomes mesh-local
+                // (prim.vertex_offset - global_base_vertex).
+                bool skinned = false;
+                uint32_t skin_pos_byte_off = 0;
+                BufHandle skin_pos_buf{};
+                BufHandle skin_attr_buf{};
+                uint32_t skin_global_base_vertex = 0;
+                if (mp.skin != cairns::kInvalidSkin) {
+                    cairns::SkinId sid{
+                        static_cast<uint16_t>(mp.skin & 0xFFFFu),
+                        static_cast<uint16_t>((mp.skin >> 16) & 0xFFFFu)};
+                    const cairns::SkinnedAttachment::Hot* sh =
+                        skins_.GetHot(sid);
+                    if (sh) {
+                        const cairns::Mesh::Hot* mhot_s =
+                            meshes_.GetHot(sh->mesh);
+                        if (mhot_s &&
+                            !mhot_s->attr_skinned_alias.IsNull() &&
+                            !skin_output_pool_buffer_.IsNull()) {
+                            skinned = true;
+                            skin_pos_buf = skin_output_pool_buffer_;
+                            skin_pos_byte_off =
+                                sh->slice.offset *
+                                static_cast<uint32_t>(sizeof(glm::vec4));
+                            skin_attr_buf = mhot_s->attr_skinned_alias;
+                            skin_global_base_vertex =
+                                mhot_s->global_base_vertex;
+                        }
+                    }
+                }
                 uint32_t stable_idx = proxy_first_draw[i];
                 for (uint32_t p = 0; p < mp.primitive_count; ++p) {
                     const cairns::PrimitiveProxy& prim =
@@ -1233,11 +1269,24 @@ public:
                     draw.index_buffer = index;
                     draw.index_offset =
                         index_base_off + (prim.first_index * sizeof(uint32_t));
-                    draw.vertex_offset = prim.vertex_offset;
-                    draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot] =
-                        pos;
-                    draw.vertex_buffers[cairns::Draw::kVertexBufferAttrSlot] =
-                        attr;
+                    if (skinned) {
+                        draw.vertex_offset =
+                            prim.vertex_offset -
+                            static_cast<int32_t>(skin_global_base_vertex);
+                        draw.vertex_buffers
+                            [cairns::Draw::kVertexBufferPosSlot] =
+                            skin_pos_buf;
+                        draw.pos_buffer_byte_offset = skin_pos_byte_off;
+                        draw.vertex_buffers
+                            [cairns::Draw::kVertexBufferAttrSlot] =
+                            skin_attr_buf;
+                    } else {
+                        draw.vertex_offset = prim.vertex_offset;
+                        draw.vertex_buffers
+                            [cairns::Draw::kVertexBufferPosSlot] = pos;
+                        draw.vertex_buffers
+                            [cairns::Draw::kVertexBufferAttrSlot] = attr;
+                    }
                     draw.instance_offset = 0;
                     draw.instance_count = 1;
                     // filled by EncodeDraws.
@@ -1816,16 +1865,111 @@ public:
                     b.WriteBuffer(pool);
                 },
                 [&](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
-                    // Translate per-frame SkinBatchGpu (element offsets) into
-                    // SkinDispatchBatch (byte offsets) onto the slot arena
-                    // -- TODO: fill once Frames publishes skin_group_b set
-                    // to CommandRecorderPlat + Allocator exposes the
-                    // kDynamic master buffer. Today batches is always empty
-                    // (BuildSkinFrame stub), so we never enter the body.
+                    // P9d translation: per batch, bump Params (16B UBO),
+                    // palettes (joint_count * 64B SSBO), InstanceMeta
+                    // (instance_count * 8B SSBO) into kDynamic and resolve
+                    // the mesh's pos + skin-attrs buffer handles + base
+                    // offsets. The recorder iterates the resulting
+                    // SkinDispatchBatch span.
+                    PerSlot& s2 = slots_[pkt.slot];
+                    const uint32_t n_batches =
+                        static_cast<uint32_t>(pkt.skin_batches.size());
+                    if (n_batches == 0) {
+                        return;
+                    }
+                    rhi::SkinDispatchBatch* dbatches =
+                        s2.arena.AllocateArray<rhi::SkinDispatchBatch>(
+                            n_batches);
+                    const uint32_t ubo_align = rhi_.alloc.UboAlign();
+                    const uint32_t ssbo_align = rhi_.alloc.StorageAlign();
+                    for (uint32_t bi = 0; bi < n_batches; ++bi) {
+                        const cairns::SkinBatchGpu& sbg =
+                            pkt.skin_batches[bi];
+                        const cairns::Mesh::Hot* mhot =
+                            meshes_.GetHot(sbg.mesh);
+                        rhi::SkinDispatchBatch& db = dbatches[bi];
+                        db = rhi::SkinDispatchBatch{};
+                        if (!mhot ||
+                            mhot->posHandle.IsNull() ||
+                            mhot->skin_attrs_buffer.IsNull()) {
+                            continue;
+                        }
+                        struct SkinParamsCpu {
+                            uint32_t instance_count;
+                            uint32_t vertex_count;
+                            uint32_t joint_count;
+                            uint32_t pad;
+                        };
+                        SkinParamsCpu params{};
+                        params.instance_count = sbg.instance_count;
+                        params.vertex_count = sbg.vertex_count;
+                        params.joint_count = 0;
+                        uint32_t params_off = 0;
+                        void* params_ptr = rhi_.alloc.BumpAllocate(
+                            sizeof(SkinParamsCpu), ubo_align,
+                            rhi::Memory::kDynamic, &params_off);
+                        if (!params_ptr) {
+                            continue;
+                        }
+                        memcpy(params_ptr, &params, sizeof(SkinParamsCpu));
+
+                        // Per-batch palette window: joint_count = (next batch's
+                        // first_palette_mat4 - this one) or remaining for last.
+                        const uint32_t pal_start = sbg.first_palette_mat4;
+                        const uint32_t pal_end =
+                            (bi + 1 < n_batches)
+                                ? pkt.skin_batches[bi + 1].first_palette_mat4
+                                : static_cast<uint32_t>(
+                                      pkt.palettes.size());
+                        const uint32_t pal_count =
+                            (pal_end > pal_start) ? (pal_end - pal_start)
+                                                  : 0;
+                        uint32_t pal_bytes = pal_count *
+                            static_cast<uint32_t>(sizeof(glm::mat4));
+                        uint32_t pal_off = 0;
+                        void* pal_ptr = rhi_.alloc.BumpAllocate(
+                            pal_bytes ? pal_bytes : 64u, ssbo_align,
+                            rhi::Memory::kDynamic, &pal_off);
+                        if (pal_bytes > 0 && pal_ptr) {
+                            memcpy(pal_ptr,
+                                   pkt.palettes.data() + pal_start,
+                                   pal_bytes);
+                        }
+                        // InstanceMeta window for this batch.
+                        const uint32_t meta_start = sbg.first_meta;
+                        const uint32_t meta_count = sbg.instance_count;
+                        const uint32_t meta_bytes = meta_count *
+                            static_cast<uint32_t>(sizeof(glm::uvec2));
+                        uint32_t meta_off = 0;
+                        void* meta_ptr = rhi_.alloc.BumpAllocate(
+                            meta_bytes ? meta_bytes : 8u, ssbo_align,
+                            rhi::Memory::kDynamic, &meta_off);
+                        if (meta_bytes > 0 && meta_ptr) {
+                            memcpy(meta_ptr,
+                                   pkt.instance_meta.data() + meta_start,
+                                   meta_bytes);
+                        }
+
+                        db.mesh_set = sbg.mesh_set;
+                        db.pos_buffer = mhot->posHandle;
+                        db.pos_byte_offset =
+                            mhot->global_base_vertex *
+                            static_cast<uint32_t>(sizeof(glm::vec4));
+                        db.skin_attr_buffer = mhot->skin_attrs_buffer;
+                        db.skin_attr_byte_offset =
+                            mhot->skin_attr_base_vertex *
+                            static_cast<uint32_t>(
+                                sizeof(cairns::SkinVertex));
+                        db.params_byte_offset = params_off;
+                        db.palettes_byte_offset = pal_off;
+                        db.instance_meta_byte_offset = meta_off;
+                        db.workgroups = sbg.workgroups;
+                    }
                     cmd.DispatchSkinBatches(
                         rhi_.resources, rhi_.alloc, skin_kernel_,
                         skin_output_pool_buffer_,
-                        std::span<const rhi::SkinDispatchBatch>{});
+                        std::span<const rhi::SkinDispatchBatch>(
+                            dbatches, n_batches));
                 });
         }
 
@@ -2282,11 +2426,11 @@ public:
         cairns::Handle<cairns::Mesh> skinned_mesh;
         uint32_t vert_count = 0;
         for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
-            cairns::Mesh::Cold* mcold = meshes_.GetCold(mid);
-            if (mcold && !mcold->cpuSkinAttrs.empty()) {
+            cairns::Mesh::Hot* mhot = meshes_.GetHot(mid);
+            if (mhot && !mhot->attr_skinned_alias.IsNull() &&
+                mhot->vert_count > 0) {
                 skinned_mesh = mid;
-                vert_count =
-                    static_cast<uint32_t>(mcold->cpuPositions.size());
+                vert_count = mhot->vert_count;
                 break;
             }
         }
@@ -2325,14 +2469,148 @@ public:
     // bit-for-bit unchanged.
     void BuildSkinFrame(uint32_t slot) {
         PerSlot& s = slots_[slot];
-        // Empty spans by default. When skinned content + the SkinRef
-        // component path land, this populates: palettes (flat mat4 array,
-        // arena-backed), instance_meta (flat uvec2 array, arena-backed),
-        // skin_batches (per-mesh dispatch units).
         s.pkt.skin_batches = std::span<const cairns::SkinBatchGpu>{};
         s.pkt.palettes = std::span<const glm::mat4>{};
         s.pkt.instance_meta = std::span<const glm::uvec2>{};
-        (void)s;
+
+        if (skin_kernel_.IsNull() || skin_output_pool_buffer_.IsNull()) {
+            return;
+        }
+        cairns::World::Cold* wc = worlds_.GetCold(active_world_);
+        if (!wc) {
+            return;
+        }
+        auto view = wc->registry.view<const cairns::SkinRef>();
+        uint32_t total_joints = 0;
+        uint32_t total_actors = 0;
+        for (auto e : view) {
+            const cairns::SkinRef& sr = view.get<const cairns::SkinRef>(e);
+            auto* sh = skins_.GetHot(sr.id);
+            if (!sh) {
+                continue;
+            }
+            total_joints += sh->joint_count;
+            ++total_actors;
+        }
+        if (total_actors == 0 || total_joints == 0) {
+            return;
+        }
+
+        glm::mat4* palettes =
+            s.arena.AllocateArray<glm::mat4>(total_joints);
+        glm::uvec2* instance_meta =
+            s.arena.AllocateArray<glm::uvec2>(total_actors);
+        cairns::SkinBatchGpu* batches =
+            s.arena.AllocateArray<cairns::SkinBatchGpu>(total_actors);
+
+        const float anim_t = static_cast<float>(sim_frame_) *
+                              static_cast<float>(cairns::kFixedDt);
+        uint32_t actor_idx = 0;
+        uint32_t pal_off_mat4 = 0;
+        for (auto e : view) {
+            const cairns::SkinRef& sr = view.get<const cairns::SkinRef>(e);
+            auto* sh = skins_.GetHot(sr.id);
+            auto* sc = skins_.GetCold(sr.id);
+            if (!sh || !sc) {
+                continue;
+            }
+            cairns::Scene::Hot* shot = scenes_.GetHot(sc->scene);
+            cairns::Scene::Cold* scold = scenes_.GetCold(sc->scene);
+            if (!shot || !scold) {
+                continue;
+            }
+            if (sc->skin_index >= scold->skins.size()) {
+                continue;
+            }
+            const cairns::Skin& skin = scold->skins[sc->skin_index];
+            const cairns::Mesh::Hot* mhot = meshes_.GetHot(sh->mesh);
+            const cairns::Mesh::Cold* mcold = meshes_.GetCold(sh->mesh);
+            if (!mhot || !mcold) {
+                continue;
+            }
+            const uint32_t vert_count = mhot->vert_count;
+            const uint32_t n_nodes =
+                static_cast<uint32_t>(scold->nodes.size());
+            if (vert_count == 0 || n_nodes == 0) {
+                continue;
+            }
+
+            const auto mark = s.arena.Mark();
+            cairns::AnimatedTRS* trs =
+                s.arena.AllocateArray<cairns::AnimatedTRS>(n_nodes);
+            glm::mat4* local_xforms =
+                s.arena.AllocateArray<glm::mat4>(n_nodes);
+            glm::mat4* world_out =
+                s.arena.AllocateArray<glm::mat4>(n_nodes);
+
+            for (uint32_t i = 0; i < n_nodes; ++i) {
+                trs[i] = cairns::DecomposeNodeLocal(scold->nodes[i]);
+            }
+            if (sh->clip_index >= 0 &&
+                sh->clip_index <
+                    static_cast<int32_t>(scold->clips.size())) {
+                const cairns::Clip& clip = scold->clips[sh->clip_index];
+                const float t = anim_t * sh->time_scale + sh->time_offset;
+                cairns::SampleClip(
+                    clip, t,
+                    std::span<cairns::AnimatedTRS>(trs, n_nodes));
+            }
+            for (uint32_t i = 0; i < n_nodes; ++i) {
+                local_xforms[i] = cairns::ComposeTRS(trs[i]);
+            }
+            cairns::ComputeNodeWorldMatrices(
+                scold->nodes,
+                std::span<const int32_t>(shot->rootNodes.data(),
+                                          shot->rootNodes.size()),
+                std::span<const glm::mat4>(local_xforms, n_nodes),
+                std::span<glm::mat4>(world_out, n_nodes),
+                s.arena);
+
+            glm::mat4 mesh_node_world = glm::mat4(1.0f);
+            for (uint32_t i = 0; i < n_nodes; ++i) {
+                const cairns::Node& nd = scold->nodes[i];
+                if (nd.meshIndex >= 0 &&
+                    nd.skinIndex ==
+                        static_cast<int32_t>(sc->skin_index)) {
+                    mesh_node_world = world_out[i];
+                    break;
+                }
+            }
+            const glm::mat4 mesh_node_world_inv =
+                glm::inverse(mesh_node_world);
+            cairns::ComputeSkinningPalette(
+                skin,
+                std::span<const glm::mat4>(world_out, n_nodes),
+                mesh_node_world_inv,
+                std::span<glm::mat4>(palettes + pal_off_mat4,
+                                      sh->joint_count));
+
+            // .x is BATCH-RELATIVE palette offset (kernel reads
+            // palette[palette_off + j] where palette is bound at the
+            // per-batch dynamic byte offset). .y is GLOBAL output offset
+            // into skin_output_pool_buffer_ (bound whole, in vec4 units).
+            instance_meta[actor_idx] =
+                glm::uvec2(0u, sh->slice.offset);
+            cairns::SkinBatchGpu& b = batches[actor_idx];
+            b.mesh_set = rhi::Handle<rhi::BindGroup>{};
+            b.mesh = sh->mesh;
+            b.first_palette_mat4 = pal_off_mat4;
+            b.first_meta = actor_idx;
+            b.instance_count = 1;
+            b.vertex_count = vert_count;
+            b.workgroups = (vert_count + 63u) / 64u;
+
+            pal_off_mat4 += sh->joint_count;
+            ++actor_idx;
+            s.arena.Rewind(mark);
+        }
+
+        s.pkt.palettes =
+            std::span<const glm::mat4>(palettes, pal_off_mat4);
+        s.pkt.instance_meta =
+            std::span<const glm::uvec2>(instance_meta, actor_idx);
+        s.pkt.skin_batches =
+            std::span<const cairns::SkinBatchGpu>(batches, actor_idx);
     }
 
     // #221 Phase 4: best-effort load of skin compute kernel. Failing the
