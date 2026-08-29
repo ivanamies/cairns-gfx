@@ -154,6 +154,14 @@ void CommandRecorder::DispatchSkinBatches(
         cenc->dispatchThreadgroups(MTL::Size{b.workgroups, b.instance_count, 1u},
                                     MTL::Size{64u, 1u, 1u});
     }
+    // Skin compute writes skin_output_pool_buffer_; subsequent forward render
+    // reads it via pos_stream alias as vertex stream. Heap is untracked, so
+    // updateFence here + waitForFence in BeginRenderPass (beforeStages:Vertex)
+    // is what makes vertex fetch see the kernel writes.
+    if (plat.compute_fence_ == nullptr) {
+        plat.compute_fence_ = plat.cmd_->device()->newFence();
+    }
+    cenc->updateFence(plat.compute_fence_);
     cenc->endEncoding();
 }
 
@@ -239,6 +247,10 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
                 to_mtl_load(desc.color[0].load));
         }
         plat.enc_ = plat.cmd_->renderCommandEncoder(plat.render_pass_desc_);
+        if (plat.compute_fence_ != nullptr) {
+            plat.enc_->waitForFence(plat.compute_fence_,
+                                     MTL::RenderStageVertex);
+        }
         return;
     }
 
@@ -266,6 +278,10 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
         da->setClearDepth(desc.depth.clear_depth);
     }
     plat.enc_ = plat.cmd_->renderCommandEncoder(rpd);
+    if (plat.compute_fence_ != nullptr) {
+        plat.enc_->waitForFence(plat.compute_fence_,
+                                 MTL::RenderStageVertex);
+    }
     rpd->release();
 }
 
