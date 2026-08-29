@@ -740,43 +740,19 @@ public:
         }
 
         { // bindless resources set up via rhi
-            auto* texArg = MTL::ArgumentDescriptor::alloc()->init();
-            texArg->setDataType(MTL::DataTypeTexture);
-            texArg->setIndex(cairns::rhi::GpuSceneRegistry::kTexturesSlotOffset);
-            texArg->setArrayLength(cairns::rhi::GpuSceneRegistry::kMaxTextures);
-            texArg->setAccess(MTL::ArgumentAccessReadOnly);
-
-            auto* attrArg = MTL::ArgumentDescriptor::alloc()->init();
-            attrArg->setDataType(MTL::DataTypePointer);
-            attrArg->setIndex(cairns::rhi::GpuSceneRegistry::kMeshesSlotOffset);
-            attrArg->setArrayLength(cairns::rhi::GpuSceneRegistry::kMaxMeshes);
-            attrArg->setAccess(MTL::ArgumentAccessReadOnly);
-
-            auto* sampArg = MTL::ArgumentDescriptor::alloc()->init();
-            sampArg->setDataType(MTL::DataTypeSampler);
-            sampArg->setIndex(cairns::rhi::GpuSceneRegistry::kSamplersSlotOffset);
-            sampArg->setArrayLength(cairns::rhi::GpuSceneRegistry::kMaxSamplers);
-            sampArg->setAccess(MTL::ArgumentAccessReadOnly);
-
-            NS::Array* args = NS::Array::array((NS::Object*[]){ texArg, attrArg, sampArg }, 3);
-            MTL::ArgumentEncoder* arg_encoder = device_->newArgumentEncoder(args);
-
-            rhi::BufferDesc bd;
-            bd.byte_size = static_cast<uint32_t>(arg_encoder->encodedLength());
-            bd.usage = rhi::kUsageUniform | rhi::kUsageStorage;
-            bd.memory = rhi::Memory::kUpload;
-            rhi::Handle<rhi::Buffer> arg_buf_h = rm_.CreateBuffer(bd);
-            uint32_t arg_off = 0;
-            MTL::Buffer* arg_buf = rm_.GetMtlBuffer(arg_buf_h, &arg_off);
-
-            arg_encoder->setArgumentBuffer(arg_buf, arg_off);
+            using R = cairns::rhi::GpuSceneRegistry;
+            rhi::BindlessRegistryDesc rdesc{};
+            rdesc.max_textures = R::kMaxTextures;
+            rdesc.max_attr_buffers = R::kMaxMeshes;
+            rdesc.max_samplers = R::kMaxSamplers;
+            rdesc.texture_slot = R::kTexturesSlotOffset;
+            rdesc.attr_buffer_slot = R::kMeshesSlotOffset;
+            rdesc.sampler_slot = R::kSamplersSlotOffset;
+            rdesc.debug_name = "bindless";
+            bindless_bg_handle_ = rm_.CreateBindlessRegistry(rdesc);
 
             mesh_attr_id_map_.clear();
             sampler_id_map_.clear();
-
-            uint32_t num_tex = 0;
-            uint32_t num_attr = 0;
-            uint32_t num_sampler = 0;
 
             for (size_t i = 0; i < scenes_.size(); ++i) {
                 cairns::Scene& scene = scenes_[i];
@@ -784,37 +760,27 @@ public:
                     auto h = scene.textureHandles[j];
                     MTL::Texture* tex = rm_.GetHot(h)->api_view;
                     if (tex) {
-                        assert(h.index == num_tex);
-                        arg_encoder->setTexture(tex,
-                            cairns::rhi::GpuSceneRegistry::kTexturesSlotOffset + num_tex);
-                        ++num_tex;
+                        const uint32_t slot =
+                            rm_.BindlessAddTexture(bindless_bg_handle_, h);
+                        assert(h.index == slot);
+                        (void)slot;
                     }
                 }
                 for (size_t j = 0; j < scene.meshes.size(); ++j) {
                     auto h = scene.meshes[j].attrHandle;
                     if (!h.IsNull()) {
-                        uint32_t attr_off = 0;
-                        MTL::Buffer* attr_buf = rm_.GetMtlBuffer(h, &attr_off);
-                        arg_encoder->setBuffer(attr_buf, attr_off,
-                            cairns::rhi::GpuSceneRegistry::kMeshesSlotOffset + num_attr);
-                        mesh_attr_id_map_[h.index] = num_attr;
-                        ++num_attr;
+                        mesh_attr_id_map_[h.index] =
+                            rm_.BindlessAddAttrBuffer(bindless_bg_handle_, h);
                     }
                 }
                 for (size_t j = 0; j < scene.samplerHandles.size(); ++j) {
                     auto h = scene.samplerHandles[j];
-                    MTL::SamplerState* samp = rm_.GetHot(h)->api_sampler;
-                    arg_encoder->setSamplerState(samp,
-                        cairns::rhi::GpuSceneRegistry::kSamplersSlotOffset + num_sampler);
-                    sampler_id_map_[h.index] = num_sampler;
-                    ++num_sampler;
+                    sampler_id_map_[h.index] =
+                        rm_.BindlessAddSampler(bindless_bg_handle_, h);
                 }
             }
 
-            arg_encoder->release();
-            arg_encoder = nullptr;
-
-            bindless_bg_handle_ = rm_.CreateBindGroupFromMtlBuffer(arg_buf, arg_off);
+            rm_.BindlessFinalize(bindless_bg_handle_);
         }
         
         MTL::DepthStencilDescriptor* depthStencilDescriptor = MTL::DepthStencilDescriptor::alloc()->init();
