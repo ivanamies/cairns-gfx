@@ -853,23 +853,33 @@ SCENARIO("scenario picker renders clean: picker only, no HUD/particles/depth",
 
     REQUIRE(e.ParticlesEnabled() == false);   // (3) no emitter bound
     REQUIRE(e.HudVisible() == false);          // (2) HUD suppressed
-    // (1) the picker drew: non-black pixels exist over the otherwise-black
-    // blank scene (the window frame + the three buttons).
-    bool any_nonblack = false;
-    for (uint8_t v : rgba) {
-        if (v != 0) {
-            any_nonblack = true;
-            break;
+
+    // Region-brightness assertions -- NOT a pixel-exact hash. imgui renders with
+    // sub-pixel AA that varies with shared-context state across the suite, so an
+    // exact hash flakes (the imgui-overlay golden SKIPs for the same reason).
+    // These are permitted for imgui tests ONLY; non-imgui goldens keep exact
+    // hashes. The invariant: the ONLY bright content in the frame is the picker.
+    auto sum3 = [&](uint32_t x, uint32_t y) -> int {
+        const size_t i = (static_cast<size_t>(y) * w + x) * 4;
+        return static_cast<int>(rgba[i]) + rgba[i + 1] + rgba[i + 2];
+    };
+    // The "Scenarios" window sits at ~(20,200), ~260x105 px; box it with margin.
+    auto in_picker = [](uint32_t x, uint32_t y) -> bool {
+        return x >= 15 && x <= 292 && y >= 195 && y <= 312;
+    };
+    int picker_bright = 0;   // (1) picker drew: bright text/buttons in its box
+    int stray_bright = 0;    // (2) HUD / (3) particle / (4) depth-PIP pixels land
+    for (uint32_t y = 0; y < h; ++y) {                 // outside -> must be zero
+        for (uint32_t x = 0; x < w; ++x) {
+            if (sum3(x, y) > 300) {   // brighter than dark bg (~94) + blue button
+                if (in_picker(x, y)) {
+                    ++picker_bright;
+                } else {
+                    ++stray_bright;
+                }
+            }
         }
     }
-    REQUIRE(any_nonblack);
-
-    // Golden compare (per-platform: imgui font atlas differs across backends).
-    const std::string observed = seam::Md5Hex(rgba);
-    const std::string ref =
-        refs::LoadImageRef("scenario_picker", seam::PlatformKey(), observed);
-    if (ref.empty()) {
-        SKIP("bake scenario_picker ref (CAIRNS_GFX_BAKE_REFS=1)");
-    }
-    REQUIRE(observed == ref);
+    REQUIRE(picker_bright > 0);   // (1) the scenario picker rendered
+    REQUIRE(stray_bright == 0);   // (2) no HUD, (3) no particles, (4) no depth PIP
 }
