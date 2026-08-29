@@ -309,7 +309,7 @@ void Resources::Destroy(Handle<Buffer> h) {
     }
     impl_->alloc->impl_->memory.FreeBuffer(
         hot->heap_buffer_index, cold->alloc,
-        impl_->frame_index + ResourceManager::kFramesInFlight);
+        impl_->frame_index + kFramesInFlight);
     buffers.Release(h);
 }
 
@@ -323,7 +323,7 @@ void Resources::Destroy(Handle<Texture> h) {
         cold->heap_buffer_index, cold->alloc,
         static_cast<VkImage>(cold->api_image),
         static_cast<VkImageView>(hot->api_view),
-        impl_->frame_index + ResourceManager::kFramesInFlight);
+        impl_->frame_index + kFramesInFlight);
     textures.Release(h);
 }
 

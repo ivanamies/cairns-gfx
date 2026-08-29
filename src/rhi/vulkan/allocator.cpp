@@ -65,7 +65,7 @@ uint32_t Allocator::UboAlign() const { return impl_->uniform_align; }
 uint32_t Allocator::StorageAlign() const { return impl_->storage_align; }
 
 void Allocator::AdvanceFrame(uint32_t frame_index) {
-    const uint32_t slot = frame_index % ResourceManager::kFramesInFlight;
+    const uint32_t slot = frame_index % kFramesInFlight;
     impl_->memory.RetireFrame(slot);
     impl_->memory.BeginFrame(frame_index);
 }

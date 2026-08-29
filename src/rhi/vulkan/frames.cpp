@@ -166,7 +166,7 @@ bool Frames::Init(Device& device, Resources& resources) {
     impl_->res = &resources;
 
     {  // per-frame command buffers + sync
-        const uint32_t n = ResourceManager::kFramesInFlight;
+        const uint32_t n = kFramesInFlight;
         impl_->frames_in_flight = n;
         impl_->graphics_cmds.resize(n);
         impl_->compute_cmds.resize(n);
@@ -210,7 +210,7 @@ bool Frames::Init(Device& device, Resources& resources) {
 
     {  // descriptor layouts + pool + per-frame sets (non-bindless)
         VkDevice dev = impl_->device;
-        const uint32_t n = ResourceManager::kFramesInFlight;
+        const uint32_t n = kFramesInFlight;
 
         {  // point layout (empty: particle render reads ssbo as a vertex buffer)
             VkDescriptorSetLayoutCreateInfo li{};

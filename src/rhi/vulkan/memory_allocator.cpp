@@ -48,7 +48,7 @@ VkBufferUsageFlags to_vk_buffer_usage(BufferUsage u) {
 }  // namespace
 
 MemoryAllocator::~MemoryAllocator() {
-    for (uint32_t slot = 0; slot < ResourceManager::kFramesInFlight; ++slot) {
+    for (uint32_t slot = 0; slot < kFramesInFlight; ++slot) {
         RetireFrame(slot);
     }
     for (uint32_t i = 0; i < blocks_.size(); ++i) {
@@ -277,9 +277,9 @@ AllocResult MemoryAllocator::AllocBuffer(uint32_t bytes, BufferUsage usage,
         }
     }
 
-    uint32_t block_bytes = (padded > ResourceManager::kHeapBlockBytes)
+    uint32_t block_bytes = (padded > kHeapBlockBytes)
                                ? padded
-                               : ResourceManager::kHeapBlockBytes;
+                               : kHeapBlockBytes;
     uint32_t hi = kInvalidBlock;
     if (!CreateBufferBlock(block_bytes, usage, mem, &hi)) {
         return {};
@@ -308,9 +308,9 @@ AllocResult MemoryAllocator::AllocImage(uint32_t bytes, uint32_t align,
         }
     }
 
-    uint32_t block_bytes = (padded > ResourceManager::kHeapBlockBytes)
+    uint32_t block_bytes = (padded > kHeapBlockBytes)
                                ? padded
-                               : ResourceManager::kHeapBlockBytes;
+                               : kHeapBlockBytes;
     uint32_t hi = kInvalidBlock;
     if (!CreateImageBlock(block_bytes, memory_type_bits, mem, &hi)) {
         return {};
@@ -330,7 +330,7 @@ void MemoryAllocator::FreeBuffer(uint32_t heap_index,
     p.heap_index = heap_index;
     p.alloc = alloc;
     p.is_image = false;
-    pending_frees_[retire_frame % ResourceManager::kFramesInFlight].push_back(p);
+    pending_frees_[retire_frame % kFramesInFlight].push_back(p);
 }
 
 void MemoryAllocator::FreeImage(uint32_t heap_index,
@@ -342,7 +342,7 @@ void MemoryAllocator::FreeImage(uint32_t heap_index,
     p.is_image = true;
     p.image = image;
     p.view = view;
-    pending_frees_[retire_frame % ResourceManager::kFramesInFlight].push_back(p);
+    pending_frees_[retire_frame % kFramesInFlight].push_back(p);
 }
 
 void* MemoryAllocator::BumpAllocate(uint32_t bytes, uint32_t align, Memory mem) {
@@ -424,7 +424,7 @@ void MemoryAllocator::BeginFrame(uint32_t frame_index) {
         if (r.block_bytes == 0) {
             continue;
         }
-        r.current_slot = frame_index % ResourceManager::kFramesInFlight;
+        r.current_slot = frame_index % kFramesInFlight;
         r.cursors[r.current_slot] = 0;
     }
 }

@@ -522,12 +522,13 @@ struct BackendInitParams {
 struct BackendInitParams;
 #endif  // CAIRNS_VULKAN
 
+// rhi-wide config constants (formerly ResourceManager statics).
+inline constexpr uint32_t kFramesInFlight = 2;
+inline constexpr uint32_t kHeapBlockBytes = 128u * 1024u * 1024u;
+inline constexpr uint32_t kLargeThreshold = 64u * 1024u * 1024u;
+
 class ResourceManager {
 public:
-    static constexpr uint32_t kFramesInFlight = 2;
-    static constexpr uint32_t kHeapBlockBytes = 128u * 1024u * 1024u;
-    static constexpr uint32_t kLargeThreshold = 64u * 1024u * 1024u;
-
     ResourceManager() = default;
     ~ResourceManager();
 

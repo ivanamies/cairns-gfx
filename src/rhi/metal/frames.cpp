@@ -33,7 +33,7 @@ bool Frames::Init(Device& device, Resources& resources) {
     impl_->queue = device.impl_->queue;
     impl_->res = &resources;
 
-    impl_->frame_semaphore = dispatch_semaphore_create(ResourceManager::kFramesInFlight);
+    impl_->frame_semaphore = dispatch_semaphore_create(kFramesInFlight);
     {
         MTL::DepthStencilDescriptor* dsd = MTL::DepthStencilDescriptor::alloc()->init();
         dsd->setDepthCompareFunction(MTL::CompareFunctionLessEqual);

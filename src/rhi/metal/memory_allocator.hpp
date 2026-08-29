@@ -51,8 +51,8 @@ struct HeapBlock {
 };
 
 struct BumpRing {
-    std::array<uint32_t, ResourceManager::kFramesInFlight> block_indices{};
-    std::array<uint32_t, ResourceManager::kFramesInFlight> cursors{};
+    std::array<uint32_t, kFramesInFlight> block_indices{};
+    std::array<uint32_t, kFramesInFlight> cursors{};
     uint32_t current_slot = 0;
     uint32_t block_bytes = 0;
 };
@@ -121,7 +121,7 @@ private:
 
     BumpRing rings_[kMemoryCount]{};
 
-    std::vector<PendingFree> pending_frees_[ResourceManager::kFramesInFlight];
+    std::vector<PendingFree> pending_frees_[kFramesInFlight];
 };
 
 }  // namespace cairns::rhi::metal

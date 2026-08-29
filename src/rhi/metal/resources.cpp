@@ -121,7 +121,7 @@ void Resources::Destroy(Handle<Buffer> h) {
     }
     impl_->alloc->impl_->memory.FreeBuffer(
         hot->heap_buffer_index, cold->alloc,
-        impl_->frame_index + ResourceManager::kFramesInFlight);
+        impl_->frame_index + kFramesInFlight);
     buffers.Release(h);
 }
 
@@ -133,7 +133,7 @@ void Resources::Destroy(Handle<Texture> h) {
     }
     impl_->alloc->impl_->memory.FreeImage(
         cold->heap_buffer_index, cold->alloc, hot->api_view,
-        impl_->frame_index + ResourceManager::kFramesInFlight);
+        impl_->frame_index + kFramesInFlight);
     textures.Release(h);
 }
 
@@ -282,7 +282,7 @@ Handle<Texture> Resources::CreateTexture(const TextureDesc& d) {
     td->release();
     if (!tex) {
         impl_->alloc->impl_->memory.FreeImage(r.heap_index, r.alloc, nullptr,
-                                impl_->frame_index + ResourceManager::kFramesInFlight);
+                                impl_->frame_index + kFramesInFlight);
         return Handle<Texture>::Null;
     }
 
