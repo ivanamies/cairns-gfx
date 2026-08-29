@@ -360,6 +360,11 @@ public:
                 if (!hot.set2.IsNull()) {
                     return;
                 }
+                // #229: untextured-material placeholder (texture-less prefab) --
+                // no texture to bind; leave set2 null (the recorder skips it).
+                if (cold.color.IsNull()) {
+                    return;
+                }
                 const rhi::TextureBinding tb{0, cold.color};
                 const rhi::SamplerBinding sb{0, cold.sampler};
                 rhi::BindGroupDesc bgd{};

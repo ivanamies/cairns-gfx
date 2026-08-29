@@ -48,6 +48,12 @@ namespace cairns {
 // that embedded a heap pointer + escaped the block cap / hash.
 using NameRef = cairns::ArenaSlice<char>;
 
+// #229 loader: sentinel in materialToTextureIndex/materialToSamplerIndex for a
+// glTF material with no resolvable baseColorTexture. PreparePrefabResources maps
+// it to a placeholder so the material list stays 1:1 with glTF material indices
+// (the draw path indexes hot.materials by prim.materialIndex).
+inline constexpr uint32_t kNoMaterialTexture = UINT32_MAX;
+
 // Fail loud on prefab-arena overflow: ArenaSlice::Alloc returns a null slice
 // when the BumpArena is full, and the fill loop would then write through a
 // nullptr. Abort with a clear "raise kPrefabArenaBytes" message instead.
@@ -713,23 +719,30 @@ inline bool LoadPrefabFromGltf(const std::filesystem::path& path,
     
     // 3. Material Mapping
     // ONLY DOES UNLIT MATERIALS
+    // #229: push one entry PER glTF material so the list stays 1:1 with glTF
+    // material indices (the draw indexes hot.materials by prim.materialIndex).
+    // A material with no resolvable baseColorTexture gets kNoMaterialTexture;
+    // skipping it (the old behaviour) compacted the list and shifted every
+    // later material's slot -> off-by-N texture binds.
     for (size_t i = 0; i < asset.materials.size(); ++i) {
         const auto& mat = asset.materials[i];
+        uint32_t image_index = kNoMaterialTexture;
+        uint32_t sampler_index = kNoMaterialTexture;
         if (mat.pbrData.baseColorTexture.has_value()) {
             size_t texIdx = mat.pbrData.baseColorTexture->textureIndex;
-            int32_t image_index = -1;
-            if (texIdx < asset.textures.size() && asset.textures[texIdx].imageIndex.has_value()) {
-                image_index = static_cast<uint32_t>(*asset.textures[texIdx].imageIndex);
-            }
-            int32_t sampler_index = -1;
-            if ( texIdx < asset.textures.size() && asset.textures[texIdx].samplerIndex.has_value()) {
-                sampler_index = static_cast<uint32_t>(*asset.textures[texIdx].samplerIndex);
-            }
-            if ( image_index >= 0 && sampler_index >= 0 ) {
-                cold.materialToTextureIndex.push_back(image_index);
-                cold.materialToSamplerIndex.push_back(sampler_index);
+            if (texIdx < asset.textures.size()) {
+                if (asset.textures[texIdx].imageIndex.has_value()) {
+                    image_index =
+                        static_cast<uint32_t>(*asset.textures[texIdx].imageIndex);
+                }
+                if (asset.textures[texIdx].samplerIndex.has_value()) {
+                    sampler_index = static_cast<uint32_t>(
+                        *asset.textures[texIdx].samplerIndex);
+                }
             }
         }
+        cold.materialToTextureIndex.push_back(image_index);
+        cold.materialToSamplerIndex.push_back(sampler_index);
     }
 
     // 4. Meshes -- #220 Step 2: acquire pool slot per gltf mesh, write
@@ -1072,17 +1085,32 @@ inline void PreparePrefabResources(Prefab::Hot& hot, Prefab::Cold& cold,
     // ONLY DOES UNLIT MATERIALS
     assert(cold.materialToTextureIndex.size() == cold.materialToSamplerIndex.size());
     for ( size_t i = 0; i < cold.materialToTextureIndex.size(); ++i ) {
-        uint32_t gltf_tex_idx = cold.materialToTextureIndex[i];
-        uint32_t gltf_sampler_idx = cold.materialToSamplerIndex[i];
-        auto t = cold.textureHandles[gltf_tex_idx];
-        auto s = cold.samplerHandles[gltf_sampler_idx];
+        const uint32_t gltf_tex_idx = cold.materialToTextureIndex[i];
+        const uint32_t gltf_sampler_idx = cold.materialToSamplerIndex[i];
+        // #229: kNoMaterialTexture (or an out-of-range index) -> placeholder.
+        // Fall back to the prefab's first texture/sampler so the slot is still
+        // renderable; a truly texture-less prefab yields Null (BuildMaterialSet2
+        // skips those). Either way hot.materials stays 1:1 with glTF material
+        // indices so prim.materialIndex resolves correctly.
+        rhi::Handle<rhi::Texture> t = rhi::Handle<rhi::Texture>::Null;
+        if (gltf_tex_idx < cold.textureHandles.size()) {
+            t = cold.textureHandles[gltf_tex_idx];
+        } else if (!cold.textureHandles.empty()) {
+            t = cold.textureHandles[0];
+        }
+        rhi::Handle<rhi::Sampler> s = rhi::Handle<rhi::Sampler>::Null;
+        if (gltf_sampler_idx < cold.samplerHandles.size()) {
+            s = cold.samplerHandles[gltf_sampler_idx];
+        } else if (!cold.samplerHandles.empty()) {
+            s = cold.samplerHandles[0];
+        }
         // #220 Step 1: acquire pool slot, populate Cold. Hot.set2 (the
         // bind group) is filled in later by Engine::initRenderPipeline
         // since it needs rhi_.frames/resources to build the descriptor.
         const cairns::Handle<Material> mat_id = materials.Acquire();
-        Material::Cold* cold = materials.GetCold(mat_id);
-        cold->color = t;
-        cold->sampler = s;
+        Material::Cold* mcold = materials.GetCold(mat_id);
+        mcold->color = t;
+        mcold->sampler = s;
         hot.materials.push_back(mat_id);  // #220 Step 3: was materialIds
     }
 }

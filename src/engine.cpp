@@ -1016,6 +1016,10 @@ bool Engine::initRenderPipeline() {
             prefab_store_.materials.ForEachLive(
                 [&](cairns::Material::Hot& hot,
                     cairns::Material::Cold& cold) {
+                    // #229: skip untextured-material placeholders (null color).
+                    if (cold.color.IsNull()) {
+                        return;
+                    }
                     const rhi::TextureBinding tb{0, cold.color};
                     const rhi::SamplerBinding sb{0, cold.sampler};
                     rhi::BindGroupDesc bgd{};
