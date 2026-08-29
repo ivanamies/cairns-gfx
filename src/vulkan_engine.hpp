@@ -287,14 +287,13 @@ private:
         const int instance_count =
             std::getenv("CAIRNS_N") ? std::atoi(std::getenv("CAIRNS_N"))
                                     : static_cast<int>(glb_paths.size());
-        const float target_size =
+        const float scale =
             std::getenv("CAIRNS_SCALE")
                 ? static_cast<float>(std::atof(std::getenv("CAIRNS_SCALE")))
-                : 0.8f;
+                : 0.005f;
         debugSceneXforms_ = cairns::GenerateDebugGridTransforms(
-            glm::vec3(-1, -1, -3), 3, 1, 1, 1, 1.0f, instance_count);
+            glm::vec3(-1, -1, -3), 3, 1, 1, 1, scale, instance_count);
 
-        scene_norm_scales_.clear();
         for (const std::filesystem::path& filepath : glb_paths) {
             scenes_.push_back(cairns::Scene(hot_arena_));
             cairns::Scene& scene = scenes_.back();
@@ -305,17 +304,6 @@ private:
             if (!cairns::rhi::LoadSceneGpu(scene, rm_)) {
                 return false;
             }
-            glm::vec3 lo(1e9f);
-            glm::vec3 hi(-1e9f);
-            for (const auto& m : scene.meshes) {
-                for (const auto& p : m.cpuPositions) {
-                    lo = glm::min(lo, glm::vec3(p));
-                    hi = glm::max(hi, glm::vec3(p));
-                }
-            }
-            const glm::vec3 ext = hi - lo;
-            const float max_ext = std::max({ext.x, ext.y, ext.z, 1e-6f});
-            scene_norm_scales_.push_back(target_size / max_ext);
             scene.CleanupTmps();
         }
         return true;
@@ -406,9 +394,7 @@ private:
                     memcpy(mptr, &material_gpu, sizeof(material_gpu));
                     const uint32_t material_offset = rm_.BumpOffset(mptr);
 
-                    const glm::mat4 norm_scale = glm::scale(
-                        glm::mat4(1.0f), glm::vec3(scene_norm_scales_[scene_idx]));
-                    const glm::mat4 model_matrix = scene_xform * norm_scale * rot_matrix;
+                    const glm::mat4 model_matrix = scene_xform * rot_matrix;
                     const cairns::rhi::DrawTmp draw_tmp{
                         .model_matrix = node.globalTransform * model_matrix,
                         .mesh_id = gpu_attr_idx,
@@ -2106,7 +2092,6 @@ private:
     std::vector<cairns::Scene, cairns::Allocator<cairns::Scene>> scenes_;
     std::vector<cairns::LoadedMaterial> materials_;
     std::vector<glm::mat4> debugSceneXforms_;
-    std::vector<float> scene_norm_scales_;
     std::unordered_map<uint32_t, uint32_t> texture_id_map_;
     std::unordered_map<uint32_t, uint32_t> mesh_attr_id_map_;
     std::unordered_map<uint32_t, uint32_t> sampler_id_map_;
