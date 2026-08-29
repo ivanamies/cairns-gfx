@@ -741,6 +741,8 @@ public:
                 return reg.all_of<cairns::Transform>(e);
             case cairns::ComponentType::kDirectionalLight:
                 return reg.all_of<cairns::DirectionalLight>(e);
+            case cairns::ComponentType::kPostEffect:
+                return reg.all_of<cairns::PostEffect>(e);
             default:
                 return false;
         }
@@ -771,6 +773,9 @@ public:
                 break;
             case cairns::ComponentType::kDirectionalLight:
                 reg.remove<cairns::DirectionalLight>(e);
+                break;
+            case cairns::ComponentType::kPostEffect:
+                reg.remove<cairns::PostEffect>(e);
                 break;
             default:
                 return false;  // Transform is not removable (draw needs it)
@@ -864,6 +869,34 @@ public:
             return false;
         }
         out = reg.get<cairns::DirectionalLight>(e);
+        return true;
+    }
+    bool SetEntityPostEffect(int scene_index, uint32_t entity_int,
+                             const cairns::PostEffect& fx) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!reg.valid(e)) {
+            return false;
+        }
+        reg.emplace_or_replace<cairns::PostEffect>(e, fx);
+        return true;
+    }
+    bool GetEntityPostEffect(int scene_index, uint32_t entity_int,
+                             cairns::PostEffect& out) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!reg.valid(e) || !reg.all_of<cairns::PostEffect>(e)) {
+            return false;
+        }
+        out = reg.get<cairns::PostEffect>(e);
         return true;
     }
     // Data mutation, not a mode: flips every live material's shader family

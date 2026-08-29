@@ -20,6 +20,7 @@ enum class ComponentType : uint32_t {
     kRenderable,
     kTransform,
     kDirectionalLight,
+    kPostEffect,
     kInvalid,
 };
 

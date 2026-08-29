@@ -138,4 +138,25 @@ struct DirectionalLight {
     bool cast_shadows = false;
 };
 
+// A screen-space post-processing effect. One entity per effect in the scene;
+// RecordFrame walks them (insertion-sorted by `order`) into a fullscreen
+// pass chain between the forward/outline passes and the swap composite.
+// Existence-based: no PostEffect => the chain is absent and the frame is
+// byte-identical to today. p0/p1 carry per-effect params (radius/q/threshold
+// etc.) interpreted by the effect's shader.
+enum class PostEffectType : uint8_t {
+    kKuwahara,
+    kBloom,
+    kWatercolor,
+    kMoebius,
+    kPainterly,
+};
+
+struct PostEffect {
+    PostEffectType type = PostEffectType::kKuwahara;
+    uint8_t order = 0;
+    glm::vec4 p0 = glm::vec4(0.0f);
+    glm::vec4 p1 = glm::vec4(0.0f);
+};
+
 }  // namespace cairns

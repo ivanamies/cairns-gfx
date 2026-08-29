@@ -325,6 +325,35 @@ bool GetEntityDirectionalLight(Engine* engine, int scene_index,
     out.cast_shadows = light.cast_shadows;
     return true;
 }
+bool SetEntityPostEffect(Engine* engine, int scene_index, uint32_t entity,
+                         const PostEffectParams& p) {
+    if (engine == nullptr) {
+        return false;
+    }
+    cairns::PostEffect fx;
+    fx.type = static_cast<cairns::PostEffectType>(p.type);
+    fx.order = static_cast<uint8_t>(p.order);
+    fx.p0 = glm::vec4(p.p0[0], p.p0[1], p.p0[2], p.p0[3]);
+    fx.p1 = glm::vec4(p.p1[0], p.p1[1], p.p1[2], p.p1[3]);
+    return engine->SetEntityPostEffect(scene_index, entity, fx);
+}
+bool GetEntityPostEffect(Engine* engine, int scene_index, uint32_t entity,
+                         PostEffectParams& out) {
+    if (engine == nullptr) {
+        return false;
+    }
+    cairns::PostEffect fx;
+    if (!engine->GetEntityPostEffect(scene_index, entity, fx)) {
+        return false;
+    }
+    out.type = static_cast<uint32_t>(fx.type);
+    out.order = fx.order;
+    out.p0[0] = fx.p0.x; out.p0[1] = fx.p0.y;
+    out.p0[2] = fx.p0.z; out.p0[3] = fx.p0.w;
+    out.p1[0] = fx.p1.x; out.p1[1] = fx.p1.y;
+    out.p1[2] = fx.p1.z; out.p1[3] = fx.p1.w;
+    return true;
+}
 uint32_t SetMaterialShaderAllByName(Engine* engine, const char* shader) {
     cairns::ShaderKey key = cairns::ShaderKey::kUnlit;
     if (engine == nullptr || !cairns::StringToShaderKey(shader, &key)) {

@@ -149,6 +149,18 @@ bool SetEntityDirectionalLight(Engine* engine, int scene_index,
                                const DirectionalLightParams& p);
 bool GetEntityDirectionalLight(Engine* engine, int scene_index,
                                uint32_t entity, DirectionalLightParams& out);
+// Screen-space post-effect. type is the PostEffectType ordinal; p0/p1 are the
+// per-effect param vec4s (no glm at the boundary).
+struct PostEffectParams {
+    uint32_t type = 0;
+    uint32_t order = 0;
+    float p0[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float p1[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+};
+bool SetEntityPostEffect(Engine* engine, int scene_index, uint32_t entity,
+                         const PostEffectParams& p);
+bool GetEntityPostEffect(Engine* engine, int scene_index, uint32_t entity,
+                         PostEffectParams& out);
 // cairns.scene.setMaterialShaderAll: every live material's shader family.
 uint32_t SetMaterialShaderAllByName(Engine* engine, const char* shader);
 bool SetEntityRenderable(Engine* engine, int scene_index, uint32_t entity,

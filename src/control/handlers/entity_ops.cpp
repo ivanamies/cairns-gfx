@@ -97,6 +97,35 @@ json GetDirectionalLight(cairns::Engine* e, int s, uint32_t ent) {
             {"ambientR", p.ambient_r}, {"ambientG", p.ambient_g},
             {"ambientB", p.ambient_b}, {"castShadows", p.cast_shadows}};
 }
+json AddPostEffect(cairns::Engine* e, int s, uint32_t ent, const json& props) {
+    cairns::headless::PostEffectParams p;
+    p.type = props.value("type", 0u);
+    p.order = props.value("order", 0u);
+    if (props.contains("p0") && props["p0"].is_array()) {
+        const auto& a = props["p0"];
+        for (size_t i = 0; i < 4 && i < a.size(); ++i) {
+            p.p0[i] = a[i].get<float>();
+        }
+    }
+    if (props.contains("p1") && props["p1"].is_array()) {
+        const auto& a = props["p1"];
+        for (size_t i = 0; i < 4 && i < a.size(); ++i) {
+            p.p1[i] = a[i].get<float>();
+        }
+    }
+    return {{"ok", cairns::headless::SetEntityPostEffect(e, s, ent, p)}};
+}
+json GetPostEffect(cairns::Engine* e, int s, uint32_t ent) {
+    cairns::headless::PostEffectParams p;
+    if (!cairns::headless::GetEntityPostEffect(e, s, ent, p)) {
+        return {{"has", false}};
+    }
+    return {{"has", true},
+            {"type", p.type},
+            {"order", p.order},
+            {"p0", {p.p0[0], p.p0[1], p.p0[2], p.p0[3]}},
+            {"p1", {p.p1[0], p.p1[1], p.p1[2], p.p1[3]}}};
+}
 json AddEmitter(cairns::Engine* e, int s, uint32_t ent, const json&) {
     return {{"ok", cairns::headless::AddParticleEmitter(e, s, ent)}};
 }
@@ -133,6 +162,8 @@ const ComponentRow kComponentRows[] = {
     {"Name", cairns::ComponentType::kName, AddName, GetName},
     {"ParticleEmitter", cairns::ComponentType::kParticleEmitter, AddEmitter,
      GetEmitter},
+    {"PostEffect", cairns::ComponentType::kPostEffect, AddPostEffect,
+     GetPostEffect},
     {"Renderable", cairns::ComponentType::kRenderable, AddRenderable,
      GetRenderable},
 };
