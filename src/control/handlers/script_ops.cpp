@@ -50,10 +50,34 @@ JsState& EnsureJs(CommandRegistry* reg) {
     static JsState s;
     if (!s.rt) {
         s.rt = JS_NewRuntime();
-        s.ctx = JS_NewContext(s.rt);
+    }
+    if (reg) {
         s.registry = reg;
     }
     return s;
+}
+
+// Drain pending jobs, drop the current JSContext, and create a fresh one in
+// the same JSRuntime. Both RegisterScriptOps (re-registration, e.g. the tests
+// rebinding ops against a fresh engine per scenario) and the R3 reload op use
+// this so studio_js always evals into a CLEAN global scope -- re-evaling it on
+// a context that already declared its globals throws "redeclaration of <X>"
+// (const/class bindings are not idempotent).
+void ResetJsContext(JsState& s) {
+    if (!s.rt) {
+        return;
+    }
+    if (s.ctx) {
+        for (int i = 0; i < 10000; ++i) {
+            JSContext* job_ctx = nullptr;
+            if (JS_ExecutePendingJob(s.rt, &job_ctx) <= 0) {
+                break;
+            }
+        }
+        JS_FreeContext(s.ctx);
+        s.ctx = nullptr;
+    }
+    s.ctx = JS_NewContext(s.rt);
 }
 
 // Forward-decl: JsDispatch is defined below.
@@ -97,17 +121,7 @@ bool ReloadJsContext() {
     if (!s.rt) {
         return false;
     }
-    // Drain microtasks before tearing down the context (same shutdown
-    // safety pattern as the JsState dtor).
-    for (int i = 0; i < 10000; ++i) {
-        JSContext* job_ctx = nullptr;
-        const int r = JS_ExecutePendingJob(s.rt, &job_ctx);
-        if (r <= 0) break;
-    }
-    if (s.ctx) {
-        JS_FreeContext(s.ctx);
-    }
-    s.ctx = JS_NewContext(s.rt);
+    ResetJsContext(s);
     if (!s.ctx) {
         return false;
     }
@@ -170,6 +184,10 @@ JSValue JsDispatch(JSContext* ctx, JSValueConst /*this_val*/, int argc,
 
 void RegisterScriptOps(CommandRegistry& registry) {
     JsState& s = EnsureJs(&registry);
+    // Fresh context each registration so the studio autoload never redeclares
+    // its globals (tests re-register per scenario against the persistent JS
+    // runtime).
+    ResetJsContext(s);
     BindAndAutoloadStudio(s.ctx);
 
     registry.Register(
