@@ -204,6 +204,68 @@ build-on-game-thread is the headliner; see there.
 
 ---
 
+## Render graph: where we strayed from Granite
+
+`src/render/render_graph` is a partial copy of Themaister's Granite render graph
+(`renderer/render_graph.{cpp,hpp}`). Granite's headline feature is *automatic,
+complete* barrier/semaphore generation. Our copy stopped at scheduling and never
+ported the synchronization model, so the backends do ad-hoc barriers with gaps —
+the `three_champ_static` golden flake (FLAKY_TESTS #2) is a cross-frame
+`final_target_` write-after-write that nothing barriers. **Rule: copy Granite,
+do not re-invent.** Point-by-point:
+
+**The core stray — barriers live in the wrong place, with no persistent
+per-resource state:**
+
+- **Granite computes barriers in `bake()`; we compute none.** Granite emits, per
+  physical pass, `invalidate` (before) + `flush` (after) `Barrier` lists. We
+  emit nothing: vk does ad-hoc `transition()` on a layout change only; metal a
+  `compute_fence_` for compute→graphics only. No graph-level barrier pass exists.
+- **Granite keeps `PipelineEvent` per physical resource, PERSISTENT across
+  frames; we keep almost nothing.** Granite's `physical_events[]` holds
+  `{layout, to_flush_access, invalidated_in_stage[64], src_stages, wait
+  semaphores}` and survives `bake()` rebuilds, so a resource's first use in
+  frame N+1 invalidates against frame N's flush. We rebuild per frame and
+  persist only vk's `vk_layout` (no flush-access, no invalidate tracking) →
+  cross-frame WAW on `final_target_` is invisible. **This is the flake.**
+- **Invalidate/flush models RAW + WAW + WAR; we model (at most) layout-change
+  RAW.** Granite: inputs → invalidate (RAW vs `to_flush_access`); outputs →
+  flush (record writes); read-only resources get a "fake flush, access=0" to
+  catch WAR. vk's `transition()` skips same-layout transitions, so WAW (two
+  writes, same layout — exactly `final_target_` frame-to-frame) and WAR are
+  never barriered.
+- **Buffers go through the same invalidate/flush in Granite; ours don't.** We
+  track `buf_reads`/`buf_writers` for *scheduling* but emit no buffer barriers.
+
+**Granite features we lack entirely (rough value order):**
+
+1. **Per-stage invalidation tracking** (`invalidated_in_stage[64]`) — avoids
+   redundant barriers + correct stage scoping. We'd brute-force ALL_COMMANDS.
+2. **Split barriers via `VkEvent`** (`pipeline_barrier_src_stages`,
+   `wait_events`) to overlap work across a barrier.
+3. **Pass reordering to maximize overlap** (bake step: minimize the
+   latest-pass-we-must-wait-for). We do topo order only.
+4. **Render-pass merging into Vulkan subpasses** (adjacent graphics passes,
+   shared attachments, `BY_REGION_BIT`, `VkSubpassDependency`). Every pass is its
+   own render pass / encoder — no tiler bandwidth win.
+5. **Transient aliasing with aliasing barriers** (`alias_transfer`: copy barrier
+   state, force layout `UNDEFINED` at the alias boundary). We do basic transient
+   assignment (`AcquireTransientTexFlat`) but emit no aliasing barrier.
+6. **Async compute / multi-queue semaphores** (`used_queues`,
+   `wait_{graphics,compute}_semaphore`, `CONCURRENT` ownership). Single-queue.
+7. **History / feedback resources** (`history_inputs`,
+   `physical_history_events` — read the previous frame's version). Absent.
+
+**Parity plan (in order):** port `PipelineEvent` (persistent `physical_events[]`)
++ the `Barrier`/invalidate/flush model into `bake()`; have both backends
+*execute* the computed barriers (vk: `vkCmdPipelineBarrier`; metal: the same
+edges as `MTLFence`/`memoryBarrier`) instead of ad-hoc ones. That kills the flake
+and makes the backends behave identically. Then layer the perf items (per-stage
+scoping, events, reorder, subpass merge, async compute). See TODO "Render-graph
+gaps vs Granite".
+
+---
+
 ## Memory management
 
 Source of truth for **which struct/system gets which allocator**. Distilled
