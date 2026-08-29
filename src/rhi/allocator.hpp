@@ -12,6 +12,11 @@
 #include <cstdint>
 
 #include "rhi/resource_manager.hpp"  // Handle<>, Memory, Buffer
+#if CAIRNS_VULKAN
+#include "rhi/vulkan/memory_allocator.hpp"
+#elif CAIRNS_METAL
+#include "rhi/metal/memory_allocator.hpp"
+#endif
 
 namespace cairns::rhi {
 
@@ -24,28 +29,37 @@ public:
     Allocator(const Allocator&) = delete;
     Allocator& operator=(const Allocator&) = delete;
 
+    // CALLER: ENGINE.
     [[nodiscard]] bool Init(Device& device);
+    // CALLER: ENGINE.
     void Deinit();
 
-    // Per-frame bump ring (transient data).
+    // Per-frame bump ring (transient data). CALLER: ENGINE (frame globals/UBOs).
     void* BumpAllocate(uint32_t bytes, uint32_t align, Memory mem);
     uint32_t BumpOffset(void* ptr) const;
     Handle<Buffer> BumpMasterBuffer(Memory mem) const;
 
-    // Minimum dynamic-UBO / SSBO offset alignment for this backend.
+    // Minimum dynamic-UBO / SSBO offset alignment. CALLER: ENGINE, RESOURCES.
     uint32_t UboAlign() const;
     uint32_t StorageAlign() const;
 
-    // Advance the bump ring to the given frame index (retire + begin).
+    // Advance the bump ring (retire + begin). CALLER: RESOURCES (AdvanceFrame).
     void AdvanceFrame(uint32_t frame_index);
 
-private:
-    friend class Resources;
-    friend class Frames;
-    friend class CommandRecorder;
+    // ============== BACKEND MEMORY STATE — INTERNAL RHI STATE ===============
+    // ACCESS: RESOURCES (create/destroy/resolve walk the MemoryAllocator + read
+    // the alignments directly). ENGINE MUST NOT TOUCH.
+    // =========================================================================
+#if CAIRNS_VULKAN
+    vulkan::MemoryAllocator memory_;
+    uint32_t uniform_align_ = 256;
+    uint32_t storage_align_ = 256;
+#elif CAIRNS_METAL
+    metal::MemoryAllocator memory_;
+#endif
 
-    struct Impl;
-    Impl* impl_ = nullptr;
+private:
+    bool inited_ = false;
 };
 
 }  // namespace cairns::rhi

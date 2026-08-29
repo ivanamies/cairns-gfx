@@ -47,7 +47,9 @@ VkBufferUsageFlags to_vk_buffer_usage(BufferUsage u) {
 
 }  // namespace
 
-MemoryAllocator::~MemoryAllocator() {
+MemoryAllocator::~MemoryAllocator() { Deinit(); }
+
+void MemoryAllocator::Deinit() {
     for (uint32_t slot = 0; slot < kFramesInFlight; ++slot) {
         RetireFrame(slot);
     }

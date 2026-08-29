@@ -80,6 +80,9 @@ public:
     MemoryAllocator& operator=(const MemoryAllocator&) = delete;
 
     bool Init(MTL::Device* device);
+    // Frees all heaps/blocks. Idempotent; the dtor calls it. Must run while the
+    // MTL::Device is still alive (Allocator::Deinit calls it before device teardown).
+    void Deinit();
 
     // Persistent allocations.
     AllocResult AllocBuffer(uint32_t bytes, BufferUsage usage, Memory mem,

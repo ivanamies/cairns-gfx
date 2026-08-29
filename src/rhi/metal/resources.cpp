@@ -13,7 +13,6 @@
 #include "rhi/allocator.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/metal/internal/resources_impl.hpp"
-#include "rhi/metal/internal/allocator_impl.hpp"
 
 namespace cairns::rhi {
 
@@ -118,7 +117,7 @@ void Resources::Destroy(Handle<Buffer> h) {
     if (!hot || !cold) {
         return;
     }
-    impl_->alloc->impl_->memory.FreeBuffer(
+    impl_->alloc->memory_.FreeBuffer(
         hot->heap_buffer_index, cold->alloc,
         impl_->frame_index + kFramesInFlight);
     buffers.Release(h);
@@ -130,7 +129,7 @@ void Resources::Destroy(Handle<Texture> h) {
     if (!hot || !cold) {
         return;
     }
-    impl_->alloc->impl_->memory.FreeImage(
+    impl_->alloc->memory_.FreeImage(
         cold->heap_buffer_index, cold->alloc, hot->api_view,
         impl_->frame_index + kFramesInFlight);
     textures.Release(h);
@@ -196,7 +195,7 @@ uint32_t Resources::GetBufferByteSize(Handle<Buffer> h) {
 
 Handle<Buffer> Resources::CreateBuffer(const BufferDesc& d) {
     metal::AllocResult r =
-        impl_->alloc->impl_->memory.AllocBuffer(d.byte_size, d.usage, d.memory, 16);
+        impl_->alloc->memory_.AllocBuffer(d.byte_size, d.usage, d.memory, 16);
     if (!r.ok) {
         return Handle<Buffer>::Null;
     }
@@ -221,18 +220,18 @@ Handle<Buffer> Resources::CreateBuffer(const BufferDesc& d) {
                 std::memcpy(dst, d.initial_data.data(), d.initial_data.size());
             }
         } else {
-            void* staging = impl_->alloc->impl_->memory.BumpAllocate(
+            void* staging = impl_->alloc->memory_.BumpAllocate(
                 static_cast<uint32_t>(d.initial_data.size()), 16,
                 Memory::kUpload);
             if (staging) {
                 std::memcpy(staging, d.initial_data.data(),
                             d.initial_data.size());
-                uint32_t src_off = impl_->alloc->impl_->memory.BumpOffset(staging);
+                uint32_t src_off = impl_->alloc->memory_.BumpOffset(staging);
                 uint32_t src_hi =
-                    impl_->alloc->impl_->memory.BumpMasterHeapIndex(Memory::kUpload);
-                MTL::Buffer* src = impl_->alloc->impl_->memory.HeapMasterBuffer(src_hi);
+                    impl_->alloc->memory_.BumpMasterHeapIndex(Memory::kUpload);
+                MTL::Buffer* src = impl_->alloc->memory_.HeapMasterBuffer(src_hi);
                 MTL::Buffer* dst_buf =
-                    impl_->alloc->impl_->memory.HeapMasterBuffer(r.heap_index);
+                    impl_->alloc->memory_.HeapMasterBuffer(r.heap_index);
                 MTL::CommandBuffer* cmd =
                     impl_->queue->commandBuffer();
                 MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
@@ -267,7 +266,7 @@ Handle<Texture> Resources::CreateTexture(const TextureDesc& d) {
 
     MTL::SizeAndAlign sa = impl_->device->heapTextureSizeAndAlign(td);
 
-    metal::AllocResult r = impl_->alloc->impl_->memory.AllocImage(
+    metal::AllocResult r = impl_->alloc->memory_.AllocImage(
         static_cast<uint32_t>(sa.size),
         static_cast<uint32_t>(sa.align),
         d.memory);
@@ -276,11 +275,11 @@ Handle<Texture> Resources::CreateTexture(const TextureDesc& d) {
         return Handle<Texture>::Null;
     }
 
-    MTL::Heap* heap = impl_->alloc->impl_->memory.HeapHandle(r.heap_index);
+    MTL::Heap* heap = impl_->alloc->memory_.HeapHandle(r.heap_index);
     MTL::Texture* tex = heap->newTexture(td, r.offset);
     td->release();
     if (!tex) {
-        impl_->alloc->impl_->memory.FreeImage(r.heap_index, r.alloc, nullptr,
+        impl_->alloc->memory_.FreeImage(r.heap_index, r.alloc, nullptr,
                                 impl_->frame_index + kFramesInFlight);
         return Handle<Texture>::Null;
     }
@@ -384,7 +383,7 @@ MTL::Buffer* Resources::GetMtlBuffer(Handle<Buffer> h, uint32_t* out_offset) {
         if (out_offset) {
             *out_offset = 0;
         }
-        return impl_->alloc->impl_->memory.HeapMasterBuffer(h.index);
+        return impl_->alloc->memory_.HeapMasterBuffer(h.index);
     }
     Buffer::Hot* hot = buffers.GetHot(h);
     if (!hot) {
@@ -396,7 +395,7 @@ MTL::Buffer* Resources::GetMtlBuffer(Handle<Buffer> h, uint32_t* out_offset) {
     if (out_offset) {
         *out_offset = hot->offset_in_heap;
     }
-    return impl_->alloc->impl_->memory.HeapMasterBuffer(hot->heap_buffer_index);
+    return impl_->alloc->memory_.HeapMasterBuffer(hot->heap_buffer_index);
 }
 
 uint8_t* Resources::MappedPtr(Handle<Buffer> h) {
@@ -405,7 +404,7 @@ uint8_t* Resources::MappedPtr(Handle<Buffer> h) {
         return nullptr;
     }
     uint8_t* base = static_cast<uint8_t*>(
-        impl_->alloc->impl_->memory.HeapMappedPtr(hot->heap_buffer_index));
+        impl_->alloc->memory_.HeapMappedPtr(hot->heap_buffer_index));
     if (!base) {
         return nullptr;
     }
@@ -413,11 +412,11 @@ uint8_t* Resources::MappedPtr(Handle<Buffer> h) {
 }
 
 MTL::Buffer* Resources::GetBumpMasterBuffer(Memory mem) const {
-    uint32_t hi = impl_->alloc->impl_->memory.BumpMasterHeapIndex(mem);
+    uint32_t hi = impl_->alloc->memory_.BumpMasterHeapIndex(mem);
     if (hi == metal::kInvalidBlock) {
         return nullptr;
     }
-    return impl_->alloc->impl_->memory.HeapMasterBuffer(hi);
+    return impl_->alloc->memory_.HeapMasterBuffer(hi);
 }
 
 }  // namespace cairns::rhi
