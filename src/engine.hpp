@@ -1141,11 +1141,11 @@ public:
         // span at this vector. Same content, just hoisted.
         resident_textures_.clear();
         for (cairns::SceneId sid : scene_ids_) {
-            cairns::Scene::Hot* shot = scenes_.GetHot(sid);
-            if (!shot) {
+            cairns::Scene::Cold* scold = scenes_.GetCold(sid);
+            if (!scold) {
                 continue;
             }
-            for (rhi::Handle<rhi::Texture> th : shot->textureHandles) {
+            for (rhi::Handle<rhi::Texture> th : scold->textureHandles) {
                 resident_textures_.push_back(th);
             }
         }

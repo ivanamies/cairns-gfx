@@ -238,9 +238,6 @@ struct Scene {
         // via cairns::ResourceManager<Mesh>; Scene only holds the handles.
         std::vector<cairns::Handle<Mesh>> meshes;
         std::vector<int32_t> rootNodes;
-        // Per-scene texture/sampler registry consulted at material-load.
-        std::vector<rhi::Handle<rhi::Texture>> textureHandles;
-        std::vector<rhi::Handle<rhi::Sampler>> samplerHandles;
         // Renamed from materialIds (legacy uint32_t name). Each element
         // is a Handle<LoadedMaterial> into Engine::materials_.
         std::vector<cairns::Handle<LoadedMaterial>> materials;
@@ -252,6 +249,12 @@ struct Scene {
     struct Cold {
         std::vector<Node> nodes;
         std::vector<AnimatedTRS> bind_pose;
+        // #222 Phase H.6 finish: per-scene texture/sampler registry. Only
+        // read at material setup (PrepareSceneResources) + resident_textures
+        // population (Engine::resident_textures_ built once post-upload).
+        // Demoted from Hot since no per-frame reader exists.
+        std::vector<rhi::Handle<rhi::Texture>> textureHandles;
+        std::vector<rhi::Handle<rhi::Sampler>> samplerHandles;
         // #221 Phase 5b: per-scene flat tables for GPU palette eval.
         // Populated at load by LoadSceneFromGltf and consumed by
         // engine's anim-table upload sweep.
@@ -826,7 +829,7 @@ inline void PrepareSceneResources(Scene::Hot& hot, Scene::Cold& cold,
             static_cast<const uint8_t*>(texDescIn.src_image),
             static_cast<size_t>(texDescIn.src_bytes_per_row) *
                 static_cast<size_t>(texDescIn.height));
-        hot.textureHandles.push_back(rm.CreateTexture(alloc, d));
+        cold.textureHandles.push_back(rm.CreateTexture(alloc, d));
     }
     
     // Samplers
@@ -852,7 +855,7 @@ inline void PrepareSceneResources(Scene::Hot& hot, Scene::Cold& cold,
         d.address_mode = map_addr(info.addressModeU);
         d.max_anisotropy = 8.0f;
         d.max_lod = 1000.0f;
-        hot.samplerHandles.push_back(rm.CreateSampler(d));
+        cold.samplerHandles.push_back(rm.CreateSampler(d));
     }
     
     // ONLY DOES UNLIT MATERIALS
@@ -860,8 +863,8 @@ inline void PrepareSceneResources(Scene::Hot& hot, Scene::Cold& cold,
     for ( size_t i = 0; i < cold.materialToTextureIndex.size(); ++i ) {
         uint32_t gltf_tex_idx = cold.materialToTextureIndex[i];
         uint32_t gltf_sampler_idx = cold.materialToSamplerIndex[i];
-        auto t = hot.textureHandles[gltf_tex_idx];
-        auto s = hot.samplerHandles[gltf_sampler_idx];
+        auto t = cold.textureHandles[gltf_tex_idx];
+        auto s = cold.samplerHandles[gltf_sampler_idx];
         // #220 Step 1: acquire pool slot, populate Cold. Hot.set2 (the
         // bind group) is filled in later by Engine::initRenderPipeline
         // since it needs rhi_.frames/resources to build the descriptor.
