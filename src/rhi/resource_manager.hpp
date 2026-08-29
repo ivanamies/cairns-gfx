@@ -1,7 +1,10 @@
 // rhi/resource_manager.hpp
 //
-// Public API for the cross-platform GPU resource manager.
-// Implementations live in {metal,vulkan,webgpu}/resource_manager.cpp.
+// The resource vocabulary: Handle<T>, the generational ResourceManager<T> pool
+// template (Aaltonen "arrays you walk"), the resource types (Buffer/Texture/...)
+// with their Hot/Cold SoA split, and the *Desc creation structs. The cooperating
+// subsystems (Device/Allocator/Resources/Bindless/Frames/Pipelines) live in their
+// own headers; this one is what they all share.
 //
 // Three rules that drive every decision:
 //   1. Handles, not pointers. Every resource is referenced by a 32-bit
@@ -92,10 +95,10 @@ struct Handle {
 template <typename T>
 const Handle<T> Handle<T>::Null = Handle<T>{};
 
-// Generational typed pool with SoA hot/cold storage. T must define T::Hot and
-// T::Cold nested types.
+// Generational typed pool with SoA hot/cold storage (Aaltonen "arrays you walk").
+// T must define T::Hot and T::Cold nested types.
 template <typename T>
-class Pool {
+class ResourceManager {
 public:
     Handle<T> Acquire() {
         uint16_t idx;
@@ -324,7 +327,7 @@ struct DynamicBuffersDesc {
 };
 
 // Each resource type defines Hot (read every draw) and Cold (touched only on
-// create/update/destroy). Pool<T> stores them in two separate dense arrays.
+// create/update/destroy). ResourceManager<T> stores them in two separate dense arrays.
 
 struct Buffer {
     struct Hot {

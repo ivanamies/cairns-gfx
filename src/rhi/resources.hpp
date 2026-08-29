@@ -1,7 +1,7 @@
 // rhi/resources.hpp
 //
 // The resource pools (Aaltonen "arrays you walk") + their create/destroy/get +
-// pipeline creation. Depends on Device + Allocator. The 7 typed Pool<T> are
+// pipeline creation. Depends on Device + Allocator. The 7 typed ResourceManager<T> are
 // public members; convenience methods delegate to them. Handle-resolving helpers
 // (BufferBaseOffset/MappedPtr/GetVkBuffer/GetMtlBuffer) live here because they
 // need the pool to resolve a Handle.
@@ -12,7 +12,7 @@
 
 #include <cstdint>
 
-#include "rhi/resource_manager.hpp"  // Pool<T>, Handle<>, resource types, Descs
+#include "rhi/resource_manager.hpp"  // ResourceManager<T>, Handle<>, resource types, Descs
 
 namespace cairns::rhi {
 
@@ -36,13 +36,13 @@ public:
     Handle<DynamicBuffers> CreateDynamicBuffers(const DynamicBuffersDesc& desc);
 
     // Typed generational pools — public; walk them directly for debug/iteration.
-    Pool<Buffer> buffers;
-    Pool<Texture> textures;
-    Pool<Sampler> samplers;
-    Pool<BindGroup> bind_groups;
-    Pool<DynamicBuffers> dynamic_buffers;
-    Pool<Shader> shaders;
-    Pool<Kernel> kernels;
+    ResourceManager<Buffer> buffers;
+    ResourceManager<Texture> textures;
+    ResourceManager<Sampler> samplers;
+    ResourceManager<BindGroup> bind_groups;
+    ResourceManager<DynamicBuffers> dynamic_buffers;
+    ResourceManager<Shader> shaders;
+    ResourceManager<Kernel> kernels;
 
     void Destroy(Handle<Buffer> h);
     void Destroy(Handle<Texture> h);
