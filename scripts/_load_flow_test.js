@@ -124,11 +124,18 @@ run("step 6: first 3 prefabs' handles unchanged (APPEND-only)", () => {
 // ── step 7 ────────────────────────────────────────────────────────────
 run("step 7: instantiate all 6 prefabs; listEntities.count == 6", () => {
     const n_total = BATCH_A.length + BATCH_B.length;
+    // Layout: 6 heroes in a horizontal row, spaced so each model's
+    // ~380-unit bind-pose extent (scale * extent ~= 0.76 world units)
+    // fits inside its 1.4-unit cell without overlap. depth z=-5 so
+    // the 6 * 1.4 = 8.4-unit row fits the 90deg FOV at that depth.
+    const SCALE = 0.002;
+    const SPACING = 1.4;
+    const START = -SPACING * (n_total - 1) * 0.5;
     for (let i = 0; i < n_total; i++) {
         _call("cairns.scene.instantiate", {
             prefab: i,
-            x: -2.0 + i * 0.7, y: 0, z: -3,
-            scale: 0.004,
+            x: START + i * SPACING, y: 0, z: -5,
+            scale: SCALE,
             time_phase: i * 0.137,
         });
     }
