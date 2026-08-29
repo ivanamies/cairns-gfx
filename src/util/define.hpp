@@ -38,3 +38,9 @@
     #define CAIRNS_VULKAN 0
 #endif
 
+#if (CAIRNS_GFX_BACKEND_WEBGPU == 1)
+    #define CAIRNS_WEBGPU 1
+#else
+    #define CAIRNS_WEBGPU 0
+#endif
+

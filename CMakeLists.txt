@@ -51,16 +51,22 @@ if(NOT DEFINED CAIRNS_GFX_BACKEND)
 endif()
 set(CAIRNS_GFX_BACKEND "${CAIRNS_GFX_BACKEND}" CACHE STRING
     "GPU backend: metal or vulkan" FORCE)
-set_property(CACHE CAIRNS_GFX_BACKEND PROPERTY STRINGS metal vulkan)
+set_property(CACHE CAIRNS_GFX_BACKEND PROPERTY STRINGS metal vulkan webgpu)
 
 if(CAIRNS_GFX_BACKEND STREQUAL "metal")
   set(CAIRNS_GFX_BACKEND_METAL 1)
   set(CAIRNS_GFX_BACKEND_VULKAN 0)
+  set(CAIRNS_GFX_BACKEND_WEBGPU 0)
 elseif(CAIRNS_GFX_BACKEND STREQUAL "vulkan")
   set(CAIRNS_GFX_BACKEND_METAL 0)
   set(CAIRNS_GFX_BACKEND_VULKAN 1)
+  set(CAIRNS_GFX_BACKEND_WEBGPU 0)
+elseif(CAIRNS_GFX_BACKEND STREQUAL "webgpu")
+  set(CAIRNS_GFX_BACKEND_METAL 0)
+  set(CAIRNS_GFX_BACKEND_VULKAN 0)
+  set(CAIRNS_GFX_BACKEND_WEBGPU 1)
 else()
-  message(FATAL_ERROR "CAIRNS_GFX_BACKEND must be 'metal' or 'vulkan', got '${CAIRNS_GFX_BACKEND}'")
+  message(FATAL_ERROR "CAIRNS_GFX_BACKEND must be 'metal', 'vulkan', or 'webgpu', got '${CAIRNS_GFX_BACKEND}'")
 endif()
 
 # #229 allocation receipts. When ON, alloc_count.cpp replaces the global
@@ -206,7 +212,8 @@ target_compile_features(cairns_control PUBLIC cxx_std_20)
 target_compile_options(cairns_control PRIVATE -Wall -Wextra)
 target_compile_definitions(cairns_control PRIVATE
     $<$<BOOL:${CAIRNS_GFX_BACKEND_METAL}>:CAIRNS_METAL=1>
-    $<$<BOOL:${CAIRNS_GFX_BACKEND_VULKAN}>:CAIRNS_VULKAN=1>)
+    $<$<BOOL:${CAIRNS_GFX_BACKEND_VULKAN}>:CAIRNS_VULKAN=1>
+    $<$<BOOL:${CAIRNS_GFX_BACKEND_WEBGPU}>:CAIRNS_WEBGPU=1>)
 # render_ops.cpp pulls engine.hpp which transitively needs every header
 # cairns_core sees -- glm/stb/entt above, plus the backend framework includes
 # and SDL. cairns_core declared its dependencies PUBLIC so linking it here is
@@ -229,7 +236,8 @@ target_compile_features(cairns_render_thread PUBLIC cxx_std_20)
 target_compile_options(cairns_render_thread PRIVATE -Wall -Wextra)
 target_compile_definitions(cairns_render_thread PRIVATE
     $<$<BOOL:${CAIRNS_GFX_BACKEND_METAL}>:CAIRNS_METAL=1>
-    $<$<BOOL:${CAIRNS_GFX_BACKEND_VULKAN}>:CAIRNS_VULKAN=1>)
+    $<$<BOOL:${CAIRNS_GFX_BACKEND_VULKAN}>:CAIRNS_VULKAN=1>
+    $<$<BOOL:${CAIRNS_GFX_BACKEND_WEBGPU}>:CAIRNS_WEBGPU=1>)
 if (CAIRNS_GFX_BACKEND_VULKAN AND APPLE)
     target_link_libraries(cairns_render_thread PRIVATE Vulkan::Vulkan)
 endif()
