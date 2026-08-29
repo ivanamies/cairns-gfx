@@ -56,6 +56,8 @@ add_executable(cairns_spec_tests
     test_render_graph_schedule.cpp
     # scene data layer (8)
     test_transform.cpp
+    # loader material->texture mapping (#229 desync invariant)
+    test_material_map.cpp
     # G.1 scene ECS PODs
     test_scene_ecs.cpp
     # G.2 render proxies

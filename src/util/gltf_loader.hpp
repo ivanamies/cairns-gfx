@@ -5,6 +5,7 @@
 #include "rhi/resource_manager.hpp"
 #include "rhi/resources.hpp"
 #include "util/cpu_arena.hpp"  // #229 P3: BumpArena + ArenaSlice (interning)
+#include "util/material_map.hpp"  // kNoMaterialTexture + MapMaterialTextures
 
 #include <cstdio>
 #include <cstdlib>
@@ -47,12 +48,6 @@ namespace cairns {
 // (Engine::prefab_arena_). Pointer-free POD -- replaces the std::string members
 // that embedded a heap pointer + escaped the block cap / hash.
 using NameRef = cairns::ArenaSlice<char>;
-
-// #229 loader: sentinel in materialToTextureIndex/materialToSamplerIndex for a
-// glTF material with no resolvable baseColorTexture. PreparePrefabResources maps
-// it to a placeholder so the material list stays 1:1 with glTF material indices
-// (the draw path indexes hot.materials by prim.materialIndex).
-inline constexpr uint32_t kNoMaterialTexture = UINT32_MAX;
 
 // Fail loud on prefab-arena overflow: ArenaSlice::Alloc returns a null slice
 // when the BumpArena is full, and the fill loop would then write through a
@@ -724,26 +719,33 @@ inline bool LoadPrefabFromGltf(const std::filesystem::path& path,
     // A material with no resolvable baseColorTexture gets kNoMaterialTexture;
     // skipping it (the old behaviour) compacted the list and shifted every
     // later material's slot -> off-by-N texture binds.
-    for (size_t i = 0; i < asset.materials.size(); ++i) {
-        const auto& mat = asset.materials[i];
-        uint32_t image_index = kNoMaterialTexture;
-        uint32_t sampler_index = kNoMaterialTexture;
+    // Reduce fastgltf materials/textures to POD, then map 1:1 (see
+    // material_map.hpp -- the no-skip invariant is the whole point).
+    std::vector<cairns::MaterialTexRef> mat_refs;
+    mat_refs.reserve(asset.materials.size());
+    for (const auto& mat : asset.materials) {
+        cairns::MaterialTexRef r;
         if (mat.pbrData.baseColorTexture.has_value()) {
-            size_t texIdx = mat.pbrData.baseColorTexture->textureIndex;
-            if (texIdx < asset.textures.size()) {
-                if (asset.textures[texIdx].imageIndex.has_value()) {
-                    image_index =
-                        static_cast<uint32_t>(*asset.textures[texIdx].imageIndex);
-                }
-                if (asset.textures[texIdx].samplerIndex.has_value()) {
-                    sampler_index = static_cast<uint32_t>(
-                        *asset.textures[texIdx].samplerIndex);
-                }
-            }
+            r.has_base_color = true;
+            r.texture_index = static_cast<uint32_t>(
+                mat.pbrData.baseColorTexture->textureIndex);
         }
-        cold.materialToTextureIndex.push_back(image_index);
-        cold.materialToSamplerIndex.push_back(sampler_index);
+        mat_refs.push_back(r);
     }
+    std::vector<cairns::TextureSlots> tex_slots;
+    tex_slots.reserve(asset.textures.size());
+    for (const auto& tex : asset.textures) {
+        cairns::TextureSlots s;
+        if (tex.imageIndex.has_value()) {
+            s.image = static_cast<uint32_t>(*tex.imageIndex);
+        }
+        if (tex.samplerIndex.has_value()) {
+            s.sampler = static_cast<uint32_t>(*tex.samplerIndex);
+        }
+        tex_slots.push_back(s);
+    }
+    cairns::MapMaterialTextures(mat_refs, tex_slots, cold.materialToTextureIndex,
+                                cold.materialToSamplerIndex);
 
     // 4. Meshes -- #220 Step 2: acquire pool slot per gltf mesh, write
     // Hot+Cold, push the MeshId into the Scene's mesh list.
