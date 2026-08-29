@@ -123,8 +123,10 @@ solid; do not skip ahead.
 5. **Threading** — game / render thread split with `kFramesInFlight = 2`.
    SPSC handoff via `std::mutex` + `std::condition_variable` ONLY (no
    semaphores, latches, barriers, `shared_mutex`, atomic wait/notify).
-   Per-slot `RenderGraph` + draw-list containers so producer and consumer
-   never share mutable state.
+   Per-slot draw-list + arena containers so producer and consumer never
+   share mutable state. A single shared `RenderGraph` instance is reused
+   each frame via `BindSlotArena(slot, ...)` — built + baked + executed on
+   the render thread inside `RecordFrame`. See "Deferred refactors" below.
 6. **RenderGraph / RenderProxies** — multi-pass graph (compute / forward /
    composite / depth-PIP / ui), Extract from `entt::registry` →
    `RenderProxyArrays`, draw build off proxies. Transient resource aliasing
@@ -164,21 +166,23 @@ we land at 60 fps so long as the GPU itself fits in vsync.
  loop:                                       loop:
    SDL_PollEvents                              pkt = queue.Pop()    // blocks if empty
    ImGui NewFrame + UI + Render                Frames::Begin(res, alloc)
-   FrameClock::Tick → sim step                   ↳ semaphore_wait + AdvanceFrame
+   FrameClock::Tick → sim step                   ↳ semaphore_wait + AcquireNextImage
    Extract → proxies (FrameArena)              Build per-draw UBOs from pkt
    BuildMeshOpaqueDraws → drawList             (rhi_.alloc.BumpAllocate ×N)
-   Build RenderGraph (AddPass + Bake)          graph_.Execute(fc, swapchain_)
-   FramePacket pkt{...}                          ↳ AcquireSwapchain inside composite
-   queue.Push(pkt)                             Frames::End → submit + present
+   BuildSkinFrame → palettes + batches         Build + Bake RenderGraph
+   FramePacket pkt{...}                        graph_.Execute(fc, swapchain_)
+   queue.Push(pkt)                             Frames::EndSubmit
    queue.WaitIfFull(kFramesInFlight)           if pkt.dump_frame: do dump + signal
 ```
 
 **Ownership rules:**
-- Game thread: SDL, ImGui, sim, Extract, BuildMeshOpaqueDraws, render-graph
-  build. No GPU bump-alloc, no `Frames::*`.
-- Render thread: per-draw UBO bumps (one allocator on one thread), graph
-  Execute, `Frames::Begin/End`. No sim, no ImGui, no resource
-  `Acquire`/`Release`.
+- Game thread: SDL, ImGui, sim, Extract, BuildMeshOpaqueDraws,
+  BuildSkinFrame. No GPU bump-alloc, no `Frames::*`, no render-graph
+  build (graph build + Bake + Execute live on the render thread inside
+  `RecordFrame`; see Deferred refactors below).
+- Render thread: per-draw UBO bumps (one allocator on one thread),
+  render-graph build + Bake + Execute, `Frames::Begin/EndSubmit`. No sim,
+  no ImGui, no resource `Acquire`/`Release`.
 - Shared: `Resources::GetHot()` is read-only and safe.
   `Resources::Acquire` / `Release` are game-thread-only (load-time today;
   runtime spawns deferred).
@@ -192,6 +196,16 @@ we land at 60 fps so long as the GPU itself fits in vsync.
 **Determinism:** under `CAIRNS_DUMP`, the dump frame collapses to a lock-step
 handshake so `scripts/verify_metal.sh` stays byte-identical to the existing
 golden.
+
+### Deferred refactors
+
+- **Move render-graph build to the game thread, per-slot.** Today the
+  graph is built + baked + executed on the render thread inside
+  `RecordFrame` (`src/engine.hpp`), with a single shared `RenderGraph`
+  instance reused per slot via `BindSlotArena(slot, ...)`. The threading
+  diagram above describes the intended end state; getting there means
+  splitting graph build/bake (game thread, per-slot graphs) from
+  Execute (render thread). Not blocking any active perf push.
 
 ---
 
