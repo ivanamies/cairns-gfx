@@ -295,49 +295,26 @@ public:
     }
     
     bool initBufferManagers() {
-        const int64_t buffers_align = device.GetGpuAlignUboOffset();
-        { // init render pass globals
+        { // init render pass globals handles
             for ( uint32_t i = 0; i < kBufferedFrames; ++i ) {
-                cairns::OffsetAllocator::Allocation mem = allocTransientLinear1_->Alloc(sizeof(cairns::rhi::RenderPassGlobals), buffers_align);
-                BufHandle dh = bufferManager_->New();
-                auto* obj = bufferManager_->GetObj(dh);
-                obj->buffer = allocTransientLinear1_->GetBuffer();
-                obj->mem = mem;
-                renderPassGlobals_.push_back(dh);
+                renderPassGlobals_.push_back(bufferManager_->New());
             }
         }
-        { // init draw tmps
+        { // init draw tmp handles
             drawTmpIdxs_.resize(kBufferedFrames);
             drawTmps_.resize(kBufferedFrames);
-            // only ubos for now
-            const int64_t draw_tmp_size = sizeof(cairns::rhi::DrawTmp);
-            // "On mobile uniform buffers have 16KB binding size limitation." sl27/pg42
-            assert(draw_tmp_size <= 1 << 16);
             for ( uint32_t i = 0; i < kBufferedFrames; ++i ) {
                 for ( uint32_t j = 0; j < kMaxDrawTmpsPerFrame; ++j ) {
-                    cairns::OffsetAllocator::Allocation mem = allocTransientLinear1_->Alloc(draw_tmp_size, buffers_align);
-                    assert(mem != cairns::OffsetAllocator::BadAllocation);
-                    BufHandle dh = bufferManager_->New();
-                    auto* obj = bufferManager_->GetObj(dh);
-                    obj->buffer = allocTransientLinear1_->GetBuffer();
-                    obj->mem = mem;
-                    drawTmps_[i].push_back(dh);
+                    drawTmps_[i].push_back(bufferManager_->New());
                 }
             }
         }
-        { // init material transfer buffers
+        { // init material buffer handles
             materialBufferIdxs_.resize(kBufferedFrames);
             materialBuffers_.resize(kBufferedFrames);
-            const int64_t material_gpu_size = sizeof(cairns::rhi::MaterialGpu);
             for ( uint32_t i = 0; i < kBufferedFrames; ++i ) {
                 for ( uint32_t j = 0; j < kMaxMaterialBuffersPerFrame; ++j ) {
-                    cairns::OffsetAllocator::Allocation mem = allocTransientLinear1_->Alloc(material_gpu_size, buffers_align);
-                    assert( mem != cairns::OffsetAllocator::BadAllocation);
-                    BufHandle h = materialBufferManager_->New();
-                    auto* obj = materialBufferManager_->GetObj(h);
-                    obj->buffer = allocTransientLinear1_->GetBuffer();
-                    obj->mem = mem;
-                    materialBuffers_[i].push_back(h);
+                    materialBuffers_[i].push_back(materialBufferManager_->New());
                 }
             }
         }
@@ -645,12 +622,16 @@ public:
                 .camera_dir = glm::vec4(camera_dir, near_z),
                 .screen_params = glm::vec4(screen_width, screen_height, 1.0f / screen_width, 1.0f / screen_height)
             };
+            const uint32_t dyn_align =
+                static_cast<uint32_t>(device.GetGpuAlignUboOffset());
+            void* gptr = rm_.BumpAllocate(
+                sizeof(cairns::rhi::RenderPassGlobals), dyn_align,
+                rhi2::Memory::kDynamic);
+            memcpy(gptr, &render_pass_globals, sizeof(render_pass_globals));
             BufHandle globals_handle = renderPassGlobals_[frame];
-            // todo @iamies use an actual RHI abstraction like GetUnifiedAddr(ResourceObject<Buffer>);
-            auto* buffer = bufferManager_->GetObj(globals_handle)->buffer;
-            cairns::OffsetAllocator::Allocation mem = bufferManager_->GetObj(globals_handle)->mem;
-            void* addr = reinterpret_cast<uint8_t*>(buffer->contents()) + mem.offset;
-            memcpy(addr, &render_pass_globals, sizeof(render_pass_globals));
+            auto* gh = bufferManager_->GetObj(globals_handle);
+            gh->buffer = rm_.GetBumpMasterBuffer(rhi2::Memory::kDynamic);
+            gh->mem.offset = rm_.BumpOffset(gptr);
             glob_obj.type = cairns::rhi::BindGroup::Type::kRenderPassGlobal;
             glob_obj.globals = globals_handle;
         }
@@ -701,14 +682,18 @@ public:
                             .tex_color_id = gpu_tex_id,
                             .sampler_id = gpu_sampler_id,
                         };
+                        const uint32_t dyn_align =
+                            static_cast<uint32_t>(device.GetGpuAlignUboOffset());
                         const uint32_t material_buf_idx = materialBufferIdxs_[frame]++;
                         assert(material_buf_idx < kMaxMaterialBuffersPerFrame);
                         const BufHandle h = materialBuffers_[frame][material_buf_idx];
-                        // todo @iamies use an actual RHI abstraction like GetUnifiedAddr(ResourceObject<Buffer>);
-                        MTL::Buffer* const material_buffer = materialBufferManager_->GetObj(h)->buffer;
-                        const cairns::OffsetAllocator::Allocation material_mem = materialBufferManager_->GetObj(h)->mem;
-                        void* const material_addr = reinterpret_cast<uint8_t*>(material_buffer->contents()) + material_mem.offset;
-                        memcpy(material_addr, &material_gpu, sizeof(material_gpu));
+                        void* mptr = rm_.BumpAllocate(
+                            sizeof(cairns::rhi::MaterialGpu), dyn_align,
+                            rhi2::Memory::kDynamic);
+                        memcpy(mptr, &material_gpu, sizeof(material_gpu));
+                        auto* mh = materialBufferManager_->GetObj(h);
+                        mh->buffer = rm_.GetBumpMasterBuffer(rhi2::Memory::kDynamic);
+                        mh->mem.offset = rm_.BumpOffset(mptr);
                         mat_obj.type = cairns::rhi::BindGroup::Type::kMaterial;
                         mat_obj.material_buffer = h;
                         mat_obj.material = mat_handle;
@@ -725,14 +710,18 @@ public:
                             .tex_id = gpu_tex_id,
                             .sampler_id = gpu_sampler_id
                         };
+                        const uint32_t dyn_align =
+                            static_cast<uint32_t>(device.GetGpuAlignUboOffset());
                         const uint32_t draw_tmp_idx = drawTmpIdxs_[frame]++;
                         assert(draw_tmp_idx < kMaxDrawTmpsPerFrame);
                         const BufHandle h = drawTmps_[frame][draw_tmp_idx];
-                        // todo @iamies use an actual RHI abstraction like GetUnifiedAddr(ResourceObject<Buffer>);
-                        MTL::Buffer* const draw_tmp_buffer = bufferManager_->GetObj(h)->buffer;
-                        const cairns::OffsetAllocator::Allocation draw_tmp_mem = bufferManager_->GetObj(h)->mem;
-                        void* const draw_tmp_addr = reinterpret_cast<uint8_t*>(draw_tmp_buffer->contents()) + draw_tmp_mem.offset;
-                        memcpy(draw_tmp_addr, &draw_tmp, sizeof(draw_tmp));
+                        void* tptr = rm_.BumpAllocate(
+                            sizeof(cairns::rhi::DrawTmp), dyn_align,
+                            rhi2::Memory::kDynamic);
+                        memcpy(tptr, &draw_tmp, sizeof(draw_tmp));
+                        auto* th = bufferManager_->GetObj(h);
+                        th->buffer = rm_.GetBumpMasterBuffer(rhi2::Memory::kDynamic);
+                        th->mem.offset = rm_.BumpOffset(tptr);
                         tmp_obj.type = cairns::rhi::DynamicBuffers::Type::kTmp;
                         tmp_obj.buf = h;
                     }
@@ -776,9 +765,10 @@ public:
         }
         
         dispatch_semaphore_wait(frameSemaphore, DISPATCH_TIME_FOREVER);
-        
+
         resetFrameTmps(frame);
-        
+        rm_.BeginFrame();
+
         if ( resizeFrameBufferRequest_ ) {
             resizeFrameBuffer(resizeFrameBufferRequest_->width, resizeFrameBufferRequest_->height);
             resizeFrameBufferRequest_ = std::nullopt;
@@ -836,14 +826,16 @@ public:
             // todo @iamies don't hard code this.
             // ... also, did this just consume one of your buffer binding slots?
             encoder->setVertexBuffer(mesh_master_buf_, 0, 0);
+            MTL::Buffer* dyn_master =
+                rm_.GetBumpMasterBuffer(rhi2::Memory::kDynamic);
             // set up render pass globals bind group in vertex shader
-            encoder->setVertexBuffer(allocTransientLinear1_->GetBuffer(), 0, cairns::kRenderPassGlobalBindSlot);
+            encoder->setVertexBuffer(dyn_master, 0, cairns::kRenderPassGlobalBindSlot);
             // set up material buffer bind group in vertex shader
-            encoder->setVertexBuffer(allocTransientLinear1_->GetBuffer(), 0, cairns::kMaterialBindSlot);
+            encoder->setVertexBuffer(dyn_master, 0, cairns::kMaterialBindSlot);
             // set up shader specific buffers bind group in vertex shader
             // none
             // set up per draw temporaries bind group in vertex shader
-            encoder->setVertexBuffer(allocTransientLinear1_->GetBuffer(), 0, cairns::kDrawTmpBindSlot);
+            encoder->setVertexBuffer(dyn_master, 0, cairns::kDrawTmpBindSlot);
             
             MatHandle last_mat = MatHandle::Null;
             uint32_t triangles = 0;

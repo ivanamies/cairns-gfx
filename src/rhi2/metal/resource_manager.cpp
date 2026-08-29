@@ -25,7 +25,7 @@ struct ResourceManager::Impl {
     Pool<BindGroup> bind_groups;
     Pool<DynamicBuffers> dynamic_buffers;
 
-    uint32_t frame_index = 0;
+    uint32_t frame_index = 1;
 };
 
 namespace {
@@ -248,6 +248,14 @@ MTL::Heap* ResourceManager::GetMtlHeap(Handle<Buffer> h) {
         return nullptr;
     }
     return impl_->memory.HeapHandle(hot->heap_buffer_index);
+}
+
+MTL::Buffer* ResourceManager::GetBumpMasterBuffer(Memory mem) const {
+    uint32_t hi = impl_->memory.BumpMasterHeapIndex(mem);
+    if (hi == metal::kInvalidBlock) {
+        return nullptr;
+    }
+    return impl_->memory.HeapMasterBuffer(hi);
 }
 
 }  // namespace cairns::rhi2

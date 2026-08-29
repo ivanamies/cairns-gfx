@@ -437,6 +437,7 @@ public:
     MTL::Buffer* GetMtlBuffer(Handle<Buffer> h, uint32_t* out_offset);
     uint8_t* MappedPtr(Handle<Buffer> h);
     MTL::Heap* GetMtlHeap(Handle<Buffer> h);
+    MTL::Buffer* GetBumpMasterBuffer(Memory mem) const;
 #endif  // CAIRNS_METAL
 
 private:
