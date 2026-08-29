@@ -99,6 +99,7 @@ MTL::VertexFormat to_mtl_vertex_format(Format f) {
         case Format::kR32F:    return MTL::VertexFormatFloat;
         case Format::kRg32F:   return MTL::VertexFormatFloat2;
         case Format::kRgba32F: return MTL::VertexFormatFloat4;
+        case Format::kRgba8Unorm: return MTL::VertexFormatUChar4Normalized;
         default:               return MTL::VertexFormatFloat4;
     }
 }

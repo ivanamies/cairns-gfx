@@ -4,3 +4,5 @@ glslc depth_only.vert -o depth_only.vert.spv
 glslc depth_only.frag -o depth_only.frag.spv
 glslc composite.vert -o composite.vert.spv
 glslc composite.frag -o composite.frag.spv
+glslc imgui.vert -o imgui.vert.spv
+glslc imgui.frag -o imgui.frag.spv

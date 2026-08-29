@@ -36,6 +36,8 @@
 #include "rhi/rhi.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/command_recorder.hpp"
+#include "imgui.h"
+#include "imgui_impl_sdl3.h"
 
 namespace cairns {
 
@@ -435,6 +437,22 @@ public:
         const uint32_t fb_w = swapchain_.Width();
         const uint32_t fb_h = swapchain_.Height();
 
+        // Overlay is non-deterministic (fps text changes per frame) -> skip it
+        // under CAIRNS_FREEZE_ROT so the byte-gate dump stays reproducible.
+        const bool draw_imgui = std::getenv("CAIRNS_FREEZE_ROT") == nullptr;
+        if (draw_imgui) {
+            ImGui_ImplSDL3_NewFrame();
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_FirstUseEver);
+            ImGui::Begin("cairns");
+            const float fps = cpu_ms_last_ > 0.0f ? 1000.0f / cpu_ms_last_ : 0.0f;
+            ImGui::Text("CPU: %.2f ms  (%.0f fps)", cpu_ms_last_, fps);
+            ImGui::PlotLines("##cpuhist", cpu_ms_history_, kCpuMsHistory, cpu_ms_head_,
+                             "cpu ms", 0.0f, 33.0f, ImVec2(220.0f, 80.0f));
+            ImGui::End();
+            ImGui::Render();
+        }
+
         graph_.Reset();
         rhi::GraphTexture depth_tex;
         rhi::GraphTexture color_tex;
@@ -495,6 +513,10 @@ public:
                                                            res.Resolve(depth_tex)};
                 cmd.DrawFullscreen(rhi_.resources, composite_, texs, 2,
                                    composite_sampler_);
+                if (draw_imgui) {
+                    cmd.DrawImGui(rhi_.resources, rhi_.alloc, imgui_, imgui_font_,
+                                  composite_sampler_, ImGui::GetDrawData());
+                }
             });
         graph_.SetOutput(swap_tex);
         if (!graph_.Bake() || !graph_.Execute(fc, swapchain_)) {
@@ -616,6 +638,57 @@ public:
             sd.mip_filter = rhi::Filter::kLinear;
             sd.address_mode = rhi::AddressMode::kClampToEdge;
             composite_sampler_ = rhi_.resources.CreateSampler(sd);
+
+            // imgui pipeline: swapchain (MSAA), alpha blend, no depth.
+            const rhi::VertexInputAttribute ia[3] = {
+                {0, 0, rhi::Format::kRg32F, offsetof(ImDrawVert, pos)},
+                {1, 0, rhi::Format::kRg32F, offsetof(ImDrawVert, uv)},
+                {2, 0, rhi::Format::kRgba8Unorm, offsetof(ImDrawVert, col)},
+            };
+            const rhi::VertexBufferLayout il{
+                0, static_cast<uint32_t>(sizeof(ImDrawVert))};
+            rhi::GraphicsPipelineDesc id{};
+            id.logical_shader = "imgui";
+            id.shader_dir = shader_dir.c_str();
+            id.vertex_attributes =
+                std::span<const rhi::VertexInputAttribute>(ia, 3);
+            id.vertex_buffers = std::span<const rhi::VertexBufferLayout>(&il, 1);
+            id.topology = rhi::PrimitiveTopology::kTriangleList;
+            id.cull = rhi::CullMode::kNone;
+            id.depth_test = false;
+            id.depth_write = false;
+            id.blend.enable = true;
+            id.blend.src_color = rhi::BlendFactor::kSrcAlpha;
+            id.blend.dst_color = rhi::BlendFactor::kOneMinusSrcAlpha;
+            id.blend.src_alpha = rhi::BlendFactor::kOne;
+            id.blend.dst_alpha = rhi::BlendFactor::kOneMinusSrcAlpha;
+            id.color_format = rhi::Format::kBgra8Unorm;
+            id.depth_format = rhi::Format::kD32F;
+            id.sample_count = sampleCount;
+            id.push_constant_bytes = 16;
+            id.debug_name = "imgui";
+            id.swap_chain = &swapchain_;
+            imgui_ = rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources,
+                                                           rhi_.frames, id);
+            if (imgui_.IsNull()) {
+                std::exit(0);
+            }
+
+            // imgui font atlas -> sampled texture (ImGui context created in main).
+            ImGuiIO& io = ImGui::GetIO();
+            unsigned char* pixels = nullptr;
+            int fw = 0;
+            int fh = 0;
+            io.Fonts->GetTexDataAsRGBA32(&pixels, &fw, &fh);
+            rhi::TextureDesc ftd{};
+            ftd.dimensions = {fw, fh, 1};
+            ftd.format = rhi::Format::kRgba8Unorm;
+            ftd.usage = rhi::kTexUsageSampled;
+            ftd.initial_data = std::span<const uint8_t>(
+                pixels, static_cast<size_t>(fw) * static_cast<size_t>(fh) * 4);
+            ftd.debug_name = "imgui_font";
+            imgui_font_ = rhi_.resources.CreateTexture(rhi_.alloc, ftd);
+            io.Fonts->SetTexID(static_cast<ImTextureID>(1));
         }
 
         return true;
@@ -758,7 +831,9 @@ private:
     ShaderHandle depth_only_ = ShaderHandle::Null;
     ShaderHandle unlit_offscreen_ = ShaderHandle::Null;
     ShaderHandle composite_ = ShaderHandle::Null;
+    ShaderHandle imgui_ = ShaderHandle::Null;
     rhi::Handle<rhi::Sampler> composite_sampler_ = rhi::Handle<rhi::Sampler>::Null;
+    rhi::Handle<rhi::Texture> imgui_font_ = rhi::Handle<rhi::Texture>::Null;
     // particles
     static constexpr uint32_t kParticleCount = 512;
     rhi::Handle<rhi::Kernel> particle_kernel_;

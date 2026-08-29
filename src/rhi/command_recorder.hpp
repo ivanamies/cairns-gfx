@@ -19,6 +19,8 @@
 #include <Metal/Metal.hpp>
 #endif
 
+struct ImDrawData;
+
 namespace cairns::rhi {
 
 class Resources;
@@ -129,6 +131,11 @@ public:
     void DrawFullscreen(Resources& res, Handle<Shader> pipeline,
                         const Handle<Texture>* textures, uint32_t tex_count,
                         Handle<Sampler> sampler);
+    // Render ImGui draw data through the RHI (own pipeline + per-frame bump
+    // upload of vtx/idx + per-cmd scissor). Drawn inside the swapchain pass.
+    void DrawImGui(Resources& res, Allocator& alloc, Handle<Shader> pipeline,
+                   Handle<Texture> font, Handle<Sampler> sampler,
+                   const ImDrawData* draw_data);
     void SetViewport(float x, float y, float w, float h);
     void SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h);
     void EndRenderPass();
