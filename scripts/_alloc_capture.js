@@ -8,7 +8,7 @@
 //   6. unloadAll
 //   7. render 5 frames
 
-const PATHS = ["aatrox.glb", "ahri.glb", "ekko.glb"];
+const PATHS = ["aatrox.glb", "ahri.glb", "aatrox_blood_moon.glb"];
 
 function _call(op, args) {
     const r = cairns.dispatch(op, args || {});

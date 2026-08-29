@@ -1,6 +1,7 @@
 #pragma once
 
 #include "util/define.hpp"
+#include "util/alloc_count.hpp"  // #229 per-phase allocation receipts
 
 #include <array>
 #include <cmath>
@@ -409,6 +410,10 @@ public:
         CAIRNS_PRINT_ERR("[LOAD] begin batch n=%zu first=%s\n",
                           glbs.size(), first_path);
         CAIRNS_SIGNPOST_INTERVAL_SCOPED("load_prefab_batch", first_path);
+#if CAIRNS_ALLOC_TRACE
+        const cairns::alloc_count::Snapshot alloc_load_begin =
+            cairns::alloc_count::Now();
+#endif
 
         LoadPrefabBatchResult r{};
         r.first_prefab_idx = static_cast<uint32_t>(prefab_ids_.size());
@@ -534,6 +539,9 @@ public:
         // hunting for the LoadTrace summary.
         CAIRNS_PRINT_ERR("[LOAD] end batch ms=%.3f count=%u\n",
                           trace.total_ms, r.count);
+#if CAIRNS_ALLOC_TRACE
+        cairns::alloc_count::PrintDelta("[LOAD]", alloc_load_begin);
+#endif
         return r;
     }
 
@@ -1190,6 +1198,10 @@ public:
                           path.filename().c_str());
         CAIRNS_SIGNPOST_INTERVAL_SCOPED("reload_prefab",
                                          path.filename().c_str());
+#if CAIRNS_ALLOC_TRACE
+        const cairns::alloc_count::Snapshot alloc_reload_begin =
+            cairns::alloc_count::Now();
+#endif
         cairns::PrefabId oldId = prefab_ids_[idx];
         // Snapshot the old prefab's owned resources BEFORE LoadPrefabBatch
         // -- it may grow the prefabs_/meshes_/materials_ pools' backing
@@ -1278,6 +1290,9 @@ public:
         }
         CAIRNS_PRINT_ERR("[RELOAD] end idx=%u path=%s ok\n", idx,
                           path.filename().c_str());
+#if CAIRNS_ALLOC_TRACE
+        cairns::alloc_count::PrintDelta("[RELOAD]", alloc_reload_begin);
+#endif
         return true;
     }
 

@@ -63,6 +63,19 @@ else()
   message(FATAL_ERROR "CAIRNS_GFX_BACKEND must be 'metal' or 'vulkan', got '${CAIRNS_GFX_BACKEND}'")
 endif()
 
+# #229 allocation receipts. When ON, alloc_count.cpp replaces the global
+# operator new/delete set to count every heap (de)allocation and the engine
+# prints per-phase deltas at the [LOAD]/[RELOAD] fences. Diagnostic only;
+# default OFF leaves the operators untouched (zero overhead). Applied globally
+# so every TU's allocations route through the counted operators.
+option(CAIRNS_GFX_ALLOC_TRACE
+  "Count heap allocations and print [ALLOC-RECEIPT] deltas at load/reload fences"
+  OFF)
+if(CAIRNS_GFX_ALLOC_TRACE)
+  add_compile_definitions(CAIRNS_ALLOC_TRACE=1)
+  message(STATUS "cairns: allocation tracing ENABLED (CAIRNS_ALLOC_TRACE=1)")
+endif()
+
 configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/src/util/gfx_config.hpp.in"
   "${CMAKE_BINARY_DIR}/generated/util/gfx_config.hpp"
