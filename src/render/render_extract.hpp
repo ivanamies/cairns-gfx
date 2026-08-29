@@ -18,11 +18,13 @@ namespace cairns {
 // for the DFS; emits the same MeshProxy/PrimitiveProxy shape as the old
 // Extract above. Sets proxy.skin = kInvalidSkin unconditionally
 // (matches old extract; skinning lands at P8).
-// #220 Step 2: meshes are engine-owned (cairns::ResourceManager<Mesh>);
-// Scene only holds MeshIds. Pool reference threaded through so the
-// inner walk can resolve each MeshId to its Hot record.
+// #220 Steps 2+3: meshes and scenes are engine-owned pools. Pool
+// references threaded through so the inner walk can resolve each
+// Asset::cpu_graph (now SceneId) to Scene::Hot+Cold and each Scene
+// mesh entry (MeshId) to Mesh::Hot.
 inline void ExtractFromWorld(World::Cold& wc, const glm::mat4& root,
                              AssetRegistry& assets,
+                             cairns::ResourceManager<Scene>& scenes_pool,
                              cairns::ResourceManager<Mesh>& meshes_pool,
                              RenderProxyArrays& out) {
     out.Clear();
@@ -47,19 +49,24 @@ inline void ExtractFromWorld(World::Cold& wc, const glm::mat4& root,
         const Renderable& rdr = view.get<const Renderable>(entity);
 
         Asset::Cold* ac = assets.Pool().GetCold(ref.asset);
-        if (!ac || !ac->cpu_graph) {
+        if (!ac || ac->cpu_graph.IsNull()) {
             continue;
         }
-        const Scene& scene = *ac->cpu_graph;
+        // #220 Step 3: cpu_graph is a SceneId; resolve to Hot+Cold.
+        Scene::Hot* shot = scenes_pool.GetHot(ac->cpu_graph);
+        Scene::Cold* scold = scenes_pool.GetCold(ac->cpu_graph);
+        if (!shot || !scold) {
+            continue;
+        }
         const glm::mat4 model = xf.world * root;
 
         top = 0;
-        for (size_t j = 0; j < scene.rootNodes.size(); ++j) {
-            push_or_die(scene.rootNodes[j]);
+        for (size_t j = 0; j < shot->rootNodes.size(); ++j) {
+            push_or_die(shot->rootNodes[j]);
         }
         while (top > 0) {
             const int32_t node_idx = stack[--top];
-            const Node& node = scene.nodes[node_idx];
+            const Node& node = scold->nodes[node_idx];
             if (node.meshIndex < 0) {
                 // #212 explicit pointer+size iteration. RelWithDebInfo doesn't
             // inline std::vector<int32_t>::begin()/end() reliably -- shows
@@ -74,7 +81,7 @@ inline void ExtractFromWorld(World::Cold& wc, const glm::mat4& root,
 
             // #220 Step 2: scene.meshes is std::vector<MeshId>; resolve
             // to the engine's pool Hot record for the GPU handles.
-            const cairns::Handle<Mesh> mid = scene.meshes[node.meshIndex];
+            const cairns::Handle<Mesh> mid = shot->meshes[node.meshIndex];
             const Mesh::Hot* mhot = meshes_pool.GetHot(mid);
             MeshProxy proxy;
             proxy.world_matrix = node.globalTransform * model;
@@ -95,7 +102,7 @@ inline void ExtractFromWorld(World::Cold& wc, const glm::mat4& root,
                 pp.first_index = prim.firstIndex;
                 pp.index_count = prim.indexCount;
                 pp.vertex_offset = prim.vertexOffset;
-                pp.material_id = scene.materialIds[prim.materialIndex];
+                pp.material_id = shot->materials[prim.materialIndex];
                 out.primitives.push_back(pp);
             }
             out.meshes.push_back(proxy);

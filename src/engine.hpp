@@ -661,25 +661,30 @@ public:
                 instance_count);
 
             for (const std::filesystem::path& filepath : glb_paths) {
-                scenes_.emplace_back();
-                cairns::Scene& scene = scenes_.back();
-                // #220 Step 2: pool threaded through so Acquired Mesh
-                // slots land in the engine-owned meshes_ pool.
-                if (!cairns::LoadSceneFromGltf(filepath, scene, meshes_)) {
+                // #220 Step 3: Acquire SceneId, write Hot+Cold via pool.
+                cairns::SceneId sid = scenes_.Acquire();
+                scene_ids_.push_back(sid);
+                cairns::Scene::Hot* shot = scenes_.GetHot(sid);
+                cairns::Scene::Cold* scold = scenes_.GetCold(sid);
+                if (!cairns::LoadSceneFromGltf(filepath, *shot, *scold, meshes_)) {
                     return false;
                 }
-                cairns::PrepareSceneResources(scene, rhi_.resources, rhi_.alloc, materials_);
+                cairns::PrepareSceneResources(*shot, *scold, rhi_.resources,
+                                              rhi_.alloc, materials_);
             }
 
             if (!cairns::rhi::LoadScenesGpu(
-                    std::span<cairns::Scene>(scenes_.data(), scenes_.size()),
-                    meshes_, rhi_.resources, rhi_.alloc)) {
+                    std::span<const cairns::SceneId>(scene_ids_.data(),
+                                                       scene_ids_.size()),
+                    scenes_, meshes_, rhi_.resources, rhi_.alloc)) {
                 return false;
             }
 
-            for (cairns::Scene& scene : scenes_) {
-                scene.CleanupTmps();
-            }
+            // #220 Step 3: per-Scene Cold CleanupTmps via the pool sweep.
+            scenes_.ForEachLive(
+                [](cairns::Scene::Hot&, cairns::Scene::Cold& c) {
+                    c.CleanupTmps();
+                });
             // #220 Step 2: clear every Mesh's CPU temporaries in the pool
             // after upload. Used to live inside Scene::CleanupTmps, but
             // mesh data now lives in the engine-owned pool, not Scene.
@@ -690,18 +695,22 @@ public:
                     c.cpuIndices.clear();
                 });
         }
-        if (!scenes_.empty() && !scenes_[0].meshes.empty()) {
-            // #220 Step 2: lookup via pool. scenes_[0].meshes[0] is now a
-            // MeshId; the actual posHandle is in the pool's Hot record.
-            mesh_master_handle_ =
-                meshes_.GetHot(scenes_[0].meshes[0])->posHandle;
+        if (!scene_ids_.empty()) {
+            cairns::Scene::Hot* s0_hot =
+                scenes_.GetHot(scene_ids_[0]);
+            if (s0_hot && !s0_hot->meshes.empty()) {
+                // #220 Step 2: lookup via pool. scene_ids_[0]'s meshes[0]
+                // is a MeshId; the actual posHandle is in the pool's Hot.
+                mesh_master_handle_ =
+                    meshes_.GetHot(s0_hot->meshes[0])->posHandle;
+            }
         }
 
         // EnTT scene-layer path. Register each loaded Scene with the
         // AssetRegistry, then create one entity per debug-grid xform in
         // the active world's registry. SceneEntity / SceneWorld are
         // gone -- the entt::registry IS the source of truth.
-        if (!scenes_.empty()) {
+        if (!scene_ids_.empty()) {
             // Pre-allocate hot/cold cells up to kMaxWorlds so Acquire
             // doesn't trigger a vector growth that would move
             // World::Cold and invalidate any cached pointers. The
@@ -714,19 +723,22 @@ public:
 
             // Shared GPU buffer handles -- all GLBs alias the same
             // packed buffer-set (see scene_gpu.hpp).
-            // #220 Step 2: scenes_[0].meshes[0] is a MeshId; resolve.
+            // #220 Step 3: resolve through scene_ids_[0] -> Scene::Hot.
+            cairns::Scene::Hot* s0_hot_b =
+                scenes_.GetHot(scene_ids_[0]);
             const cairns::Mesh::Hot* m0_hot =
-                meshes_.GetHot(scenes_[0].meshes[0]);
+                meshes_.GetHot(s0_hot_b->meshes[0]);
             const auto pos_handle = m0_hot->posHandle;
             const auto attr_handle = m0_hot->attrHandle;
             const auto idx_handle = m0_hot->indexHandle;
 
             std::vector<cairns::AssetId> per_scene_asset;
-            per_scene_asset.reserve(scenes_.size());
-            for (size_t s_idx = 0; s_idx < scenes_.size(); ++s_idx) {
+            per_scene_asset.reserve(scene_ids_.size());
+            for (size_t s_idx = 0; s_idx < scene_ids_.size(); ++s_idx) {
+                // #220 Step 3: AssetRegistry registers by SceneId.
                 per_scene_asset.push_back(
                     assets_.RegisterExistingScene(
-                        static_cast<uint32_t>(s_idx), &scenes_[s_idx],
+                        static_cast<uint32_t>(s_idx), scene_ids_[s_idx],
                         pos_handle, attr_handle, idx_handle));
             }
 
@@ -743,7 +755,7 @@ public:
                 auto& reg = wc->registry;
                 for (size_t i = 0; i < debugSceneXforms_.size(); ++i) {
                     const uint32_t scene_idx =
-                        static_cast<uint32_t>(i % scenes_.size());
+                        static_cast<uint32_t>(i % scene_ids_.size());
                     const entt::entity e = reg.create();
                     cairns::WorldTransform wt;
                     wt.world = debugSceneXforms_[i];
@@ -778,7 +790,7 @@ public:
                     const size_t half = debugSceneXforms_.size() / 2;
                     for (size_t i = 0; i < half; ++i) {
                         const uint32_t scene_idx = static_cast<uint32_t>(
-                            i % scenes_.size());
+                            i % scene_ids_.size());
                         const entt::entity e = reg2.create();
                         cairns::WorldTransform wt;
                         wt.world = debugSceneXforms_[i];
@@ -951,7 +963,7 @@ public:
             cairns::PropagateTransforms(*wc, glm::mat4(1.0f));
             if (wid.index == active_world_.index) {
                 cairns::ExtractFromWorld(*wc, wh->root_transform, assets_,
-                                         meshes_, s.proxies);
+                                         scenes_, meshes_, s.proxies);
             } else {
                 if (wh->proxy_slot < world_proxies_.size()) {
                     // #219 Chunk B: secondary-world proxies share this CPU
@@ -960,7 +972,7 @@ public:
                     // world_proxies_[i] exists yet (#194/#190 path stub).
                     world_proxies_[wh->proxy_slot].Reset(s.arena, 2048, 8192);
                     cairns::ExtractFromWorld(*wc, wh->root_transform, assets_,
-                                             meshes_,
+                                             scenes_, meshes_,
                                              world_proxies_[wh->proxy_slot]);
                 }
             }
@@ -980,7 +992,8 @@ public:
                     wh_a->root_transform = rot_matrix;
                     cairns::PropagateTransforms(*wc_a, glm::mat4(1.0f));
                     cairns::ExtractFromWorld(*wc_a, wh_a->root_transform,
-                                             assets_, meshes_, s.proxies);
+                                             assets_, scenes_, meshes_,
+                                             s.proxies);
                 }
             }
         }
@@ -1258,16 +1271,19 @@ public:
         // #219 Chunk A: count-then-allocate the resident-textures gather on
         // the per-slot BumpArena. scenes_ + textureHandles are persistent
         // engine state, so two-pass costs nothing.
+        // #220 Step 3: iterate scene_ids_ + pool lookup.
         uint32_t rt_count = 0;
-        for (auto& scene : scenes_) {
-            rt_count += static_cast<uint32_t>(scene.textureHandles.size());
+        for (cairns::SceneId sid : scene_ids_) {
+            cairns::Scene::Hot* shot = scenes_.GetHot(sid);
+            rt_count += static_cast<uint32_t>(shot->textureHandles.size());
         }
         s.resident_textures = {
             s.arena.AllocateArray<rhi::Handle<rhi::Texture>>(rt_count),
             rt_count};
         uint32_t rt_idx = 0;
-        for (auto& scene : scenes_) {
-            for (const auto th : scene.textureHandles) {
+        for (cairns::SceneId sid : scene_ids_) {
+            cairns::Scene::Hot* shot = scenes_.GetHot(sid);
+            for (const auto th : shot->textureHandles) {
                 s.resident_textures[rt_idx++] = th;
             }
         }
@@ -1445,7 +1461,7 @@ public:
 
         t_frame.End();
         if (frame_ % 120 == 0) {
-            const size_t loaded = scenes_.size();
+            const size_t loaded = scene_ids_.size();
             size_t entities = 0;
             if (auto* wc = worlds_.GetCold(active_world_)) {
                 entities = wc->registry.storage<entt::entity>().size();
@@ -2186,7 +2202,13 @@ public:
 private:
     uint32_t frame_ = 0;
 
-    std::vector<cairns::Scene> scenes_;
+    // #220 Step 3: scenes_ is now a generational pool. scene_ids_ is the
+    // order-stable parallel list of SceneIds; consumers that want
+    // index-by-position semantics (LoadScenesGpu's span, entity
+    // assignment's `i % scene_ids_.size()`) iterate this. The Scene::Hot
+    // / Scene::Cold records live in the pool, not the vector.
+    cairns::ResourceManager<cairns::Scene> scenes_;
+    std::vector<cairns::SceneId> scene_ids_;
     std::vector<int32_t> root_nodes_stack_cache_;
 
     std::vector<glm::mat4> debugSceneXforms_;

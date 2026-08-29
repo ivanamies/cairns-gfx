@@ -31,6 +31,9 @@ namespace cairns {
 // Forward-declared to avoid pulling util/gltf_loader.hpp (which pulls
 // stb_image's impl) into every TU that just needs AssetId.
 struct Scene;
+// #220 Step 3: SceneId is Handle<Scene>; cpu_graph holds it instead of
+// a raw const Scene*.
+using SceneId = Handle<Scene>;
 
 struct Asset {
     struct Hot {
@@ -47,7 +50,10 @@ struct Asset {
         // window; later commits move ownership into AssetRegistry as
         // unique_ptr<Scene> once AssetRegistry::Load is the real load
         // path. Forward-declared so this header doesn't pull stb_image.
-        const Scene* cpu_graph = nullptr;
+        // #220 Step 3: was const Scene*. Now SceneId into Engine::scenes_;
+        // ExtractFromWorld resolves via the threaded scenes_pool. Null
+        // sentinel is Handle::Null (rather than nullptr).
+        SceneId cpu_graph;
         // Suballoc slices into the shared packed buffers (deferred; the
         // existing scene_gpu.hpp packs all GLBs into one shared
         // buffer-set today, no per-asset suballoc).
@@ -79,7 +85,7 @@ public:
     // by scene_index. Later commits replace this with a real Load(path)
     // that owns parsing + suballoc + dedup-by-content-hash.
     inline AssetId RegisterExistingScene(uint32_t scene_idx,
-                                         const Scene* scene,
+                                         SceneId scene_id,
                                          rhi::Handle<rhi::Buffer> pos,
                                          rhi::Handle<rhi::Buffer> attr,
                                          rhi::Handle<rhi::Buffer> index) {
@@ -95,7 +101,7 @@ public:
         // Acquire so a previously-released slot doesn't carry over.
         if (auto* cold = pool_.GetCold(id)) {
             *cold = Asset::Cold{};
-            cold->cpu_graph = scene;
+            cold->cpu_graph = scene_id;
             cold->ref_count = 1;
         }
         if (auto* hot = pool_.GetHot(id)) {

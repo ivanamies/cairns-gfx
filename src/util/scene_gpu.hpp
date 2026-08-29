@@ -16,19 +16,20 @@ namespace cairns::rhi {
 // gives the upload bump ring a chance to recycle. The final on-GPU layout is
 // unchanged: ONE shared vertex buffer [positions | attributes] + ONE shared
 // index buffer, with primitives' vertexOffset / firstIndex patched to global.
-// #220 Step 2: meshes are engine-owned via cairns::ResourceManager<Mesh>;
-// Scene only holds MeshIds. Pool reference threaded through so this
-// function can resolve each mesh's Hot (primitives, GPU handles to write)
-// and Cold (CPU temporaries to read).
-inline bool LoadScenesGpu(std::span<Scene> scenes,
+// #220 Step 3: scenes are engine-owned via cairns::ResourceManager<Scene>;
+// caller passes a span of SceneIds + the pool. Mesh pool also threaded
+// (Step 2 invariant).
+inline bool LoadScenesGpu(std::span<const cairns::SceneId> scene_ids,
+                          cairns::ResourceManager<Scene>& scenes_pool,
                           cairns::ResourceManager<Mesh>& meshes_pool,
                           Resources& rm, Allocator& alloc) {
     static constexpr size_t kBatchSize = 10;
 
     size_t total_verts = 0;
     size_t total_indices = 0;
-    for (const Scene& scene : scenes) {
-        for (cairns::Handle<Mesh> mid : scene.meshes) {
+    for (cairns::SceneId sid : scene_ids) {
+        Scene::Hot* shot = scenes_pool.GetHot(sid);
+        for (cairns::Handle<Mesh> mid : shot->meshes) {
             Mesh::Cold* mcold = meshes_pool.GetCold(mid);
             total_verts += mcold->cpuPositions.size();
             total_indices += mcold->cpuIndices.size();
@@ -64,8 +65,9 @@ inline bool LoadScenesGpu(std::span<Scene> scenes,
     // state stays simple. Walk in the same order as the upload loop.
     size_t running_vert = 0;
     size_t running_idx = 0;
-    for (Scene& scene : scenes) {
-        for (cairns::Handle<Mesh> mid : scene.meshes) {
+    for (cairns::SceneId sid : scene_ids) {
+        Scene::Hot* shot = scenes_pool.GetHot(sid);
+        for (cairns::Handle<Mesh> mid : shot->meshes) {
             Mesh::Hot* mhot = meshes_pool.GetHot(mid);
             Mesh::Cold* mcold = meshes_pool.GetCold(mid);
             const int32_t base_vertex = static_cast<int32_t>(running_vert);
@@ -84,16 +86,17 @@ inline bool LoadScenesGpu(std::span<Scene> scenes,
     size_t cur_vert_off_bytes = 0;
     size_t cur_attr_off_bytes = 0;
     size_t cur_idx_off_bytes = 0;
-    for (size_t batch_start = 0; batch_start < scenes.size();
+    for (size_t batch_start = 0; batch_start < scene_ids.size();
          batch_start += kBatchSize) {
         const size_t batch_end =
-            std::min(batch_start + kBatchSize, scenes.size());
+            std::min(batch_start + kBatchSize, scene_ids.size());
 
         std::vector<glm::vec4> pos_batch;
         std::vector<VertexAttribute> attr_batch;
         std::vector<uint32_t> idx_batch;
         for (size_t s = batch_start; s < batch_end; ++s) {
-            for (cairns::Handle<Mesh> mid : scenes[s].meshes) {
+            Scene::Hot* shot = scenes_pool.GetHot(scene_ids[s]);
+            for (cairns::Handle<Mesh> mid : shot->meshes) {
                 Mesh::Cold* mcold = meshes_pool.GetCold(mid);
                 pos_batch.insert(pos_batch.end(), mcold->cpuPositions.begin(),
                                  mcold->cpuPositions.end());
@@ -138,8 +141,9 @@ inline bool LoadScenesGpu(std::span<Scene> scenes,
         ah->offset_in_heap = vh->offset_in_heap + static_cast<uint32_t>(pos_bytes);
     }
 
-    for (Scene& scene : scenes) {
-        for (cairns::Handle<Mesh> mid : scene.meshes) {
+    for (cairns::SceneId sid : scene_ids) {
+        Scene::Hot* shot = scenes_pool.GetHot(sid);
+        for (cairns::Handle<Mesh> mid : shot->meshes) {
             Mesh::Hot* mhot = meshes_pool.GetHot(mid);
             mhot->posHandle = shared_vtx;
             mhot->attrHandle = attr_alias;

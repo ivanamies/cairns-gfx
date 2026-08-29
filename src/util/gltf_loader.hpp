@@ -114,40 +114,46 @@ struct LoadedMaterial {
     };
 };
 
+// #220 Step 3: Aaltonen Hot/Cold split. Pooled via
+// cairns::ResourceManager<Scene> on Engine; SceneId = Handle<Scene>.
+// Hot is what extract reads at draw-build (mesh ids, mat ids, root
+// nodes, per-scene texture/sampler registry); Cold is the node tree
+// (walked once per frame in BuildMeshOpaqueDraws but not per draw)
+// and the load-time temporaries cleared after upload.
 struct Scene {
-    // #220 Step 2: was std::vector<Mesh>. Mesh data is now engine-owned
-    // via cairns::ResourceManager<Mesh>; Scene only holds the handles.
-    std::vector<cairns::Handle<Mesh>> meshes;
-    std::vector<Node> nodes;
-    std::vector<int32_t> rootNodes;
+    struct Hot {
+        // #220 Step 2: was std::vector<Mesh>. Mesh data is engine-owned
+        // via cairns::ResourceManager<Mesh>; Scene only holds the handles.
+        std::vector<cairns::Handle<Mesh>> meshes;
+        std::vector<int32_t> rootNodes;
+        // Per-scene texture/sampler registry consulted at material-load.
+        std::vector<rhi::Handle<rhi::Texture>> textureHandles;
+        std::vector<rhi::Handle<rhi::Sampler>> samplerHandles;
+        // Renamed from materialIds (legacy uint32_t name). Each element
+        // is a Handle<LoadedMaterial> into Engine::materials_.
+        std::vector<cairns::Handle<LoadedMaterial>> materials;
+    };
+    struct Cold {
+        std::vector<Node> nodes;
+        // Load-time temporaries cleared post-upload via CleanupTmps.
+        std::vector<LoadedSampler> loaded_samplers;
+        std::vector<LoadedTexture> loaded_textures;
+        std::vector<uint32_t> materialToTextureIndex;
+        std::vector<uint32_t> materialToSamplerIndex;
 
-    /////////////////
-    // temporaries //
-    std::vector<LoadedSampler> loaded_samplers;
-    std::vector<LoadedTexture> loaded_textures;
-    std::vector<uint32_t> materialToTextureIndex;
-    std::vector<uint32_t> materialToSamplerIndex;
-    /////////////////
-
-    // Bindless Registry Data
-    std::vector<rhi::Handle<rhi::Texture>> textureHandles;
-    std::vector<rhi::Handle<rhi::Sampler>> samplerHandles;
-    std::vector<cairns::Handle<LoadedMaterial>> materialIds;  // #220 Step 1
-
-    void CleanupTmps() {
-        // #220 Step 2: mesh CPU temporaries used to be cleared here;
-        // they now live in Engine::meshes_ pool's Cold side, cleared by
-        // an engine-level pool sweep after LoadScenesGpu.
-        for ( size_t i = 0; i < loaded_textures.size(); ++i ) {
-            auto& tex_desc = loaded_textures[i];
-            stbi_image_free(tex_desc.src_image);
+        void CleanupTmps() {
+            for ( size_t i = 0; i < loaded_textures.size(); ++i ) {
+                auto& tex_desc = loaded_textures[i];
+                stbi_image_free(tex_desc.src_image);
+            }
+            loaded_textures.clear();
+            loaded_samplers.clear();
+            materialToTextureIndex.clear();
+            materialToSamplerIndex.clear();
         }
-        loaded_textures.clear();
-        loaded_samplers.clear();
-        materialToTextureIndex.clear();
-        materialToSamplerIndex.clear();
-    }
+    };
 };
+using SceneId = cairns::Handle<Scene>;
 
 // #220 Step 2: writes split-out Hot + Cold sides instead of a combined
 // Mesh value. Caller (LoadSceneFromGltf) is responsible for Acquiring
@@ -227,9 +233,10 @@ inline bool LoadMeshFromGltf(const fastgltf::Asset& asset,
     return true;
 }
 
-// #220 Step 2: takes the engine-owned Mesh pool so loaded meshes go
-// into it; Scene only collects their MeshIds.
-inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene,
+// #220 Step 3: writes split-out Scene Hot + Cold sides; meshes still
+// land in the engine's Mesh pool via the threaded reference.
+inline bool LoadSceneFromGltf(const std::filesystem::path& path,
+                               Scene::Hot& hot, Scene::Cold& cold,
                                cairns::ResourceManager<Mesh>& meshes_pool) {
     size_t byte_count = 0;
     void* file_data = SDL_LoadFile(path.string().c_str(), &byte_count);
@@ -276,7 +283,7 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene,
                 texDesc.levels = static_cast<uint32_t>(std::floor(std::log2(std::max(w, h)))) + 1;
                 texDesc.src_bytes_per_row = 4 * w;
                 texDesc.src_image = raw;
-                scene.loaded_textures.push_back(texDesc);
+                cold.loaded_textures.push_back(texDesc);
             }
         }
     }
@@ -322,7 +329,7 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene,
             return rhi::SamplerAddressMode::Repeat;
         };
         info.addressModeU = mapWrap(s.wrapS); info.addressModeV = mapWrap(s.wrapT);
-        scene.loaded_samplers.push_back(info);
+        cold.loaded_samplers.push_back(info);
     }
     
     // 3. Material Mapping
@@ -340,8 +347,8 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene,
                 sampler_index = static_cast<uint32_t>(*asset.textures[texIdx].samplerIndex);
             }
             if ( image_index >= 0 && sampler_index >= 0 ) {
-                scene.materialToTextureIndex.push_back(image_index);
-                scene.materialToSamplerIndex.push_back(sampler_index);
+                cold.materialToTextureIndex.push_back(image_index);
+                cold.materialToSamplerIndex.push_back(sampler_index);
             }
         }
     }
@@ -353,14 +360,14 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene,
         Mesh::Hot* mhot = meshes_pool.GetHot(mid);
         Mesh::Cold* mcold = meshes_pool.GetCold(mid);
         LoadMeshFromGltf(asset, asset.meshes[i], *mhot, *mcold);
-        scene.meshes.push_back(mid);
+        hot.meshes.push_back(mid);
     }
     
     // 5. Nodes
     for (size_t i = 0; i < asset.nodes.size(); ++i) {
-        scene.nodes.push_back(Node());
+        cold.nodes.push_back(Node());
         auto& gn = asset.nodes[i];
-        auto& on = scene.nodes[i];
+        auto& on = cold.nodes[i];
         on.name = std::string(gn.name);
         if (const auto* trs = std::get_if<fastgltf::TRS>(&gn.transform)) {
             glm::vec3 t(trs->translation[0], trs->translation[1], trs->translation[2]);
@@ -375,15 +382,18 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene,
     }
     
     if (!asset.scenes.empty()) {
-        for (auto ni : asset.scenes[0].nodeIndices) scene.rootNodes.push_back(static_cast<int32_t>(ni));
+        for (auto ni : asset.scenes[0].nodeIndices) hot.rootNodes.push_back(static_cast<int32_t>(ni));
     }
     return true;
 }
 
-inline void PrepareSceneResources(Scene& scene, rhi::Resources& rm, rhi::Allocator& alloc,
+// #220 Step 3: takes split-out Scene Hot+Cold; reads CPU temporaries
+// from Cold and writes resolved handles into Hot.
+inline void PrepareSceneResources(Scene::Hot& hot, Scene::Cold& cold,
+                                   rhi::Resources& rm, rhi::Allocator& alloc,
                                    cairns::ResourceManager<LoadedMaterial>& materials) {
     // Textures
-    for (const auto& texDescIn : scene.loaded_textures) {
+    for (const auto& texDescIn : cold.loaded_textures) {
         rhi::TextureDesc d;
         d.dimensions = {static_cast<int32_t>(texDescIn.width),
                         static_cast<int32_t>(texDescIn.height), 1};
@@ -396,11 +406,11 @@ inline void PrepareSceneResources(Scene& scene, rhi::Resources& rm, rhi::Allocat
             static_cast<const uint8_t*>(texDescIn.src_image),
             static_cast<size_t>(texDescIn.src_bytes_per_row) *
                 static_cast<size_t>(texDescIn.height));
-        scene.textureHandles.push_back(rm.CreateTexture(alloc, d));
+        hot.textureHandles.push_back(rm.CreateTexture(alloc, d));
     }
     
     // Samplers
-    for (const auto& info : scene.loaded_samplers) {
+    for (const auto& info : cold.loaded_samplers) {
         auto map_filter = [](rhi::SamplerFilter f) {
             return f == rhi::SamplerFilter::Nearest ? rhi::Filter::kNearest : rhi::Filter::kLinear;
         };
@@ -422,16 +432,16 @@ inline void PrepareSceneResources(Scene& scene, rhi::Resources& rm, rhi::Allocat
         d.address_mode = map_addr(info.addressModeU);
         d.max_anisotropy = 8.0f;
         d.max_lod = 1000.0f;
-        scene.samplerHandles.push_back(rm.CreateSampler(d));
+        hot.samplerHandles.push_back(rm.CreateSampler(d));
     }
     
     // ONLY DOES UNLIT MATERIALS
-    assert(scene.materialToTextureIndex.size() == scene.materialToSamplerIndex.size());
-    for ( size_t i = 0; i < scene.materialToTextureIndex.size(); ++i ) {
-        uint32_t gltf_tex_idx = scene.materialToTextureIndex[i];
-        uint32_t gltf_sampler_idx = scene.materialToSamplerIndex[i];
-        auto t = scene.textureHandles[gltf_tex_idx];
-        auto s = scene.samplerHandles[gltf_sampler_idx];
+    assert(cold.materialToTextureIndex.size() == cold.materialToSamplerIndex.size());
+    for ( size_t i = 0; i < cold.materialToTextureIndex.size(); ++i ) {
+        uint32_t gltf_tex_idx = cold.materialToTextureIndex[i];
+        uint32_t gltf_sampler_idx = cold.materialToSamplerIndex[i];
+        auto t = hot.textureHandles[gltf_tex_idx];
+        auto s = hot.samplerHandles[gltf_sampler_idx];
         // #220 Step 1: acquire pool slot, populate Cold. Hot.set2 (the
         // bind group) is filled in later by Engine::initRenderPipeline
         // since it needs rhi_.frames/resources to build the descriptor.
@@ -439,7 +449,7 @@ inline void PrepareSceneResources(Scene& scene, rhi::Resources& rm, rhi::Allocat
         LoadedMaterial::Cold* cold = materials.GetCold(mat_id);
         cold->color = t;
         cold->sampler = s;
-        scene.materialIds.push_back(mat_id);
+        hot.materials.push_back(mat_id);  // #220 Step 3: was materialIds
     }
 }
 
