@@ -42,6 +42,15 @@ struct VertexAttribute {
     glm::vec2 pad1 = glm::vec2(0.0f);
 };
 
+// #221 Skinning Phase 1: per-vertex joint + weight payload for skinned
+// meshes. 32 B; only populated for meshes whose primitives carry JOINTS_0
+// / WEIGHTS_0. Unskinned meshes leave Mesh::Cold::cpuSkinAttrs empty so
+// the static 3300-hero crowd pays 0 B/vert.
+struct SkinVertex {
+    glm::uvec4 joints = glm::uvec4(0);
+    glm::vec4  weights = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+};
+
 struct Primitive {
     uint32_t firstIndex = 0;
     uint32_t indexCount = 0;
@@ -60,9 +69,24 @@ struct Mesh {
     struct Hot {
         // Read on every draw of this mesh.
         rhi::Handle<rhi::Buffer> posHandle;
-        rhi::Handle<rhi::Buffer> attrHandle; // Bindless attributes (UV, Norm, etc)
+        rhi::Handle<rhi::Buffer> attrHandle; // shared vertex-stream attrs
         rhi::Handle<rhi::Buffer> indexHandle;
         std::vector<Primitive> primitives;
+        // #221 Skinning F5: snapshot of LoadScenesGpu's running_vert at the
+        // patch site. Skinned draws subtract this to get the mesh-local
+        // baseVertex (vkCmdDrawIndexed has ONE vertexOffset, which today
+        // serves stream 0 + stream 1 globally; the skinned stream-0 binds
+        // a per-actor slice of skin_output_pool_ that's mesh-local indexed).
+        uint32_t global_base_vertex = 0;
+        // #221 Skinning Phase 1: base index into the shared skin-attr SSBO
+        // for this mesh's slice (0 for unskinned meshes, which contribute
+        // nothing to the shared skin buffer).
+        uint32_t skin_attr_base_vertex = 0;
+        // #221 Skinning F5: per-skinned-mesh alias of the shared attr region
+        // pre-offset by global_base_vertex * sizeof(VertexAttribute). Stream
+        // 1 binds this for skinned draws; mesh-local vertex_offset then
+        // indexes correctly. Null for unskinned meshes (they use attrHandle).
+        rhi::Handle<rhi::Buffer> attr_skinned_alias;
     };
     struct Cold {
         std::string name;
@@ -71,6 +95,10 @@ struct Mesh {
         std::vector<glm::vec4> cpuPositions;
         std::vector<VertexAttribute> cpuAttrs;
         std::vector<uint32_t> cpuIndices;
+        // #221 Skinning Phase 1: per-vertex joint indices + weights aligned
+        // with cpuPositions/cpuAttrs (size() == cpuPositions.size() when
+        // mesh is skinned; empty when not).
+        std::vector<SkinVertex> cpuSkinAttrs;
     };
 };
 
@@ -80,7 +108,58 @@ struct Node {
     glm::mat4 globalTransform = glm::mat4(1.0f);
 
     int32_t meshIndex = -1; // Index into Scene.meshes
+    // #221 Skinning Phase 1: per-glTF node skin reference. -1 = no skin.
+    int32_t skinIndex = -1; // Index into Scene::Cold::skins.
     std::vector<int32_t> children;
+};
+
+// #221 Skinning Phase 1: per-glTF skin (joint set + inverse binds). Joints
+// reference Scene::Cold::nodes by index; inverseBinds is one mat4 per joint
+// in the same order. skeletonRoot is the glTF "skeleton" hint (-1 if absent;
+// not used by the runtime — joint world matrices come from the node walk).
+struct Skin {
+    std::vector<int32_t> jointNodes;
+    std::vector<glm::mat4> inverseBinds;
+    int32_t skeletonRoot = -1;
+};
+
+// #221 Skinning Phase 1: animation primitives. AnimationSampler stores the
+// keyframe array for one channel (times + values + interpolation mode).
+// Channel binds a sampler to a (node, path) target. Clip groups them under
+// one name + duration.
+enum class AnimationInterpolation : uint8_t {
+    kStep,
+    kLinear,
+    kCubicSpline,
+};
+
+enum class AnimationPath : uint8_t {
+    kTranslation,
+    kRotation,
+    kScale,
+    kWeights,
+};
+
+struct AnimationSampler {
+    // For T/S/weights: x/y/z in .xyz (w ignored). For R: full quat in .xyzw.
+    // Packing as vec4 keeps the sampler payload backend-agnostic and avoids
+    // a tagged union; readers branch on the channel's path.
+    std::vector<float> times;
+    std::vector<glm::vec4> values;
+    AnimationInterpolation interp = AnimationInterpolation::kLinear;
+};
+
+struct AnimationChannel {
+    int32_t samplerIndex = -1;
+    int32_t nodeIndex = -1;
+    AnimationPath path = AnimationPath::kTranslation;
+};
+
+struct Clip {
+    std::string name;
+    std::vector<AnimationSampler> samplers;
+    std::vector<AnimationChannel> channels;
+    float duration = 0.0f;
 };
 
 struct LoadedTexture {
@@ -135,6 +214,13 @@ struct Scene {
     };
     struct Cold {
         std::vector<Node> nodes;
+        // #221 Skinning Phase 1: glTF skins + clips for this scene. Per
+        // decision 2 of plan v7 these ride std::vector on Cold to match
+        // the existing shape (proper Tier-1 bump migration is a separate
+        // sweep). Clips are kept long-lived (not in CleanupTmps) since
+        // animation playback needs them past load.
+        std::vector<Skin> skins;
+        std::vector<Clip> clips;
         // Load-time temporaries cleared post-upload via CleanupTmps.
         std::vector<LoadedSampler> loaded_samplers;
         std::vector<LoadedTexture> loaded_textures;
@@ -165,6 +251,20 @@ inline bool LoadMeshFromGltf(const fastgltf::Asset& asset,
     outCold.cpuPositions.clear();
     outCold.cpuAttrs.clear();
     outCold.cpuIndices.clear();
+    outCold.cpuSkinAttrs.clear();
+
+    // #221 Skinning Phase 1: mesh is "skinned" if ANY primitive carries
+    // JOINTS_0 (per glTF spec, JOINTS_0 + WEIGHTS_0 travel together).
+    // Skinned meshes get cpuSkinAttrs aligned with cpuPositions, padded
+    // with identity-weight rows for any primitive that lacks the attribute.
+    // Unskinned meshes leave cpuSkinAttrs empty so the static crowd pays 0 B/vert.
+    bool mesh_skinned = false;
+    for (const auto& primitive : gltfMesh.primitives) {
+        if (primitive.findAttribute("JOINTS_0") != primitive.attributes.end()) {
+            mesh_skinned = true;
+            break;
+        }
+    }
 
     for (const auto& primitive : gltfMesh.primitives) {
         Primitive outPrim;
@@ -215,6 +315,37 @@ inline bool LoadMeshFromGltf(const fastgltf::Asset& asset,
             fastgltf::iterateAccessorWithIndex<glm::vec4>(asset, accessor, [&](glm::vec4 v, size_t i) {
                 outCold.cpuAttrs[currentAttrOffset + i].color = v;
             });
+        }
+
+        // #221 Skinning Phase 1: JOINTS_0 + WEIGHTS_0. Only allocate the
+        // skin-attr slice when the mesh is skinned (mesh_skinned was set
+        // by the pre-pass). When this specific primitive lacks the
+        // attribute but a sibling has it, fall back to identity-weight
+        // bound to joint 0 -- still produces correct deformation because
+        // the joint 0 palette matrix is whatever its skin says it is, and
+        // weight=(1,0,0,0) collapses the blend to that single matrix.
+        if (mesh_skinned) {
+            size_t currentSkinOffset = outCold.cpuSkinAttrs.size();
+            outCold.cpuSkinAttrs.resize(currentSkinOffset + vertexCount);
+            const auto* jointsIt = primitive.findAttribute("JOINTS_0");
+            const auto* weightsIt = primitive.findAttribute("WEIGHTS_0");
+            if (jointsIt != primitive.attributes.end()) {
+                auto& accessor = asset.accessors[jointsIt->accessorIndex];
+                // glTF JOINTS_0 is u8 or u16; fastgltf widens via the
+                // u32vec4 iterator template.
+                fastgltf::iterateAccessorWithIndex<glm::u32vec4>(asset, accessor, [&](glm::u32vec4 v, size_t i) {
+                    outCold.cpuSkinAttrs[currentSkinOffset + i].joints = v;
+                });
+            }
+            if (weightsIt != primitive.attributes.end()) {
+                auto& accessor = asset.accessors[weightsIt->accessorIndex];
+                fastgltf::iterateAccessorWithIndex<glm::vec4>(asset, accessor, [&](glm::vec4 v, size_t i) {
+                    outCold.cpuSkinAttrs[currentSkinOffset + i].weights = v;
+                });
+            }
+            // SkinVertex default ctor leaves identity weights (1,0,0,0) +
+            // joints (0,0,0,0) for any element neither JOINTS_0 nor
+            // WEIGHTS_0 wrote.
         }
 
         // 5. INDICES
@@ -378,9 +509,117 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path,
             on.localTransform = glm::make_mat4(mat->data());
         }
         if (gn.meshIndex.has_value()) on.meshIndex = static_cast<int32_t>(*gn.meshIndex);
+        // #221 Skinning Phase 1: glTF skin reference.
+        if (gn.skinIndex.has_value()) {
+            on.skinIndex = static_cast<int32_t>(*gn.skinIndex);
+        }
         for (auto c : gn.children) on.children.push_back(static_cast<int32_t>(c));
     }
-    
+
+    // #221 Skinning Phase 1: skins. Inverse binds are optional in glTF;
+    // when absent the spec says treat as identity (each joint contributes
+    // raw world-space transform pre-multiplied by the mesh's inverse bind).
+    for (size_t si = 0; si < asset.skins.size(); ++si) {
+        const auto& gskin = asset.skins[si];
+        Skin out;
+        out.skeletonRoot = gskin.skeleton.has_value()
+                               ? static_cast<int32_t>(*gskin.skeleton)
+                               : -1;
+        out.jointNodes.reserve(gskin.joints.size());
+        for (auto j : gskin.joints) {
+            out.jointNodes.push_back(static_cast<int32_t>(j));
+        }
+        out.inverseBinds.assign(out.jointNodes.size(), glm::mat4(1.0f));
+        if (gskin.inverseBindMatrices.has_value()) {
+            auto& accessor = asset.accessors[*gskin.inverseBindMatrices];
+            fastgltf::iterateAccessorWithIndex<fastgltf::math::fmat4x4>(
+                asset, accessor,
+                [&](const fastgltf::math::fmat4x4& m, size_t i) {
+                    if (i < out.inverseBinds.size()) {
+                        out.inverseBinds[i] = glm::make_mat4(m.data());
+                    }
+                });
+        }
+        cold.skins.push_back(std::move(out));
+    }
+
+    // #221 Skinning Phase 1: animations. One Clip per glTF animation; samplers
+    // packed as {times[], values[]} with values widened to vec4 so quat
+    // (rotation) and vec3 (T/S) share a single readers-branch-on-path layout.
+    for (size_t ci = 0; ci < asset.animations.size(); ++ci) {
+        const auto& ganim = asset.animations[ci];
+        Clip out;
+        out.name = std::string(ganim.name);
+        out.samplers.reserve(ganim.samplers.size());
+        for (const auto& gs : ganim.samplers) {
+            AnimationSampler s;
+            switch (gs.interpolation) {
+                case fastgltf::AnimationInterpolation::Step:
+                    s.interp = AnimationInterpolation::kStep;
+                    break;
+                case fastgltf::AnimationInterpolation::CubicSpline:
+                    s.interp = AnimationInterpolation::kCubicSpline;
+                    break;
+                case fastgltf::AnimationInterpolation::Linear:
+                default:
+                    s.interp = AnimationInterpolation::kLinear;
+                    break;
+            }
+            auto& tAcc = asset.accessors[gs.inputAccessor];
+            s.times.reserve(tAcc.count);
+            fastgltf::iterateAccessor<float>(asset, tAcc,
+                [&](float t) { s.times.push_back(t); });
+            if (!s.times.empty() && s.times.back() > out.duration) {
+                out.duration = s.times.back();
+            }
+            auto& vAcc = asset.accessors[gs.outputAccessor];
+            s.values.reserve(vAcc.count);
+            // fastgltf maps SCALAR/VEC2/VEC3/VEC4 accessors uniformly when
+            // read as vec4 by widening with zeros; quat output (VEC4) maps
+            // cleanly. For SCALAR (weights) we widen via the vec4 iterator
+            // pattern by reading raw and packing into .x.
+            if (vAcc.type == fastgltf::AccessorType::Vec3) {
+                fastgltf::iterateAccessor<glm::vec3>(asset, vAcc,
+                    [&](glm::vec3 v) {
+                        s.values.push_back(glm::vec4(v, 0.0f));
+                    });
+            } else if (vAcc.type == fastgltf::AccessorType::Vec4) {
+                fastgltf::iterateAccessor<glm::vec4>(asset, vAcc,
+                    [&](glm::vec4 v) { s.values.push_back(v); });
+            } else if (vAcc.type == fastgltf::AccessorType::Scalar) {
+                fastgltf::iterateAccessor<float>(asset, vAcc,
+                    [&](float v) {
+                        s.values.push_back(glm::vec4(v, 0.0f, 0.0f, 0.0f));
+                    });
+            }
+            out.samplers.push_back(std::move(s));
+        }
+        out.channels.reserve(ganim.channels.size());
+        for (const auto& gc : ganim.channels) {
+            AnimationChannel ch;
+            ch.samplerIndex = static_cast<int32_t>(gc.samplerIndex);
+            ch.nodeIndex = gc.nodeIndex.has_value()
+                               ? static_cast<int32_t>(*gc.nodeIndex)
+                               : -1;
+            switch (gc.path) {
+                case fastgltf::AnimationPath::Translation:
+                    ch.path = AnimationPath::kTranslation;
+                    break;
+                case fastgltf::AnimationPath::Rotation:
+                    ch.path = AnimationPath::kRotation;
+                    break;
+                case fastgltf::AnimationPath::Scale:
+                    ch.path = AnimationPath::kScale;
+                    break;
+                case fastgltf::AnimationPath::Weights:
+                    ch.path = AnimationPath::kWeights;
+                    break;
+            }
+            out.channels.push_back(ch);
+        }
+        cold.clips.push_back(std::move(out));
+    }
+
     if (!asset.scenes.empty()) {
         for (auto ni : asset.scenes[0].nodeIndices) hot.rootNodes.push_back(static_cast<int32_t>(ni));
     }
