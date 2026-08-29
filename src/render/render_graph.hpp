@@ -101,6 +101,10 @@ public:
                         float clear_depth,
                         StoreOp store = StoreOp::kStore);
     void AddAttachmentInput(GraphTexture t);
+    // Render this pass at a FIXED extent instead of the swap-target dims
+    // (the default). The shadow map renders at 2048^2 into an off-size
+    // target; without this it would inherit the 512/1280 swap dims.
+    void SetRenderExtent(uint32_t w, uint32_t h);
 
 private:
     RenderGraph* graph_ = nullptr;
@@ -198,6 +202,10 @@ private:
         uint8_t color_outputs_count = 0;
         bool has_depth = false;
         DepthOutput depth_output;
+        // 0 = inherit the swap-target dims; nonzero = a fixed render extent
+        // (the shadow pass at 2048^2).
+        uint32_t render_w = 0;
+        uint32_t render_h = 0;
         // Bounded by GraphicsPipelineDesc::kMaxColorFormats. Fixed cap on
         // the stack -> no per-frame std::vector reallocation.
         std::array<ColorAttachment, GraphicsPipelineDesc::kMaxColorFormats>

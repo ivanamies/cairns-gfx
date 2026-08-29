@@ -476,8 +476,13 @@ void CommandRecorder::BeginRenderPass(
     // backend mismatch.
     apply_invalidate_barriers(plat.gfx_, res, invalidate);
 
-    const bool is_swapchain = desc.color.empty() ||
-                              desc.color[0].target.IsNull();
+    // Swap/present pass = empty color AND no depth. A depth-only offscreen
+    // pass (the shadow map) has empty color but a depth target, so it must
+    // take the offscreen branch (renderArea from the pass extent, its own
+    // framebuffer) rather than the swapchain framebuffer.
+    const bool is_swapchain = (desc.color.empty() ||
+                               desc.color[0].target.IsNull()) &&
+                              desc.depth.depth.IsNull();
     VkExtent2D extent{desc.width, desc.height};
 
     if (is_swapchain) {

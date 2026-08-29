@@ -316,8 +316,12 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
     if (plat.cmd_ == nullptr) {
         plat.cmd_ = plat.queue_->commandBuffer();
     }
-    const bool is_swapchain = desc.color.empty() ||
-                              desc.color[0].target.IsNull();
+    // Swap/present pass = no color attachment in desc AND no depth. A
+    // depth-only offscreen pass (the shadow map) also has empty color but
+    // carries a depth target, so it must take the offscreen branch below.
+    const bool is_swapchain = (desc.color.empty() ||
+                               desc.color[0].target.IsNull()) &&
+                              desc.depth.depth.IsNull();
     if (is_swapchain) {
         if (!desc.color.empty()) {
             const float* c = desc.color[0].clear;

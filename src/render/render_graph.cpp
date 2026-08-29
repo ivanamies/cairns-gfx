@@ -174,6 +174,11 @@ void PassBuilder::AddAttachmentInput(GraphTexture t) {
                 t.id);
 }
 
+void PassBuilder::SetRenderExtent(uint32_t w, uint32_t h) {
+    graph_->passes_[pass_].render_w = w;
+    graph_->passes_[pass_].render_h = h;
+}
+
 RenderGraph::RenderGraph(Resources& resources, Allocator& alloc)
     : resources_(resources), alloc_(alloc) {}
 
@@ -666,8 +671,8 @@ bool RenderGraph::Execute(FrameContext& fc, const SwapResolveTarget& target) {
         if (pass.has_depth) {
             rp.depth = pass.baked_depth;
         }
-        rp.width = target.width;
-        rp.height = target.height;
+        rp.width = pass.render_w != 0 ? pass.render_w : target.width;
+        rp.height = pass.render_h != 0 ? pass.render_h : target.height;
         rp.input_textures = std::span<const Handle<Texture>>(
             pass.baked_inputs.data(), pass.baked_inputs_count);
         // Granite §3.8 invalidate/flush, coarse-stage. Each accessed texture's
