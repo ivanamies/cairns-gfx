@@ -915,7 +915,11 @@ public:
         // these). Today s.proxies still drives BuildMeshOpaqueDraws's draw
         // list -- per-viewport draw fan-out lands when the multi-pass split
         // does (depends on #206's per-pass globals being per-viewport too).
-        s.proxies.Clear();
+        // #219 Chunk B: bind s.proxies' meshes + primitives lists to this
+        // slot's BumpArena. Capacity headroom for the 3300-hero benchmark
+        // (~3300 / ~11220); pushes beyond cap assert. Other 6 ProxyArrays
+        // stay on default heap (untouched in current code).
+        s.proxies.Reset(s.arena);
         for (int v = 0; v < active_viewport_count_; ++v) {
             const cairns::WorldId wid = viewports_[v].world;
             cairns::World::Hot* wh = worlds_.GetHot(wid);
@@ -930,6 +934,11 @@ public:
                                          s.proxies);
             } else {
                 if (wh->proxy_slot < world_proxies_.size()) {
+                    // #219 Chunk B: secondary-world proxies share this CPU
+                    // slot's arena. Caps smaller than s.proxies' since
+                    // secondary scenes are lighter today. No reader of
+                    // world_proxies_[i] exists yet (#194/#190 path stub).
+                    world_proxies_[wh->proxy_slot].Reset(s.arena, 2048, 8192);
                     cairns::ExtractFromWorld(*wc, wh->root_transform, assets_,
                                              world_proxies_[wh->proxy_slot]);
                 }
@@ -957,7 +966,7 @@ public:
 
         // Counting pass -> total_draws.
         uint32_t total_draws = 0;
-        for (const cairns::MeshProxy& mp : s.proxies.meshes.data) {
+        for (const cairns::MeshProxy& mp : s.proxies.meshes) {
             total_draws += mp.primitive_count;
         }
         // #219 Chunk A: count-then-allocate on the per-slot BumpArena. The
@@ -978,7 +987,7 @@ public:
         // (deterministic of input order, independent of execution order so a
         // future parallel_for is a drop-in).
         uint32_t stable_idx = 0;
-        for (const cairns::MeshProxy& mp : s.proxies.meshes.data) {
+        for (const cairns::MeshProxy& mp : s.proxies.meshes) {
             const BufHandle pos = mp.pos;
             [[maybe_unused]] const BufHandle attr = mp.attr;
             const BufHandle index = mp.index;

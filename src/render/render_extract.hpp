@@ -90,7 +90,7 @@ inline void ExtractFromWorld(World::Cold& wc, const glm::mat4& root,
                 pp.material_id = scene.materialIds[prim.materialIndex];
                 out.primitives.push_back(pp);
             }
-            out.meshes.Add(proxy);
+            out.meshes.push_back(proxy);
 
             for (int32_t c : node.children) {
                 push_or_die(c);

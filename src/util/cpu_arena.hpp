@@ -180,6 +180,45 @@ private:
     uint32_t slot_ = 0;
 };
 
+// #219 Chunk B: minimal arena-backed fixed-capacity growable list. POD
+// (T* + size + cap), no allocator template, no STL fight. push_back asserts
+// on cap so the producer commits to a known upper bound; bulk-reset via
+// BumpArena::Reset (clear() just zeroes size). Use this instead of
+// std::vector<T, BumpStdAllocator<T>> whenever you don't need STL allocator
+// composition -- it sidesteps the "construct vector before arena exists"
+// problem.
+template <typename T>
+struct ArenaList {
+    T* begin() { return data_; }
+    T* end()   { return data_ + size_; }
+    const T* begin() const { return data_; }
+    const T* end()   const { return data_ + size_; }
+    T& operator[](size_t i)             { return data_[i]; }
+    const T& operator[](size_t i) const { return data_[i]; }
+    T* data()             { return data_; }
+    const T* data() const { return data_; }
+    size_t size() const { return size_; }
+    bool empty() const  { return size_ == 0; }
+    void clear() { size_ = 0; }
+    void push_back(const T& v) {
+        assert(size_ < cap_ && "ArenaList full -- raise Reset() cap");
+        data_[size_++] = v;
+    }
+    // Bind to a fresh arena slice. Old slice is implicitly abandoned (the
+    // arena's Reset() will reclaim the lot). cap may be 0 -- no-op (no
+    // push_back will be attempted on an unused list).
+    void Reset(BumpArena& arena, uint32_t cap) {
+        data_ = cap ? arena.AllocateArray<T>(cap) : nullptr;
+        size_ = 0;
+        cap_ = cap;
+    }
+
+private:
+    T* data_ = nullptr;
+    uint32_t size_ = 0;
+    uint32_t cap_ = 0;
+};
+
 // STL-compatible adapter so existing std::vector<T, cairns::Allocator<T>> sites
 // can ride a BumpArena. STL mandates a pointer interface, so this is the one
 // sanctioned pointer-returning path -- it is contained: the vector is the owner,
