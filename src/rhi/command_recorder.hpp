@@ -58,6 +58,21 @@ struct RenderPassDesc {
     std::span<const Handle<Texture>> input_textures;
 };
 
+// A graph-computed barrier on one resource (Granite Barrier + transition). The
+// render graph fills these from PipelineEvent state and hands them to the
+// backend, which executes them (vk: one vkCmdPipelineBarrier; metal: per-resource
+// MTLFence wait). Exactly one of texture/buffer is set.
+struct ResourceBarrier {
+    Handle<Texture> texture;
+    Handle<Buffer> buffer;
+    uint32_t src_access = kAccessNone;
+    uint32_t dst_access = kAccessNone;
+    uint32_t src_stage = kPipeNone;
+    uint32_t dst_stage = kPipeNone;
+    BarrierLayout old_layout = BarrierLayout::kUndefined;
+    BarrierLayout new_layout = BarrierLayout::kUndefined;
+};
+
 struct ComputeDispatch {
     Handle<Kernel> kernel;
     uint32_t groups_x = 1;
@@ -168,8 +183,12 @@ public:
     };
     void DispatchAnimEval(Resources& res, Allocator& alloc,
                           Handle<Kernel> kernel, const AnimEvalArgs& args);
+    // invalidate = graph-computed barriers to apply BEFORE this pass (Granite
+    // invalidate bucket). vk: one vkCmdPipelineBarrier; metal: per-resource
+    // MTLFence waits.
     void BeginRenderPass(Resources& res, const SwapResolveTarget& target,
-                          const RenderPassDesc& desc);
+                          const RenderPassDesc& desc,
+                          std::span<const ResourceBarrier> invalidate);
     void DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list);
     void DrawPoints(Resources& res, Allocator& alloc, const PointDraw& draw);
     void DrawFullscreen(Resources& res, Handle<Shader> pipeline,
@@ -182,7 +201,9 @@ public:
                    const ImDrawData* draw_data);
     void PassTimerBegin(const char* name, bool is_compute = false);
     void PassTimerEnd();
-    void EndRenderPass();
+    // flush = textures this pass WROTE; backend records the producer side of the
+    // barrier (metal: MTLFence signal; vk: no-op, state tracked in PipelineEvent).
+    void EndRenderPass(Resources& res, std::span<const Handle<Texture>> flush);
 
     // Per-frame recording state, populated by Frames::Begin. Backend state in
     // plat; pending_name_/pending_slot_ are common timer state.

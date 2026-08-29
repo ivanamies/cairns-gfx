@@ -387,8 +387,13 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
     vkCmdDispatch(plat.comp_, d.groups_x, d.groups_y, d.groups_z);
 }
 
-void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& target,
-                                      const RenderPassDesc& desc) {
+void CommandRecorder::BeginRenderPass(
+    Resources& res, const SwapResolveTarget& target, const RenderPassDesc& desc,
+    std::span<const ResourceBarrier> /*invalidate*/) {
+    // TODO(Granite gap #1): execute the graph's `invalidate` barriers here as
+    // one vkCmdPipelineBarrier and delete transition(). vk is tracked + already
+    // correct via transition(), so it stays for now while the metal leaf proves
+    // out the graph-driven path.
     // Surfaceless (vk render-to-texture) path: swap_chain is nullptr, every
     // swap pass desc routes final_target_ as desc.color[0].target so the
     // offscreen path below picks up the right framebuffer.
@@ -816,7 +821,11 @@ void CommandRecorder::SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) {
     vkCmdSetScissor(plat.gfx_, 0, 1, &s);
 }
 
-void CommandRecorder::EndRenderPass() {
+void CommandRecorder::EndRenderPass(
+    Resources& /*res*/, std::span<const Handle<Texture>> /*flush*/) {
+    // vk tracks barrier state via transition() (the graph's `flush` is a no-op
+    // here); the metal leaf signals per-resource fences. TODO(Granite gap #1):
+    // unify on the graph's computed barriers.
     vkCmdEndRenderPass(plat.gfx_);
 }
 

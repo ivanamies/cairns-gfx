@@ -25,12 +25,10 @@ struct CommandRecorderPlat {
     // boundary does NOT auto-sync compute writes. DispatchAnimEval updates,
     // DispatchSkinBatches waits.
     MTL::Fence* compute_fence_ = nullptr;
-    // Same problem for graphics->graphics: untracked render targets mean the
-    // encoder boundary does NOT sync a prior render pass's writes against the
-    // next pass that reads them (e.g. forward writes color_off, swap samples
-    // it). EndRenderPass updates this, BeginRenderPass waits it -- the metal
-    // mirror of the vk backend's per-pass transition() barrier. FLAKY_TESTS #2.
-    MTL::Fence* gfx_fence_ = nullptr;
+    // graphics->graphics sync is now per-resource + graph-driven: each render
+    // target carries its own MTL::Fence in TextureColdPlat::sync_fence_, signaled
+    // by the writing pass (EndRenderPass) and waited by the next hazarding pass
+    // (BeginRenderPass) from the graph's computed ResourceBarrier list.
 };
 
 }  // namespace cairns::rhi

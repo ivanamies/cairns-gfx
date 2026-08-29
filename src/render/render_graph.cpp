@@ -585,12 +585,75 @@ bool RenderGraph::Execute(FrameContext& fc, const SwapResolveTarget& target) {
         rp.height = target.height;
         rp.input_textures = std::span<const Handle<Texture>>(
             pass.baked_inputs.data(), pass.baked_inputs_count);
+        // Granite §3.8 invalidate/flush, coarse-stage. Each accessed texture's
+        // persistent PipelineEvent (Texture::Cold.sync) is the producer's last
+        // state; emit an invalidate barrier on a pending flush (RAW/WAW -- the
+        // cross-frame final_target_ WAW lives here) or a layout change, then
+        // record the new flush state. The list is handed to the backend, which
+        // executes it (vk: vkCmdPipelineBarrier; metal: per-resource MTLFence).
+        ResourceBarrier invalidate[24];
+        uint8_t inv_n = 0;
+        Handle<Texture> flush[8];
+        uint8_t flush_n = 0;
+        auto access_tex = [&](Handle<Texture> h, uint32_t dst_access,
+                              uint32_t dst_stage, BarrierLayout new_layout,
+                              bool is_write) {
+            if (h.IsNull()) {
+                return;
+            }
+            Texture::Cold* cold = resources_.textures.GetCold(h);
+            if (cold == nullptr) {
+                return;
+            }
+            PipelineEvent& pe = cold->sync;
+            const bool need =
+                (pe.to_flush_access != 0) || (pe.layout != new_layout);
+            if (need && inv_n < 24) {
+                ResourceBarrier b{};
+                b.texture = h;
+                b.src_access = pe.to_flush_access;
+                b.src_stage = pe.src_stages != 0
+                                  ? pe.src_stages
+                                  : static_cast<uint32_t>(kPipeAllCommands);
+                b.dst_access = dst_access;
+                b.dst_stage = dst_stage;
+                b.old_layout = pe.layout;
+                b.new_layout = new_layout;
+                invalidate[inv_n++] = b;
+            }
+            pe.layout = new_layout;
+            if (is_write) {
+                pe.to_flush_access = dst_access;
+                pe.src_stages = dst_stage;
+                if (flush_n < 8) {
+                    flush[flush_n++] = h;
+                }
+            } else {
+                pe.to_flush_access = 0;  // a read consumes the pending flush
+            }
+        };
+        for (uint8_t i = 0; i < pass.baked_inputs_count; ++i) {
+            access_tex(pass.baked_inputs[i], kAccessShaderRead, kPipeFragment,
+                       BarrierLayout::kShaderRead, false);
+        }
+        for (uint8_t i = 0; i < pass.baked_color_count; ++i) {
+            access_tex(pass.baked_color[i].target, kAccessColorWrite,
+                       kPipeColorOutput, BarrierLayout::kColorAttachment, true);
+        }
+        if (pass.has_depth) {
+            access_tex(pass.baked_depth.depth, kAccessDepthWrite, kPipeDepth,
+                       BarrierLayout::kDepthAttachment, true);
+        }
+
         fc.cmd.PassTimerBegin(pass.name.data());
-        fc.cmd.BeginRenderPass(resources_, target, rp);
+        fc.cmd.BeginRenderPass(
+            resources_, target, rp,
+            std::span<const ResourceBarrier>(invalidate, inv_n));
         if (pass.execute) {
             pass.execute(fc.cmd, res);
         }
-        fc.cmd.EndRenderPass();
+        fc.cmd.EndRenderPass(resources_,
+                             std::span<const Handle<Texture>>(flush, flush_n));
         fc.cmd.PassTimerEnd();
     }
     return true;

@@ -600,8 +600,16 @@ bool Resources::ReadBackTextureRgba(Handle<Texture> h,
     if (!readback) {
         return false;
     }
+    Texture::Cold* cold = textures.GetCold(h);
     MTL::CommandBuffer* cb = plat.queue_->commandBuffer();
     MTL::BlitCommandEncoder* blit = cb->blitCommandEncoder();
+    // Wait for the producing render pass's write to complete (the graph signaled
+    // sync_fence_ at its EndRenderPass). Untracked targets get no automatic
+    // transfer-read sync, so this is the flush to the external (host) consumer
+    // -- the readback would otherwise race the swap's write. FLAKY_TESTS #2.
+    if (cold != nullptr && cold->plat.sync_fence_ != nullptr) {
+        blit->waitForFence(cold->plat.sync_fence_);
+    }
     blit->copyFromTexture(tex, 0, 0, MTL::Origin{0, 0, 0},
                           MTL::Size{w, hgt, 1}, readback, 0, bpr, 0);
     blit->endEncoding();

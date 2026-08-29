@@ -231,8 +231,27 @@ static MTL::StoreAction to_mtl_store(StoreOp op) {  // #222 Phase A.2
     return MTL::StoreActionStore;
 }
 
+// Execute the graph's invalidate barriers on the just-created render encoder:
+// wait each hazarding texture's sync_fence_ (signaled by its last writer at
+// EndRenderPass). Metal has no layouts/access masks; the fence IS the barrier,
+// so we ignore the abstract src/dst fields and just wait. FLAKY_TESTS #2.
+static void apply_invalidate_fences(CommandRecorderPlat& plat, Resources& res,
+                                    std::span<const ResourceBarrier> invalidate) {
+    for (const ResourceBarrier& b : invalidate) {
+        if (b.texture.IsNull()) {
+            continue;
+        }
+        Texture::Cold* cold = res.textures.GetCold(b.texture);
+        if (cold != nullptr && cold->plat.sync_fence_ != nullptr) {
+            plat.enc_->waitForFence(cold->plat.sync_fence_,
+                                    MTL::RenderStageVertex);
+        }
+    }
+}
+
 void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
-                                      const RenderPassDesc& desc) {
+                                      const RenderPassDesc& desc,
+                                      std::span<const ResourceBarrier> invalidate) {
     if (plat.cmd_ == nullptr) {
         plat.cmd_ = plat.queue_->commandBuffer();
     }
@@ -251,9 +270,7 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
             plat.enc_->waitForFence(plat.compute_fence_,
                                      MTL::RenderStageVertex);
         }
-        if (plat.gfx_fence_ != nullptr) {
-            plat.enc_->waitForFence(plat.gfx_fence_, MTL::RenderStageVertex);
-        }
+        apply_invalidate_fences(plat, res, invalidate);
         return;
     }
 
@@ -285,9 +302,7 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget&,
         plat.enc_->waitForFence(plat.compute_fence_,
                                  MTL::RenderStageVertex);
     }
-    if (plat.gfx_fence_ != nullptr) {
-        plat.enc_->waitForFence(plat.gfx_fence_, MTL::RenderStageVertex);
-    }
+    apply_invalidate_fences(plat, res, invalidate);
     rpd->release();
 }
 
@@ -521,16 +536,28 @@ void CommandRecorder::SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) {
     plat.enc_->setScissorRect(s);
 }
 
-void CommandRecorder::EndRenderPass() {
-    // Signal the graphics fence after this pass's fragment writes so the NEXT
-    // render pass that samples this pass's output (e.g. swap reading color_off)
-    // waits for it. Untracked render targets => the encoder boundary alone does
-    // NOT sync graphics->graphics. Metal mirror of the vk transition() barrier.
-    if (plat.gfx_fence_ == nullptr && plat.cmd_ != nullptr) {
-        plat.gfx_fence_ = plat.cmd_->device()->newFence();
-    }
-    if (plat.gfx_fence_ != nullptr) {
-        plat.enc_->updateFence(plat.gfx_fence_, MTL::RenderStageFragment);
+void CommandRecorder::EndRenderPass(Resources& res,
+                                    std::span<const Handle<Texture>> flush) {
+    // Signal each written texture's sync_fence_ after this pass's fragment
+    // writes, so a later pass that hazards on it (this frame OR next) waits via
+    // BeginRenderPass. Lazy-create the per-resource fence on first write; one
+    // fence per texture, reused across frames -> cross-frame WAW. The metal leaf
+    // of the graph's flush. FLAKY_TESTS #2 / Granite gap #1.
+    for (Handle<Texture> h : flush) {
+        if (h.IsNull()) {
+            continue;
+        }
+        Texture::Cold* cold = res.textures.GetCold(h);
+        if (cold == nullptr) {
+            continue;
+        }
+        if (cold->plat.sync_fence_ == nullptr && plat.cmd_ != nullptr) {
+            cold->plat.sync_fence_ = plat.cmd_->device()->newFence();
+        }
+        if (cold->plat.sync_fence_ != nullptr) {
+            plat.enc_->updateFence(cold->plat.sync_fence_,
+                                   MTL::RenderStageFragment);
+        }
     }
     plat.enc_->endEncoding();
 }

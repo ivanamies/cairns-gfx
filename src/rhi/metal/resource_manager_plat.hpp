@@ -17,6 +17,7 @@ class ComputePipelineState;
 class Buffer;
 class Device;
 class CommandQueue;
+class Fence;
 }
 
 namespace cairns::rhi {
@@ -27,7 +28,14 @@ using ApiPsoHandle = MTL::RenderPipelineState*;
 using ApiArgBufferHandle = MTL::Buffer*;
 using ApiKernelHandle = MTL::ComputePipelineState*;
 
-struct TextureColdPlat {};
+// The metal leaf of the graph's per-resource barrier: the writing pass signals
+// this fence at EndRenderPass, a later pass that hazards on this texture waits
+// it at BeginRenderPass. Lazy-created, reused across frames (the fence persists
+// with Texture::Cold) -> cross-frame WAW sync. Driven by the graph's computed
+// barriers, NOT ad-hoc. (Granite physical_events leaf; FLAKY_TESTS #2.)
+struct TextureColdPlat {
+    MTL::Fence* sync_fence_ = nullptr;
+};
 struct ShaderHotPlat {};
 struct KernelHotPlat {};
 // #222 Phase D.2: Metal has no descriptor objects; DynamicBuffers plat is
