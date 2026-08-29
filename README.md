@@ -102,54 +102,32 @@ interactive build. The two checks are complementary, not competing.
 
 ---
 
-## Canonical implementation order
+## Requirements: headless iteration + live interaction
 
-The order each subsystem MUST be brought up in, regardless of branch / fork /
-rebase / cherry-pick churn. Each later layer depends on the earlier ones being
-solid; do not skip ahead.
+Two standing requirements, every platform/backend (memory: `general-requirements`):
 
-1. **RHI** — device, swapchain, command recorder, frames, single forward pass.
-2. **Allocators** — A: bump arena (CPU). B: chunk allocator. C: range pool /
-   OffsetAllocator. D: `ResourceManager<T>` + Hot/Cold. GPU side: single heap
-   + single master buffer per memory type, bump ring for upload/dynamic.
-   Batched upload (10 GLBs / batch) baked into `LoadScenesGpu` from day one.
-3. **Profiling** — Timer slots (`frame`, `build_draws`, `record`, etc.),
-   `PrintReport` every 120 frames, cpu-ms history ring. GPU completion-handler
-   timer slot on Metal.
-4. **ImGui** — vendor imgui core + impl_sdl3, RHI-routed renderer (own pipeline
-   + per-frame bump upload of vtx/idx + per-cmd scissor + font atlas as
-   `CreateTexture`). FPS text + cpu-ms PlotLines overlay. Drawn at the end of
-   the swap pass — no separate composite pass required.
-5. **Threading** — game / render thread split with `kFramesInFlight = 2`.
-   SPSC handoff via `std::mutex` + `std::condition_variable` ONLY (no
-   semaphores, latches, barriers, `shared_mutex`, atomic wait/notify).
-   Per-slot draw-list + arena containers so producer and consumer never
-   share mutable state. A single shared `RenderGraph` instance is reused
-   each frame via `BindSlotArena(slot, ...)` — built + baked + executed on
-   the render thread inside `RecordFrame`. See "Deferred refactors" below.
-6. **RenderGraph / RenderProxies** — multi-pass graph (compute / forward /
-   composite / depth-PIP / ui), Extract from `entt::registry` →
-   `RenderProxyArrays`, draw build off proxies. Transient resource aliasing
-   via `OffsetAllocator` over baked lifetimes.
-7. **Scene layer** — `Handle<World>` pool, EnTT components
-   (`WorldTransform` / `AssetRef` / `Renderable` / `Skin` / `Parent` /
-   `DirtyTransform` / `Name`), `AssetRegistry` for dedup + suballoc + refcount,
-   per-view `Camera` + persistent imported target.
-8. **Animation** — skinning. Persistent skin output pool (`RangePool` over a
-   GPU buffer), per-instance joint palette via `FrameArena`, compute-pass
-   deformation, `skin_output` bound as a vertex buffer to the existing mesh
-   pipeline. (Tier 1 load-time joint inverse-binds in `BumpArena`; Tier 2
-   persistent skin output in `RangePool`; Tier 3 per-frame palettes in
-   `FrameArena`.)
-9. **Physics** — broadphase + narrowphase + solver. CPU first; parallelism
-   via the threading carve from step 5. Hot loops on flat
-   arrays-of-structs-of-arrays in `BumpArena`.
-10. **Scripting** — embedded VM for gameplay code. Calls into the systems
-    above via thin C wrappers; no direct RHI/scene mutation from script
-    threads.
+**R1 — Headless, fast, no human.** Boot surfaceless, drive entirely over the op
+surface (NDJSON / `cairns.script.eval`), capture a PNG or image-hash, iterate.
+No window, no clicks. How Coding Claude iterates and how the goldens gate.
 
-Out of order = fragile. New subsystem? Find where it slots in vs this list,
-and only land it after everything below it (lower number) is healthy.
+**R2 — Windowed live interaction.** A user opens the windowed (or browser) app,
+**clicks/picks an entity**, says "move it left", and Claude **evals a script
+against the live app** to move it. Needs three things wired per platform: a drive
+transport into the live process, `cairns.selection.get` to read the pick, and a
+transform op to move it. (`cairns.scene.setTransform {entity,x,y,z,scale}` exists
+but is *absolute*; a relative `cairns.scene.translate` / a `getTransform` is the
+one small op still to add so "left" composes from the current pose.)
+
+| Platform | R1 — headless drive | R2 — windowed click → eval → move | Capture |
+|---|---|---|---|
+| **macOS Metal** | ✅ surfaceless `serve`/`sdl-min` + NDJSON on stdin (`CAIRNS_AGENT_STDIN=1`); `cairns_golden_tests` | ✅ `sdl-min` window; user picks (mouse → `selection_`); I pipe NDJSON → `cairns.selection.get` + `cairns.scene.setTransform` | `cairns.io.dumpTexture` → PNG (`target:final`/`window`) |
+| **macOS Vulkan** | ✅ identical (one binary per backend) | ✅ identical | identical |
+| **iOS (sim/device, Metal)** | ✅ goldens on the simulator (xcodebuild) | ⚠ transport gap — no on-device stdin; needs a socket/USB NDJSON bridge | in-test PNG dump |
+| **Android (Vulkan)** | ✅ goldens via `adb` on AVD/device | ⚠ transport gap — `adb forward` socket NDJSON not yet wired | PNG pulled via `adb` |
+| **WebGPU native (macOS)** | 🔭 planned — surfaceless wgpu-native + NDJSON (`CAIRNS_GFX_BACKEND=webgpu`); the headless golden gate | — no native window / no SDL; windowed WebGPU lives in the browser (next row) | offscreen readback → PNG |
+| **Web / Chrome (WASM)** | 🔭 planned — headless Chrome `--remote-debugging-port=9222` + CDP `Page.captureScreenshot` (+ `Runtime.evaluate`); no human | 🔭 planned — user clicks canvas; I `Runtime.evaluate("window.cairns.dispatch(...)")` → `selection.get` + `setTransform` | CDP `Page.captureScreenshot` → PNG |
+
+✅ wired · ⚠ partial (transport gap) · 🔭 planned (see `~/dev/plans/2026-06-21_gfx_webgpu-wgpu-native-standup.md`).
 
 ---
 
@@ -457,233 +435,6 @@ offset (into a known buffer/slab) → raw pointer.
 | `src/rhi/{vulkan,metal}/memory_allocator.*` | GPU memory — **DO NOT TOUCH from CPU code** |
 
 ---
-
-## Style / conventions
-
-A growing set of small conventions that aren't worth a Mistake but are worth
-not re-litigating in PR review.
-
-### We are Aaltonen-pilled and Acton-pilled
-
-Two patron saints, two rules:
-
-- **Aaltonen (handle-pilled).** Sebastian Aaltonen's resource-management
-  designs: typed `Handle<T>` end-to-end, OffsetAllocator over fixed buffers,
-  one giant heap + one master buffer per memory type, bump rings for
-  per-frame UBOs. Indirection is by integer index into dense pools, not by
-  pointer. The handle IS the contract — don't drop it to "save an int" or
-  collapse it to a raw pointer at the last second.
-
-- **Acton (array-pilled).** Mike Acton's DOD: flat
-  arrays-of-structs-of-arrays, hot loops iterate contiguous memory, no
-  hidden allocations, no virtual dispatch on the hot path, no hash maps
-  where a flat array indexed by id fits. The data is the program.
-
-When in doubt: handle-then-index, array-then-element.
-
-### No pimpl in this repo
-
-When a header needs different members on Metal vs Vulkan, use the
-SwapChain-style `#if CAIRNS_METAL ... #elif CAIRNS_VULKAN ...` access
-contract directly in the header. No opaque `void* impl_`, no separate
-`_noop.cpp` TU, no virtual call, no extra heap allocation. The ugliness
-is the point — it's the same ugliness that lets the hot path be one
-struct field deref instead of a vtable + indirect call.
-
-> "I'm ugly and I'm proud." — SpongeBob
-
-### Anti-singleton (scene layer)
-
-- **No "the world."** No global/static/singleton world, registry, camera,
-  or selection.
-- **No implicit "current scene."** Every public op takes an explicit
-  `WorldId` or `EntityRef`.
-- **Never pass a bare `entt::entity` across a boundary.** The cross-boundary
-  reference is `EntityRef = { WorldId, entt::entity }`. A bare `entt::entity`
-  lives only inside a scope that has already resolved its world.
-  Code-review rule: a bare `entt::entity` in a signature, member, or
-  container is a defect.
-- **`active_world` is UI focus ONLY** — never read by core logic.
-
----
-
-## Mistakes
-
-A running record, from the user, of things I broke or never finished. Read
-before touching adjacent code so they don't get re-introduced.
-
-- **Didn't propagate allocators.** Randomly over-allocated `MTL::Heap`s and
-  `MTL::Buffer`s by copying tutorial-style "block per (memory type, slot)"
-  shapes instead of finishing the migration to the cairns allocator
-  architecture. Result: one heap per slot per memory type when the design
-  calls for **exactly one heap + one master buffer for the whole bump path**.
-- **Deleted `Handle<BindGroup>` and `Handle<DynamicOffsets>` to "save time."**
-  The hot path looked like just an integer at the moment the RHI was stood
-  up, so I dropped the typed handles. That's wrong — the typed handles are
-  the contract; the hot-path integer shape is a representation detail.
-- **Added an `std::counting_semaphore` for no good reason.** The project
-  explicitly restricts threading primitives to `std::thread`, `std::mutex`,
-  `std::condition_variable`. See `feedback-threading-primitives.md`. I keep
-  reaching for newer primitives by reflex; stop.
-- **Mangled `Draw` struct packing by adding random padding bytes** for
-  alignment/comment reasons that didn't survive review. Don't add or move
-  fields without an actual reason.
-- **Broke bind-group split-by-frequency** by collapsing into a single giant
-  descriptor set (tutorial-style again). Set-0 / set-1 / set-2 / set-3 by
-  update frequency is the design (RenderPassGlobals / Material /
-  ShaderSpecific / DynamicOffsets); merging defeats the entire reason
-  bind groups are split.
-- **Keep talking about base-instance and push-constants.** Base-instance is
-  proven not to work in our pipeline. Push constants are emulated with UBOs.
-  Stop suggesting either; both are explicitly deferred levers.
-  (`feedback-no-instancing-pushconstants.md` covers this too.)
-- **Don't continue the "handle-pilled" pattern.** During the allocator work
-  the rule is **`Handle<T>` first** — bind/use handles end-to-end, resolve
-  to pointer/index only as a local at the lowest level. I keep introducing
-  raw pointers / indices in places where a typed handle was the established
-  shape.
-- **Added an `std::unordered_map` to `AssetRegistry::by_key_` without
-  asking.** Violated `feedback-ask-before-hashmap`. Replaced with sorted
-  `std::vector<KeyEntry>` + `std::lower_bound` binary search. Lesson:
-  ALWAYS ask before introducing a hash map. Even when "the keyspace is
-  small" — that's exactly when the flat-array win is biggest.
-
-## Bisecting a vk regression on a moving op-surface (the L9-era hell)
-
-The vk wedge bisect (9737baa..ia/dev) **cost a session** because the NDJSON
-op surface mutates inside the bisect range. Every time you jump commits
-the spawn/instantiate plumbing changes shape — `prefab.loadBatch` doesn't
-exist before `26a1af7`, `scene.instantiateGrid` is a stub at `f8af786`,
-the engine's auto-spawn from `CAIRNS_N`/`CAIRNS_GLB` is killed at
-`bd617d3`. Repeat **before** you start the Android re-bisect.
-
-### The five op-surface eras (newest first)
-
-| commit range                             | how to spawn N actors                                              | notes                                                                                                       |
-|------------------------------------------|--------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------|
-| `73ce3c4`..`HEAD` (bundled run.js)       | edit `assets/run.js` then rebuild — boot runs it                  | mandatory asset; `boot_run.cpp` aborts if missing; identical content on every platform                       |
-| `26a1af7`..`73ce3c4~1`                   | `prefab.loadBatch(cursor,count)` + N× `scene.instantiateGrid`     | both ops real; `instantiate` returns `UINT32_MAX` on fail (post-`bc826b0`)                                  |
-| `bc826b0`..`26a1af7~1`                   | same ops but textures render as white silhouettes                | bc826b0 fixes the L9 strands; 26a1af7 (L10b) builds material set2 inside LoadPrefabBatch                    |
-| `bd617d3`..`bc826b0~1` (3 commits, **untestable**) | `prefab.loadBatch` works but `InstantiatePrefab` silently returns entity=0 | per_prefab_asset_ / active_scene_ / resident_textures_ stranded by L9; skip these commits in the bisect      |
-| `e9ac791`..`bd617d3~1`                   | engine auto-loads 100 GLBs at boot → drive entity spawn via `scene.clear` + N× `scene.instantiate(prefab,x,y,z,scale,time_phase)` | `instantiateGrid` is a STUB (returns synthetic id only); `prefab.load*` are STUBS too                       |
-| ..`e9ac791~1` (pre-#224 L4)              | engine auto-spawns from `CAIRNS_N` + `CAIRNS_GLB` env vars        | no NDJSON ops; `kHeroSlices=33` default-multiplier; **`9737baa` was last known-good S22 vk row** in PERFORMANCE.md |
-
-### Driving each era
-
-```jsonc
-// era 5 (HEAD, run.js): edit assets/run.js, rebuild, launch.
-// Same NDJSON-ish shape but via cairns.dispatch in JS:
-cairns.dispatch("cairns.prefab.loadBatch", { cursor: 0, count: 100 });
-for (let k = 0; k < 5; ++k) {
-    cairns.dispatch("cairns.scene.instantiateGrid",
-                    { first_prefab_idx: 0, prefab_count: 100 });
-}
-```
-
-```ndjson
-// era 4 (post-26a1af7): pipe to sdl-min via CAIRNS_AGENT_STDIN=1, or to
-// cairns_serve via stdin.
-{"op":"cairns.scene.clear"}
-{"op":"cairns.prefab.loadBatch","args":{"cursor":0,"count":9}}
-{"op":"cairns.scene.instantiateGrid","args":{"first_prefab_idx":0,"prefab_count":9}}
-```
-
-```ndjson
-// era 2 (e9ac791..bd617d3~1): the engine auto-loaded 100 GLBs at boot. To
-// spawn 9 explicitly:
-{"op":"cairns.scene.clear"}
-{"op":"cairns.scene.instantiate","args":{"prefab":0,"x":-1.6,"y":-1.6,"z":-4.0,"scale":0.005,"time_phase":0.0}}
-{"op":"cairns.scene.instantiate","args":{"prefab":1,"x":0.0, "y":-1.6,"z":-4.0,"scale":0.005,"time_phase":0.137}}
-// ... 7 more, prefab indices 2..8
-```
-
-```sh
-# era 1 (..e9ac791): no NDJSON. Engine spawns from env vars at GreaterInit.
-CAIRNS_N=500 ./sdl-min                                                     # default 100 GLBs, 500 actors
-CAIRNS_N=9 CAIRNS_GLB="aatrox.glb,aatrox_blood_moon.glb,…" ./sdl-min        # 9 distinct GLBs, 9 actors
-```
-
-### Build + run loops
-
-**Desktop vk Release** (always pass `-DCAIRNS_GFX_BACKEND=vulkan` — the
-cmake default is metal and the silent-pick has burned hours):
-
-```sh
-cmake -S . -B build/vk -G Xcode -DCAIRNS_GFX_BACKEND=vulkan
-cmake --build build/vk --target sdl-min --config Release -j8
-
-CAIRNS_AGENT_STDIN=1 \
-  ./build/vk/Release/sdl-min.app/Contents/MacOS/sdl-min \
-  < driver.ndjson 2>tmp/stderr.log &
-
-# wait, check pid, eyeball window
-pgrep -af sdl-min
-grep -E '\[Timer\] slot|draws |entities=' tmp/stderr.log | tail -20
-```
-
-For headless dump-and-compare runs (faster bisect iteration than the
-windowed app): append `cairns.render.frame` ×4 + `cairns.io.dumpTexture`
-+ `cairns.app.quit` to the driver and pipe into `cairns_serve` instead
-of `sdl-min`.
-
-**Android (S22) vk Release** — Android needs the windowed app
-(`sdl-min` AAR is what gets built). No NDJSON transport, so eras 4/5 need
-the NDJSON to come from `assets/run.js`; era 1 uses env-var auto-spawn
-in `main.cpp`'s `__ANDROID__` block.
-
-```sh
-# Build + install. Gradle drives cmake; the cmake POST_BUILD copies
-# assets/run.js into the APK assets dir. If you only changed run.js,
-# force the copy:
-cp assets/run.js third_party/SDL/android-project/app/src/main/assets/run.js
-
-cd third_party/SDL/android-project
-./gradlew :app:assembleRelease
-adb -s <serial> install -r app/build/outputs/apk/release/app-release.apk
-
-# Run + wait + capture.
-adb -s <serial> logcat -c
-adb -s <serial> shell am force-stop org.libsdl.app
-adb -s <serial> shell am start -n org.libsdl.app/.SDLActivity
-
-# Wait ~30s for steady state, then either eyeball the device or pull:
-adb -s <serial> logcat -d | grep -E 'cairns|\[Timer\] slot|draws ' | tail -40
-
-# Sanity-check process still alive (silent OOM-kill if not):
-adb -s <serial> shell pidof org.libsdl.app
-```
-
-### Per-commit verification signal
-
-The stderr / logcat line you grep for after each bisect step:
-
-```
-draws 1700 | 100 GLBs x 5 slices = 500 entities | resolution 1280 x 720
-[Timer] slot 0 (frame): accum NNN us, avg NNN us over 120 frames
-[Timer] slot 3 (skinning_compute): accum NNN us, avg NNN us over 120 frames
-```
-
-For the visual signal (wedge vs clean) on desktop you can `screencapture
--x tmp/shot.png`. On Android, eyeball the device or use `adb exec-out
-screencap -p > tmp/shot.png`.
-
-### Skipping the untestable strands
-
-`bd617d3`..`bc826b0~1` is three commits where `cairns.scene.instantiate`
-silently returns entity:0 because L9 stranded `per_prefab_asset_` /
-`active_scene_` / `resident_textures_`. Don't try to verify them
-individually; treat the whole block as "the bug is at one end of the
-block, you can't tell which without surgery." Test `e9ac791` (good
-side) and `bc826b0` (bad side) and conclude the regression is in one
-of `{bd617d3, 64e1de0, 7cbac96, bc826b0}` — only `bd617d3` and
-`bc826b0` have code changes (the other two are golden rebake + script
-add), so the culprit is one of those two. The fix sat at the closer
-match — once `bc826b0` made instantiate work, the wedge was already
-present, so the introducing commit was `bd617d3` (kill the boot
-bulk-load) and the eventual fix was to recreate the stranded
-descriptor sets after the first runtime `loadBatch` (commit `a273119`
-on `ia/dev` adds `recreateSkinGroupB`; H4b's `recreateAnimDynBindings`
-was the other half).
 
 ## Testing
 

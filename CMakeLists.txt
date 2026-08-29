@@ -449,10 +449,6 @@ if (APPLE)
         set_property(SOURCE "${SCRIPT_FILE}" PROPERTY
                      MACOSX_PACKAGE_LOCATION "Resources/scripts")
     endforeach()
-    # TODO(#229 cleanup): remove these bundled demo/sample assets -- leftover
-    # SDL-template cruft, not used by cairns. Drop the add_resource lines AND
-    # the files (assets/Inter-VariableFont.ttf, the_entertainer.ogg, gs_tiger.svg,
-    # mc_grass.jpeg). Confirm imgui doesn't load Inter before removing the font.
     add_resource("${input_root}/the_entertainer.ogg")
     add_resource("${input_root}/gs_tiger.svg")
     add_resource("${input_root}/mc_grass.jpeg")

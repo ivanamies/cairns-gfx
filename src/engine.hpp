@@ -1492,6 +1492,7 @@ public:
         anim_cur_ = {};
         anim_eval_tables_uploaded_ = false;
         anim_dyn_dirty_ = true;
+        prefab_arena_.Reset();  // monotonic; else repeated loads overflow it
         return n;
     }
 
@@ -4229,22 +4230,22 @@ public:
                 const float fb_fw = static_cast<float>(fb_w);
                 const float fb_fh = static_cast<float>(fb_h);
                 if (nested_graph_mode_) {
-                  // #229 nested viz: the GLB set's resolved color fills the top
-                  // of the frame; a depthviz strip of the SAME depth buffer runs
-                  // along the bottom. Unlike the debug PIP below, this is enabled
-                  // in golden -- the depth strip IS the subject of the capture.
+                  // depthviz panel: bottom-right, window aspect (scaled, not squished).
                   const int vi = active_viewport_index_;
-                  const float kDepthStrip = 0.22f;
-                  const float color_h = fb_fh * (1.0f - kDepthStrip);
-                  cmd.SetViewport(0.0f, 0.0f, fb_fw, color_h);
-                  cmd.SetScissor(0, 0, fb_w, static_cast<uint32_t>(color_h));
+                  cmd.SetViewport(0.0f, 0.0f, fb_fw, fb_fh);
+                  cmd.SetScissor(0, 0, fb_w, fb_h);
                   cmd.DrawFullscreen(
                       rhi_.resources, composite_pip_,
                       std::span<const rhi::Handle<rhi::Texture>>(&vp_color[vi], 1),
                       composite_sampler_);
-                  cmd.SetViewport(0.0f, color_h, fb_fw, fb_fh * kDepthStrip);
-                  cmd.SetScissor(0, static_cast<int32_t>(color_h), fb_w,
-                                 static_cast<uint32_t>(fb_fh * kDepthStrip));
+                  const float kPip = 0.3f;  // bottom-right, aspect-preserved
+                  const float pip_w = fb_fw * kPip;
+                  const float pip_h = fb_fh * kPip;
+                  cmd.SetViewport(fb_fw - pip_w, fb_fh - pip_h, pip_w, pip_h);
+                  cmd.SetScissor(static_cast<int32_t>(fb_fw - pip_w),
+                                 static_cast<int32_t>(fb_fh - pip_h),
+                                 static_cast<uint32_t>(pip_w),
+                                 static_cast<uint32_t>(pip_h));
                   cmd.DrawFullscreen(
                       rhi_.resources, depthviz_,
                       std::span<const rhi::Handle<rhi::Texture>>(&vp_depth[vi], 1),
@@ -4274,31 +4275,9 @@ public:
                                        std::span<const rhi::Handle<rhi::Texture>>(&vp_color[v], 1),
                                        composite_sampler_);
                 }
-                // Active viewport's depth PIP (bottom-right 25% of the active
-                // viewport's layout_rect). A.3: skip in golden mode -- it's
-                // a debug overlay that polluted every L1..L7 capture with a
-                // black corner (depthviz of an empty depth buffer = 0
-                // brightness).
-                if (!golden_) {
-                    const glm::vec4& av_rect =
-                        viewports_.GetHot(active_viewport_)->layout_rect;
-                    const float av_w = av_rect.z * fb_fw;
-                    const float av_h = av_rect.w * fb_fh;
-                    const float vp_x0 = av_rect.x * fb_fw;
-                    const float vp_y0 = av_rect.y * fb_fh;
-                    const float pip_x = vp_x0 + 0.75f * av_w;
-                    const float pip_y = vp_y0 + 0.75f * av_h;
-                    const float pip_w = 0.25f * av_w;
-                    const float pip_h = 0.25f * av_h;
-                    cmd.SetViewport(pip_x, pip_y, pip_w, pip_h);
-                    cmd.SetScissor(static_cast<int32_t>(pip_x),
-                                   static_cast<int32_t>(pip_y),
-                                   static_cast<uint32_t>(pip_w),
-                                   static_cast<uint32_t>(pip_h));
-                    cmd.DrawFullscreen(rhi_.resources, depthviz_,
-                                       std::span<const rhi::Handle<rhi::Texture>>(&vp_depth[active_viewport_index_], 1),
-                                       composite_sampler_);
-                }
+                // #229: the depthviz only appears in nested mode (above) now --
+                // the old always-on bottom-right debug PIP is gone, so ordinary
+                // scenarios render clean color with no depth overlay.
                 }  // end else (non-nested multi-viewport composite)
                 // Restore full extent before the ui draw.
                 cmd.SetViewport(0.0f, 0.0f, static_cast<float>(fb_w),

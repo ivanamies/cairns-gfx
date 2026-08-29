@@ -205,6 +205,9 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     if (!engine->GreaterInit(rhi_cfg, ecfg)) {
         return SDL_Fail();
     }
+    // #229 blank boot: no particles until a scenario asks for them (the perf
+    // smokes do). The launcher reset also disables them between scenarios.
+    engine->EnableParticles(false);
 
     // Setup App State
     *appstate = new AppContext{
@@ -378,6 +381,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         reg.Dispatch(cairns::json{{"op", "cairns.render.nestedGraph"},
                                   {"args", {{"on", false}}}});
         reg.Dispatch(cairns::json{{"op", "cairns.render.tinyTriangle"},
+                                  {"args", {{"on", false}}}});
+        reg.Dispatch(cairns::json{{"op", "cairns.particles.enable"},
                                   {"args", {{"on", false}}}});
         std::ifstream f(app->launcher.scripts[idx].path);
         std::stringstream ss;

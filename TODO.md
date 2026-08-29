@@ -7,6 +7,28 @@ here.
 
 ---
 
+## #229 scenario launcher + Unity-components refactor (2026-06-21)
+
+Remaining work:
+
+- **Features must be Components, not engine flags** (memory: features-are-
+  components-not-engine-flags). Refactor these into entt Components the scene
+  spawns + systems iterate; the engine booleans then vanish:
+  - `EnableParticles(bool)` → a `ParticleEmitter` component.
+  - `SetTinyTriangle(bool)` → a debug-draw component (or just a scene).
+  - `SetNestedGraphMode(bool)` + `nested_graph_mode_` + the hardcoded bottom-right
+    depth PIP → a `DepthView { rect, source_viewport }` component; the composite
+    iterates DepthViews + draws each at its rect (no flag, no hardcoded corner).
+- **De-dupe scenarios onto the shared scripts.** `test_golden_scenarios.cpp` still
+  embeds inline JS duplicating `assets/scripts/*.js`. Rewire tests to eval the
+  bundled scripts (`DriveScriptFile` seam started in `golden_js.hpp`) + bundle
+  `scripts/` for the test binary.
+- **Drop bundled demo cruft** — `assets/Inter-VariableFont.ttf`, `the_entertainer.ogg`,
+  `gs_tiger.svg`, `mc_grass.jpeg` (SDL-template leftovers; confirm imgui doesn't
+  load Inter). Remove the `add_resource` lines + the files.
+
+---
+
 ## Render-graph gaps vs Themaister Granite (surfaced 2026-06-20)
 
 Our `src/render/render_graph` is a partial copy of Granite's render graph,
@@ -14,7 +36,12 @@ whose headline feature is *automatic* barrier/semaphore insertion. The
 `three_champ_static` golden flake (FLAKY_TESTS #2) exposed that the copy is
 incomplete. Gaps, roughly highest-value first:
 
-1. **Cross-frame / persistent-resource sync — OPEN, causes the flake.**
+1. **Cross-frame / persistent-resource sync — OPEN (perf/correctness).**
+   2026-06-21: the three_champ flake is PROBABLY FIXED — it went from ~30%
+   reproduction to 0/200, cause unknown (likely a side effect of the #229
+   arena/compaction work). Ruled out as a sync issue: debug-vk synchronization
+   validation found zero hazards and the CPU sim+render hashes are byte-
+   deterministic run-to-run. Still a real Granite gap:
    Granite tracks resources across frames + submissions and barriers persistent
    ones (history buffers, the backbuffer). Our graph rebuilds per-frame with no
    cross-frame dependency tracking, so the persistent `final_target_` (swap
@@ -51,131 +78,7 @@ Also surfaced (not a graph gap): a **pre-existing MSAA sample-count mismatch**
 
 ---
 
-## Deferred — AFTER all #229 allocation-less milestones (M0b, M3–M7) land
-
-### M0b activation (load-vector arena migration) — LOW VALUE, do not pursue blind
-Attempted 2026-06-19 (increment 1: scene_gpu batch vectors → `ChunkAllocator`
-`load_alloc_`). Reverted. Findings:
-- **Reach is ~0.6% of boot allocs.** Boot is ~5k allocs/GLB (load ~1.9k +
-  instantiate + texture residency + scene setup). The engine *load vectors*
-  (`Mesh::Cold` cpu*, `Prefab::Cold` gpu_*) are only ~25–30/GLB. The bulk is
-  **fastgltf-internal** (its `Asset` std::vectors — would need fastgltf's custom
-  allocator, which is PMR = banned), **stb_image** texture loads (C `malloc`,
-  not even in the C++ `[ALLOC-RECEIPT]`), and entity instantiation. None are
-  "load vectors." M3's tiny 3.6k/100-GLB saving corroborates.
-- A 57-agent map (workflow `wf_1ad70248-8c2`) confirms all ~13 load vectors are
-  `load_temporary` + arena_span-SAFE, but the migration is INVASIVE per-vector
-  (writers + readers + the `ValidateAndCleanupTmps` `.empty()`/`.clear()`
-  invariants at engine.hpp:614-622,771-773 all re-home to span semantics).
-- **Verdict:** invasive per-vector restructure for ~0.6% reduction = not worth
-  it. The headline "boot 497k→low" is NOT reachable this way; it needs fastgltf's
-  allocator (PMR-blocked) + texture/instantiation arenas (broad cross-cutting).
-  The M0b reservation FOUNDATION + the M7 QuickJS activation stand; this is the
-  wrong lever.
-
-### ChunkAllocator unproven under large/oversize allocations (M7 latent risk)
-Increment-1 above SIGSEGV'd in `LoadPrefabsGpu` (main thread) the first time the
-(previously dormant) `ChunkAllocator` served LARGE batch vectors (multi-MB,
-oversize path). QuickJS/M7 only does tiny allocs so M7 works in practice, but a
->4 MB JS allocation would hit the same unproven path. Before relying on
-`ChunkAllocator` for large allocations: add a stress test over the oversize +
-in-class-4MB-boundary paths, find the bug, fix it.
-
-
-### Reload skinning-compute-binding crash (pre-existing, do AFTER #229)
-Hot-reloading a SKINNED/animated prefab while it is being rendered crashes the
-render thread ~`kFramesInFlight` frames after the reload. Pre-existing —
-confirmed byte-for-byte identical at the safepoint `21c893a` (before any #229
-work), so NOT a #229 regression. Park it until the allocation milestones are
-done, then fix.
-
-- **Symptom:** Metal API Validation:
-  `-[MTLDebugComputeCommandEncoder setBuffer:offset:attributeStride:atIndex:]:464:
-  failed assertion 'offset(71202720) must be 0.'` → `SIGSEGV` (exit 139) in the
-  render thread's `drawIndexedPrimitives`/compute encode. A compute kernel
-  (anim_eval / skinning) gets a garbage ~71 MB offset for a buffer that must be
-  bound at offset 0.
-- **Repro:** load a skinned glb (`aatrox.glb`) + instantiate + render + reload
-  the SAME path + render ≥2–3 frames. `build/spec-mac-metal/Release/wC3.ndjson`
-  reproduces; `MTL_DEBUG_LAYER=1 MTL_DEBUG_LAYER_ERROR_MODE=assert` surfaces the
-  assertion. `wC0`/`wC1` (0–1 post-reload frames) DON'T crash → it's the old
-  resources retiring at `+kFIF` while a draw still binds them.
-- **Already fixed (related):** the `UnloadAllPrefabs` variant of this race — it
-  released pool slots with no render-thread/GPU quiesce. Added `Drain()` +
-  `device.WaitIdle()` guard (#229 serve-SIGSEGV work). The reload path already
-  quiesces via `RuntimeLoadBatch`'s `WaitIdle`, so the reload crash is NOT a
-  mutation race — it's a stale skin offset after the `*oldH = std::move(*newH)`
-  swap (`ReloadPrefab`, engine.hpp). Suspect a stale `Mesh::Hot::batch_id` /
-  `per_batch_shared_skin_` index or a `skin_output_pool_` offset that isn't
-  re-pointed when the new prefab's meshes move into the old slot.
-- **CONSTRAINT:** the fix may touch the skin pool offsets (`skin_output_pool_`
-  / `RangePool`) — that's Aaltonen-canon. Get explicit permission before
-  modifying the offset allocator / pool; prefer fixing the BINDING code (which
-  offset is passed) over the pool.
-
----
-
 ## Active
-
-### #224 Loading system (P0) — COMPLETE (2026-06-13)
-Plan: `/Users/ivanamies/dev/plans/2026-06-13_gfx_loading-system-224.md`.
-Byte-gate green every commit; studio_js smoke 9/9 throughout.
-- [x] **L0** ListActiveWorld / ClearActiveWorld → …ActiveScene rename
-- [x] **L1** `Engine::LoadPrefabBatch(span<path>)` + per-batch shared skin
-              (`per_batch_shared_skin_` list + `Mesh::Hot::batch_id`)
-- [x] **L2** `Engine::ValidatePrefab` + `…MeshWeights` + `cairns.prefab.validate`
-- [x] **L3** `LoadTrace` + `LoaderCounters` PODs +
-              `cairns.loader.{trace,counters}` (boot batch = ~40s parse +
-              1s upload — instrument quantifies the load slowness)
-- [x] **L4** `Engine::FitGridToViewport(N, extents)` — pure-fn camera solve
-- [x] **L5** `cairns.prefab.loadBatch` + real `cairns.scene.instantiateGrid`
-              (the "+50 +50 +50 auto-fit no-flash" deliverable)
-- [x] **L6** APPEND-only acceptance test
-              (`cairns.debug.snapshotPrefabHandles` /`assertAppendOnly`)
-- [x] **L7** `FitGridToViewport` determinism check (`cairns.debug.loadTwice`)
-- [x] **L8** Editor chrome (selection outline) toggle (`cairns.editor.chrome`)
-
-Follow-ups queued (above): two-sort screenshot strategy
-(full editor vs per-viewport canvas) + chrome-leak byte-gate.
-
-### #225 Unity-shaped rename pass — COMPLETE (2026-06-13)
-Plan: `/Users/ivanamies/dev/plans/2026-06-13_gfx_unity-rename-225.md`.
-Byte-gate green every commit; studio_js smoke harness covers the new
-surface (9/9 on both backends).
-- [x] **R-1** TODO.md extraction + WebGPU ladder
-- [x] **R0** C++ `Scene` (GLB) → `Prefab` (~150 sites, 10 files)
-- [x] **R1** C++ `World` → `Scene` (~100 sites, 12 files)
-- [x] **R2** `LoadedMaterial`→`Material`, `SpawnHero`→`InstantiatePrefab`,
-              `NumScenes`→`NumPrefabs`
-- [x] **R3** NDJSON ops `cairns.world.*`→`cairns.scene.*` +
-              `cairns.asset.load`→`cairns.prefab.load` +
-              `cairns.viewport.setWorld`→`setScene`,
-              all legacy names register as RegisterAlias (one release)
-- [x] **R4** `studio_js.hpp` rewrite — `Prefab` / `Scene.instantiate` /
-              `Prefabs.{load,loadOne,list}` / `Editor.{scenes,newScene,
-              show,thumbnails,compose}`; `GameObject.scene` (new) +
-              `.world` deprecated alias
-- [x] **R5** `docs/studio_notes.md` rewritten: clone / new noun / refuse
-              bins (no "divergence ledger"); `scripts/_studio_js_smoke.js`
-              + `scripts/verify_studio_js.sh` (9 assertions)
-- [x] **R6** `#226` stubs throw "not wired yet (#226 CAP-N)"; comment
-              audit (multi-world → multi-scene, etc.)
-
-Below the wall: **#226** (the three engine capabilities behind the
-worked example) lives in its own plan — multi-camera per viewport,
-virtualized RT pool for `Editor.thumbnails`, multi-target composition
-pass for `Editor.compose`. Each is real rendering plumbing that moves
-pixels, needs its own goldens, and must NOT share commits with the
-rename.
-
-### Golden capture is CPU-side readback at a fixed frame — never a screenshot
-Capture is `ReadFinalTargetRgba` / `DumpFinalTarget` off the offscreen target,
-taken after a fixed frame interval (deterministic frame N) — NOT an OS
-`screencapture` / window grab. WHY: a screenshot is non-deterministic
-(compositor timing, DPI, window chrome, async present) and can't be
-byte-gated; the fixed interval pins sim/particle state to the same frame every
-run. (The 2026-06-19 G1 particle flake is the symptom of getting the *timing*
-wrong even on the correct CPU-side path — see modularization-notes #9b.)
 
 ### No global mutable state (no globals, no singletons, no thread-locals)
 Delete every global, singleton (`static X& Instance()`), file-scope mutable
@@ -189,33 +92,14 @@ Known offenders:
   (a fresh registry per SCENARIO bound to that SCENARIO's Engine). Make it
   constructible, pass `CommandRegistry&` everywhere (the `Register*Ops` already
   take it by ref). modularization-notes #12.
-- `static JsState s` (src/control/handlers/script_ops.cpp:50) — one QuickJS
+- `static JsState s` (src/control/handlers/script_ops.cpp:92) — one QuickJS
   runtime/context for the whole process, bound to whatever registry it first
   saw. Must become per-caller state owned alongside the registry it serves.
-- `g_scene_counter` (src/control/handlers/scene_ops.cpp:21) — file-scope atomic;
-  scene ids should come from the scenes_ pool, not a global counter.
 - `cairns::Timer` static accumulators (accum_times_/accum_itrs_/slot_names_) —
   shared across Engine instances; perf.last + the imgui overlay read them. A
   source of cross-Engine state bleed (modularization-notes #9b territory).
 - Audit for more: grep `Instance()`, `static .*&`, file-scope `static` mutable,
   function-local `static`, `thread_local`.
-
-### Over-specialized test seams -> JS snippets / primitives
-`Engine::SetupTwoSceneViewports(left, right, particles)`, `Engine::SpawnHeroFramed
-(glb, animated)` (src/engine.hpp), and `test_seams::AdvanceToGoldenFrame` are
-bespoke compositions baked in to drive ONE golden each. That is backwards for an
-AI-first/headless engine: the engine should expose PRIMITIVE ops — load-glb,
-fit+center, instantiate-into-scene, open-viewport, bind-viewport-scene, set-
-viewport-particles, advance-N-frames — and a setup like "two scenes, a different
-hero in each" should be a few lines of run.js / a studio_js snippet via
-`cairns.dispatch`, not an engine method. `AdvanceToGoldenFrame` just hardcodes
-`kGoldenDumpFrame+1` over the real primitive `AdvanceFrames(N)` (see
-modularization-notes #11) — the test should pick N. Same root as
-modularization-notes #9 (the open-viewport sequence repeats because the test
-harness bypasses JS dispatch). Needs: a scene-targeted instantiate op (today
-`InstantiatePrefab` hardcodes active_scene_, so the seam swaps active_scene_
-around the spawn — a smell) + a `viewport.setScene` op. Delete the seams once
-those primitives exist and the tests drive JS.
 
 ### Two-sort screenshot + test strategy (chrome on / chrome off)
 The editor canvas has two pixel surfaces and the test matrix must
@@ -238,19 +122,33 @@ global state). Both screenshot kinds need byte-gate golden coverage so
 a chrome-leak regression on either surface fails the dev build.
 Locks the §6 separation from #224.
 
-### ~~#270 Fix broken animations on Samsung S22 (vk release)~~ — DONE (2026-06-19)
-Driven by `scripts/dev_drive.sh` post-#269 spawn flow. Spawn one prefab
-at a time until `[SKIN-FAIL]` fires; the log already names the failing
-scene_id + reason. Needs in-app driver for on-device iteration (no NDJSON
-socket on Android).
-
 ### #268 Per-actor frustum cull (was S.3)
 Bind-pose AABB capture at load is already on `Mesh::Hot`
 (`bind_aabb_min/max`, used by [PICK]). Need: frustum test in
 `BuildSkinFrame` vs live frusta, 1.5× extents pad. Skinning + anim_eval
 cost becomes ∝ visible.
+Test gate: the golden "actors outside the frustum are culled from the counters"
+SKIPs at `tests/test_golden_scenarios.cpp:310` — `SKIP("LastFrameStats accessor
+not wired yet")`. Wire a `LastFrameStats` accessor exposing the per-frame cull
+counters so `REQUIRE(s.culled == kOutside)` can run; until then the cull test is
+inert.
 
 ### #253 Phase 4 — half4 skin output (decide post P1/P3)
+
+### Instanced draw
+Draw N instances of one mesh in ONE call (instance count + per-instance data via
+a dynamic-offset / storage buffer indexed by `instance_index`), not N separate
+draws. WebGPU / WebGL / DX12 have no base-instance (Aaltonen slide 42), so index
+per-instance data off `instance_index`. Consumers: two_die (die.glb ×2) + the
+grid scenarios.
+
+### Untextured champion in the nested golden (bad texture bind)
+In the golden `nested graph: 20 GLBs resolved color + depth strip`
+(`tests/test_golden_scenarios.cpp`, the `[scenarios]` nested case), one of the 20
+GLBs renders as a flat WHITE untextured silhouette — row 2, col 3 of the 4×5 grid
+(albedo/material not bound for that actor). Deterministic (not a flake). Fix the
+texture/material bind, THEN re-bake `nested.color.*` — don't bake the broken
+render as the golden. Identify the exact GLB (kDebugGlbs grid index) when fixing.
 
 ---
 
@@ -289,35 +187,6 @@ on a phone over WebGPU-on-mobile-Chrome is the actual win.
 
 ---
 
-## Deferred refactors (from README — moved here)
-
-### Move render-graph build to the game thread, per-slot
-Today the graph is built + baked + executed on the render thread inside
-`RecordFrame` (`src/engine.hpp`), with a single shared `RenderGraph`
-instance reused per slot via `BindSlotArena(slot, ...)`. The threading
-diagram in README describes the intended end state; getting there means
-splitting graph build/bake (game thread, per-slot graphs) from Execute
-(render thread). Not blocking any active perf push.
-
-### EnTT internals still on `std::allocator`
-`entt::registry`'s component pages go through `std::allocator<T>`, not
-`cairns::Allocator`. Routing through
-`cairns::basic_registry<entt::entity, cairns::Allocator<entt::entity>>`
-is mechanical surgery (every `view<T>` / `storage<T>` call site has to
-carry the allocator type), but right now `cairns::Arena::kEnabled = false`
-means the Arena just `malloc`s anyway — so the surgery would route
-through a wrapper that calls `malloc` instead of routing through
-`malloc` directly. Revisit when `kEnabled` flips to true and the
-ChunkAllocator path is live.
-
-### `World::Cold::registry` is held by value (now `Scene::Cold` post-R1)
-Dropping the prior `std::unique_ptr<entt::registry>` saves one heap
-alloc per scene open (~8 across the program). Safe because
-`scenes_.Reserve(kMaxScenes)` guarantees the cold_ vector never
-reallocates, so `Scene::Cold*` stays stable for the engine's lifetime.
-
----
-
 ## Editor extensions to add (from README)
 
 Per the Editor stack table — currently picked but not yet vendored / wired:
@@ -351,7 +220,6 @@ Source shader count is ~30 (21 GLSL stages + 12 Metal). Realistic target
 ~16-18 after:
 - Consolidate `composite` / `composite_pip` / `composite3` into one
   pipeline with permutations (−2 files).
-- Drop `depthviz` if its consumer is just debug (−1).
 - Audit `blur` consumer — keep if used, drop if stale.
 
 Cleanup should land before the WebGPU stand-up (rung 1+) so we're not
@@ -359,23 +227,5 @@ porting dead shaders to WGSL.
 
 ---
 
-## Backlog (not committed to)
-
-- **Aaltonen A.4 vertex packing** — 64 B → 16-20 B per vertex (RGBA8
-  color + 2×16 octahedral normal + 2×16 octahedral tangent + half2 UV).
-  3-4× stream-1 bandwidth cut. Golden re-bake required (quantization
-  moves pixels). Decide alongside the lit pipeline work.
-- **A.3 direct-to-swap fast path** — when `active_viewport_count_==1 &&
-  !outline_on && !pip`, render forward directly into the swap render
-  pass. MSAA on geometry = visual change; design memo before code.
-- **R.2 BDA on Vulkan** — DESCRIPTOR-decongestion already achieved via
-  Phase D's `DynamicBuffers` (WebGPU-shaped). BDA stays a possible vk
-  fast path if measured win justifies. Adreno/Mali driver floor for
-  `buffer_device_address` is the gate.
-- **Delta-encoded draw stream** — Aaltonen end-state past ~10k draws.
-  Per-draw change bitfield, only emit deltas. Reference only.
-
----
-
-Last touched 2026-06-19. When adding a row: name the issue/branch in
+Last touched 2026-06-21. When adding a row: name the issue/branch in
 the heading (e.g. `### #299 thing`) so `git log --grep` can find it.
