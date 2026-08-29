@@ -1,6 +1,15 @@
 .DS_Store
 build/
 tmp/
+
+# media assets (incl. third-party) — kept local, not tracked
+assets/*.glb
+assets/*.png
+assets/*.jpeg
+assets/*.jpg
+assets/*.ogg
+assets/*.ttf
+assets/*.svg
 assets/a.out
 assets/a.out.dSYM/
 
