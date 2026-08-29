@@ -4786,3 +4786,50 @@ bool Engine::ValidatePrefab(const cairns::Prefab::Cold& cold,
     }
 
 }  // namespace cairns
+
+namespace cairns {
+
+std::vector<std::filesystem::path> Engine::ResolveDebugGlbPaths(
+            uint32_t cursor, uint32_t count) {
+        std::vector<std::filesystem::path> out;
+        out.reserve(count);
+        const uint32_t start =
+            cairns::kDebugGlbsToParseStart + cursor;
+        const uint32_t end_excl = std::min<uint32_t>(
+            start + count,
+            cairns::kDebugGlbsToParseStart + cairns::kDebugGlbsToParse);
+        for (uint32_t i = start; i < end_excl; ++i) {
+            std::filesystem::path p;
+            if (cairns::GetStaticResourceFilepath(cairns::kDebugGlbs[i], p)) {
+                out.push_back(p);
+            }
+        }
+        return out;
+    }
+
+}  // namespace cairns
+
+namespace cairns {
+
+bool Engine::ValidateMeshWeights(const cairns::Mesh::Cold& mc,
+                              cairns::ValidationReport& report,
+                              uint32_t prefab_idx) {
+        const uint8_t pre_errors = report.issue_count;
+        uint32_t bad_vertices = 0;
+        for (const cairns::SkinVertex& sv : mc.cpuSkinAttrs) {
+            const float sum = sv.weights.x + sv.weights.y +
+                              sv.weights.z + sv.weights.w;
+            if (sum < 0.999f || sum > 1.001f) {
+                ++bad_vertices;
+            }
+        }
+        if (bad_vertices > 0) {
+            // One warning per mesh (not per vertex) to bound issues[].
+            report.Add(cairns::ValidationSeverity::kWarning,
+                        "weight_sum != 1 on at least one skinned vertex",
+                        prefab_idx);
+        }
+        return report.issue_count == pre_errors;
+    }
+
+}  // namespace cairns
