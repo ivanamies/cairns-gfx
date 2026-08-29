@@ -32,7 +32,7 @@
 #include "scene/scene_world.hpp"
 #include "render/render_extract.hpp"
 #include "render/render_scene.hpp"
-#include "rhi/render_graph.hpp"
+#include "render/render_graph.hpp"
 #include "rhi/rhi.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/command_recorder.hpp"
@@ -374,6 +374,13 @@ public:
     
     bool draw() {
         frame_++;
+        const uint64_t cpu_now_ns = cairns::timestamp_ns();
+        if (cpu_last_frame_ns_ != 0) {
+            cpu_ms_last_ = static_cast<float>(cpu_now_ns - cpu_last_frame_ns_) / 1.0e6f;
+            cpu_ms_history_[cpu_ms_head_] = cpu_ms_last_;
+            cpu_ms_head_ = (cpu_ms_head_ + 1) % kCpuMsHistory;
+        }
+        cpu_last_frame_ns_ = cpu_now_ns;
         if (frame_ == 5) {
             const char* dump = std::getenv("CAIRNS_DUMP");
             rhi_.frames.SetDumpPath(dump ? dump : "/tmp/cairns_dump.png");
@@ -696,6 +703,12 @@ private:
     uint32_t particle_parity_ = 0;
     uint32_t globals_offset_ = 0;
     uint64_t last_ticks_ = 0;
+    // cpu frame-time history (wall-clock between draw() calls) for the imgui graph
+    static constexpr int kCpuMsHistory = 128;
+    float cpu_ms_history_[kCpuMsHistory] = {};
+    int cpu_ms_head_ = 0;
+    float cpu_ms_last_ = 0.0f;
+    uint64_t cpu_last_frame_ns_ = 0;
     // render pass
     static constexpr size_t sampleCount = 4;
 };

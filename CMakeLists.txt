@@ -165,13 +165,34 @@ set(SDLIMAGE_JPEG OFF)
 set(SDLIMAGE_WEBP OFF)
 add_subdirectory(third_party/SDL_image EXCLUDE_FROM_ALL)
 
-# Link SDL to our executable. This also makes its include directory available to us. 
-target_link_libraries(${EXECUTABLE_NAME} PUBLIC 
+# Dear ImGui: core + the SDL3 platform backend ONLY (input/timing). The GPU
+# renderer is our own, through the cairns RHI -- no imgui_impl_metal/vulkan.
+# Built as a separate static lib so third-party warnings don't trip the app's
+# -Werror; keeps -fno-exceptions/-fno-rtti to match the app ABI.
+add_library(imgui STATIC
+    third_party/imgui/imgui.cpp
+    third_party/imgui/imgui_draw.cpp
+    third_party/imgui/imgui_tables.cpp
+    third_party/imgui/imgui_widgets.cpp
+    third_party/imgui/imgui_demo.cpp
+    third_party/imgui/backends/imgui_impl_sdl3.cpp
+)
+target_include_directories(imgui PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui/backends"
+)
+target_compile_features(imgui PUBLIC cxx_std_20)
+target_compile_options(imgui PRIVATE -fno-exceptions -fno-rtti)
+target_link_libraries(imgui PUBLIC SDL3::SDL3)
+
+# Link SDL to our executable. This also makes its include directory available to us.
+target_link_libraries(${EXECUTABLE_NAME} PUBLIC
 	SDL3_ttf::SDL3_ttf      # remove if you are not using SDL_ttf
 	SDL3_mixer::SDL3_mixer  # remove if you are not using SDL_mixer
 	SDL3_image::SDL3_image	# remove if you are not using SDL_image
         SDL3::SDL3              # If using satelite libraries, SDL must be the last item in the list.
-        fastgltf::fastgltf   
+        fastgltf::fastgltf
+        imgui
 )
 
 # SDL_Image bug: https://github.com/libsdl-org/SDL_image/issues/506
