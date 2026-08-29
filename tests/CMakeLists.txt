@@ -103,12 +103,15 @@ target_link_libraries(cairns_spec_tests PRIVATE Catch2::Catch2WithMain)
 # host to enumerate tests; on cross-compiles (Android NDK / iOS device) that
 # fails because the binary isn't a host binary. Use PRE_TEST there so
 # discovery happens only when ctest actually runs (on-device).
+# SKIP_RETURN_CODE 4: Catch2 exits 4 when every selected test SKIPs; without
+# the property ctest reports an honest SKIP as a failure.
 if(CMAKE_CROSSCOMPILING)
     catch_discover_tests(cairns_spec_tests
-        PROPERTIES LABELS "spec"
+        PROPERTIES LABELS "spec" SKIP_RETURN_CODE 4
         DISCOVERY_MODE PRE_TEST)
 else()
-    catch_discover_tests(cairns_spec_tests PROPERTIES LABELS "spec")
+    catch_discover_tests(cairns_spec_tests
+        PROPERTIES LABELS "spec" SKIP_RETURN_CODE 4)
 endif()
 
 # ---- Tier G: golden ladder (links the engine; backend-selected) -----------
@@ -141,10 +144,11 @@ if(CAIRNS_GFX_BUILD_GOLDEN_TESTS)
         cairns_core cairns_control Catch2::Catch2WithMain)
     if(CMAKE_CROSSCOMPILING)
         catch_discover_tests(cairns_golden_tests
-            PROPERTIES LABELS "golden"
+            PROPERTIES LABELS "golden" SKIP_RETURN_CODE 4
             DISCOVERY_MODE PRE_TEST)
     else()
-        catch_discover_tests(cairns_golden_tests PROPERTIES LABELS "golden")
+        catch_discover_tests(cairns_golden_tests
+            PROPERTIES LABELS "golden" SKIP_RETURN_CODE 4)
     endif()
 
     # Asset bundling -- mirrors the root CMakeLists.txt EXECUTABLE_NAME path
