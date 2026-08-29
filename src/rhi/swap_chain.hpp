@@ -13,21 +13,29 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <limits>
 #include <optional>
+#include <thread>
 #include <vector>
 
-#include <SDL3/SDL.h>
 #include <vulkan/vulkan.h>
 
 namespace cairns::rhi {
+
+// Shell-provided getter for current window pixel dims; used during resize
+// (RecreateSwapChain / chooseSwapExtent). cairns_app fills this with a
+// SDL_GetWindowSizeInPixels wrapper. Headless mode never invokes it (no
+// surface, no SwapChain).
+using WindowSizeFn = void (*)(void* user, int* w, int* h);
 
 struct SwapChain {
     // Injected by Init (owned by the app).
     VkDevice device = VK_NULL_HANDLE;
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
     VkSurfaceKHR surface = VK_NULL_HANDLE;
-    SDL_Window* window_ = nullptr;
+    WindowSizeFn window_size_fn_ = nullptr;
+    void* window_size_user_ = nullptr;
     VkCommandPool commandPool = VK_NULL_HANDLE;
     VkQueue graphicsQueue = VK_NULL_HANDLE;
     VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -49,12 +57,14 @@ struct SwapChain {
     std::vector<VkFramebuffer> swapChainFramebuffers;
 
     bool Init(VkDevice dev, VkPhysicalDevice phys, VkSurfaceKHR surf,
-              SDL_Window* window, VkCommandPool pool, VkQueue queue,
+              WindowSizeFn size_fn, void* size_user,
+              VkCommandPool pool, VkQueue queue,
               VkSampleCountFlagBits samples, bool dump) {
         device = dev;
         physicalDevice = phys;
         surface = surf;
-        window_ = window;
+        window_size_fn_ = size_fn;
+        window_size_user_ = size_user;
         commandPool = pool;
         graphicsQueue = queue;
         msaaSamples = samples;
@@ -74,10 +84,12 @@ struct SwapChain {
     void RecreateSwapChain() {
         int width = 0;
         int height = 0;
-        SDL_GetWindowSizeInPixels(window_, &width, &height);
-        while (width == 0 || height == 0) {
-            SDL_GetWindowSizeInPixels(window_, &width, &height);
-            SDL_Delay(10);
+        if (window_size_fn_) {
+            window_size_fn_(window_size_user_, &width, &height);
+            while (width == 0 || height == 0) {
+                window_size_fn_(window_size_user_, &width, &height);
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
         }
         vkDeviceWaitIdle(device);
         cleanupSwapChain();
@@ -188,7 +200,9 @@ private:
         } else {
             int width = 0;
             int height = 0;
-            SDL_GetWindowSizeInPixels(window_, &width, &height);
+            if (window_size_fn_) {
+                window_size_fn_(window_size_user_, &width, &height);
+            }
             VkExtent2D actualExtent = {static_cast<uint32_t>(width),
                                       static_cast<uint32_t>(height)};
             actualExtent.width = std::clamp(actualExtent.width,
@@ -637,7 +651,6 @@ private:
 
 #elif CAIRNS_METAL
 
-#include <SDL3/SDL.h>
 #include <Foundation/Foundation.hpp>
 #include <Metal/Metal.hpp>
 #include <QuartzCore/QuartzCore.hpp>
@@ -649,15 +662,15 @@ namespace cairns::rhi {
 struct SwapChain {
     SwapChain() {}
 
-    bool Init(MTL::Device* device, SDL_Window* window) {
-        metalView_ = SDL_Metal_CreateView(window);
-        if (!metalView_) {
+    // Layer is pre-resolved by the SDL shell via SDL_Metal_CreateView +
+    // SDL_Metal_GetLayer and ownership stays with the shell (it also calls
+    // SDL_Metal_DestroyView). Headless host passes nullptr and never invokes
+    // this code path (SwapChain::Init is skipped).
+    bool Init(MTL::Device* device, CA::MetalLayer* layer) {
+        if (!layer) {
             return false;
         }
-        metalLayer_ = static_cast<CA::MetalLayer*>(SDL_Metal_GetLayer(metalView_));
-        if (!metalLayer_) {
-            return false;
-        }
+        metalLayer_ = layer;
         metalLayer_->setDevice(device);
         metalLayer_->setPixelFormat(MTL::PixelFormatBGRA8Unorm);
         // Drawables must be blittable: Frames::End copies from the drawable for the
@@ -668,11 +681,7 @@ struct SwapChain {
         return true;
     }
 
-    void Deinit() {
-        if (metalView_) {
-            SDL_Metal_DestroyView(metalView_);
-        }
-    }
+    void Deinit() {}
 
     bool NextDrawable() {
         metalDrawable_ = metalLayer_->nextDrawable();
@@ -695,7 +704,6 @@ struct SwapChain {
 private:
     Size size_ = cairns::kInvalidSize;
     CA::MetalDrawable* metalDrawable_ = nullptr;
-    SDL_MetalView metalView_ = nullptr;
     CA::MetalLayer* metalLayer_ = nullptr;
 };
 

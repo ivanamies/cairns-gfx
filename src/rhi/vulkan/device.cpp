@@ -16,12 +16,11 @@
 #include <string>
 #include <vector>
 
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_vulkan.h>
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_beta.h>
 
 #include "rhi/device.hpp"
+#include "rhi/init_config.hpp"
 #include "rhi/swap_chain.hpp"
 
 namespace cairns::rhi {
@@ -170,9 +169,19 @@ bool is_device_suitable(VkPhysicalDevice device, VkSurfaceKHR surface) {
 
 Device::~Device() { Deinit(); }
 
-bool Device::Init(SDL_Window* window) {
+bool Device::Init(const InitConfig& cfg) {
     if (inited_) {
         return true;
+    }
+
+    // P0b: surfaceless not yet plumbed all the way (Engine still creates a
+    // SwapChain). Treat surfaceless=true as an error here so the SDL shell
+    // path is unaffected; P1 wires the surfaceless mode end-to-end.
+    if (cfg.surfaceless) {
+        return false;
+    }
+    if (!cfg.vk_create_surface) {
+        return false;
     }
 
 #ifdef NDEBUG
@@ -193,9 +202,9 @@ bool Device::Init(SDL_Window* window) {
         app.engineVersion = VK_MAKE_VERSION(1, 0, 0);
         app.apiVersion = VK_API_VERSION_1_2;
 
-        uint32_t sdl_count = 0;
-        const char* const* sdl_exts = SDL_Vulkan_GetInstanceExtensions(&sdl_count);
-        std::vector<const char*> extensions(sdl_exts, sdl_exts + sdl_count);
+        std::vector<const char*> extensions(
+            cfg.vk_instance_extensions,
+            cfg.vk_instance_extensions + cfg.vk_instance_extension_count);
         if (validation_enabled_) {
             extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         }
@@ -230,8 +239,8 @@ bool Device::Init(SDL_Window* window) {
         create_debug_messenger(instance_, &ci, &debug_messenger_);
     }
 
-    if (!SDL_Vulkan_CreateSurface(window, instance_, nullptr,
-                                  &surface_)) {
+    if (!cfg.vk_create_surface(cfg.vk_create_surface_user, instance_,
+                                &surface_)) {
         return false;
     }
 
@@ -382,8 +391,9 @@ void Device::Deinit() {
     inited_ = false;
 }
 
-bool Device::InitSwapChain(SwapChain& sc, SDL_Window* window) {
-    return sc.Init(device_, physical_, surface_, window,
+bool Device::InitSwapChain(SwapChain& sc, const InitConfig& cfg) {
+    return sc.Init(device_, physical_, surface_,
+                   cfg.vk_window_size, cfg.vk_window_size_user,
                    command_pool_, graphics_queue_, msaa_samples_,
                    true);
 }

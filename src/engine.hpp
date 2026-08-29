@@ -19,6 +19,7 @@
 #include <stb_image_write.h>
 
 #include "gfx_api.hpp"
+#include "rhi/init_config.hpp"
 #include "rhi/swap_chain.hpp"
 #include "gpu_scene_registry.hpp"
 #include "util/misc.hpp"
@@ -119,8 +120,8 @@ public:
         }
     }
     
-    bool initSwapChain(SDL_Window* window) {
-        if ( !rhi_.device.InitSwapChain(swapchain_, window)) {
+    bool initSwapChain(const rhi::InitConfig& cfg) {
+        if ( !rhi_.device.InitSwapChain(swapchain_, cfg)) {
             return false;
         }
 
@@ -149,7 +150,7 @@ public:
         return true;
     }
     
-    bool GreaterInit(SDL_Window* window) {
+    bool GreaterInit(const rhi::InitConfig& cfg) {
         // Clock selection: CAIRNS_DUMP => FixedClock (golden); else WallClock.
         golden_ = (std::getenv("CAIRNS_DUMP") != nullptr);
         tiny_quad_test_ = (std::getenv("CAIRNS_TINY_QUAD") != nullptr);
@@ -176,7 +177,7 @@ public:
             CAIRNS_PRINT("GreaterInit: initResourceManagers failed\n");
             return false;
         }
-        if (!rhi_.device.Init(window)) {
+        if (!rhi_.device.Init(cfg)) {
             CAIRNS_PRINT("GreaterInit: device.Init failed\n");
             return false;
         }
@@ -196,7 +197,7 @@ public:
             CAIRNS_PRINT("GreaterInit: pipelines.Init failed\n");
             return false;
         }
-        if ( !initSwapChain(window)) {
+        if ( !initSwapChain(cfg)) {
             CAIRNS_PRINT("GreaterInit: initSwapChain failed\n");
             return false;
         }

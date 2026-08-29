@@ -12,14 +12,15 @@
 #include <Metal/Metal.hpp>
 
 #include "rhi/device.hpp"
+#include "rhi/init_config.hpp"
 #include "rhi/swap_chain.hpp"
 
 namespace cairns::rhi {
 
 Device::~Device() { Deinit(); }
 
-bool Device::Init(SDL_Window* window) {
-    (void)window;
+bool Device::Init(const InitConfig& cfg) {
+    (void)cfg;
     if (inited_) {
         return true;
     }
@@ -45,8 +46,8 @@ void Device::Deinit() {
     inited_ = false;
 }
 
-bool Device::InitSwapChain(SwapChain& sc, SDL_Window* window) {
-    return sc.Init(device_, window);
+bool Device::InitSwapChain(SwapChain& sc, const InitConfig& cfg) {
+    return sc.Init(device_, cfg.metal_layer);
 }
 
 }  // namespace cairns::rhi

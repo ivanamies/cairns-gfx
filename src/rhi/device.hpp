@@ -16,10 +16,9 @@
 #include <Metal/Metal.hpp>
 #endif
 
-struct SDL_Window;
-
 namespace cairns::rhi {
 
+struct InitConfig;
 struct SwapChain;
 
 class Device {
@@ -30,11 +29,11 @@ public:
     Device& operator=(const Device&) = delete;
 
     // CALLER: ENGINE.
-    [[nodiscard]] bool Init(SDL_Window* window);
+    [[nodiscard]] bool Init(const InitConfig& cfg);
     // CALLER: ENGINE.
     void Deinit();
     // CALLER: ENGINE.
-    [[nodiscard]] bool InitSwapChain(SwapChain& sc, SDL_Window* window);
+    [[nodiscard]] bool InitSwapChain(SwapChain& sc, const InitConfig& cfg);
 
     // Platform handles; the subsystems mirror these during their Init().
 #if CAIRNS_VULKAN

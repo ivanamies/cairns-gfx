@@ -6,6 +6,13 @@
 #include <SDL3_mixer/SDL_mixer.h>
 #include <SDL3_image/SDL_image.h>
 
+#if CAIRNS_VULKAN
+#include <SDL3/SDL_vulkan.h>
+#endif
+#if CAIRNS_METAL
+#include <SDL3/SDL_metal.h>
+#endif
+
 #include <vector>
 #include <string>
 #include <memory>
@@ -20,6 +27,7 @@
 #include "imgui_impl_sdl3.h"
 
 #include "engine.hpp"
+#include "rhi/init_config.hpp"
 #include "util/task_guard.hpp"
 
 namespace cairns {
@@ -27,13 +35,17 @@ namespace cairns {
 
 } // namespace cairns
 
+
 struct AppContext {
     SDL_Window* window = nullptr;
-    
+#if CAIRNS_METAL
+    SDL_MetalView metal_view = nullptr;
+#endif
+
     // Audio
     SDL_AudioDeviceID audioDevice;
     MIX_Track* track = nullptr;
-    
+
     cairns::Engine* engine = nullptr;
 
     SDL_AppResult app_quit = SDL_APP_CONTINUE;
@@ -44,22 +56,37 @@ struct AppContext {
     }
 };
 
+#if CAIRNS_VULKAN
+// Shell-side VkSurfaceKHR creation -- invoked by rhi::Device::Init after the
+// VkInstance is up. user is the SDL_Window*.
+static bool ShellVkCreateSurface(void* user, VkInstance instance,
+                                 VkSurfaceKHR* out_surface) {
+    SDL_Window* window = static_cast<SDL_Window*>(user);
+    return SDL_Vulkan_CreateSurface(window, instance, nullptr, out_surface);
+}
+
+// Shell-side window pixel-size getter for SwapChain resize handling.
+static void ShellVkWindowSize(void* user, int* w, int* h) {
+    SDL_GetWindowSizeInPixels(static_cast<SDL_Window*>(user), w, h);
+}
+#endif
+
 SDL_AppResult SDL_Fail(){
     SDL_LogError(SDL_LOG_CATEGORY_CUSTOM, "Error %s", SDL_GetError());
     return SDL_APP_FAILURE;
 }
 
 SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
-    
+
     constexpr uint32_t kWindowStartWidth = 1280;
     constexpr uint32_t kWindowStartHeight = 720;
 
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
-    
+
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)){
         return SDL_Fail();
     }
-    
+
     SDL_Window* window = nullptr;
     cairns::Engine* engine = nullptr;
 
@@ -83,14 +110,46 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
         return SDL_Fail();
     }
 
+    // Build the platform-handle InitConfig the RHI consumes.
+    cairns::rhi::InitConfig rhi_cfg{};
+    rhi_cfg.surfaceless = false;
+    rhi_cfg.width = kWindowStartWidth;
+    rhi_cfg.height = kWindowStartHeight;
+
+#if CAIRNS_VULKAN
+    uint32_t sdl_ext_count = 0;
+    const char* const* sdl_exts = SDL_Vulkan_GetInstanceExtensions(&sdl_ext_count);
+    rhi_cfg.vk_instance_extensions = sdl_exts;
+    rhi_cfg.vk_instance_extension_count = sdl_ext_count;
+    rhi_cfg.vk_create_surface = &ShellVkCreateSurface;
+    rhi_cfg.vk_create_surface_user = window;
+    rhi_cfg.vk_window_size = &ShellVkWindowSize;
+    rhi_cfg.vk_window_size_user = window;
+#endif
+
+#if CAIRNS_METAL
+    SDL_MetalView metal_view = SDL_Metal_CreateView(window);
+    if (!metal_view) {
+        return SDL_Fail();
+    }
+    rhi_cfg.metal_layer =
+        static_cast<CA::MetalLayer*>(SDL_Metal_GetLayer(metal_view));
+    if (!rhi_cfg.metal_layer) {
+        return SDL_Fail();
+    }
+#endif
+
     engine = new cairns::Engine;
-    if ( !engine->GreaterInit(window)) {
+    if (!engine->GreaterInit(rhi_cfg)) {
         return SDL_Fail();
     }
 
     // Setup App State
     *appstate = new AppContext{
         .window = window,
+#if CAIRNS_METAL
+        .metal_view = metal_view,
+#endif
         .audioDevice = 0,
         .track = nullptr,
         .engine = engine,
@@ -98,7 +157,7 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
 
     SDL_ShowWindow(window);
     SDL_Log("cairns Application started successfully!");
-    
+
     return SDL_APP_CONTINUE;
 }
 
@@ -147,6 +206,11 @@ void SDL_AppQuit(void* appstate, [[maybe_unused]] SDL_AppResult result) {
         }
         ImGui_ImplSDL3_Shutdown();
         ImGui::DestroyContext();
+#if CAIRNS_METAL
+        if (app->metal_view) {
+            SDL_Metal_DestroyView(app->metal_view);
+        }
+#endif
         if (app->window) {
             SDL_DestroyWindow(app->window);
         }
