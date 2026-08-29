@@ -444,11 +444,21 @@ public:
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
             ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_FirstUseEver);
-            ImGui::Begin("cairns");
+            ImGui::Begin("cairns", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
             const float fps = cpu_ms_last_ > 0.0f ? 1000.0f / cpu_ms_last_ : 0.0f;
-            ImGui::Text("CPU: %.2f ms  (%.0f fps)", cpu_ms_last_, fps);
+            float ms_max = 1.0f;
+            float ms_avg = 0.0f;
+            for (int i = 0; i < kCpuMsHistory; ++i) {
+                ms_max = cpu_ms_history_[i] > ms_max ? cpu_ms_history_[i] : ms_max;
+                ms_avg += cpu_ms_history_[i];
+            }
+            ms_avg /= static_cast<float>(kCpuMsHistory);
+            ImGui::Text("CPU %.2f ms   |   %.0f FPS", cpu_ms_last_, fps);
+            ImGui::Text("avg %.2f ms   |   peak %.2f ms", ms_avg, ms_max);
+            char overlay[32];
+            std::snprintf(overlay, sizeof(overlay), "%.2f ms", cpu_ms_last_);
             ImGui::PlotLines("##cpuhist", cpu_ms_history_, kCpuMsHistory, cpu_ms_head_,
-                             "cpu ms", 0.0f, 33.0f, ImVec2(220.0f, 80.0f));
+                             overlay, 0.0f, ms_max * 1.15f, ImVec2(300.0f, 110.0f));
             ImGui::End();
             ImGui::Render();
         }
