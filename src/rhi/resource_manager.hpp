@@ -506,19 +506,15 @@ struct GraphicsPipelineDesc {
     uint32_t sample_count = 1;
     uint32_t push_constant_bytes = 0;
     const char* debug_name = nullptr;
-#if CAIRNS_VULKAN
-    VkRenderPass render_pass = VK_NULL_HANDLE;
-    Span<const VkDescriptorSetLayout> set_layouts;
-#endif
+    // Neutral: the backend reads its render pass / target info from the swap
+    // chain; descriptor set layouts are resolved rhi-side from logical_shader.
+    SwapChain* swap_chain = nullptr;
 };
 
 struct ComputePipelineDesc {
     const char* logical_shader = nullptr;  // "particle"
     const char* shader_dir = nullptr;
     const char* debug_name = nullptr;
-#if CAIRNS_VULKAN
-    Span<const VkDescriptorSetLayout> set_layouts;
-#endif
 };
 
 // --- Bindless registry -----------------------------------------------------

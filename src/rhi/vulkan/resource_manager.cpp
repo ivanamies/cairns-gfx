@@ -1496,10 +1496,16 @@ Handle<Shader> ResourceManager::CreateGraphicsPipeline(
     pc_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pc_range.offset = 0;
     pc_range.size = desc.push_constant_bytes;
+    std::vector<VkDescriptorSetLayout> set_layouts;
+    if (desc.logical_shader && std::string(desc.logical_shader) == "unlit") {
+        set_layouts = {impl_->bindless_layout, impl_->dyn_ubo_layout};
+    } else {
+        set_layouts = {impl_->point_layout};
+    }
     VkPipelineLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layout_info.setLayoutCount = static_cast<uint32_t>(desc.set_layouts.size());
-    layout_info.pSetLayouts = desc.set_layouts.data();
+    layout_info.setLayoutCount = static_cast<uint32_t>(set_layouts.size());
+    layout_info.pSetLayouts = set_layouts.data();
     layout_info.pushConstantRangeCount = desc.push_constant_bytes ? 1 : 0;
     layout_info.pPushConstantRanges = desc.push_constant_bytes ? &pc_range : nullptr;
 
@@ -1523,7 +1529,7 @@ Handle<Shader> ResourceManager::CreateGraphicsPipeline(
     pi.pDynamicState = &dynamic_state;
     pi.pDepthStencilState = &depth_stencil;
     pi.layout = layout;
-    pi.renderPass = desc.render_pass;
+    pi.renderPass = desc.swap_chain->renderPass;
     pi.subpass = 0;
     pi.basePipelineHandle = VK_NULL_HANDLE;
     pi.basePipelineIndex = -1;
@@ -1567,10 +1573,11 @@ Handle<Kernel> ResourceManager::CreateComputePipeline(
     stage.module = comp_mod;
     stage.pName = "main";
 
+    const VkDescriptorSetLayout compute_layouts[1] = {impl_->compute_layout};
     VkPipelineLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layout_info.setLayoutCount = static_cast<uint32_t>(desc.set_layouts.size());
-    layout_info.pSetLayouts = desc.set_layouts.data();
+    layout_info.setLayoutCount = 1;
+    layout_info.pSetLayouts = compute_layouts;
 
     VkPipelineLayout layout = VK_NULL_HANDLE;
     if (vkCreatePipelineLayout(device, &layout_info, nullptr, &layout) != VK_SUCCESS) {

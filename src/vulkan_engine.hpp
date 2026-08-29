@@ -1491,8 +1491,6 @@ private:
             const rhi::VertexInputAttribute pos_attr{0, 0, rhi::Format::kRgba32F, 0};
             const rhi::VertexBufferLayout pos_layout{
                 0, static_cast<uint32_t>(sizeof(glm::vec4))};
-            const VkDescriptorSetLayout set_layouts[2] = {
-                rm_.GetBindlessLayout(bindless_bg_), rm_.GetDynUboLayout()};
             rhi::GraphicsPipelineDesc desc{};
             desc.logical_shader = "unlit";
             desc.shader_dir = shader_dir.c_str();
@@ -1509,8 +1507,7 @@ private:
             desc.sample_count = static_cast<uint32_t>(msaaSamples);
             desc.push_constant_bytes = sizeof(uint32_t);
             desc.debug_name = "unlit";
-            desc.render_pass = sc_.renderPass;
-            desc.set_layouts = rhi::Span<const VkDescriptorSetLayout>(set_layouts, 2);
+            desc.swap_chain = &sc_;
             unlit_shader_ = rm_.CreateGraphicsPipeline(desc);
             if (unlit_shader_.IsNull()) return false;
         }
@@ -1525,7 +1522,6 @@ private:
             };
             const rhi::VertexBufferLayout layout{
                 0, static_cast<uint32_t>(sizeof(Particle))};
-            const VkDescriptorSetLayout set_layouts[1] = {rm_.GetPointLayout()};
             rhi::GraphicsPipelineDesc desc{};
             desc.logical_shader = "particle";
             desc.shader_dir = shader_dir.c_str();
@@ -1542,8 +1538,7 @@ private:
             desc.sample_count = static_cast<uint32_t>(msaaSamples);
             desc.push_constant_bytes = 0;
             desc.debug_name = "particle_render";
-            desc.render_pass = sc_.renderPass;
-            desc.set_layouts = rhi::Span<const VkDescriptorSetLayout>(set_layouts, 1);
+            desc.swap_chain = &sc_;
             particle_render_shader_ = rm_.CreateGraphicsPipeline(desc);
             if (particle_render_shader_.IsNull()) return false;
         }
@@ -1553,12 +1548,10 @@ private:
     bool createComputePipeline() {
         const char* sdl_base = SDL_GetBasePath();
         const std::string shader_dir = sdl_base ? sdl_base : "";
-        const VkDescriptorSetLayout set_layouts[1] = {rm_.GetComputeLayout()};
         rhi::ComputePipelineDesc desc{};
         desc.logical_shader = "particle";
         desc.shader_dir = shader_dir.c_str();
         desc.debug_name = "particle_compute";
-        desc.set_layouts = rhi::Span<const VkDescriptorSetLayout>(set_layouts, 1);
         particle_kernel_ = rm_.CreateComputePipeline(desc);
         return !particle_kernel_.IsNull();
     }
