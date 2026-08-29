@@ -170,7 +170,7 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     AppContext* app_ctx = static_cast<AppContext*>(*appstate);
     auto& registry = cairns::control::CommandRegistry::Instance();
     cairns::control::RegisterLifecycleOps(registry, &app_ctx->agent_quit);
-    cairns::control::RegisterPerfOps(registry);
+    cairns::control::RegisterPerfOps(registry, engine);
     app_ctx->agent_drain.Start();
     if (app_ctx->agent_drain.Enabled()) {
         std::fprintf(stderr,

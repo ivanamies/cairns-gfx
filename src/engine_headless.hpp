@@ -20,5 +20,10 @@ namespace headless {
 bool RenderFrame(Engine* engine);
 bool DumpFinalTarget(Engine* engine, const std::filesystem::path& path);
 
+// Note: SetRandomSeed must run BEFORE GreaterInit's initParticles for the
+// new seed to take effect on particle init. Calling at runtime updates the
+// field but leaves the in-flight particle state alone.
+void SetRandomSeed(Engine* engine, uint32_t seed);
+
 }  // namespace headless
 }  // namespace cairns

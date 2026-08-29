@@ -3,12 +3,13 @@
 #include <array>
 
 #include "control/command_registry.hpp"
+#include "engine_headless.hpp"
 #include "util/json.hpp"
 #include "util/timer.hpp"
 
 namespace cairns::control {
 
-void RegisterPerfOps(CommandRegistry& registry) {
+void RegisterPerfOps(CommandRegistry& registry, cairns::Engine* engine) {
     registry.Register(
         "perf.last",
         /*schema=*/json::object(),
@@ -35,27 +36,35 @@ void RegisterPerfOps(CommandRegistry& registry) {
             return {{"slots", slots}};
         });
 
-    // rng.seed + time.set are P4 stubs: the registry surface lights up so
-    // an external caller / tools.list manifest exposes them, but the
-    // engine-side wiring (seeded RNG in scene init, FixedClock advancement)
-    // is a separate change tracked in the task list.
+    // rng.seed is wired engine-side: updates Engine::random_seed_ which
+    // initParticles reads via std::srand. Note: GreaterInit's initParticles
+    // already ran, so the seed change takes effect on the NEXT particle
+    // (re-)init -- not retroactive on the current particle state. For a
+    // truly seeded boot, call rng.seed BEFORE the first render.frame and
+    // expect the engine init flow to evolve to apply it.
     registry.Register(
         "rng.seed",
         /*schema=*/json::object(),
-        /*doc=*/"Seed the engine RNG (P4 stub; wiring pending).",
-        [](const json& args) -> json {
-            const uint64_t n = args.value("n", uint64_t{1});
-            return {{"seed", n}, {"note", "stub; engine RNG wiring pending"}};
+        /*doc=*/"Seed the engine RNG. Takes effect at next initParticles; "
+                "today not yet retroactive on the live particle SSBO.",
+        [engine](const json& args) -> json {
+            const uint64_t n = args.value("n", uint64_t{42});
+            const uint32_t n32 = static_cast<uint32_t>(n);
+            cairns::headless::SetRandomSeed(engine, n32);
+            return {{"seed", n32}, {"engine_bound", engine != nullptr}};
         });
 
+    // time.set still a stub: FixedClock advancement isn't directly
+    // settable -- the headless render path will grow a `dt` arg on
+    // render.frame instead. For now the op records the intent.
     registry.Register(
         "time.set",
         /*schema=*/json::object(),
-        /*doc=*/"Set the deterministic sim time (P4 stub; FixedClock "
-                "advancement wiring pending).",
+        /*doc=*/"Set the deterministic sim time (stub today; "
+                "render.frame({dt}) is the planned shape).",
         [](const json& args) -> json {
             const double t = args.value("t", 0.0);
-            return {{"t", t}, {"note", "stub; clock wiring pending"}};
+            return {{"t", t}, {"note", "stub; render.frame({dt}) planned"}};
         });
 }
 

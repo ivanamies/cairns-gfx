@@ -139,6 +139,12 @@ public:
         return true;
     }
 
+    // Override the deterministic-particles seed (default kept at 42 to match
+    // the existing CAIRNS_DUMP byte-gate). Must be called before
+    // GreaterInit's initParticles for the change to take effect.
+    void SetRandomSeed(uint32_t seed) { random_seed_ = seed; }
+    uint32_t GetRandomSeed() const { return random_seed_; }
+
     // Headless (cairns_serve) minimum render: clear final_target_ to the
     // engine's clear color. Synchronous (waits for GPU completion). Returns
     // false if final_target_ isn't allocated (i.e. windowed mode -- caller
@@ -171,6 +177,64 @@ public:
         cb->commit();
         cb->waitUntilCompleted();
         rpd->release();
+        return true;
+#elif CAIRNS_VULKAN
+        VkImage img = static_cast<VkImage>(
+            rhi_.resources.textures.GetCold(final_target_)->api_image);
+        if (img == VK_NULL_HANDLE) {
+            return false;
+        }
+        VkCommandBufferAllocateInfo cai{};
+        cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cai.commandPool = rhi_.device.command_pool_;
+        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = 1;
+        VkCommandBuffer cb = VK_NULL_HANDLE;
+        if (vkAllocateCommandBuffers(rhi_.device.device_, &cai, &cb) != VK_SUCCESS) {
+            return false;
+        }
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cb, &bi);
+        VkImageMemoryBarrier to_dst{};
+        to_dst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        to_dst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        to_dst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        to_dst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        to_dst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        to_dst.image = img;
+        to_dst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        to_dst.srcAccessMask = 0;
+        to_dst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
+                              0, nullptr, 1, &to_dst);
+        VkClearColorValue cc{};
+        cc.float32[0] = 41.0f / 255.0f;
+        cc.float32[1] = 42.0f / 255.0f;
+        cc.float32[2] = 48.0f / 255.0f;
+        cc.float32[3] = 1.0f;
+        VkImageSubresourceRange r{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdClearColorImage(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                              &cc, 1, &r);
+        VkImageMemoryBarrier to_shader = to_dst;
+        to_shader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        to_shader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        to_shader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        to_shader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                              0, nullptr, 0, nullptr, 1, &to_shader);
+        vkEndCommandBuffer(cb);
+        VkSubmitInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cb;
+        vkQueueSubmit(rhi_.device.graphics_queue_, 1, &si, VK_NULL_HANDLE);
+        vkQueueWaitIdle(rhi_.device.graphics_queue_);
+        vkFreeCommandBuffers(rhi_.device.device_, rhi_.device.command_pool_,
+                              1, &cb);
         return true;
 #else
         return false;
@@ -222,6 +286,127 @@ public:
             static_cast<int>(h), 4, rgba.data(),
             static_cast<int>(bpr)) != 0;
         readback->release();
+        return ok;
+#elif CAIRNS_VULKAN
+        VkImage img = static_cast<VkImage>(
+            rhi_.resources.textures.GetCold(final_target_)->api_image);
+        if (img == VK_NULL_HANDLE) {
+            return false;
+        }
+        const uint32_t w = final_target_w_;
+        const uint32_t h = final_target_h_;
+        const VkDeviceSize buf_size =
+            static_cast<VkDeviceSize>(w) * h * 4;
+
+        VkBufferCreateInfo bci{};
+        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bci.size = buf_size;
+        bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VkBuffer buf = VK_NULL_HANDLE;
+        if (vkCreateBuffer(rhi_.device.device_, &bci, nullptr, &buf) !=
+            VK_SUCCESS) {
+            return false;
+        }
+        VkMemoryRequirements mr{};
+        vkGetBufferMemoryRequirements(rhi_.device.device_, buf, &mr);
+        VkPhysicalDeviceMemoryProperties mp{};
+        vkGetPhysicalDeviceMemoryProperties(rhi_.device.physical_, &mp);
+        uint32_t type_idx = 0;
+        bool found_type = false;
+        for (uint32_t i = 0; i < mp.memoryTypeCount; ++i) {
+            const auto need = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+            if ((mr.memoryTypeBits & (1u << i)) &&
+                (mp.memoryTypes[i].propertyFlags & need) == need) {
+                type_idx = i;
+                found_type = true;
+                break;
+            }
+        }
+        if (!found_type) {
+            vkDestroyBuffer(rhi_.device.device_, buf, nullptr);
+            return false;
+        }
+        VkMemoryAllocateInfo mai{};
+        mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        mai.allocationSize = mr.size;
+        mai.memoryTypeIndex = type_idx;
+        VkDeviceMemory mem = VK_NULL_HANDLE;
+        vkAllocateMemory(rhi_.device.device_, &mai, nullptr, &mem);
+        vkBindBufferMemory(rhi_.device.device_, buf, mem, 0);
+
+        VkCommandBufferAllocateInfo cai{};
+        cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cai.commandPool = rhi_.device.command_pool_;
+        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = 1;
+        VkCommandBuffer cb = VK_NULL_HANDLE;
+        vkAllocateCommandBuffers(rhi_.device.device_, &cai, &cb);
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cb, &bi);
+
+        VkImageMemoryBarrier to_src{};
+        to_src.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        to_src.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        to_src.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        to_src.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        to_src.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        to_src.image = img;
+        to_src.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        to_src.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        to_src.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
+                              0, nullptr, 1, &to_src);
+
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {w, h, 1};
+        vkCmdCopyImageToBuffer(cb, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                buf, 1, &region);
+
+        VkImageMemoryBarrier to_shader = to_src;
+        to_shader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        to_shader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        to_shader.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        to_shader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                              0, nullptr, 0, nullptr, 1, &to_shader);
+
+        vkEndCommandBuffer(cb);
+        VkSubmitInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cb;
+        vkQueueSubmit(rhi_.device.graphics_queue_, 1, &si, VK_NULL_HANDLE);
+        vkQueueWaitIdle(rhi_.device.graphics_queue_);
+
+        void* mapped = nullptr;
+        vkMapMemory(rhi_.device.device_, mem, 0, buf_size, 0, &mapped);
+        std::vector<uint8_t> rgba(static_cast<size_t>(buf_size));
+        const uint8_t* src = static_cast<const uint8_t*>(mapped);
+        // final_target_ format is BGRA8Unorm (matches the metal path).
+        for (uint32_t i = 0; i < w * h; ++i) {
+            rgba[i * 4 + 0] = src[i * 4 + 2];
+            rgba[i * 4 + 1] = src[i * 4 + 1];
+            rgba[i * 4 + 2] = src[i * 4 + 0];
+            rgba[i * 4 + 3] = src[i * 4 + 3];
+        }
+        vkUnmapMemory(rhi_.device.device_, mem);
+
+        const bool ok = stbi_write_png(
+            path.string().c_str(), static_cast<int>(w),
+            static_cast<int>(h), 4, rgba.data(),
+            static_cast<int>(w * 4)) != 0;
+
+        vkFreeCommandBuffers(rhi_.device.device_, rhi_.device.command_pool_,
+                              1, &cb);
+        vkDestroyBuffer(rhi_.device.device_, buf, nullptr);
+        vkFreeMemory(rhi_.device.device_, mem, nullptr);
         return ok;
 #else
         (void)path;
@@ -1320,7 +1505,9 @@ public:
         }
 
         // Deterministic particle seed -- matches the golden capture path.
-        std::srand(42);
+        // Override via Engine::SetRandomSeed before GreaterInit if you need
+        // a different starting state (e.g. the rng.seed NDJSON op).
+        std::srand(random_seed_);
         std::vector<Particle> particles(kParticleCount);
         for (uint32_t i = 0; i < kParticleCount; ++i) {
             const float r = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
@@ -1445,6 +1632,10 @@ private:
     rhi::Handle<rhi::Texture> final_target_ = rhi::Handle<rhi::Texture>::Null;
     uint32_t final_target_w_ = 0;
     uint32_t final_target_h_ = 0;
+
+    // Seed used by initParticles. Default 42 preserves the existing golden;
+    // the rng.seed NDJSON op writes through SetRandomSeed before init.
+    uint32_t random_seed_ = 42;
     // Fiedler fixed-timestep accumulator state. Game-thread only -- never
     // touched by the render thread. clock_ is WallClock in live mode,
     // FixedClock under CAIRNS_DUMP.

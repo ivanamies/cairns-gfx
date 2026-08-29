@@ -6,10 +6,14 @@
 
 #pragma once
 
+namespace cairns { class Engine; }
+
 namespace cairns::control {
 
 class CommandRegistry;
 
-void RegisterPerfOps(CommandRegistry& registry);
+// engine may be null (cairns_serve before engine_ok / cairns_app's
+// pre-engine ops). rng.seed is a no-op-but-recorded when engine is null.
+void RegisterPerfOps(CommandRegistry& registry, cairns::Engine* engine);
 
 }  // namespace cairns::control
