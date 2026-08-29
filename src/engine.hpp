@@ -254,13 +254,14 @@ public:
         if (!scenes_.empty()) {
             world_.scenes = scenes_.data();
             world_.scene_count = scenes_.size();
-            world_.entities.clear();
-            world_.entities.reserve(debugSceneXforms_.size());
+            world_.ClearEntities();
+            world_.entities.Reserve(debugSceneXforms_.size());
+            world_.live_entities.reserve(debugSceneXforms_.size());
             for (size_t i = 0; i < debugSceneXforms_.size(); ++i) {
-                cairns::SceneEntity e;
+                cairns::SceneEntity::Hot e{};
                 e.transform = debugSceneXforms_[i];
                 e.scene_index = static_cast<uint32_t>(i % scenes_.size());
-                world_.entities.push_back(e);
+                world_.AddEntity(e);
             }
         }
         if ( !initRenderPipeline() ) {
@@ -419,16 +420,15 @@ public:
                           std::vector<std::pair<cairns::DrawKey, uint32_t>>& out_sorted) {
         out_draws.clear();
         out_sorted.clear();
-        cairns::SceneWorld w;
-        w.scenes = world_.scenes;
-        w.scene_count = world_.scene_count;
-        w.root_transform = root;
+        // Build a handle filter from the live indices (D's path: handles, not raw copies).
+        std::vector<rhi::Handle<cairns::SceneEntity>> handles;
+        handles.reserve(entity_indices.size());
         for (uint32_t ei : entity_indices) {
-            if (ei < world_.entities.size()) {
-                w.entities.push_back(world_.entities[ei]);
+            if (ei < world_.live_entities.size()) {
+                handles.push_back(world_.live_entities[ei]);
             }
         }
-        cairns::Extract(w, subset_proxies_);
+        cairns::Extract(world_, subset_proxies_, handles, &root);
         const float near_z = 0.1f;
         const float far_z = 100.0f;
         for (const cairns::MeshProxy& mp : subset_proxies_.meshes.data) {
@@ -505,12 +505,14 @@ public:
         // Models are placed as (entity.transform * root) -> they spin in place at
         // the fixed grid position, so the camera target is the entity translation.
         auto entity_center = [&](uint32_t i) -> glm::vec3 {
-            return glm::vec3(world_.entities[i].transform[3]);
+            const cairns::SceneEntity::Hot* hot =
+                world_.entities.GetHot(world_.live_entities[i]);
+            return glm::vec3(hot->transform[3]);
         };
-        const glm::vec3 t0 =
-            world_.entities.size() > 0 ? entity_center(0) : glm::vec3(0, 0, -3);
-        const glm::vec3 t1 =
-            world_.entities.size() > 1 ? entity_center(1) : glm::vec3(0, 0, -3);
+        const glm::vec3 t0 = world_.live_entities.size() > 0 ? entity_center(0)
+                                                             : glm::vec3(0, 0, -3);
+        const glm::vec3 t1 = world_.live_entities.size() > 1 ? entity_center(1)
+                                                             : glm::vec3(0, 0, -3);
 
         const glm::mat4 proj_wide = glm::perspectiveRH_ZO(glm::radians(90.0f), aspect, near_z, far_z);
         const glm::mat4 proj_narrow = glm::perspectiveRH_ZO(glm::radians(22.0f), aspect, near_z, far_z);
@@ -527,8 +529,8 @@ public:
         // Smoke wire-up for allocator A: route this transient through the per-frame ring.
         std::vector<uint32_t, cairns::BumpStdAllocator<uint32_t>> e_all{
             cairns::BumpStdAllocator<uint32_t>(frame_arena_.Current())};
-        e_all.reserve(world_.entities.size());
-        for (uint32_t i = 0; i < world_.entities.size(); ++i) {
+        e_all.reserve(world_.live_entities.size());
+        for (uint32_t i = 0; i < world_.live_entities.size(); ++i) {
             e_all.push_back(i);
         }
         const uint32_t e_glb1[] = {0};

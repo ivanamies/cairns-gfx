@@ -4,19 +4,37 @@
 #include "scene/scene_world.hpp"
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace cairns {
 
-inline void Extract(const SceneWorld& world, RenderProxyArrays& out) {
+// Walk the live entities and produce render proxies. With `filter` empty (the
+// default) iterates the packed live list; with a filter, iterates exactly the
+// supplied handles (the parallel-test subset path). `root_override` lets callers
+// frame against a different root than `world.root_transform`.
+inline void Extract(SceneWorld& world, RenderProxyArrays& out,
+                    std::span<const rhi::Handle<SceneEntity>> filter = {},
+                    const glm::mat4* root_override = nullptr) {
     out.Clear();
+    const std::span<const rhi::Handle<SceneEntity>> handles =
+        filter.empty()
+            ? std::span<const rhi::Handle<SceneEntity>>(world.live_entities.data(),
+                                                        world.live_entities.size())
+            : filter;
+    const glm::mat4& root =
+        root_override != nullptr ? *root_override : world.root_transform;
     std::vector<int32_t> stack;
-    for (const SceneEntity& entity : world.entities) {
-        if (entity.scene_index >= world.scene_count) {
+    for (rhi::Handle<SceneEntity> h : handles) {
+        SceneEntity::Hot* hot = world.entities.GetHot(h);
+        if (hot == nullptr) {
+            continue;  // stale handle -- silently skip (D's stale-detection)
+        }
+        if (hot->scene_index >= world.scene_count) {
             continue;
         }
-        const Scene& scene = world.scenes[entity.scene_index];
-        const glm::mat4 model_matrix = entity.transform * world.root_transform;
+        const Scene& scene = world.scenes[hot->scene_index];
+        const glm::mat4 model_matrix = hot->transform * root;
 
         stack.clear();
         for (size_t j = 0; j < scene.rootNodes.size(); ++j) {
@@ -42,8 +60,8 @@ inline void Extract(const SceneWorld& world, RenderProxyArrays& out) {
             proxy.first_primitive = static_cast<uint32_t>(out.primitives.size());
             proxy.primitive_count = static_cast<uint32_t>(mesh.primitives.size());
             proxy.skin = kInvalidSkin;
-            proxy.layer_mask = entity.layer_mask;
-            proxy.flags = entity.flags;
+            proxy.layer_mask = hot->layer_mask;
+            proxy.flags = hot->flags;
             for (const Primitive& prim : mesh.primitives) {
                 PrimitiveProxy pp;
                 pp.first_index = prim.firstIndex;

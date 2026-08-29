@@ -148,6 +148,41 @@ public:
 
     size_t Size() const { return hot_.size(); }
 
+    // Drop everything. Releases all slots; bumps no generations -- safe because
+    // any outstanding handles will fail the generation check after the next
+    // Acquire fills the same index. CALLER: owner during teardown/world swap.
+    void Reset() {
+        hot_.clear();
+        cold_.clear();
+        generation_.clear();
+        freelist_.clear();
+    }
+
+    void Reserve(size_t n) {
+        hot_.reserve(n);
+        cold_.reserve(n);
+        generation_.reserve(n);
+    }
+
+    const typename T::Hot* GetHot(Handle<T> h) const {
+        if (h.index >= generation_.size()) {
+            return nullptr;
+        }
+        if (generation_[h.index] != h.generation) {
+            return nullptr;
+        }
+        return &hot_[h.index];
+    }
+    const typename T::Cold* GetCold(Handle<T> h) const {
+        if (h.index >= generation_.size()) {
+            return nullptr;
+        }
+        if (generation_[h.index] != h.generation) {
+            return nullptr;
+        }
+        return &cold_[h.index];
+    }
+
     template <typename Fn>
     void ForEachLive(Fn fn) {
         std::vector<bool> is_free(hot_.size(), false);
