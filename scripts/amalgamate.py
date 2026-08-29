@@ -31,12 +31,23 @@ INC_ANGLE = re.compile(r'^\s*#\s*include\s*<')
 PRAGMA_ONCE = re.compile(r'^\s*#\s*pragma\s+once\s*$')
 
 
+def _is_test_path(path):
+    # Tests live in tests/ (outside SRC_ROOT) so they are already excluded;
+    # this is a belt-and-suspenders guard in case a test file lands under src/.
+    base = os.path.basename(path).lower()
+    if base.startswith("test_") or "_test." in base:
+        return True
+    parts = {p.lower() for p in path.split(os.sep)}
+    return "tests" in parts or "test" in parts
+
+
 def collect():
     files = []
     for dirpath, _dirnames, filenames in os.walk(SRC_ROOT):
         for fn in filenames:
-            if os.path.splitext(fn)[1] in EXTS:
-                files.append(os.path.join(dirpath, fn))
+            full = os.path.join(dirpath, fn)
+            if os.path.splitext(fn)[1] in EXTS and not _is_test_path(full):
+                files.append(full)
     return files
 
 
