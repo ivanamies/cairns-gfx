@@ -1201,15 +1201,6 @@ Handle<BindGroup> ResourceManager::CreateBindGroup(const BindGroupDesc&) {
     return Handle<BindGroup>::Null;
 }
 
-Handle<Shader> ResourceManager::CreateShader(const ShaderDesc& desc) {
-    Handle<Shader> h = impl_->shaders.Acquire();
-    Shader::Hot* hot = impl_->shaders.GetHot(h);
-    hot->vk_pipeline = desc.vk_pipeline;
-    hot->vk_layout = desc.vk_layout;
-    impl_->shaders.GetCold(h)->debug_name = desc.debug_name;
-    return h;
-}
-
 void ResourceManager::Destroy(Handle<Shader> h) {
     impl_->shaders.Release(h);
 }
@@ -1265,15 +1256,6 @@ void ResourceManager::Destroy(Handle<BindGroup> h) {
 
 void ResourceManager::Destroy(Handle<DynamicBuffers> h) {
     impl_->dynamic_buffers.Release(h);
-}
-
-Handle<Kernel> ResourceManager::CreateKernel(const KernelDesc& desc) {
-    Handle<Kernel> h = impl_->kernels.Acquire();
-    Kernel::Hot* hot = impl_->kernels.GetHot(h);
-    hot->vk_pipeline = desc.vk_pipeline;
-    hot->vk_layout = desc.vk_layout;
-    impl_->kernels.GetCold(h)->debug_name = desc.debug_name;
-    return h;
 }
 
 void ResourceManager::Destroy(Handle<Kernel> h) {

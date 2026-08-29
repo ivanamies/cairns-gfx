@@ -404,15 +404,6 @@ struct Shader {
     };
 };
 
-struct ShaderDesc {
-    ApiPsoHandle api_pso = nullptr;  // engine-compiled; rhi takes ownership
-    const char* debug_name = nullptr;
-#if CAIRNS_VULKAN
-    VkPipeline vk_pipeline = VK_NULL_HANDLE;
-    VkPipelineLayout vk_layout = VK_NULL_HANDLE;
-#endif
-};
-
 struct Kernel {
     struct Hot {
         ApiKernelHandle api_pso = nullptr;  // MTLComputePipelineState
@@ -424,15 +415,6 @@ struct Kernel {
     struct Cold {
         const char* debug_name = nullptr;
     };
-};
-
-struct KernelDesc {
-    ApiKernelHandle api_pso = nullptr;  // engine-compiled; rhi takes ownership
-    const char* debug_name = nullptr;
-#if CAIRNS_VULKAN
-    VkPipeline vk_pipeline = VK_NULL_HANDLE;
-    VkPipelineLayout vk_layout = VK_NULL_HANDLE;
-#endif
 };
 
 // --- Pipeline creation -----------------------------------------------------
@@ -573,8 +555,6 @@ public:
     Handle<Sampler> CreateSampler(const SamplerDesc& desc);
     Handle<BindGroup> CreateBindGroup(const BindGroupDesc& desc);
     Handle<DynamicBuffers> CreateDynamicBuffers(const DynamicBuffersDesc& desc);
-    Handle<Shader> CreateShader(const ShaderDesc& desc);
-    Handle<Kernel> CreateKernel(const KernelDesc& desc);
     Handle<Shader> CreateGraphicsPipeline(const GraphicsPipelineDesc& desc);
     Handle<Kernel> CreateComputePipeline(const ComputePipelineDesc& desc);
 

@@ -501,30 +501,6 @@ Kernel::Hot* ResourceManager::GetHot(Handle<Kernel> h) {
     return impl_->kernels.GetHot(h);
 }
 
-Handle<Shader> ResourceManager::CreateShader(const ShaderDesc& d) {
-    if (!d.api_pso) {
-        return Handle<Shader>::Null;
-    }
-    Handle<Shader> h = impl_->shaders.Acquire();
-    Shader::Hot* hot = impl_->shaders.GetHot(h);
-    hot->api_pso = d.api_pso;
-    Shader::Cold* cold = impl_->shaders.GetCold(h);
-    cold->debug_name = d.debug_name;
-    return h;
-}
-
-Handle<Kernel> ResourceManager::CreateKernel(const KernelDesc& d) {
-    if (!d.api_pso) {
-        return Handle<Kernel>::Null;
-    }
-    Handle<Kernel> h = impl_->kernels.Acquire();
-    Kernel::Hot* hot = impl_->kernels.GetHot(h);
-    hot->api_pso = d.api_pso;
-    Kernel::Cold* cold = impl_->kernels.GetCold(h);
-    cold->debug_name = d.debug_name;
-    return h;
-}
-
 namespace {
 
 std::string read_text_file(const std::string& path) {
