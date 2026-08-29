@@ -1479,7 +1479,11 @@ public:
                 std::exit(0);
             }
 
-            // composite_pip: full-screen tri, samples 1 color tex, writes MSAA swap.
+            // composite_pip: full-screen tri, samples 1 color tex, writes the
+            // swap target. Surfaceless: final_target_ is 1-sample / no-depth,
+            // so the pipeline is compat with a 1-sample / no-depth renderpass.
+            // Windowed: swapchain renderpass is MSAA + depth attachments.
+            const bool surfaceless_pipe = !final_target_.IsNull();
             rhi::GraphicsPipelineDesc cpd{};
             cpd.logical_shader = "composite_pip";
             cpd.shader_dir = shader_dir.c_str();
@@ -1488,10 +1492,11 @@ public:
             cpd.depth_test = false;
             cpd.depth_write = false;
             cpd.color_format = rhi::Format::kBgra8Unorm;
-            cpd.depth_format = rhi::Format::kD32F;
-            cpd.sample_count = sampleCount;
+            cpd.depth_format = surfaceless_pipe ? rhi::Format::kUndefined
+                                                : rhi::Format::kD32F;
+            cpd.sample_count = surfaceless_pipe ? 1u : sampleCount;
             cpd.debug_name = "composite_pip";
-            cpd.swap_chain = &swapchain_;
+            cpd.swap_chain = surfaceless_pipe ? nullptr : &swapchain_;
             composite_pip_ = rhi_.pipelines.CreateGraphicsPipeline(
                 rhi_.resources, rhi_.frames, cpd);
 
@@ -1611,12 +1616,14 @@ public:
             id.blend.dst_color = rhi::BlendFactor::kOneMinusSrcAlpha;
             id.blend.src_alpha = rhi::BlendFactor::kOne;
             id.blend.dst_alpha = rhi::BlendFactor::kOneMinusSrcAlpha;
+            const bool surfaceless_imgui = !final_target_.IsNull();
             id.color_format = rhi::Format::kBgra8Unorm;
-            id.depth_format = rhi::Format::kD32F;
-            id.sample_count = sampleCount;
+            id.depth_format = surfaceless_imgui ? rhi::Format::kUndefined
+                                                : rhi::Format::kD32F;
+            id.sample_count = surfaceless_imgui ? 1u : sampleCount;
             id.push_constant_bytes = 16;
             id.debug_name = "imgui";
-            id.swap_chain = &swapchain_;
+            id.swap_chain = surfaceless_imgui ? nullptr : &swapchain_;
             imgui_ = rhi_.pipelines.CreateGraphicsPipeline(rhi_.resources,
                                                           rhi_.frames, id);
             if (imgui_.IsNull()) {
