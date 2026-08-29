@@ -5,6 +5,41 @@ Newest first.
 
 ---
 
+## `e2d0c26` (2026-05-30) — `ia/26-05-30/performance_debug`
+
+Layout: 20×5 grid × 33 slices = **3300 entities**, ~11.5k draws.
+Heroes: scale 0.01, dx=dy=0.7, dz=2.0, front slice z=-4.
+Window: 2400×1080 (Pixel 6a landscape native). 100 GLBs, each drawn 33×.
+Landscape locked across all targets.
+
+### Pixel 6a emulator (Android 14, arm64-v8a, Tensor G1 host-translated Vulkan, Release)
+GLBs adb-pushed to `/sdcard/Android/data/org.libsdl.app/files/`.
+```
+slot 0 (frame):                          avg 31173–31743 us  (~32 fps)
+slot 1 (build_draws):                    avg  3168– 3298 us
+slot 2 (record):                         avg  5133– 5184 us
+slot 3 (set up render pass globals):     avg     0–    1 us
+slot 4 (build opaque draw list):         avg  3165– 3294 us
+draws: ~11.5k
+```
+**No OOM** at 100 GLBs on the AVD (Pixel 6a profile, 6 GB RAM allocation,
+arm64-v8a system image with Vulkan compute + level 1). The "unbatched upload
+blows up newHeap" hazard is iOS-Simulator-specific (MTLSimDevice has tighter
+heap caps than Vulkan-on-android).
+
+Notes: emulator GPU is host-translated, not real Tensor G1 — these are
+representative-of-low-end-mobile bytecode-path numbers but actual hardware
+will differ (memory subsystem, mali-equivalent throughput etc).
+
+### iOS Simulator (iPhone 16 Pro, Release) — still crashes
+Same `MTLSimDevice::newHeapWithDescriptor:` SIGABRT during `LoadScenesGpu` →
+`CreateBuffer` → `CreateBufferBlock` → `newHeap`. Will retry after batched
+upload (task #143).
+
+### macOS / iOS device — not yet measured at this commit.
+
+---
+
 ## `4fb1e46` (2026-05-30) — `ia/26-05-30/performance_debug`
 
 Branch base = `9d90f90`. Constants flipped: `kDebugGlbsToParse 50→100`,
