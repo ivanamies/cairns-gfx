@@ -168,15 +168,27 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     rpd->setVertexFunction(vfn);
     rpd->setFragmentFunction(ffn);
 
-    MTL::RenderPipelineColorAttachmentDescriptor* color =
-        rpd->colorAttachments()->object(0);
-    color->setPixelFormat(to_mtl_pixel_format(desc.color_format));
-    if (desc.blend.enable) {
-        color->setBlendingEnabled(true);
-        color->setSourceRGBBlendFactor(to_mtl_blend_factor(desc.blend.src_color));
-        color->setDestinationRGBBlendFactor(to_mtl_blend_factor(desc.blend.dst_color));
-        color->setSourceAlphaBlendFactor(to_mtl_blend_factor(desc.blend.src_alpha));
-        color->setDestinationAlphaBlendFactor(to_mtl_blend_factor(desc.blend.dst_alpha));
+    // #206 multi-color attachment setup. color_count > 0 -> use
+    // color_formats[0..count); else fall back to single color_format.
+    // Attachment 0 carries the shared BlendState; secondaries (e.g.
+    // R32U ID buffer) get blend disabled (UINT can't blend).
+    const uint8_t n_color_atts =
+        desc.color_count > 0
+            ? desc.color_count
+            : (desc.color_format != Format::kUndefined ? 1u : 0u);
+    for (uint8_t i = 0; i < n_color_atts; ++i) {
+        MTL::RenderPipelineColorAttachmentDescriptor* color =
+            rpd->colorAttachments()->object(i);
+        const Format f = (desc.color_count > 0) ? desc.color_formats[i]
+                                                 : desc.color_format;
+        color->setPixelFormat(to_mtl_pixel_format(f));
+        if (i == 0 && desc.blend.enable) {
+            color->setBlendingEnabled(true);
+            color->setSourceRGBBlendFactor(to_mtl_blend_factor(desc.blend.src_color));
+            color->setDestinationRGBBlendFactor(to_mtl_blend_factor(desc.blend.dst_color));
+            color->setSourceAlphaBlendFactor(to_mtl_blend_factor(desc.blend.src_alpha));
+            color->setDestinationAlphaBlendFactor(to_mtl_blend_factor(desc.blend.dst_alpha));
+        }
     }
     rpd->setSampleCount(desc.sample_count);
     rpd->setDepthAttachmentPixelFormat(to_mtl_pixel_format(desc.depth_format));

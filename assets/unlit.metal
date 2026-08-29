@@ -97,8 +97,18 @@ vertex VertexOut vertexShader(VertexInput in [[stage_in]],
     return out;
 }
 
-fragment float4 fragmentShader(VertexOut in [[stage_in]], constant MaterialArg& material [[buffer(CUBE_MATERIAL_BUFFER_SLOT)]]) {
-    return material.tex.sample(material.samp, in.textureCoordinate);
+// #206 MRT: color + R32U id buffer. id is stubbed to 0 until per-draw
+// {type<<24 | id} encoding lands via instance buffer.
+struct FragmentOut {
+    float4 color [[color(0)]];
+    uint id [[color(1)]];
+};
+
+fragment FragmentOut fragmentShader(VertexOut in [[stage_in]], constant MaterialArg& material [[buffer(CUBE_MATERIAL_BUFFER_SLOT)]]) {
+    FragmentOut out;
+    out.color = material.tex.sample(material.samp, in.textureCoordinate);
+    out.id = 0u;
+    return out;
 }
     
 } // namespace cube

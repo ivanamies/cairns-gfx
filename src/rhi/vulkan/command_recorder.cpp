@@ -74,9 +74,17 @@ static VkAttachmentLoadOp to_vk_load(LoadOp op) {
 
 static bool key_eq(const OffscreenTargetCache::RpKey& a,
                    const OffscreenTargetCache::RpKey& b) {
-    return a.color == b.color && a.depth == b.depth &&
-           a.color_load == b.color_load && a.depth_load == b.depth_load &&
-           a.has_color == b.has_color && a.has_depth == b.has_depth;
+    if (a.color_count != b.color_count ||
+        a.depth != b.depth ||
+        a.color_load != b.color_load ||
+        a.depth_load != b.depth_load ||
+        a.has_depth != b.has_depth) {
+        return false;
+    }
+    for (uint32_t i = 0; i < a.color_count; ++i) {
+        if (a.colors[i] != b.colors[i]) return false;
+    }
+    return true;
 }
 
 static VkRenderPass get_offscreen_rp(OffscreenTargetCache* cache,
@@ -86,12 +94,13 @@ static VkRenderPass get_offscreen_rp(OffscreenTargetCache* cache,
             return e.rp;
         }
     }
-    VkAttachmentDescription atts[2]{};
-    VkAttachmentReference color_ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    constexpr uint32_t kMax = OffscreenTargetCache::kMaxColors + 1;
+    VkAttachmentDescription atts[kMax]{};
+    VkAttachmentReference color_refs[OffscreenTargetCache::kMaxColors]{};
     VkAttachmentReference depth_ref{0, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
     uint32_t att_count = 0;
-    if (key.has_color) {
-        atts[att_count].format = key.color;
+    for (uint32_t i = 0; i < key.color_count; ++i) {
+        atts[att_count].format = key.colors[i];
         atts[att_count].samples = VK_SAMPLE_COUNT_1_BIT;
         atts[att_count].loadOp = key.color_load;
         atts[att_count].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -99,7 +108,8 @@ static VkRenderPass get_offscreen_rp(OffscreenTargetCache* cache,
         atts[att_count].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         atts[att_count].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         atts[att_count].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        color_ref.attachment = att_count;
+        color_refs[i].attachment = att_count;
+        color_refs[i].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         ++att_count;
     }
     if (key.has_depth) {
@@ -116,10 +126,8 @@ static VkRenderPass get_offscreen_rp(OffscreenTargetCache* cache,
     }
     VkSubpassDescription sub{};
     sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    if (key.has_color) {
-        sub.colorAttachmentCount = 1;
-        sub.pColorAttachments = &color_ref;
-    }
+    sub.colorAttachmentCount = key.color_count;
+    sub.pColorAttachments = key.color_count > 0 ? color_refs : nullptr;
     if (key.has_depth) {
         sub.pDepthStencilAttachment = &depth_ref;
     }
@@ -136,26 +144,36 @@ static VkRenderPass get_offscreen_rp(OffscreenTargetCache* cache,
 }
 
 static VkFramebuffer get_offscreen_fb(OffscreenTargetCache* cache, VkRenderPass rp,
-                                      VkImageView v0, VkImageView v1,
+                                      const VkImageView* views, uint32_t view_count,
                                       uint32_t w, uint32_t h) {
     for (const auto& e : cache->fbs) {
-        if (e.rp == rp && e.v0 == v0 && e.v1 == v1 && e.w == w && e.h == h) {
-            return e.fb;
+        if (e.rp != rp || e.view_count != view_count || e.w != w || e.h != h) {
+            continue;
         }
+        bool match = true;
+        for (uint32_t i = 0; i < view_count; ++i) {
+            if (e.views[i] != views[i]) { match = false; break; }
+        }
+        if (match) return e.fb;
     }
-    VkImageView views[2]{v0, v1};
-    uint32_t count = (v1 == VK_NULL_HANDLE) ? 1 : 2;
     VkFramebufferCreateInfo ci{};
     ci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     ci.renderPass = rp;
-    ci.attachmentCount = count;
+    ci.attachmentCount = view_count;
     ci.pAttachments = views;
     ci.width = w;
     ci.height = h;
     ci.layers = 1;
     VkFramebuffer fb = VK_NULL_HANDLE;
     vkCreateFramebuffer(cache->device, &ci, nullptr, &fb);
-    cache->fbs.push_back({rp, v0, v1, w, h, fb});
+    OffscreenTargetCache::FbEntry entry{};
+    entry.rp = rp;
+    for (uint32_t i = 0; i < view_count; ++i) entry.views[i] = views[i];
+    entry.view_count = view_count;
+    entry.w = w;
+    entry.h = h;
+    entry.fb = fb;
+    cache->fbs.push_back(entry);
     return fb;
 }
 
@@ -291,21 +309,26 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& t
         rpi.pClearValues = clears;
         vkCmdBeginRenderPass(plat.gfx_, &rpi, VK_SUBPASS_CONTENTS_INLINE);
     } else {
-        const bool has_color = !desc.color.empty();
+        // #206 multi-color: iterate desc.color for every attachment. Each
+        // gets transitioned to COLOR_ATTACHMENT_OPTIMAL, its view collected,
+        // and its format hashed into the cache key.
+        const uint32_t color_count = static_cast<uint32_t>(desc.color.size());
         const bool has_depth = !desc.depth.depth.IsNull();
-        VkImageView color_view = VK_NULL_HANDLE;
+        VkImageView color_views[OffscreenTargetCache::kMaxColors]{};
         VkImageView depth_view = VK_NULL_HANDLE;
         OffscreenTargetCache::RpKey key;
-        key.has_color = has_color;
+        key.color_count = color_count;
         key.has_depth = has_depth;
-        if (has_color) {
-            transition(plat.gfx_, res, desc.color[0].target,
+        for (uint32_t i = 0; i < color_count; ++i) {
+            transition(plat.gfx_, res, desc.color[i].target,
                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-            Texture::Cold* c = res.textures.GetCold(desc.color[0].target);
-            color_view = reinterpret_cast<VkImageView>(
-                res.GetHot(desc.color[0].target)->api_view);
-            key.color = to_vk_format(c->format);
-            key.color_load = to_vk_load(desc.color[0].load);
+            Texture::Cold* c = res.textures.GetCold(desc.color[i].target);
+            color_views[i] = reinterpret_cast<VkImageView>(
+                res.GetHot(desc.color[i].target)->api_view);
+            key.colors[i] = to_vk_format(c->format);
+            if (i == 0) {
+                key.color_load = to_vk_load(desc.color[i].load);
+            }
         }
         if (has_depth) {
             transition(plat.gfx_, res, desc.depth.depth,
@@ -317,18 +340,23 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& t
             key.depth_load = to_vk_load(desc.depth.load);
         }
         VkRenderPass rp = get_offscreen_rp(plat.offscreen_, key);
-        // attachment order matches the render pass: color (if any) then depth.
-        const VkImageView v0 = has_color ? color_view : depth_view;
-        const VkImageView v1 = has_color ? depth_view : VK_NULL_HANDLE;
-        VkFramebuffer fb = get_offscreen_fb(plat.offscreen_, rp, v0, v1,
+        // Attachment order matches the renderpass: colors[0..N) then depth.
+        VkImageView views[OffscreenTargetCache::kMaxColors + 1]{};
+        uint32_t view_count = 0;
+        for (uint32_t i = 0; i < color_count; ++i) {
+            views[view_count++] = color_views[i];
+        }
+        if (has_depth) views[view_count++] = depth_view;
+        VkFramebuffer fb = get_offscreen_fb(plat.offscreen_, rp, views,
+                                            view_count,
                                             extent.width, extent.height);
-        VkClearValue clears[2]{};
+        VkClearValue clears[OffscreenTargetCache::kMaxColors + 1]{};
         uint32_t clear_n = 0;
-        if (has_color) {
-            clears[clear_n++].color = {{desc.color[0].clear[0],
-                                        desc.color[0].clear[1],
-                                        desc.color[0].clear[2],
-                                        desc.color[0].clear[3]}};
+        for (uint32_t i = 0; i < color_count; ++i) {
+            clears[clear_n++].color = {{desc.color[i].clear[0],
+                                        desc.color[i].clear[1],
+                                        desc.color[i].clear[2],
+                                        desc.color[i].clear[3]}};
         }
         if (has_depth) {
             clears[clear_n++].depthStencil = {desc.depth.clear_depth, 0};

@@ -1448,6 +1448,7 @@ public:
         // submission that draws into each forward pass's encoder).
         std::array<rhi::GraphTexture, kNumViewports> color_off{};
         std::array<rhi::GraphTexture, kNumViewports> depth_off{};
+        std::array<rhi::GraphTexture, kNumViewports> id_off{};
         for (int v = 0; v < active_viewport_count_; ++v) {
             const int vp_idx = v;
             const char* pass_name = (vp_idx == 0) ? "forward_vp0" : "forward_vp1";
@@ -1466,7 +1467,21 @@ public:
                     dd.format = rhi::Format::kD32F;
                     dd.usage = rhi::kTexUsageDepthTarget | rhi::kTexUsageSampled;
                     depth_off[vp_idx] = b.CreateDepthTarget(dd);
+                    // #206 R32U id buffer (MRT). sampled+transfer_src so the
+                    // pick readback (#208) and the outline shader (#207)
+                    // can read it. Same dims as color_off so the MRT
+                    // framebuffer attachments match.
+                    rhi::GraphTextureDesc id_desc{};
+                    id_desc.width = vp_w;
+                    id_desc.height = vp_h;
+                    id_desc.format = rhi::Format::kR32Uint;
+                    id_desc.usage = rhi::kTexUsageColorTarget |
+                                     rhi::kTexUsageSampled |
+                                     rhi::kTexUsageTransferSrc;
+                    id_off[vp_idx] = b.CreateColorTarget(id_desc);
                     b.AddColorOutput("color", color_off[vp_idx], rhi::LoadOp::kClear, clear);
+                    const float id_clear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                    b.AddColorOutput("id", id_off[vp_idx], rhi::LoadOp::kClear, id_clear);
                     b.AddDepthOutput("fwd_depth", depth_off[vp_idx], rhi::LoadOp::kClear, 1.0f);
                 },
                 [&, vp_idx](rhi::CommandRecorder& cmd, const rhi::PassResources&) {
@@ -1663,10 +1678,16 @@ public:
 
             // Offscreen variant: single-sample, no swapchain compat. Same shaders
             // + vertex layout as unlit; targets a render-graph color_off+depth_off.
+            // #206 MRT: forward pass writes {BGRA color, R32U id} -- pipeline
+            // declares both formats so vk renderpass compat matches the
+            // 2-attachment offscreen renderpass cache key.
             rhi::GraphicsPipelineDesc ofd = desc;
             ofd.logical_shader = "unlit_offscreen";
             ofd.sample_count = 1;
             ofd.swap_chain = nullptr;
+            ofd.color_formats[0] = rhi::Format::kBgra8Unorm;
+            ofd.color_formats[1] = rhi::Format::kR32Uint;
+            ofd.color_count = 2;
             ofd.debug_name = "unlit_offscreen";
             unlit_offscreen_ = rhi_.pipelines.CreateGraphicsPipeline(
                 rhi_.resources, rhi_.frames, ofd);
@@ -1773,10 +1794,16 @@ public:
             if (particle_render_shader_.IsNull()) {
                 return false;
             }
-            // Offscreen variant for the render-graph forward pass.
+            // Offscreen variant for the render-graph forward pass. #206 the
+            // forward pass is MRT (BGRA color + R32U id); pipeline declares
+            // both attachments so the offscreen-target-cache renderpass
+            // matches the pipeline's compat renderpass.
             rhi::GraphicsPipelineDesc opd = desc;
             opd.sample_count = 1;
             opd.swap_chain = nullptr;
+            opd.color_formats[0] = rhi::Format::kBgra8Unorm;
+            opd.color_formats[1] = rhi::Format::kR32Uint;
+            opd.color_count = 2;
             opd.debug_name = "particle_render_offscreen";
             particle_render_offscreen_ = rhi_.pipelines.CreateGraphicsPipeline(
                 rhi_.resources, rhi_.frames, opd);

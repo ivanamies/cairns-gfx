@@ -74,6 +74,7 @@ VkFormat to_vk_format(Format f) {
         case Format::kR32F: return VK_FORMAT_R32_SFLOAT;
         case Format::kRg32F: return VK_FORMAT_R32G32_SFLOAT;
         case Format::kRgba32F: return VK_FORMAT_R32G32B32A32_SFLOAT;
+        case Format::kR32Uint: return VK_FORMAT_R32_UINT;
         case Format::kD32F: return VK_FORMAT_D32_SFLOAT;
         case Format::kD24S8: return VK_FORMAT_D24_UNORM_S8_UINT;
         default: return VK_FORMAT_R8G8B8A8_UNORM;

@@ -343,6 +343,10 @@ bool Device::Init(const InitConfig& cfg) {
         VkPhysicalDeviceFeatures2 features2{};
         features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         features2.features.samplerAnisotropy = VK_TRUE;
+        // #206 MRT: per-attachment blend state (color attachment 0 alpha-
+        // blends, R32U id attachment has blendEnable=false). Without
+        // independentBlend, all attachments must share the same blend state.
+        features2.features.independentBlend = VK_TRUE;
         features2.pNext = &vk12;
 
         // Headless device skips VK_KHR_SWAPCHAIN (the only required one

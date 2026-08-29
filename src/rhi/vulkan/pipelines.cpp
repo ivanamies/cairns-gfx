@@ -204,18 +204,19 @@ VkShaderFiles resolve_vk_shader(const char* logical) {
 
 // Render-pass compatibility object built once per pipeline create, then
 // destroyed. Used when desc.swap_chain is null (offscreen target compat).
-VkRenderPass build_offscreen_compat_rp(VkDevice dev, VkFormat color, bool has_color,
+// #206 multi-color: color_count attachments at indices [0..color_count),
+// depth (if has_depth) follows at color_count. kMaxColorFormats hard cap.
+VkRenderPass build_offscreen_compat_rp(VkDevice dev,
+                                       const VkFormat* colors, uint32_t color_count,
                                        VkFormat depth, bool has_depth,
                                        VkSampleCountFlagBits samples) {
-    VkAttachmentDescription atts[2]{};
-    VkAttachmentReference color_ref{};
+    constexpr uint32_t kMaxAtts = GraphicsPipelineDesc::kMaxColorFormats + 1;
+    VkAttachmentDescription atts[kMaxAtts]{};
+    VkAttachmentReference color_refs[GraphicsPipelineDesc::kMaxColorFormats]{};
     VkAttachmentReference depth_ref{};
     uint32_t n = 0;
-    int color_idx = -1;
-    int depth_idx = -1;
-    if (has_color) {
-        color_idx = static_cast<int>(n);
-        atts[n].format = color;
+    for (uint32_t i = 0; i < color_count; ++i) {
+        atts[n].format = colors[i];
         atts[n].samples = samples;
         atts[n].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         atts[n].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -223,8 +224,11 @@ VkRenderPass build_offscreen_compat_rp(VkDevice dev, VkFormat color, bool has_co
         atts[n].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         atts[n].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         atts[n].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color_refs[i].attachment = n;
+        color_refs[i].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         ++n;
     }
+    int depth_idx = -1;
     if (has_depth) {
         depth_idx = static_cast<int>(n);
         atts[n].format = depth;
@@ -239,12 +243,8 @@ VkRenderPass build_offscreen_compat_rp(VkDevice dev, VkFormat color, bool has_co
     }
     VkSubpassDescription sub{};
     sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    if (color_idx >= 0) {
-        color_ref.attachment = static_cast<uint32_t>(color_idx);
-        color_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        sub.colorAttachmentCount = 1;
-        sub.pColorAttachments = &color_ref;
-    }
+    sub.colorAttachmentCount = color_count;
+    sub.pColorAttachments = color_count > 0 ? color_refs : nullptr;
     if (depth_idx >= 0) {
         depth_ref.attachment = static_cast<uint32_t>(depth_idx);
         depth_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
@@ -361,12 +361,27 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     blend_attachment.dstAlphaBlendFactor = to_vk_blend_factor(desc.blend.dst_alpha);
     blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
 
+    // #206 per-attachment blend state. The shared BlendState applies to
+    // attachment 0 (color); secondary attachments (e.g. R32U ID buffer)
+    // get a blend-disabled state with the same color write mask.
+    const uint32_t n_color_atts =
+        desc.color_count > 0
+            ? static_cast<uint32_t>(desc.color_count)
+            : (desc.color_format != Format::kUndefined ? 1u : 0u);
+    VkPipelineColorBlendAttachmentState blend_atts[GraphicsPipelineDesc::kMaxColorFormats]{};
+    for (uint32_t i = 0; i < n_color_atts; ++i) {
+        blend_atts[i] = blend_attachment;
+        if (i > 0) {
+            // Secondary attachments: blend off (UINT formats can't blend).
+            blend_atts[i].blendEnable = VK_FALSE;
+        }
+    }
     VkPipelineColorBlendStateCreateInfo color_blending{};
     color_blending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     color_blending.logicOpEnable = VK_FALSE;
     color_blending.logicOp = VK_LOGIC_OP_COPY;
-    color_blending.attachmentCount = 1;
-    color_blending.pAttachments = &blend_attachment;
+    color_blending.attachmentCount = n_color_atts;
+    color_blending.pAttachments = n_color_atts ? blend_atts : nullptr;
 
     VkPipelineDepthStencilStateCreateInfo depth_stencil{};
     depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
@@ -439,10 +454,22 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     if (desc.swap_chain && desc.swap_chain->plat.renderPass != VK_NULL_HANDLE) {
         pi.renderPass = desc.swap_chain->plat.renderPass;
     } else {
-        const bool has_color = desc.color_format != Format::kUndefined;
+        // #206 resolve color formats: prefer color_formats[] when
+        // color_count > 0; else fall back to single color_format.
+        VkFormat color_fmts[GraphicsPipelineDesc::kMaxColorFormats]{};
+        uint32_t cc = 0;
+        if (desc.color_count > 0) {
+            for (uint8_t i = 0; i < desc.color_count; ++i) {
+                color_fmts[i] = to_vk_format(desc.color_formats[i]);
+            }
+            cc = desc.color_count;
+        } else if (desc.color_format != Format::kUndefined) {
+            color_fmts[0] = to_vk_format(desc.color_format);
+            cc = 1;
+        }
         const bool has_depth = desc.depth_format != Format::kUndefined;
         compat_rp = build_offscreen_compat_rp(
-            device, to_vk_format(desc.color_format), has_color,
+            device, color_fmts, cc,
             to_vk_format(desc.depth_format), has_depth,
             to_vk_samples(desc.sample_count));
         pi.renderPass = compat_rp;

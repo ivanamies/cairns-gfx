@@ -23,12 +23,20 @@ inline constexpr uint32_t kCompositeRingSize = 4;
 // passes keep using sc.renderPass; only graph-created offscreen targets land
 // here.
 struct OffscreenTargetCache {
+    // #206 multi-color: colors[0..color_count) describe each color
+    // attachment (kMaxColors hard cap). color_load applies to attachment
+    // 0; secondaries share the same load op for now (no use case for
+    // mixed yet). When color_count == 0 the renderpass has no color
+    // attachment (depth-only). Back-compat: color_count == 1 matches the
+    // pre-MRT shape exactly.
+    static constexpr uint32_t kMaxColors = 4;
     struct RpKey {
-        VkFormat color = VK_FORMAT_UNDEFINED;
+        VkFormat colors[kMaxColors] = {VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED,
+                                        VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED};
         VkFormat depth = VK_FORMAT_UNDEFINED;
         VkAttachmentLoadOp color_load = VK_ATTACHMENT_LOAD_OP_CLEAR;
         VkAttachmentLoadOp depth_load = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        bool has_color = false;
+        uint32_t color_count = 0;
         bool has_depth = false;
     };
     struct RpEntry {
@@ -37,8 +45,8 @@ struct OffscreenTargetCache {
     };
     struct FbEntry {
         VkRenderPass rp = VK_NULL_HANDLE;
-        VkImageView v0 = VK_NULL_HANDLE;
-        VkImageView v1 = VK_NULL_HANDLE;
+        VkImageView views[kMaxColors + 1] = {VK_NULL_HANDLE};
+        uint32_t view_count = 0;
         uint32_t w = 0;
         uint32_t h = 0;
         VkFramebuffer fb = VK_NULL_HANDLE;
