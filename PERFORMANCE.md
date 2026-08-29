@@ -34,8 +34,21 @@ particle_sim            0.00 ms
 forward                35.56 ms
 ```
 
-**Samsung S22 (SM-S901U) Android Vulkan:** ~2-3× slower than iPhone 15 Pro,
-matches subjective experience.
+**Samsung S22 (SM-S901U) Android Vulkan (screenshot):**
+```
+CPU 138.40 ms | 7 FPS    avg 35.53 ms | peak 457.9? ms
+gpu_frame             128.78 ms
+frame                 133.72 ms
+build_draws             9.81 ms
+record                 10.37 ms
+set up render pass globals  0
+build opaque draw list  9.57 ms
+particle_sim            0.00 ms
+forward               128.78 ms
+```
+~4× slower than iPhone 15 Pro on forward GPU (128.78 vs 35.56 ms).
+Frame 133 ms = 7 FPS. Adreno 730 vs A17 Pro on this workload — fragment
+throughput dominates as expected.
 
 ---
 

@@ -546,10 +546,10 @@ public:
             const size_t loaded = scenes_.size();
             const size_t entities = world_.entities.size();
             const size_t slices = loaded > 0 ? entities / loaded : 0;
-            printf("============\n");
-            printf("draws %zu | %zu GLBs x %zu slices = %zu entities | resolution %u x %u\n",
-                   drawList_.size(), loaded, slices, entities,
-                   swapchain_.Width(), swapchain_.Height());
+            CAIRNS_PRINT("============\n");
+            CAIRNS_PRINT("draws %zu | %zu GLBs x %zu slices = %zu entities | resolution %u x %u\n",
+                         drawList_.size(), loaded, slices, entities,
+                         swapchain_.Width(), swapchain_.Height());
             cairns::Timer::PrintReport();
             cairns::Timer::Reset();
         }
