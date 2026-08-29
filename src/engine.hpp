@@ -46,6 +46,7 @@
 #include "util/timer.hpp"
 #include "util/frame_clock.hpp"
 #include "util/log.hpp"
+#include "util/signpost.hpp"
 #include "scene/asset_registry.hpp"
 #include "scene/components.hpp"
 #include "scene/world.hpp"
@@ -337,6 +338,15 @@ public:
     };
     LoadPrefabBatchResult LoadPrefabBatch(
             std::span<const std::filesystem::path> glbs) {
+        // Phase D: bracket every load with a printf + an Instruments
+        // signpost so the time profiler distinguishes load work from
+        // steady-state frames.
+        const char* first_path =
+            glbs.empty() ? "<empty>" : glbs.front().filename().c_str();
+        CAIRNS_PRINT_ERR("[LOAD] begin batch n=%zu first=%s\n",
+                          glbs.size(), first_path);
+        CAIRNS_SIGNPOST_INTERVAL_SCOPED("load_prefab_batch", first_path);
+
         LoadPrefabBatchResult r{};
         r.first_prefab_idx = static_cast<uint32_t>(prefab_ids_.size());
 
@@ -456,7 +466,11 @@ public:
         if (trace.total_ms > loader_counters_.peak_batch_ms) {
             loader_counters_.peak_batch_ms = trace.total_ms;
         }
-
+        // Phase D close: end-of-batch marker. Pair with [LOAD] begin
+        // so log scanning can compute per-batch wall time without
+        // hunting for the LoadTrace summary.
+        CAIRNS_PRINT_ERR("[LOAD] end batch ms=%.3f count=%u\n",
+                          trace.total_ms, r.count);
         return r;
     }
 
@@ -1080,6 +1094,13 @@ public:
         if (idx >= prefab_ids_.size()) {
             return false;
         }
+        // Phase D / R1 instrumentation. Pair with the Instruments
+        // signpost so the time profiler bands reload work distinctly
+        // from steady-state frames.
+        CAIRNS_PRINT_ERR("[RELOAD] begin idx=%u path=%s\n", idx,
+                          path.filename().c_str());
+        CAIRNS_SIGNPOST_INTERVAL_SCOPED("reload_prefab",
+                                         path.filename().c_str());
         cairns::PrefabId oldId = prefab_ids_[idx];
         // Snapshot the old prefab's owned resources BEFORE LoadPrefabBatch
         // -- it may grow the prefabs_/meshes_/materials_ pools' backing
@@ -1166,6 +1187,8 @@ public:
                 resident_textures_.push_back(th);
             }
         }
+        CAIRNS_PRINT_ERR("[RELOAD] end idx=%u path=%s ok\n", idx,
+                          path.filename().c_str());
         return true;
     }
 
@@ -2639,6 +2662,20 @@ public:
     }
 
     bool draw() {
+        // Phase D: steady-frame marker. Throttled to once per 60 frames
+        // so the log scanner can see "engine is in steady state" without
+        // drowning out the [LOAD]/[RELOAD] markers. Pair with the
+        // Instruments signpost on this scope; the time profiler shows
+        // each frame as a 16ms band under "Points of Interest".
+        CAIRNS_SIGNPOST_INTERVAL_SCOPED("frame", "draw");
+        if ((frame_ % 60) == 0) {
+            size_t ec = 0;
+            if (auto* wc = scenes_.GetCold(active_scene_)) {
+                ec = wc->registry.storage<entt::entity>().size();
+            }
+            CAIRNS_PRINT_ERR("[STEADY] frame=%u entities=%zu prefabs=%zu\n",
+                              frame_, ec, prefab_ids_.size());
+        }
 #if CAIRNS_VULKAN
         if (rhi_.frames.plat.recreate_pending_.load(std::memory_order_acquire)) {
             if (render_thread_) {
