@@ -52,6 +52,8 @@ EngineConfig LoadEngineConfigFromEnv() {
     // CAIRNS_NO_PARTICLES env override for headless debugging.
     cfg.particles_enabled = (std::getenv("CAIRNS_NO_PARTICLES") == nullptr);
 
+    cfg.anim_vert_report = (std::getenv("CAIRNS_ANIM_VERT_REPORT") != nullptr);
+
     return cfg;
 }
 

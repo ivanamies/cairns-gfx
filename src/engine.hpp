@@ -138,6 +138,11 @@ struct EngineConfig {
     // Set via Engine::EnableParticles(bool) at runtime; CLI app and serve
     // shell default ON via main / serve_main lowering.
     bool particles_enabled = false;
+
+    // CAIRNS_ANIM_VERT_REPORT: per-frame [ANIM-VERTS] receipt of the vertices
+    // the skin kernel actually dispatches (post-cull, post-cap). Diagnostic for
+    // the scale rungs + frustum cull; off by default.
+    bool anim_vert_report = false;
 };
 
 class Engine {
@@ -4929,6 +4934,31 @@ public:
         }
         if (bucket_count == 0) {
             return;
+        }
+
+        // Vertices the skin kernel actually dispatches this frame (post-cull,
+        // post-cap), not the load-time mesh total.
+        if (engine_cfg_.anim_vert_report) {
+            uint64_t anim_verts = 0;
+            uint64_t anim_joints = 0;
+            uint32_t total_inst = 0;
+            uint32_t max_joints = 0;
+            for (uint32_t bi = 0; bi < bucket_count; ++bi) {
+                anim_verts += static_cast<uint64_t>(batches[bi].vertex_count) *
+                              batches[bi].instance_count;
+                anim_joints += static_cast<uint64_t>(batches[bi].joint_count) *
+                               batches[bi].instance_count;
+                total_inst += batches[bi].instance_count;
+                if (batches[bi].joint_count > max_joints) {
+                    max_joints = batches[bi].joint_count;
+                }
+            }
+            CAIRNS_PRINT(
+                "[ANIM-VERTS] slot=%u actors=%u meshes=%u instances=%u "
+                "verts/frame=%llu joints/frame=%llu max_joints=%u\n",
+                slot, total_actors, bucket_count, total_inst,
+                static_cast<unsigned long long>(anim_verts),
+                static_cast<unsigned long long>(anim_joints), max_joints);
         }
 
         glm::uvec2* instance_meta =
