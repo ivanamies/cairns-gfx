@@ -93,3 +93,9 @@ container declaration, the first question is **"is this a flat vector
 indexed by id?"** If not, the SECOND question is **"have I asked?"**
 There is no third question. Either the user explicitly approves the
 map, or I do not write it.
+
+## Committed without verifying (counter: 1)
+
+> ❯ wait, did you do any verification of the thing you just completed?
+>
+> You're right, I didn't. Verifying right now.

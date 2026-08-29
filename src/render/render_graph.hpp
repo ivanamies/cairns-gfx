@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace cairns::rhi {
@@ -138,7 +139,7 @@ private:
     };
 
     struct PassRecord {
-        const char* name = nullptr;  // #214 callers pass string literals
+        std::string_view name;  // #214 callers pass string literals
         PassType type = PassType::kGraphics;
         SetupFn setup;
         ExecuteFn execute;

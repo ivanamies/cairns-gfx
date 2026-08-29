@@ -367,6 +367,17 @@ struct GraphicsPipelineDesc {
     bool depth_write = true;
     CompareOp depth_compare = CompareOp::kLess;
     BlendState blend;
+    // #206 multi-color attachment support. color_count == 0 means "single
+    // attachment, use color_format below" (back-compat shorthand). When
+    // color_count > 0, color_formats[0..count) drives the renderpass /
+    // pipeline; color_format is ignored. kMaxColorFormats matches the RHI
+    // ceiling on simultaneous color attachments.
+    static constexpr uint8_t kMaxColorFormats = 4;
+    Format color_formats[kMaxColorFormats] = {Format::kUndefined,
+                                                Format::kUndefined,
+                                                Format::kUndefined,
+                                                Format::kUndefined};
+    uint8_t color_count = 0;
     Format color_format = Format::kBgra8Unorm;
     Format depth_format = Format::kD32F;
     uint32_t sample_count = 1;
