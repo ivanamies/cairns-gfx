@@ -49,7 +49,9 @@ SDL_AppResult SDL_Fail(){
 }
 
 SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
-    
+    setvbuf(stderr, nullptr, _IONBF, 0);
+    setvbuf(stdout, nullptr, _IONBF, 0);
+
     constexpr uint32_t kWindowStartWidth = 1280;
     constexpr uint32_t kWindowStartHeight = 960;
 
