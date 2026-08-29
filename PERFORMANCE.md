@@ -5,6 +5,41 @@ Newest first.
 
 ---
 
+## bisect (2026-06-15) — skinning_compute regression 2026-06-09 → 2026-06-11
+
+Bisect run today on `bisect/skinning-perf` to chase the bad animation GPU numbers.
+500 actors / 100 distinct GLBs, metal Release, M2 Max, 2560×1440, vsync.
+
+| commit | date | skinning_compute | forward_vp0 | record | build_draws | frame |
+|---|---|---|---|---|---|---|
+| `c838f5f` | EOD 2026-06-09 (P9 walking-clip + SkinRef attach) | — (slot not present) | 1.72 ms | 0.40 ms | 0.52 ms | 20.84 ms |
+| `302f58c` | EOD 2026-06-10 (imgui flicker fix) | 5.18 ms | 3.87 ms | 0.60 ms | 0.64 ms | 20.84 ms |
+| `9a94846` | EOD 2026-06-11 (Phase S.2 pack skin attrs) | 11.09 ms | 1.49 ms | 0.48 ms | 0.53 ms | 20.84 ms |
+| `577938e` | 2026-06-15 known-good rewind = `984dae1` | 14.11 ms | 1.51 ms | 0.42 ms | 0.47 ms | 20.84 ms |
+
+---
+
+## `577938e` (2026-06-15) — known-good baseline, 500 actors / 100 distinct GLBs
+
+### macOS Metal Release — M2 Max, 2560×1440
+
+| Pass               | avg     |
+|--------------------|---------|
+| CPU                | 21.39 ms (avg 20.85, peak 24.96) |
+| FPS                | 47      |
+| `gpu_frame`        | 20.28 ms |
+| `frame`            | 20.84 ms |
+| `build_draws`      |  0.47 ms |
+| `record`           |  0.42 ms |
+| `forward_vp0`      |  1.51 ms |
+| `swap`             |  0.24 ms |
+| `present_pacing`   |  4.35 ms |
+| `skinning_compute` | 14.11 ms |
+| `skin_eval`        |  0.03 ms |
+| `present_wait`     |  0.00 ms |
+
+---
+
 ## `<skinning P3>` (2026-06-09) — #221 Skinning Phase 3: ring growth + persistent skin output pool
 
 Memory budget note (no perf rows yet -- skinned content not loaded yet):
