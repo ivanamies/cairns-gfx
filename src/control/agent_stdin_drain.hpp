@@ -21,6 +21,9 @@
 #include <string>
 #include <thread>
 
+#include "util/alloc_tags.hpp"
+#include "util/print_allocator.hpp"
+
 namespace cairns::control {
 
 class CommandRegistry;
@@ -54,7 +57,14 @@ private:
     std::atomic<bool> quit_{false};
     std::thread reader_;
     std::mutex queue_m_;
-    std::deque<std::string> queue_;
+    using tagged_str = std::basic_string<
+        char, std::char_traits<char>,
+        cairns::print_allocator<char,
+                                cairns::tags::StdinDrainQueueItem>>;
+    std::deque<tagged_str,
+               cairns::print_allocator<tagged_str,
+                                       cairns::tags::StdinDrainQueue>>
+        queue_;
 };
 
 }  // namespace cairns::control

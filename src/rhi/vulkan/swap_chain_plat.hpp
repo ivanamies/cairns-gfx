@@ -13,7 +13,9 @@
 #include <vulkan/vulkan.h>
 
 #include "rhi/swap_resolve_target.hpp"
+#include "util/alloc_tags.hpp"
 #include "util/log.hpp"
+#include "util/print_allocator.hpp"
 
 namespace cairns::rhi {
 
@@ -37,8 +39,13 @@ struct SwapChainPlat {
 
     // Owned.
     VkSwapchainKHR swapChain = VK_NULL_HANDLE;
-    std::vector<VkImage> swapChainImages;
-    std::vector<VkImageView> swapChainImageViews;
+    std::vector<VkImage,
+                cairns::print_allocator<VkImage, cairns::tags::VkSwapImages>>
+        swapChainImages;
+    std::vector<VkImageView,
+                cairns::print_allocator<VkImageView,
+                                        cairns::tags::VkSwapImageViews>>
+        swapChainImageViews;
     VkFormat swapChainImageFormat = VK_FORMAT_UNDEFINED;
     VkExtent2D swapChainExtent{};
     VkRenderPass renderPass = VK_NULL_HANDLE;
@@ -48,7 +55,10 @@ struct SwapChainPlat {
     VkImage depthImage = VK_NULL_HANDLE;
     VkDeviceMemory depthImageMemory = VK_NULL_HANDLE;
     VkImageView depthImageView = VK_NULL_HANDLE;
-    std::vector<VkFramebuffer> swapChainFramebuffers;
+    std::vector<VkFramebuffer,
+                cairns::print_allocator<VkFramebuffer,
+                                        cairns::tags::VkSwapFramebuffers>>
+        swapChainFramebuffers;
 
     bool Init(VkDevice dev, VkPhysicalDevice phys, VkSurfaceKHR surf,
               WindowSizeFn size_fn, void* size_user,

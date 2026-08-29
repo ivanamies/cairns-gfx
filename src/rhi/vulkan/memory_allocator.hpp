@@ -21,7 +21,9 @@
 #include <vulkan/vulkan.h>
 
 #include "rhi/resource_manager.hpp"
+#include "util/alloc_tags.hpp"
 #include "util/offset_allocator.hpp"
+#include "util/print_allocator.hpp"
 
 namespace cairns::rhi::vulkan {
 
@@ -127,10 +129,18 @@ private:
     VkPhysicalDeviceMemoryProperties mem_props_{};
     bool bda_enabled_ = false;
 
-    std::vector<HeapBlock> blocks_;
+    std::vector<HeapBlock,
+                cairns::print_allocator<HeapBlock, cairns::tags::MemAllocBlocks>>
+        blocks_;
 
-    std::vector<uint32_t> buffer_pools_[kMemoryCount];
-    std::vector<uint32_t> image_pools_[kMemoryCount];
+    std::vector<uint32_t,
+                cairns::print_allocator<uint32_t,
+                                        cairns::tags::MemAllocBufferPool>>
+        buffer_pools_[kMemoryCount];
+    std::vector<uint32_t,
+                cairns::print_allocator<uint32_t,
+                                        cairns::tags::MemAllocImagePool>>
+        image_pools_[kMemoryCount];
 
     BumpLayout bump_{};
 
@@ -141,7 +151,10 @@ public:
 private:
     bool CreateBumpHeap();
 
-    std::vector<PendingFree> pending_frees_[kFramesInFlight];
+    std::vector<PendingFree,
+                cairns::print_allocator<PendingFree,
+                                        cairns::tags::MemAllocPendingFree>>
+        pending_frees_[kFramesInFlight];
 };
 
 }  // namespace cairns::rhi::vulkan

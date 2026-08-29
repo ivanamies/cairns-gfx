@@ -2,7 +2,9 @@
 
 #include "core/handle.hpp"  // #220 Step 1: cairns::Handle template
 #include "rhi/resource_manager.hpp"
+#include "util/alloc_tags.hpp"
 #include "util/cpu_pool.hpp"  // #221 Phase 3: PoolSlice for SkinnedAttachment
+#include "util/print_allocator.hpp"
 
 #include <glm/glm.hpp>
 
@@ -115,7 +117,10 @@ struct SkinnedAttachment {
         // Allocation) lives here. Only read at destroy/Free; today there
         // is no destroy path so it's effectively a deathbed reference.
         cairns::PoolSlice slice;
-        std::string name;
+        std::basic_string<char, std::char_traits<char>,
+                          cairns::print_allocator<
+                              char, cairns::tags::SkinnedAttachmentColdName>>
+            name;
     };
 };
 using SkinId = Handle<SkinnedAttachment>;

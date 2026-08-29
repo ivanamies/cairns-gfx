@@ -1,6 +1,7 @@
 #include "control/agent_stdin_drain.hpp"
 
 #include <iostream>
+#include <string_view>
 #include <utility>
 
 #include "control/command_registry.hpp"
@@ -42,7 +43,7 @@ void AgentStdinDrain::ReaderLoop() {
             continue;
         }
         std::lock_guard<std::mutex> lk(queue_m_);
-        queue_.push_back(std::move(line));
+        queue_.push_back(tagged_str(line.data(), line.size()));
         line.clear();
     }
 }
@@ -51,15 +52,18 @@ void AgentStdinDrain::Drain(CommandRegistry& registry, std::ostream& out) {
     if (!enabled_) {
         return;
     }
-    std::deque<std::string> batch;
+    std::deque<tagged_str,
+               cairns::print_allocator<tagged_str,
+                                       cairns::tags::StdinDrainQueue>>
+        batch;
     {
         std::lock_guard<std::mutex> lk(queue_m_);
         batch.swap(queue_);
     }
-    for (const std::string& line : batch) {
+    for (const tagged_str& line : batch) {
         json req;
         try {
-            req = json::parse(line);
+            req = json::parse(std::string_view(line.data(), line.size()));
         } catch (const std::exception& e) {
             json resp;
             resp["ok"] = false;

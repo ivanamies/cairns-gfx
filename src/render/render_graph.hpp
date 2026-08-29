@@ -4,6 +4,8 @@
 #include "rhi/command_recorder.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/swap_resolve_target.hpp"
+#include "util/alloc_tags.hpp"
+#include "util/print_allocator.hpp"
 
 #include <array>
 #include <cstdint>
@@ -48,17 +50,25 @@ struct GraphBufferDesc {
 
 class PassResources {
 public:
+    using TexVec = std::vector<Handle<Texture>,
+                               cairns::print_allocator<
+                                   Handle<Texture>,
+                                   cairns::tags::RGResolvedTex>>;
+    using BufVec = std::vector<Handle<Buffer>,
+                               cairns::print_allocator<
+                                   Handle<Buffer>,
+                                   cairns::tags::RGResolvedBuf>>;
+
     PassResources() = default;
-    PassResources(const std::vector<Handle<Texture>>* textures,
-                  const std::vector<Handle<Buffer>>* buffers)
+    PassResources(const TexVec* textures, const BufVec* buffers)
         : textures_(textures), buffers_(buffers) {}
 
     Handle<Texture> Resolve(GraphTexture t) const;
     Handle<Buffer> Resolve(GraphBuffer b) const;
 
 private:
-    const std::vector<Handle<Texture>>* textures_ = nullptr;
-    const std::vector<Handle<Buffer>>* buffers_ = nullptr;
+    const TexVec* textures_ = nullptr;
+    const BufVec* buffers_ = nullptr;
 };
 
 using SetupFn = std::function<void(class PassBuilder&)>;
@@ -209,16 +219,34 @@ private:
     Resources& resources_;
     Allocator& alloc_;
 
-    std::vector<PassRecord> passes_;
-    std::vector<TexRecord> textures_;
-    std::vector<BufRecord> buffers_;
+    std::vector<PassRecord,
+                cairns::print_allocator<PassRecord, cairns::tags::RGPasses>>
+        passes_;
+    std::vector<TexRecord,
+                cairns::print_allocator<TexRecord, cairns::tags::RGTextures>>
+        textures_;
+    std::vector<BufRecord,
+                cairns::print_allocator<BufRecord, cairns::tags::RGBuffers>>
+        buffers_;
     GraphTexture output_;
 
-    std::vector<uint32_t> topo_order_;
-    std::vector<Handle<Texture>> resolved_tex_;
-    std::vector<Handle<Buffer>> resolved_buf_;
-    std::vector<PooledTex> tex_pool_;
-    std::vector<PooledBuf> buf_pool_;
+    std::vector<uint32_t,
+                cairns::print_allocator<uint32_t, cairns::tags::RGTopo>>
+        topo_order_;
+    std::vector<Handle<Texture>,
+                cairns::print_allocator<Handle<Texture>,
+                                        cairns::tags::RGResolvedTex>>
+        resolved_tex_;
+    std::vector<Handle<Buffer>,
+                cairns::print_allocator<Handle<Buffer>,
+                                        cairns::tags::RGResolvedBuf>>
+        resolved_buf_;
+    std::vector<PooledTex,
+                cairns::print_allocator<PooledTex, cairns::tags::RGTexPool>>
+        tex_pool_;
+    std::vector<PooledBuf,
+                cairns::print_allocator<PooledBuf, cairns::tags::RGBufPool>>
+        buf_pool_;
 
     // #210 per-slot arena table. Engine binds once at init; Bake(slot)
     // resolves slot_arenas_[slot] -> the BumpArena that owns Bake's

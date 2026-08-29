@@ -300,7 +300,12 @@ InvariantsExport DebugCheckInvariants(Engine* engine) {
         out.violations = 0;  // no engine, no contract to violate
         return out;
     }
-    out.violations = engine->CheckPrefabStateInvariants(&out.messages);
+    std::vector<std::string> raw_msgs;
+    out.violations = engine->CheckPrefabStateInvariants(&raw_msgs);
+    out.messages.reserve(raw_msgs.size());
+    for (const std::string& m : raw_msgs) {
+        out.messages.emplace_back(m.data(), m.size());
+    }
     return out;
 }
 

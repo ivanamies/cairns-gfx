@@ -18,7 +18,9 @@
 
 #include "core/handle.hpp"
 #include "rhi/resource_manager.hpp"
+#include "util/alloc_tags.hpp"
 #include "util/offset_allocator.hpp"
+#include "util/print_allocator.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -125,7 +127,10 @@ private:
         uint64_t key = 0;
         AssetId id;
     };
-    std::vector<KeyEntry> by_key_;
+    std::vector<KeyEntry,
+                cairns::print_allocator<KeyEntry,
+                                        cairns::tags::AssetRegistryByKey>>
+        by_key_;
 
     AssetId* FindByKey(uint64_t key) {
         auto it = std::lower_bound(

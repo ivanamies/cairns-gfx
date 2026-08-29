@@ -1,6 +1,8 @@
 #pragma once
 
 #include "util/gltf_loader.hpp"
+#include "util/alloc_tags.hpp"
+#include "util/print_allocator.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/resources.hpp"
 
@@ -132,11 +134,26 @@ inline bool LoadPrefabsGpu(std::span<const cairns::PrefabId> prefab_ids,
         const size_t batch_end =
             std::min(batch_start + kBatchSize, prefab_ids.size());
 
-        std::vector<glm::vec4> pos_batch;
-        std::vector<VertexAttribute> attr_batch;
-        std::vector<uint32_t> idx_batch;
-        std::vector<PackedSkinVertex> skin_batch;
-        std::vector<SkinVertex> skin_raw;
+        std::vector<glm::vec4,
+                    cairns::print_allocator<glm::vec4,
+                                              cairns::tags::SceneGpuPosBatch>>
+            pos_batch;
+        std::vector<VertexAttribute,
+                    cairns::print_allocator<VertexAttribute,
+                                              cairns::tags::SceneGpuAttrBatch>>
+            attr_batch;
+        std::vector<uint32_t,
+                    cairns::print_allocator<uint32_t,
+                                              cairns::tags::SceneGpuIdxBatch>>
+            idx_batch;
+        std::vector<PackedSkinVertex,
+                    cairns::print_allocator<PackedSkinVertex,
+                                              cairns::tags::SceneGpuSkinBatch>>
+            skin_batch;
+        std::vector<SkinVertex,
+                    cairns::print_allocator<SkinVertex,
+                                              cairns::tags::SceneGpuSkinRaw>>
+            skin_raw;
         for (size_t s = batch_start; s < batch_end; ++s) {
             Prefab::Hot* shot = prefabs_pool.GetHot(prefab_ids[s]);
             for (cairns::Handle<Mesh> mid : shot->meshes) {

@@ -9,6 +9,8 @@
 #include <vulkan/vulkan.h>
 
 #include "rhi/resource_manager.hpp"  // kMaxStepsPerFrame
+#include "util/alloc_tags.hpp"
+#include "util/print_allocator.hpp"
 
 namespace cairns::rhi {
 
@@ -59,8 +61,14 @@ struct OffscreenTargetCache {
         VkFramebuffer fb = VK_NULL_HANDLE;
     };
     VkDevice device = VK_NULL_HANDLE;
-    std::vector<RpEntry> rps;
-    std::vector<FbEntry> fbs;
+    std::vector<RpEntry,
+                cairns::print_allocator<RpEntry,
+                                        cairns::tags::VkCmdRecorderRps>>
+        rps;
+    std::vector<FbEntry,
+                cairns::print_allocator<FbEntry,
+                                        cairns::tags::VkCmdRecorderFbs>>
+        fbs;
 
     void Deinit();
     // Resize entry. Framebuffers are sized at create-time; on resize their

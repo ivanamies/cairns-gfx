@@ -1,7 +1,9 @@
 #pragma once
 
 #include "render/render_proxy.hpp"
+#include "util/alloc_tags.hpp"
 #include "util/cpu_arena.hpp"
+#include "util/print_allocator.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -18,7 +20,8 @@ namespace cairns {
 // (no Remove call site in the engine); dropped.
 template <typename T>
 struct ProxyArray {
-    std::vector<T> data;
+    std::vector<T, cairns::print_allocator<T, cairns::tags::RenderProxyArrayData>>
+        data;
 
     uint32_t Add(const T& value) {
         data.push_back(value);
