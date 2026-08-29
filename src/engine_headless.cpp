@@ -156,7 +156,7 @@ PickResultExport ConsumePickResult(Engine* engine) {
     if (!engine || !engine->PickResolved()) {
         return out;
     }
-    Engine::PickResult r = engine->ConsumePickResult();
+    cairns::PickResult r = engine->ConsumePickResult();
     out.resolved = true;
     out.viewport = r.viewport;
     out.x = r.x;

@@ -5,6 +5,7 @@
 #include "util/memory_budget.hpp"  // #229 single source of reservation sizes
 #include "engine/engine_config.hpp"  // EngineConfig (split out; shell includes it directly)
 #include "engine/particle_system.hpp"  // ParticleSystem state (C2 S3)
+#include "engine/pick_selection.hpp"  // PickSelection + PickResult (C2 S6)
 
 #include <array>
 #include <cmath>
@@ -1828,48 +1829,48 @@ public:
     // replaced by the ID-buffer + readback path: O(1) per click, exact (no
     // geometry-vs-ray accuracy gap), cheap GPU-side, no scene-graph traversal.
 
-    const std::vector<cairns::SelectionTarget>& Selection() const { return selection_; }
-    const std::vector<cairns::SelectionTarget>& Highlights() const { return highlights_; }
-    uint32_t SelectionRevision() const { return selection_rev_; }
+    const std::vector<cairns::SelectionTarget>& Selection() const { return picking_.selection; }
+    const std::vector<cairns::SelectionTarget>& Highlights() const { return picking_.highlights; }
+    uint32_t SelectionRevision() const { return picking_.selection_rev; }
 
     void ClearSelection() {
-        if (!selection_.empty()) {
-            selection_.clear();
-            ++selection_rev_;
+        if (!picking_.selection.empty()) {
+            picking_.selection.clear();
+            ++picking_.selection_rev;
         }
     }
     void SetSelection(std::vector<cairns::SelectionTarget>&& targets) {
-        selection_ = std::move(targets);
-        ++selection_rev_;
+        picking_.selection = std::move(targets);
+        ++picking_.selection_rev;
     }
     void AddSelection(const cairns::SelectionTarget& t) {
-        for (const auto& s : selection_) {
+        for (const auto& s : picking_.selection) {
             if (s == t) {
                 return;
             }
         }
-        selection_.push_back(t);
-        ++selection_rev_;
+        picking_.selection.push_back(t);
+        ++picking_.selection_rev;
     }
     void RemoveSelection(const cairns::SelectionTarget& t) {
-        for (size_t i = 0; i < selection_.size(); ++i) {
-            if (selection_[i] == t) {
-                selection_.erase(selection_.begin() + static_cast<long>(i));
-                ++selection_rev_;
+        for (size_t i = 0; i < picking_.selection.size(); ++i) {
+            if (picking_.selection[i] == t) {
+                picking_.selection.erase(picking_.selection.begin() + static_cast<long>(i));
+                ++picking_.selection_rev;
                 return;
             }
         }
     }
 
     void ClearHighlights() {
-        if (!highlights_.empty()) {
-            highlights_.clear();
-            ++highlights_rev_;
+        if (!picking_.highlights.empty()) {
+            picking_.highlights.clear();
+            ++picking_.highlights_rev;
         }
     }
     void SetHighlights(std::vector<cairns::SelectionTarget>&& targets) {
-        highlights_ = std::move(targets);
-        ++highlights_rev_;
+        picking_.highlights = std::move(targets);
+        ++picking_.highlights_rev;
     }
 
     // Window-pixel coords. Engine doesn't resolve the pick yet -- the GPU
@@ -1877,15 +1878,15 @@ public:
     // request so a future RecordFrame can copy the texel out and a future
     // tick can deliver the resolved entity.
     void RequestPick(int viewport, uint32_t x, uint32_t y) {
-        pick_pending_ = true;
-        pick_viewport_ = viewport;
-        pick_x_ = x;
-        pick_y_ = y;
+        picking_.pending = true;
+        picking_.viewport = viewport;
+        picking_.x = x;
+        picking_.y = y;
     }
-    bool PickPending() const { return pick_pending_; }
-    int PendingPickViewport() const { return pick_viewport_; }
-    uint32_t PendingPickX() const { return pick_x_; }
-    uint32_t PendingPickY() const { return pick_y_; }
+    bool PickPending() const { return picking_.pending; }
+    int PendingPickViewport() const { return picking_.viewport; }
+    uint32_t PendingPickX() const { return picking_.x; }
+    uint32_t PendingPickY() const { return picking_.y; }
 
     // CPU ray-cast pick: unproject the click to a world ray, intersect every
     // entity's world AABB (the mesh bind-pose AABB transformed by WorldTransform),
@@ -1958,25 +1959,12 @@ public:
         return best_id1;
     }
 
-    // Last resolved pick. Updated by ResolvePendingPick once per frame when
-    // pick_pending_ was true at the top of the frame. PickResolved() flips
-    // true on the frame the readback completes; ConsumePickResult()
-    // atomically reads + clears so each request returns exactly one result.
-    struct PickResult {
-        int viewport = 0;
-        uint32_t x = 0;
-        uint32_t y = 0;
-        cairns::SelectionType type = cairns::SelectionType::kEntity;
-        uint32_t id = 0;
-        // Today's stub source: final_target_ BGRA at (x, y). Swap to the
-        // R32U id_target once #206 lands the dedicated ID buffer; the
-        // {type, id} decode swaps with it.
-        uint32_t raw = 0;
-    };
-    bool PickResolved() const { return pick_resolved_; }
+    // PickResult + the pick/selection state now live in PickSelection
+    // (engine/pick_selection.hpp); these accessors operate on picking_.
+    bool PickResolved() const { return picking_.resolved; }
     PickResult ConsumePickResult() {
-        pick_resolved_ = false;
-        return last_pick_result_;
+        picking_.resolved = false;
+        return picking_.last_result;
     }
 
     // Click-to-focus: caller passes the window-x of the LMB click. Engine
@@ -2039,7 +2027,7 @@ public:
         }
     }
 
-    // #207 (re)build the highlights texture from highlights_. Called by
+    // #207 (re)build the highlights texture from picking_.highlights. Called by
     // RecordFrame each frame; if the rev hasn't changed, no-op. On change,
     // destroys the prior texture through the rhi destroy queue and creates
     // a fresh 65x1 R32U with the new pack. Empty highlight set still
@@ -2047,21 +2035,21 @@ public:
     // binding is always satisfied -- the early-out in id_in_highlights
     // keeps it cheap.
     void EnsureHighlightsTex() {
-        if (!highlights_tex_.IsNull() &&
-            highlights_tex_rev_ == highlights_rev_) {
+        if (!picking_.highlights_tex.IsNull() &&
+            picking_.highlights_tex_rev == picking_.highlights_rev) {
             return;
         }
-        if (!highlights_tex_.IsNull()) {
-            rhi_.resources.Destroy(rhi_.alloc, highlights_tex_);
-            highlights_tex_ = rhi::Handle<rhi::Texture>::Null;
+        if (!picking_.highlights_tex.IsNull()) {
+            rhi_.resources.Destroy(rhi_.alloc, picking_.highlights_tex);
+            picking_.highlights_tex = rhi::Handle<rhi::Texture>::Null;
         }
         std::array<uint32_t, kMaxHighlights + 1> pack{};
         const uint32_t n =
-            static_cast<uint32_t>(std::min<size_t>(highlights_.size(),
+            static_cast<uint32_t>(std::min<size_t>(picking_.highlights.size(),
                                                    kMaxHighlights));
         pack[0] = n;
         for (uint32_t i = 0; i < n; ++i) {
-            pack[i + 1] = highlights_[i].id;
+            pack[i + 1] = picking_.highlights[i].id;
         }
         rhi::TextureDesc td{};
         td.debug_name = "highlights_tex";
@@ -2072,8 +2060,8 @@ public:
         td.initial_data = std::span<const uint8_t>(
             reinterpret_cast<const uint8_t*>(pack.data()),
             sizeof(uint32_t) * pack.size());
-        highlights_tex_ = rhi_.resources.CreateTexture(rhi_.alloc, td);
-        highlights_tex_rev_ = highlights_rev_;
+        picking_.highlights_tex = rhi_.resources.CreateTexture(rhi_.alloc, td);
+        picking_.highlights_tex_rev = picking_.highlights_rev;
     }
 
     // Reallocate final_target_ at the new dimensions. Surfaceless mode only.
@@ -3637,21 +3625,21 @@ public:
         // sees the just-rendered frame -- windowed sdl-min normally lets
         // the render thread run async, but Shift+LMB stalls one frame to
         // resolve the pick (acceptable cost for an interactive event).
-        if (golden_ || !final_target_.IsNull() || pick_pending_) {
+        if (golden_ || !final_target_.IsNull() || picking_.pending) {
             render_thread_->Drain();
         }
 
         // #207 pick: read one R32U texel from id_target_[vp]. The forward
         // pass writes entt::to_integral(entity)+1 there; value 0 = clear
-        // background (clicked empty space). Drop the result into highlights_
+        // background (clicked empty space). Drop the result into picking_.highlights
         // so the outline pass activates on the next frame.
-        if (pick_pending_ && pick_viewport_ < kNumViewports) {
+        if (picking_.pending && picking_.viewport < kNumViewports) {
             // CPU ray-cast pick -- synchronous + identical on metal/vulkan/webgpu,
             // no GPU id-buffer readback (the browser can't read back synchronously).
             // The id buffer stays only for the outline edge-detect (GPU-side).
             const uint32_t entity_plus_one = ResolvePickRaycast(
-                pick_viewport_, pick_x_, pick_y_,
-                s.pending_globals[pick_viewport_].inv_view_proj);
+                picking_.viewport, picking_.x, picking_.y,
+                s.pending_globals[picking_.viewport].inv_view_proj);
             const bool ok = true;
             // #267: resolve hero name + world AABB from the clicked id so
             // the [PICK] line answers "which hero + where" in one printf.
@@ -3719,7 +3707,7 @@ public:
                     "[PICK] vp=%d xy=(%u,%u) tex_dims=(%u,%u) ok=%d "
                     "id+1=%u hero=%s scene_idx=%u animated=%d "
                     "aabb=[%s%.3f,%.3f,%.3f]-[%.3f,%.3f,%.3f]\n",
-                    pick_viewport_, pick_x_, pick_y_, id_target_w_,
+                    picking_.viewport, picking_.x, picking_.y, id_target_w_,
                     id_target_h_, ok ? 1 : 0, entity_plus_one,
                     hero_name, hero_scene_idx,
                     hero_animated ? 1 : 0,
@@ -3727,13 +3715,13 @@ public:
                     hero_min.x, hero_min.y, hero_min.z,
                     hero_max.x, hero_max.y, hero_max.z);
             if (ok) {
-                last_pick_result_.viewport = pick_viewport_;
-                last_pick_result_.x = pick_x_;
-                last_pick_result_.y = pick_y_;
-                last_pick_result_.type = cairns::SelectionType::kEntity;
-                last_pick_result_.id = entity_plus_one;
-                last_pick_result_.raw = entity_plus_one;
-                pick_resolved_ = true;
+                picking_.last_result.viewport = picking_.viewport;
+                picking_.last_result.x = picking_.x;
+                picking_.last_result.y = picking_.y;
+                picking_.last_result.type = cairns::SelectionType::kEntity;
+                picking_.last_result.id = entity_plus_one;
+                picking_.last_result.raw = entity_plus_one;
+                picking_.resolved = true;
                 if (entity_plus_one != 0u) {
                     std::vector<cairns::SelectionTarget> next;
                     next.push_back({cairns::SelectionType::kEntity,
@@ -3743,7 +3731,7 @@ public:
                     ClearHighlights();
                 }
             }
-            pick_pending_ = false;
+            picking_.pending = false;
         }
 
         t_frame.End();
@@ -3850,7 +3838,7 @@ public:
         // overlay or a pending pick this frame). Default path uses the
         // no-id PSO and a single-color forward render pass, saving the
         // R32U store + flat-interp on every visible fragment.
-        const bool id_path = !highlights_.empty() || pick_pending_;
+        const bool id_path = !picking_.highlights.empty() || picking_.pending;
         const rhi::Handle<rhi::Shader> forward_pso =
             id_path ? unlit_offscreen_ : unlit_offscreen_noid_;
         std::array<rhi::MeshDrawList, kNumViewports> mls{};
@@ -3903,7 +3891,7 @@ public:
         // #222 Phase A.1: id targets only allocated when this frame writes
         // them (outline overlay or pending pick). The lazy alloc inside
         // EnsureIdTargets is cheap to skip when no one consumes it.
-        if (!highlights_.empty() || pick_pending_) {
+        if (!picking_.highlights.empty() || picking_.pending) {
             EnsureIdTargets(vp_w, vp_h);
         }
         EnsureHighlightsTex();
@@ -4192,10 +4180,10 @@ public:
         // in the material path, and is unaffected by this gate. The
         // remixer canvas calls cairns.editor.chrome({on:false}) before
         // a capture or scroll so the selection outline drops out but
-        // the stylized look survives. selection STATE (highlights_) is
+        // the stylized look survives. selection STATE (picking_.highlights) is
         // preserved -- only the outline-pass DRAWING is suppressed.
         const bool outline_on =
-            editor_chrome_enabled_ && !highlights_.empty();
+            editor_chrome_enabled_ && !picking_.highlights.empty();
         if (outline_on) {
             for (int v = 0; v < active_viewport_count_; ++v) {
                 const int vp_idx = v;
@@ -4213,7 +4201,7 @@ public:
                         outline_off[vp_idx] = b.CreateColorTarget(od);
                         b.AddAttachmentInput(color_off[vp_idx]);
                         b.AddAttachmentInput(id_off[vp_idx]);
-                        // Import highlights_tex_ as a graph input so its
+                        // Import picking_.highlights_tex as a graph input so its
                         // SHADER_READ_ONLY layout transition is emitted by
                         // BeginRenderPass before DrawFullscreen samples it.
                         rhi::GraphTextureDesc hd{};
@@ -4222,7 +4210,7 @@ public:
                         hd.format = rhi::Format::kR32Uint;
                         hd.usage = rhi::kTexUsageSampled;
                         rhi::GraphTexture hg =
-                            b.ImportTexture(highlights_tex_, hd);
+                            b.ImportTexture(picking_.highlights_tex, hd);
                         b.AddAttachmentInput(hg);
                         const float oclear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
                         b.AddColorOutput("outline_color", outline_off[vp_idx],
@@ -4233,7 +4221,7 @@ public:
                         const rhi::Handle<rhi::Texture> srcs[3] = {
                             res.Resolve(color_off[vp_idx]),
                             res.Resolve(id_off[vp_idx]),
-                            highlights_tex_,
+                            picking_.highlights_tex,
                         };
                         cmd.SetViewport(0.0f, 0.0f, static_cast<float>(vp_w),
                                         static_cast<float>(vp_h));
@@ -6042,28 +6030,11 @@ private:
     uint32_t id_target_w_ = 0;
     uint32_t id_target_h_ = 0;
 
-    // #207 highlights texture: R32U 65x1 packed as [count, id0, id1, ...].
-    // Sampled by outline.frag to filter the edge-detect to the current
-    // highlight set. Recreated on highlights_rev_ change (rare -- clicks).
-    rhi::Handle<rhi::Texture> highlights_tex_ = rhi::Handle<rhi::Texture>::Null;
-    uint32_t highlights_tex_rev_ = 0;
+    // Selection/highlight/pick document state + the pick request/result
+    // handshake, grouped in PickSelection (C2 S6). The per-viewport id_target
+    // render targets above stay on Engine (GPU resources, kNumViewports-coupled).
+    cairns::PickSelection picking_;
     static constexpr uint32_t kMaxHighlights = 64;
-
-    // P4 selection / highlight / pick. Selection + highlight are
-    // document-side state; rev counters let the protocol's
-    // cairns.selection.changed event know when to emit. Pick state holds
-    // the most recent unresolved (viewport, x, y) click intent until the
-    // GPU ID buffer + readback path lands.
-    std::vector<cairns::SelectionTarget> selection_;
-    std::vector<cairns::SelectionTarget> highlights_;
-    uint32_t selection_rev_ = 0;
-    uint32_t highlights_rev_ = 0;
-    bool pick_pending_ = false;
-    int pick_viewport_ = 0;
-    uint32_t pick_x_ = 0;
-    uint32_t pick_y_ = 0;
-    bool pick_resolved_ = false;
-    PickResult last_pick_result_{};
 
     // P3 resize lifecycle. SDL fires WINDOW_PIXEL_SIZE_CHANGED on the event
     // thread; we record intent + dims and settle on the next draw() call so
