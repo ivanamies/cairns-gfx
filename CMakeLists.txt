@@ -183,6 +183,9 @@ if(CAIRNS_BUILD_WGPU_SMOKE)
   add_executable(wgpu_link_smoke
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/wgpu_link_smoke.cpp")
   target_link_libraries(wgpu_link_smoke PRIVATE wgpu_native)
+  add_executable(wgpu_readback_smoke
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/wgpu_readback_smoke.cpp")
+  target_link_libraries(wgpu_readback_smoke PRIVATE wgpu_native)
 endif()
 
 # nlohmann/json uses exceptions internally + has compile-time warnings that
