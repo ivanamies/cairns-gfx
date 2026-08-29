@@ -283,7 +283,7 @@ endif()
 # cairns_core no longer needs SDL.
 # =============================================================================
 
-file(GLOB_RECURSE CAIRNS_CORE_SOURCES
+file(GLOB_RECURSE CAIRNS_CORE_SOURCES CONFIGURE_DEPENDS
   "src/*.cpp"
   "src/*.hpp"
 )
