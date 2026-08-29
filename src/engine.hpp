@@ -31,6 +31,7 @@
 #include "util/frame_transient_cache.hpp"
 #include "util/timer.hpp"
 #include "util/unique_ptr.hpp"
+#include "rhi/device.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/command_recorder.hpp"
 
@@ -108,7 +109,10 @@ public:
         if ( !initResourceManagers() ) {
             return false;
         }
-        if (!rm_.InitDevice(window)) {
+        if (!device_.Init(window)) {
+            return false;
+        }
+        if (!rm_.InitDevice(device_)) {
             return false;
         }
         if ( !initSwapChain(window)) {
@@ -601,6 +605,7 @@ public:
     bool deinit() {
         swapchain_.Deinit();
         rm_.Deinit();
+        device_.Deinit();
         return true;
     }
     
@@ -626,6 +631,7 @@ private:
     std::vector<uint32_t> sorted_draw_indices_;
     std::vector<rhi::Handle<rhi::Texture>> resident_textures_;
     
+    rhi::Device device_;
     rhi::ResourceManager rm_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
     rhi::Handle<rhi::BindGroup> bindless_bg_;

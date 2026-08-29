@@ -64,6 +64,7 @@ using ApiKernelHandle = void*;
 #endif
 
 class ResourceManager;
+class Device;
 struct Buffer;
 struct Texture;
 struct Sampler;
@@ -530,10 +531,10 @@ public:
     ResourceManager& operator=(const ResourceManager&) = delete;
 
     bool Init(const BackendInitParams& params);
-    // Neutral backend bring-up: creates the device (and, on Vulkan, the
-    // instance/surface/queues/command pool) from the window, then initializes
-    // the memory allocator. Replaces app-side device creation + Init.
-    bool InitDevice(SDL_Window* window);
+    // Mirrors the device handles owned by `device` into this manager, then
+    // initializes the memory allocator + per-frame command/sync/descriptor
+    // state. Device must be Init'd first (the engine owns construction order).
+    bool InitDevice(Device& device);
     // Neutral swapchain bring-up: fills `sc` using the device objects InitDevice
     // owns (Vulkan: device/surface/queues/pool/samples; Metal: device).
     bool InitSwapChain(SwapChain& sc, SDL_Window* window);

@@ -23,6 +23,8 @@
 #include "rhi/metal/memory_allocator.hpp"
 #include "rhi/command_recorder.hpp"
 #include "rhi/metal/command_recorder_impl.hpp"
+#include "rhi/device.hpp"
+#include "rhi/metal/internal/device_impl.hpp"
 #include "rhi/swap_chain.hpp"
 #include "gpu_scene_registry.hpp"
 
@@ -141,19 +143,11 @@ void ResourceManager::Deinit() {
     if (impl_->render_pass_desc) {
         impl_->render_pass_desc->release();
     }
-    // Release device/queue LAST: delete impl_ runs the memory allocator dtor,
-    // which frees device-owned heaps. Releasing the device first would free the
-    // heaps against a dead device.
-    MTL::CommandQueue* queue = impl_->params.queue;
-    MTL::Device* device = impl_->params.device;
+    // delete impl_ runs the memory allocator dtor, freeing device heaps. The
+    // device/queue release is owned by Device::Deinit, which the engine calls
+    // AFTER this (so heaps free against a live device).
     delete impl_;
     impl_ = nullptr;
-    if (queue) {
-        queue->release();
-    }
-    if (device) {
-        device->release();
-    }
 }
 
 bool ResourceManager::Init(const BackendInitParams& params) {
@@ -165,11 +159,11 @@ bool ResourceManager::Init(const BackendInitParams& params) {
     return true;
 }
 
-bool ResourceManager::InitDevice(SDL_Window* window) {
-    (void)window;
+bool ResourceManager::InitDevice(Device& dev) {
     impl_ = new Impl();
-    impl_->params.device = MTL::CreateSystemDefaultDevice();
-    impl_->params.queue = impl_->params.device->newCommandQueue();
+    // Mirror the device/queue owned by Device; Device owns creation + teardown.
+    impl_->params.device = dev.impl_->device;
+    impl_->params.queue = dev.impl_->queue;
     if (!impl_->memory.Init(impl_->params.device)) {
         return false;
     }
