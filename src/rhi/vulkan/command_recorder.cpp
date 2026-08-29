@@ -106,7 +106,17 @@ static VkRenderPass get_offscreen_rp(OffscreenTargetCache* cache,
         atts[att_count].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         atts[att_count].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         atts[att_count].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        atts[att_count].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        // #207: when load_op=CLEAR the previous contents are discarded, so
+        // initialLayout=UNDEFINED is the correct (and safer) value. Lets the
+        // pool reuse a transient target that the validation tracker still
+        // sees in SHADER_READ_ONLY from a prior pass without us needing to
+        // emit a redundant transition barrier. With load_op=LOAD the caller
+        // must arrive in COLOR_ATTACHMENT_OPTIMAL (we emit the transition
+        // ourselves in BeginRenderPass).
+        atts[att_count].initialLayout =
+            (key.color_load == VK_ATTACHMENT_LOAD_OP_CLEAR)
+                ? VK_IMAGE_LAYOUT_UNDEFINED
+                : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         atts[att_count].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         color_refs[i].attachment = att_count;
         color_refs[i].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;

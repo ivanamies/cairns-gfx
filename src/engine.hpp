@@ -1490,6 +1490,53 @@ public:
                 });
         }
 
+        // #207 pass 2.5: outline. Per viewport, fullscreen tri samples
+        // color_off + id_off, edge-detects on the id channel, tints yellow on
+        // discontinuities. Today unlit emits id=0 for every fragment so
+        // outline is a structural no-op (every pixel passes the centre==0
+        // early-out); when per-draw {type|id} encoding lands this pass
+        // produces visible silhouettes. We only insert the pass when the
+        // engine carries highlights, so the no-op cost is zero by default.
+        std::array<rhi::GraphTexture, kNumViewports> outline_off{};
+        const bool outline_on = !highlights_.empty();
+        if (outline_on) {
+            for (int v = 0; v < active_viewport_count_; ++v) {
+                const int vp_idx = v;
+                const char* pass_name =
+                    (vp_idx == 0) ? "outline_vp0" : "outline_vp1";
+                graph_->AddPass(
+                    pass_name, rhi::PassType::kGraphics,
+                    [&, vp_idx](rhi::PassBuilder& b) {
+                        rhi::GraphTextureDesc od{};
+                        od.width = vp_w;
+                        od.height = vp_h;
+                        od.format = rhi::Format::kBgra8Unorm;
+                        od.usage = rhi::kTexUsageColorTarget |
+                                   rhi::kTexUsageSampled;
+                        outline_off[vp_idx] = b.CreateColorTarget(od);
+                        b.AddAttachmentInput(color_off[vp_idx]);
+                        b.AddAttachmentInput(id_off[vp_idx]);
+                        const float oclear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                        b.AddColorOutput("outline_color", outline_off[vp_idx],
+                                         rhi::LoadOp::kClear, oclear);
+                    },
+                    [&, vp_idx](rhi::CommandRecorder& cmd,
+                                const rhi::PassResources& res) {
+                        const rhi::Handle<rhi::Texture> srcs[2] = {
+                            res.Resolve(color_off[vp_idx]),
+                            res.Resolve(id_off[vp_idx]),
+                        };
+                        cmd.SetViewport(0.0f, 0.0f, static_cast<float>(vp_w),
+                                        static_cast<float>(vp_h));
+                        cmd.SetScissor(0, 0, vp_w, vp_h);
+                        cmd.DrawFullscreen(
+                            rhi_.resources, outline_pip_,
+                            std::span<const rhi::Handle<rhi::Texture>>(srcs, 2),
+                            outline_sampler_);
+                    });
+            }
+        }
+
         // pass 3: composite + ui kGraphics. Composite samples color_off full-
         // screen, depth_off PIP in the bottom-right; ImGui draws on top into the
         // same encoder. Both backends use MSAA swapchain renderpasses where the
@@ -1517,7 +1564,10 @@ public:
                 swap_tex = b.ImportTexture(swap_handle, td);
                 b.AddColorOutput("swapchain", swap_tex, rhi::LoadOp::kClear, clear);
                 for (int v = 0; v < active_viewport_count_; ++v) {
-                    b.AddAttachmentInput(color_off[v]);
+                    // #207 swap reads outline_off when the outline pass ran
+                    // this frame, else color_off. Both are sampled-readonly.
+                    b.AddAttachmentInput(outline_on ? outline_off[v]
+                                                    : color_off[v]);
                     b.AddAttachmentInput(depth_off[v]);
                 }
             },
@@ -1525,7 +1575,8 @@ public:
                 std::array<rhi::Handle<rhi::Texture>, kNumViewports> vp_color{};
                 std::array<rhi::Handle<rhi::Texture>, kNumViewports> vp_depth{};
                 for (int v = 0; v < active_viewport_count_; ++v) {
-                    vp_color[v] = res.Resolve(color_off[v]);
+                    vp_color[v] = res.Resolve(outline_on ? outline_off[v]
+                                                          : color_off[v]);
                     vp_depth[v] = res.Resolve(depth_off[v]);
                 }
                 // #194 composite each LIVE viewport into its layout_rect
@@ -1723,7 +1774,23 @@ public:
             depthviz_ = rhi_.pipelines.CreateGraphicsPipeline(
                 rhi_.resources, rhi_.frames, dvd);
 
-            if (composite_pip_.IsNull() || depthviz_.IsNull()) {
+            // #207 outline: same shape; samples color_off + id_off (2 textures
+            // via the shared composite descriptor layout), renders into
+            // outline_off (BGRA, same dims as color_off). Surfaceless: targets
+            // a 1-sample / no-depth render pass. Windowed: still 1-sample /
+            // no-depth because the outline pass writes to a graph color
+            // target, NOT directly to the MSAA swapchain renderpass.
+            rhi::GraphicsPipelineDesc opd = cpd;
+            opd.logical_shader = "outline";
+            opd.debug_name = "outline";
+            opd.depth_format = rhi::Format::kUndefined;
+            opd.sample_count = 1u;
+            opd.swap_chain = nullptr;
+            outline_pip_ = rhi_.pipelines.CreateGraphicsPipeline(
+                rhi_.resources, rhi_.frames, opd);
+
+            if (composite_pip_.IsNull() || depthviz_.IsNull() ||
+                outline_pip_.IsNull()) {
                 std::exit(0);
             }
 
@@ -1733,6 +1800,13 @@ public:
             sd.mip_filter = rhi::Filter::kLinear;
             sd.address_mode = rhi::AddressMode::kClampToEdge;
             composite_sampler_ = rhi_.resources.CreateSampler(sd);
+
+            rhi::SamplerDesc nsd{};
+            nsd.min_filter = rhi::Filter::kNearest;
+            nsd.mag_filter = rhi::Filter::kNearest;
+            nsd.mip_filter = rhi::Filter::kNearest;
+            nsd.address_mode = rhi::AddressMode::kClampToEdge;
+            outline_sampler_ = rhi_.resources.CreateSampler(nsd);
         }
 
         return true;
@@ -2014,7 +2088,13 @@ private:
     ShaderHandle unlit_offscreen_ = ShaderHandle::Null;
     ShaderHandle composite_pip_ = ShaderHandle::Null;
     ShaderHandle depthviz_ = ShaderHandle::Null;
+    ShaderHandle outline_pip_ = ShaderHandle::Null;
     rhi::Handle<rhi::Sampler> composite_sampler_ = rhi::Handle<rhi::Sampler>::Null;
+    // #207 nearest sampler for outline's id_off binding -- R32_UINT can't be
+    // linearly filtered (VUID-vkCmdDraw-magFilter-04553). Outline's color
+    // binding is also nearest because the fullscreen tri samples color_off
+    // at native res (texel-aligned), so linear vs nearest is identical.
+    rhi::Handle<rhi::Sampler> outline_sampler_ = rhi::Handle<rhi::Sampler>::Null;
     // imgui
     rhi::Handle<rhi::Shader> imgui_ = rhi::Handle<rhi::Shader>::Null;
     rhi::Handle<rhi::Texture> imgui_font_ = rhi::Handle<rhi::Texture>::Null;

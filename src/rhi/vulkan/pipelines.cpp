@@ -408,8 +408,10 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
         set_layouts = {frames.plat.globals_set_layout_,      // set 0: globals (once/frame)
                        resources.plat.MaterialSetLayout(),   // set 1: per-material
                        frames.plat.drawtmp_set_layout_};     // set 2: drawtmp (per draw)
-    } else if (ls == "composite_pip" || ls == "depthviz") {
-        set_layouts = {frames.plat.composite_set_layout_};   // 1 COMBINED_IMAGE_SAMPLER frag
+    } else if (ls == "composite_pip" || ls == "depthviz" || ls == "outline") {
+        // 2 COMBINED_IMAGE_SAMPLER frag (binding 0 = primary color, binding
+        // 1 = id; only outline statically accesses binding 1).
+        set_layouts = {frames.plat.composite_set_layout_};
     } else if (ls == "imgui") {
         VkDescriptorSetLayoutBinding b{};
         b.binding = 0;

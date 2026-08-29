@@ -1,5 +1,6 @@
 // #207 outline (plan B fullscreen post-process). Mirror of outline.vert/
-// outline.frag.spv on the Metal backend.
+// outline.frag.spv on the Metal backend. MVP: treat any non-zero id as
+// highlightable; tint 4-neighbour edge.
 
 #include <metal_stdlib>
 using namespace metal;
@@ -18,29 +19,14 @@ vertex VertexOut vertexShader(uint vid [[vertex_id]]) {
     return out;
 }
 
-struct Highlights {
-    uint count;
-    uint ids[64];
-};
-
 fragment float4 fragmentShader(
         VertexOut in [[stage_in]],
         texture2d<float> color_tex [[texture(0)]],
         texture2d<uint>  id_tex    [[texture(1)]],
-        sampler color_samp [[sampler(0)]],
-        constant Highlights& highlights [[buffer(0)]]) {
+        sampler color_samp [[sampler(0)]]) {
     float4 colour = color_tex.sample(color_samp, in.uv);
     uint centre = id_tex.sample(color_samp, in.uv).r;
-    bool centre_in = false;
-    if (centre != 0u) {
-        for (uint i = 0u; i < highlights.count; ++i) {
-            if (highlights.ids[i] == centre) {
-                centre_in = true;
-                break;
-            }
-        }
-    }
-    if (!centre_in) {
+    if (centre == 0u) {
         return colour;
     }
     float2 texel = 1.0 / float2(id_tex.get_width(), id_tex.get_height());
