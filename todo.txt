@@ -46,7 +46,26 @@ HUMAN TODO (do at the end of the renderer merge):
   resolved rhi-side. Still to audit/hide: VkPipeline/VkPipelineLayout on
   Shader/Kernel Hot, VkDescriptorSet on BindGroup, and the Vk* device getters.]
 
-HUMAN TODO (INVESTIGATE — suspicious, do NOT dismiss as a flake):
+HUMAN TODO — DECISION REQUIRED before/within Phase 0 (god-class split):
+  Either (a) ROOT-CAUSE and KILL this flake, or (b) consciously DECIDE it's
+  unsolvable / acceptable and write down WHY + how we de-risk the gate around it.
+  Do not keep "rerun until it passes" as the unwritten policy.
+  Why now: Phase 0 is ~11 byte-identical-gated steps. Every step eats 1-2 Metal
+  rebuilds + a flake rerun. If the flake is a real first-frame determinism hole,
+  EVERY one of those green gates is suspect — we'd be refactoring against a gate
+  with a blind spot. The cost/risk is highest exactly during this refactor.
+  Concrete next actions to force the decision:
+    1. `xcodebuild clean` then a single fresh build + single run. If the bad image
+       NEVER appears after a clean build, it's stale-.o/ABI skew -> the gate's
+       incremental build is the bug, fix verify_metal.sh to clean-build (or accept).
+    2. Make verify_metal.sh capture the FIRST run's dump to a separate file (don't
+       overwrite) and `cmp`/visual-diff it vs golden when it fails. Classify: is it
+       a projection/rotation delta (determinism) or byte-garbage (race/uninit)?
+    3. Add a frame counter assert / log to confirm the dump is taken at frame 5
+       fully-rendered, ruling out the kill/wait race in verify_metal.sh.
+  Resolution = one of: "fixed, root cause was X"; or "can't fix, it's Y, gate
+  mitigated by Z (e.g. always clean-build + double-run + cmp both)."
+
 - V-METAL (tmp/verify_metal.sh) intermittently produces a DIFFERENT Metal render on
   the FIRST run right after a shared-header edit (e.g. resource_manager.hpp), then
   byte-identical on every rerun. The bad image is NOT noise: heroes are repositioned
