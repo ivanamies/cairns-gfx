@@ -4,7 +4,9 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <string_view>
 
@@ -108,5 +110,45 @@ class Timer {
 std::array<uint64_t, Timer::kMaxSlots> Timer::accum_times_ = {};
 std::array<uint64_t, Timer::kMaxSlots> Timer::accum_itrs_ = {};
 std::array<const char*, Timer::kMaxSlots> Timer::slot_names_ = {};
+
+class TimerStorage {
+ public:
+  static int SlotForPass(const char* name) {
+    std::lock_guard<std::mutex> lk(mu_);
+    for (uint32_t i = 0; i < count_; ++i) {
+      if (names_[i] == name) {
+        return static_cast<int>(i);
+      }
+      if (names_[i] && std::strcmp(names_[i], name) == 0) {
+        return static_cast<int>(i);
+      }
+    }
+    if (count_ >= Timer::kMaxSlots) {
+      return -1;
+    }
+    const int s = static_cast<int>(count_++);
+    names_[s] = name;
+    return s;
+  }
+
+  static void Span(int slot, const char* name, uint64_t us) {
+    if (slot < 0) {
+      return;
+    }
+    std::lock_guard<std::mutex> lk(mu_);
+    Timer::slot_names_[slot] = name;
+    Timer::accum_times_[slot] += us;
+    Timer::accum_itrs_[slot] += 1;
+  }
+
+ private:
+  static std::mutex mu_;
+  static std::array<const char*, Timer::kMaxSlots> names_;
+  static uint32_t count_;
+};
+
+std::mutex TimerStorage::mu_;
+std::array<const char*, Timer::kMaxSlots> TimerStorage::names_ = {};
+uint32_t TimerStorage::count_ = 0;
 
 } // namespace cairns
