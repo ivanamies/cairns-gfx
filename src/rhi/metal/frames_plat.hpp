@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <atomic>
+
 #include <Metal/Metal.hpp>
 
 #include "rhi/resource_manager.hpp"  // Handle<>, Texture
@@ -16,6 +18,7 @@ struct FramesPlat {
     MTL::DepthStencilState* depth_stencil_ = nullptr;
     Handle<Texture> msaa_handle_ = Handle<Texture>::Null;
     Handle<Texture> depth_handle_ = Handle<Texture>::Null;
+    std::atomic<double> last_gpu_end_s_{0.0};
 };
 
 }  // namespace cairns::rhi

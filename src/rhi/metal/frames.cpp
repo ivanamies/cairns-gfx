@@ -17,6 +17,7 @@
 #include "rhi/swap_chain.hpp"
 #include "rhi/swap_resolve_target.hpp"
 #include "rhi/command_recorder.hpp"
+#include "util/timer.hpp"
 
 namespace cairns::rhi {
 
@@ -217,7 +218,26 @@ void Frames::EndSubmit(const SwapResolveTarget& target, FrameContext& fc) {
             term->presentDrawable(drawable);
         }
         dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(plat.frame_semaphore_);
-        term->addCompletedHandler([sem](MTL::CommandBuffer*) { dispatch_semaphore_signal(sem); });
+        std::atomic<double>* gpu_end_slot = &plat.last_gpu_end_s_;
+        term->addCompletedHandler([sem, gpu_end_slot](MTL::CommandBuffer* cb) {
+            gpu_end_slot->store(cb->GPUEndTime(), std::memory_order_release);
+            dispatch_semaphore_signal(sem);
+        });
+        if (drawable) {
+            drawable->addPresentedHandler(
+                [gpu_end_slot](MTL::Drawable* d) {
+                    const double gpu_end_s =
+                        gpu_end_slot->load(std::memory_order_acquire);
+                    const double presented_s = d->presentedTime();
+                    if (gpu_end_s > 0.0 && presented_s >= gpu_end_s) {
+                        const uint64_t us = static_cast<uint64_t>(
+                            (presented_s - gpu_end_s) * 1.0e6);
+                        cairns::TimerStorage::Span(
+                            cairns::TimerStorage::SlotForPass("present_pacing"),
+                            "present_pacing", us);
+                    }
+                });
+        }
         term->commit();
         term->waitUntilCompleted();
         std::vector<uint8_t> rgba(bufSize);
@@ -237,7 +257,26 @@ void Frames::EndSubmit(const SwapResolveTarget& target, FrameContext& fc) {
             term->presentDrawable(drawable);
         }
         dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(plat.frame_semaphore_);
-        term->addCompletedHandler([sem](MTL::CommandBuffer*) { dispatch_semaphore_signal(sem); });
+        std::atomic<double>* gpu_end_slot = &plat.last_gpu_end_s_;
+        term->addCompletedHandler([sem, gpu_end_slot](MTL::CommandBuffer* cb) {
+            gpu_end_slot->store(cb->GPUEndTime(), std::memory_order_release);
+            dispatch_semaphore_signal(sem);
+        });
+        if (drawable) {
+            drawable->addPresentedHandler(
+                [gpu_end_slot](MTL::Drawable* d) {
+                    const double gpu_end_s =
+                        gpu_end_slot->load(std::memory_order_acquire);
+                    const double presented_s = d->presentedTime();
+                    if (gpu_end_s > 0.0 && presented_s >= gpu_end_s) {
+                        const uint64_t us = static_cast<uint64_t>(
+                            (presented_s - gpu_end_s) * 1.0e6);
+                        cairns::TimerStorage::Span(
+                            cairns::TimerStorage::SlotForPass("present_pacing"),
+                            "present_pacing", us);
+                    }
+                });
+        }
         term->commit();
         if (!drawable) {
             // Render-to-texture: synchronous so a subsequent texture readback

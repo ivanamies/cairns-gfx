@@ -1491,11 +1491,6 @@ public:
     }
 
     bool draw() {
-        // Settle any pending SDL resize BEFORE the next render thread acquire
-        // -- ApplyPendingResize drains the render thread and waits the device
-        // idle so destroyed targets aren't dereferenced by an in-flight frame.
-        // Minimized window: swap dims are 0 in windowed mode; bail with a
-        // drain so we don't try to render to a zero-extent target.
         ApplyPendingResize();
         if (final_target_.IsNull() &&
             (swapchain_.Width() == 0 || swapchain_.Height() == 0)) {
@@ -1715,21 +1710,17 @@ public:
         slot_lock.unlock();
         render_thread_->Submit(slot, &s.pkt);
 
-        // MAIN-THREAD present. Render thread ran Frames::EndSubmit and
-        // stashed (fc, target) on THIS slot under present_m_. Lock the
-        // slot, wait for present_ready, run Frames::Present on main.
-        // Driver vendors don't test render-thread present -- on MoltenVK
-        // vkQueuePresentKHR reaches into CALayer (main-thread-only) and
-        // aborts under CA_ASSERT_MAIN_THREAD_TRANSACTIONS.
-        {
+        if (prev_present_slot_ >= 0) {
+            PerSlot& ps = slots_[prev_present_slot_];
             std::unique_lock<std::mutex> lk(present_m_);
-            present_cv_.wait(lk, [&] { return s.present_ready; });
-            rhi::FrameContext present_fc = s.present_fc;
-            rhi::SwapResolveTarget present_target = s.present_target;
-            s.present_ready = false;
+            present_cv_.wait(lk, [&] { return ps.present_ready; });
+            rhi::FrameContext present_fc = ps.present_fc;
+            rhi::SwapResolveTarget present_target = ps.present_target;
+            ps.present_ready = false;
             lk.unlock();
             rhi_.frames.Present(present_target, present_fc);
         }
+        prev_present_slot_ = static_cast<int32_t>(slot);
 
         // Under CAIRNS_DUMP, collapse to depth-1 pipelining: wait for the
         // render thread to fully complete this frame before the next iteration
@@ -3044,6 +3035,7 @@ private:
     // backend.
     std::mutex present_m_;
     std::condition_variable present_cv_;
+    int32_t prev_present_slot_ = -1;
     bool dump_emitted_ = false;
     uint32_t dump_emit_frame_ = 0;
 
