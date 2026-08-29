@@ -455,7 +455,8 @@ public:
                     draw.vertex_buffers[cairns::Draw::kVertexBufferPosSlot] = pos;
                     draw.instance_offset = 0;
                     draw.instance_count = 1;
-                    draw.dynamic_buffer_offsets = {};
+                    draw.dynamic_buffer_offsets[0] = mat_obj.material_offset;
+                    draw.dynamic_buffer_offsets[1] = tmp_obj.offset;
                     assert(prim.indexCount % 3 == 0);
                     draw.triangle_count = prim.indexCount / 3;
                     
@@ -586,7 +587,7 @@ public:
             // set up per draw temporaries bind group in vertex shader
             encoder->setVertexBuffer(dyn_master, 0, cairns::kDrawTmpBindSlot);
             
-            MatId last_mat = std::numeric_limits<uint32_t>::max();
+            uint32_t last_mat_off = std::numeric_limits<uint32_t>::max();
             uint32_t triangles = 0;
             for ( size_t draw_idx = 0; draw_idx < drawListSorted_.size(); ++draw_idx ) {
                 const cairns::Draw& draw = drawList_[drawListSorted_[draw_idx].second];
@@ -597,18 +598,14 @@ public:
                     encoder->setVertexBufferOffset(pos_off, 0 /*hard coded for some reason*/);
                 }
                 { // set up material
-                    const BindGroupId mat_bg = draw.bind_groups[cairns::kMaterialBindSlot-1];
-                    auto& mat_bg_obj = bindGroups_.At(mat_bg);
-                    const MatId mat = mat_bg_obj.material;
-                    if ( mat != last_mat ) {
-                        last_mat = mat;
-                        encoder->setVertexBufferOffset(mat_bg_obj.material_offset, cairns::kMaterialBindSlot);
+                    const uint32_t mat_off = draw.dynamic_buffer_offsets[0];
+                    if ( mat_off != last_mat_off ) {
+                        last_mat_off = mat_off;
+                        encoder->setVertexBufferOffset(mat_off, cairns::kMaterialBindSlot);
                     }
                 }
                 { // set up draw temporary
-                    const DynBufId draw_tmp_bg = draw.dynamic_buffers;
-                    auto& draw_tmp_obj = dynBufs_.At(draw_tmp_bg);
-                    encoder->setVertexBufferOffset(draw_tmp_obj.offset, cairns::kDrawTmpBindSlot);
+                    encoder->setVertexBufferOffset(draw.dynamic_buffer_offsets[1], cairns::kDrawTmpBindSlot);
                 }
                 {
                     const uint32_t index_count = draw.triangle_count * 3;
