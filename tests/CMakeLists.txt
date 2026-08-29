@@ -119,6 +119,7 @@ if(CAIRNS_GFX_BUILD_GOLDEN_TESTS)
     add_executable(cairns_golden_tests
         test_golden_scenarios.cpp
         test_golden_stress.cpp
+        test_js_smoke.cpp
         test_seams.cpp
         test_refs.cpp
         test_md5.cpp)
@@ -133,8 +134,10 @@ if(CAIRNS_GFX_BUILD_GOLDEN_TESTS)
     # run-from-build-dir CI invocation can override via the env var.
     target_compile_definitions(cairns_golden_tests PRIVATE
         CAIRNS_TEST_REFS_DIR_DEFINE=\"${CMAKE_CURRENT_SOURCE_DIR}/refs\")
+    # cairns_control holds the command registry + QuickJS host so scenarios are
+    # composed in JS (cairns.dispatch) instead of bespoke C++ seams.
     target_link_libraries(cairns_golden_tests PRIVATE
-        cairns_core Catch2::Catch2WithMain)
+        cairns_core cairns_control Catch2::Catch2WithMain)
     if(CMAKE_CROSSCOMPILING)
         catch_discover_tests(cairns_golden_tests
             PROPERTIES LABELS "golden"

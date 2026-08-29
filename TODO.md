@@ -69,6 +69,26 @@ byte-gated; the fixed interval pins sim/particle state to the same frame every
 run. (The 2026-06-19 G1 particle flake is the symptom of getting the *timing*
 wrong even on the correct CPU-side path — see modularization-notes #9b.)
 
+### Delete all singletons (unless dragged in by a 3rd-party dependency)
+Every process singleton / Meyer's `static X& Instance()` / file-scope mutable
+`static` must be deleted — construct the thing and pass it explicitly. The ONLY
+allowed exception is a singleton forced on us by a 3rd-party dependency. Known
+offenders:
+- `CommandRegistry::Instance()` (src/control/command_registry.{hpp,cpp}) — the
+  whole dispatch surface routes through one global. Blocks per-test registries
+  (a fresh registry per SCENARIO bound to that SCENARIO's Engine). Make it
+  constructible, pass `CommandRegistry&` everywhere (the `Register*Ops` already
+  take it by ref). modularization-notes #12.
+- `static JsState s` (src/control/handlers/script_ops.cpp:50) — one QuickJS
+  runtime/context for the whole process, bound to whatever registry it first
+  saw. Must become per-caller state owned alongside the registry it serves.
+- `g_scene_counter` (src/control/handlers/scene_ops.cpp:21) — file-scope atomic;
+  scene ids should come from the scenes_ pool, not a global counter.
+- `cairns::Timer` static accumulators (accum_times_/accum_itrs_/slot_names_) —
+  shared across Engine instances; perf.last + the imgui overlay read them. A
+  source of cross-Engine state bleed (modularization-notes #9b territory).
+- Audit for more: grep `Instance()`, `static .*&`, file-scope `static` mutable.
+
 ### Over-specialized test seams -> JS snippets / primitives
 `Engine::SetupTwoSceneViewports(left, right, particles)`, `Engine::SpawnHeroFramed
 (glb, animated)` (src/engine.hpp), and `test_seams::AdvanceToGoldenFrame` are
