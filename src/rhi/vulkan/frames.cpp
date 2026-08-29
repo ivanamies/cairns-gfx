@@ -162,6 +162,7 @@ bool Frames::Init(Device& device) {
     present_queue_ = device.present_queue_;
     ts_period_ns_ = device.timestamp_period_ns_;
     host_query_reset_ = device.host_query_reset_;
+    vk_reset_query_pool_ = device.vk_reset_query_pool_;
     {
         VkQueryPoolCreateInfo qpi{};
         qpi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
@@ -384,7 +385,8 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
         pass_count_[cf] = 0;
     }
     if (host_query_reset_) {
-        vkResetQueryPool(dev, ts_pool_, 2 * kMaxPasses * cf, 2 * kMaxPasses);
+        vk_reset_query_pool_(dev, ts_pool_, 2 * kMaxPasses * cf,
+                             2 * kMaxPasses);
     }
 
     vkResetFences(dev, 1, &compute_in_flight_[cf]);

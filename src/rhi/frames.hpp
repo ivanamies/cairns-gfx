@@ -81,6 +81,7 @@ public:
     VkQueryPool ts_pool_ = VK_NULL_HANDLE;
     float ts_period_ns_ = 0.0f;
     bool host_query_reset_ = false;
+    PFN_vkResetQueryPool vk_reset_query_pool_ = nullptr;
     std::vector<std::array<const char*, kMaxPasses>> pass_names_;
     std::vector<uint32_t> pass_count_;
 #elif CAIRNS_METAL

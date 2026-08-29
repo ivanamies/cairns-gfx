@@ -295,6 +295,7 @@ bool Device::Init(SDL_Window* window) {
         if (host_query_reset_) {
             vk12.hostQueryReset = VK_TRUE;
         }
+        // Resolved after vkCreateDevice below; see post-device-create block.
         {
             VkPhysicalDeviceProperties pp;
             vkGetPhysicalDeviceProperties(physical_, &pp);
@@ -328,6 +329,17 @@ bool Device::Init(SDL_Window* window) {
         vkGetDeviceQueue(device_, indices.graphics_compute.value(), 0,
                          &compute_queue_);
         queue_family_index_ = indices.graphics_compute.value();
+        if (host_query_reset_) {
+            vk_reset_query_pool_ = reinterpret_cast<PFN_vkResetQueryPool>(
+                vkGetDeviceProcAddr(device_, "vkResetQueryPool"));
+            if (vk_reset_query_pool_ == nullptr) {
+                vk_reset_query_pool_ = reinterpret_cast<PFN_vkResetQueryPool>(
+                    vkGetDeviceProcAddr(device_, "vkResetQueryPoolEXT"));
+            }
+            if (vk_reset_query_pool_ == nullptr) {
+                host_query_reset_ = false;
+            }
+        }
     }
 
     {  // command pool

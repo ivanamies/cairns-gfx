@@ -52,6 +52,7 @@ public:
     VkSampleCountFlagBits msaa_samples_ = VK_SAMPLE_COUNT_1_BIT;
     float timestamp_period_ns_ = 0.0f;
     bool host_query_reset_ = false;
+    PFN_vkResetQueryPool vk_reset_query_pool_ = nullptr;
 #elif CAIRNS_METAL
     MTL::Device* device_ = nullptr;
     MTL::CommandQueue* queue_ = nullptr;

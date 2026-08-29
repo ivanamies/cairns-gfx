@@ -301,6 +301,8 @@ else()
     copy_helper("particle.vert.spv")
     copy_helper("particle.frag.spv")
     copy_helper("particle.comp.spv")
+    copy_helper("imgui.vert.spv")
+    copy_helper("imgui.frag.spv")
 endif()
 
 # set some extra configs for each platform
