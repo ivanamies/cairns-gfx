@@ -15,15 +15,34 @@ WebGPU reached full parity with metal in the **native/headless golden gate**
 things that pass the native gate are rejected in Chrome. STATIC champions render
 fine in-browser (W7 move-a-champion works); ANIMATED (skinned) champions hit:
 
-- **anim_eval has 12 storage buffers; Chrome's `maxStorageBuffersPerShaderStage`
-  is 10** (Dawn-Metal cap; `web_main.cpp` already requests the adapter max).
-  → `CreateBindGroupLayout` fails in-browser, so the anim_eval dyn bindings are
-  invalid (warning, but skinning is silently disabled). Fix: pack 2+ of the 12
-  anim SSBOs into fewer buffers (e.g. concatenate the small int index streams
-  parent/topo/joint_nodes behind global offsets, or fold world_scratch into the
-  palette pool). Engine-side change to the anim-table flatten (`uploadAnimTablesGpu`)
-  + the kernel indexing, across all 3 backends + a re-bake. Native is unaffected
-  (its adapter exposes ≥12).
+- **anim_eval has 12 storage buffers; the WebGPU spec FLOOR for
+  `maxStorageBuffersPerShaderStage` is 8** (web3dsurvey: 8 = 100% of devices,
+  10 = 98.5% [Chrome 120+ max], 16 = 80%, ≥31 = <18%). There is NO device tier at
+  12 — the next stop above 10 is 16, which already drops ~20% of devices. So 12 is
+  non-portable, full stop (not just a Chrome quirk). `web_main.cpp` already requests
+  the adapter max; Chrome-Metal caps at 10 → `CreateBindGroupLayout` fails, anim_eval
+  bindings invalid, skinning silently disabled in-browser.
+  Fix (canon-preserving — the data is ALREADY byte-offset-addressed via SceneHeader
+  `*_off` fields, so pack by ELEMENT TYPE): one `array<u32>` buffer for the i32 /
+  16B-struct streams (parent, topo, joint_nodes, times-via-bitcast, channels,
+  samplers) + one `array<vec4<f32>>` buffer for the vec4-stride streams (bind_pose
+  3×vec4, values 1×vec4, inverse_binds 4×vec4) + `headers` as a UNIFORM (small,
+  read-once-per-workgroup, doesn't count against the storage limit) + world_scratch
+  + palette_out (RW). 12 storage → ~4 storage + 1 uniform, well under 8. Engine-side
+  change to the anim-table flatten (`uploadAnimTablesGpu`) + kernel indexing, across
+  all 3 backends + a re-bake. Native is unaffected (its adapter exposes ≥12), but the
+  pack is strictly better design even there.
+- **skin output pool is bound WHOLE (`WGPU_WHOLE_SIZE`) but is 1 GiB on desktop**
+  (`MemoryBudget::gpu_skin_pool_bytes` = 1 GB desktop / 128 MB mobile). WebGPU's
+  `maxStorageBufferBindingSize` FLOOR is 128 MiB (web3dsurvey: 128 MiB = 100%,
+  256 MiB = 96.5%, 1 GiB = 87.8%, 2 GiB = 71%). A 1 GiB whole-pool binding is 8× the
+  floor and excludes ~12% of devices. THIS IS THE SAME BUG CLASS AS THE S22 GARBLE
+  (Adreno 730 `maxStorageBufferRange` 256 MB, 1 GB pool bound past it → silent no-op
+  writes; engine.hpp:2291). Fix: bind only the per-batch OUTPUT slice (256-aligned
+  offset + size covering that batch's `output_off..+vert*16` window) in
+  DispatchSkinBatches, not the whole pool — keeps the persistent mega-pool but the
+  per-dispatch binding stays under 128 MiB. palette_out / world_scratch are 16 MiB
+  each (1024 actors × 256 mat4 × 64B) — fine.
 - **anim_eval `workgroupBarrier()` is in non-uniform control flow** (Dawn rejects;
   wgpu-native accepts). The stage-4 early `return` before the barrier + reads from
   the read_write `headers` SSBO make the barrier non-uniform. Fix: declare the
