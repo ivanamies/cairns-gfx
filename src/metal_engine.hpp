@@ -27,6 +27,8 @@
 #include "util/debug_asset.hpp"
 #include "util/draw.hpp"
 #include "util/draw_key.hpp"
+#include "util/material_gpu.hpp"
+#include "util/scene_gpu.hpp"
 #include "util/frame_transient_cache.hpp"
 #include "util/timer.hpp"
 #include "util/unique_ptr.hpp"
@@ -71,66 +73,6 @@ MTL::Library* compileMetalShader(MTL::Device* pDevice, std::string_view shaderPa
 } // anonymous namespace
 
 namespace cairns::rhi {
-
-struct MaterialGpu {
-    uint32_t tex_color_id = std::numeric_limits<uint32_t>::max();
-    uint32_t wip1 = std::numeric_limits<uint32_t>::max();
-    uint32_t wip2 = std::numeric_limits<uint32_t>::max();
-    uint32_t wip3 = std::numeric_limits<uint32_t>::max();
-    uint32_t wip4 = std::numeric_limits<uint32_t>::max();
-    uint32_t sampler_id = std::numeric_limits<uint32_t>::max();
-};
-
-// todo @iamies rename this
-struct DrawTmp {
-    glm::mat4 model_matrix;
-    uint32_t mesh_id = std::numeric_limits<uint32_t>::max();
-    uint32_t tex_id = std::numeric_limits<uint32_t>::max();
-    uint32_t sampler_id = std::numeric_limits<uint32_t>::max();
-    uint32_t yolo_padding = std::numeric_limits<uint32_t>::max();
-};
-
-bool LoadMeshGpu(Mesh& mesh, rhi::ResourceManager& rm) {
-    auto process = [&](rhi::Handle<rhi::Buffer>& h, const void* srcData,
-                       size_t srcSize) -> bool {
-        if (srcSize == 0) {
-            return true;
-        }
-        rhi::BufferDesc d;
-        d.byte_size = static_cast<uint32_t>(srcSize);
-        d.usage = rhi::kUsageVertex | rhi::kUsageIndex;
-        d.memory = rhi::Memory::kDefault;
-        d.initial_data = rhi::Span<const uint8_t>(
-            static_cast<const uint8_t*>(srcData), srcSize);
-        h = rm.CreateBuffer(d);
-        return !h.IsNull();
-    };
-
-    if (!process(mesh.posHandle, mesh.cpuPositions.data(),
-                 mesh.cpuPositions.size() * sizeof(glm::vec4))) {
-        return false;
-    }
-    if (!process(mesh.attrHandle, mesh.cpuAttrs.data(),
-                 mesh.cpuAttrs.size() * sizeof(VertexAttribute))) {
-        return false;
-    }
-    if (!process(mesh.indexHandle, mesh.cpuIndices.data(),
-                 mesh.cpuIndices.size() * sizeof(uint32_t))) {
-        return false;
-    }
-    return true;
-}
-
-bool LoadSceneGpu(Scene& scene, rhi::ResourceManager& rm)
-{
-    for ( size_t i = 0; i < scene.meshes.size(); ++i ) {
-        auto& mesh = scene.meshes[i];
-        if ( !LoadMeshGpu(mesh, rm) ) {
-            return false;
-        }
-    }
-    return true;
-}
 
 bool InitRenderPassDescriptor(MTL::RenderPassDescriptor*& renderPassDescriptor, MTL::Texture* msaa, MTL::Texture* depth,
                               SwapChain& swap_chain) {
