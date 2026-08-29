@@ -260,20 +260,47 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
     // Pack-meshes (slide 26): bind streams only when the mesh buffer changes;
     // drawIndexedPrimitives already selects the primitive via baseVertex.
     uint32_t last_mat_off = std::numeric_limits<uint32_t>::max();
-    uint32_t last_mat_bg = std::numeric_limits<uint32_t>::max();
+    uint32_t last_bg[3] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
     MTL::Buffer* last_pos_buf = nullptr;
     uint32_t last_pos_off = std::numeric_limits<uint32_t>::max();
     MTL::Buffer* last_attr_buf = nullptr;
     uint32_t last_attr_off = std::numeric_limits<uint32_t>::max();
+    // #222 Phase E.1 (metal mirror): per-draw shader rebind on change.
+    // Init last bound to list.pipeline so an unchanged draw.shader (or
+    // the still-common Null sentinel) doesn't rebind.
+    uint32_t last_shader_idx = list.pipeline.index;
     for (size_t i = 0; i < list.sorted_draws.size(); ++i) {
         const cairns::Draw& draw = list.draws[list.sorted_draws[i].second];
-        // set 2: per-material argument buffer, bound (fragment) on material change.
-        const uint32_t mat_bg = draw.bind_groups[1].index;
-        if (mat_bg != last_mat_bg) {
-            last_mat_bg = mat_bg;
-            BindGroup::Hot* mh = res.GetHot(draw.bind_groups[1]);
-            enc->setFragmentBuffer(mh->api_descriptor_set, mh->arg_buf_offset,
-                                   cairns::kMaterialBindSlot);
+        if (!draw.shader.IsNull() && draw.shader.index != last_shader_idx) {
+            Shader::Hot* sh = res.GetHot(draw.shader);
+            if (sh) {
+                enc->setRenderPipelineState(sh->api_pso);
+                last_shader_idx = draw.shader.index;
+            }
+        }
+        // #222 Phase E.0 (metal mirror): generic bind_groups[0..2] loop.
+        // Today only slot 1 (material) is non-null; E.1/E.2/E.4 fill the
+        // others. Bound as a vertex+fragment argument buffer; material
+        // sets a fragment buffer (see kMaterialBindSlot).
+        for (uint32_t s = 0; s < 3; ++s) {
+            if (draw.bind_groups[s].IsNull()) {
+                continue;
+            }
+            if (draw.bind_groups[s].index == last_bg[s]) {
+                continue;
+            }
+            last_bg[s] = draw.bind_groups[s].index;
+            BindGroup::Hot* mh = res.GetHot(draw.bind_groups[s]);
+            if (!mh) {
+                continue;
+            }
+            // Material today (slot 1) is fragment-side only on metal.
+            // Other slots arrive with their own bind sites in E.1/E.2.
+            if (s == 1) {
+                enc->setFragmentBuffer(mh->api_descriptor_set,
+                                        mh->arg_buf_offset,
+                                        cairns::kMaterialBindSlot);
+            }
         }
         {
             uint32_t pos_off = 0;
