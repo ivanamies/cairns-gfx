@@ -41,5 +41,30 @@ HUMAN TODO (do at the end of the renderer merge):
   engine. once Phase 3 (bindless layout) + Phase 4 (render pass/swapchain) move those
   into the rhi, hide them — opaque backend handle? pimpl? not sure yet. goal: zero
   raw Vk*/MTL* in the public header.
+  [UPDATE 2026-05-26: GraphicsPipelineDesc/ComputePipelineDesc leak RESOLVED in
+  M6.7c-2b — desc now carries a neutral SwapChain*; render pass + set layouts
+  resolved rhi-side. Still to audit/hide: VkPipeline/VkPipelineLayout on
+  Shader/Kernel Hot, VkDescriptorSet on BindGroup, and the Vk* device getters.]
+
+HUMAN TODO (INVESTIGATE — suspicious, do NOT dismiss as a flake):
+- V-METAL (tmp/verify_metal.sh) intermittently produces a DIFFERENT Metal render on
+  the FIRST run right after a shared-header edit (e.g. resource_manager.hpp), then
+  byte-identical on every rerun. The bad image is NOT noise: heroes are repositioned
+  / re-projected (looks like a different camera/aspect or wrong per-frame data) — a
+  coherent-but-wrong render, not a half-written PNG. Observed twice during M6.7c
+  (GraphicsPipelineDesc change; SwapChain Width()/Height() change).
+  Hypotheses to rule out:
+    * incremental xcodebuild linking a stale .o (ABI skew between TUs) — but the
+      Metal-read GraphicsPipelineDesc fields were unchanged-offset, so this should
+      NOT visibly corrupt. Try: `xcodebuild clean` before the first build — does it
+      vanish?
+    * a real frame-5 determinism hole (uninitialized bump/ring/parity state on the
+      very first launch after a rebuild; the SDL_GetTicks/last_ticks_ dt path even
+      under CAIRNS_FREEZE_ROT?). Capture the bad dump and diff vs golden: is it a
+      rotation/projection delta or data-corruption?
+    * dump captured before frame 5 fully rendered (race in verify_metal.sh kill/wait).
+  Why it matters: if it's a determinism hole, the "byte-identical golden" gate has a
+  blind spot and could pass while real first-frame state is wrong. Reproduce it
+  deterministically before trusting the gate.
 
 (the very next slide is the CPU database and GPU virtual machine analogy)
