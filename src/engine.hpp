@@ -660,10 +660,11 @@ public:
 
         PerSlot& s = slots_[pkt.slot];
 
-        // Publish parity early -- it's a pure function of pkt.particle_parity_in
-        // (no GPU dependency), so the game thread's parity_cv wait clears
-        // immediately, not gated on GPU completion.
-        pkt.particle_parity_out = pkt.particle_parity_in ^ 1;
+        // Publish parity early -- a pure function of pkt fields (no GPU
+        // dependency) so the game thread's parity_cv wait clears immediately.
+        // With N steps per frame, parity_out = parity_in ^ (N & 1).
+        pkt.particle_parity_out =
+            pkt.particle_parity_in ^ (pkt.sim_steps_this_frame & 1u);
         {
             std::lock_guard<std::mutex> lk(parity_m_);
             latest_parity_out_ = pkt.particle_parity_out;
@@ -680,14 +681,8 @@ public:
         cairns::Timer t_record("record", 2);
         EncodeDraws(pkt);
 
-        rhi::BoundBuffer cbufs[3] = {
-            {0, rhi_.alloc.BumpMasterBuffer(rhi::Memory::kDynamic), s.dt_off},
-            {1, particle_ssbo_[pkt.particle_parity_in], 0},
-            {2, particle_ssbo_[1 - pkt.particle_parity_in], 0},
-        };
         rhi::ComputeDispatch cd{};
         cd.kernel = particle_kernel_;
-        cd.buffers = std::span<const rhi::BoundBuffer>(cbufs, 3);
         cd.groups_x = kParticleCount / 256;
         cd.local_x = 256;
 
@@ -702,14 +697,32 @@ public:
 
         rhi::PointDraw pd{};
         pd.pipeline = particle_render_shader_;
-        pd.vertex_buffer = particle_ssbo_[1 - pkt.particle_parity_in];
+        // Read from the buffer that the loop last wrote into = parity_out.
+        // If N==0, parity_out == parity_in (no Dispatch); both SSBOs were
+        // seeded identically at init, so reading either is safe.
+        pd.vertex_buffer = particle_ssbo_[pkt.particle_parity_out];
         pd.vertex_offset = 0;
         pd.vertex_count = kParticleCount;
 
         const float clear[4] = {41.0f / 255.0f, 42.0f / 255.0f, 48.0f / 255.0f, 1.0f};
 
+        // Particle compute: N steps per frame, ping-ponging SSBOs each step.
+        // Metal: sequential ComputeCommandEncoders self-hazard on R/W ordering
+        // (MTLHazardTrackingModeTracked). Vulkan: command_recorder emits a
+        // compute->compute pipeline barrier between consecutive dispatches
+        // (commit 4 lands the descriptor-set-per-step plumbing).
         fc.cmd.PassTimerBegin("particle_sim");
-        fc.cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
+        for (uint32_t k = 0; k < pkt.sim_steps_this_frame; ++k) {
+            const uint32_t step_src = pkt.particle_parity_in ^ (k & 1u);
+            const uint32_t step_dst = step_src ^ 1u;
+            rhi::BoundBuffer cbufs[3] = {
+                {0, rhi_.alloc.BumpMasterBuffer(rhi::Memory::kDynamic), s.dt_off},
+                {1, particle_ssbo_[step_src], 0},
+                {2, particle_ssbo_[step_dst], 0},
+            };
+            cd.buffers = std::span<const rhi::BoundBuffer>(cbufs, 3);
+            fc.cmd.Dispatch(rhi_.resources, rhi_.alloc, cd);
+        }
         fc.cmd.PassTimerEnd();
 
         rhi::ColorAttachment ca{};
