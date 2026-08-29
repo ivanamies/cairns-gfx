@@ -1,12 +1,12 @@
 // rhi/webgpu/allocator_plat.hpp
-// W2 STUB: empty AllocatorPlat so the cross-backend header resolves the webgpu arm.
-// Real members come with the rhi/webgpu/*.cpp implementations (W2/W3+).
 #pragma once
 
-#include <webgpu/webgpu.h>
+#include "rhi/webgpu/memory_allocator.hpp"
 
 namespace cairns::rhi {
 
-struct AllocatorPlat {};
+struct AllocatorPlat {
+    webgpu::MemoryAllocator memory_;
+};
 
 }  // namespace cairns::rhi

@@ -1,12 +1,27 @@
 // rhi/webgpu/resources_plat.hpp
-// W2 STUB: empty ResourcesPlat so the cross-backend header resolves the webgpu arm.
-// Real members come with the rhi/webgpu/*.cpp implementations (W2/W3+).
 #pragma once
+
+#include <cstdint>
 
 #include <webgpu/webgpu.h>
 
+#include "rhi/resource_manager.hpp"  // Handle<>, Memory, Buffer
+
 namespace cairns::rhi {
 
-struct ResourcesPlat {};
+class Resources;
+class Allocator;
+
+struct ResourcesPlat {
+    WGPUDevice device_ = nullptr;          // mirrored from Device
+    WGPUQueue queue_ = nullptr;            // mirrored from Device
+    uint32_t frame_index_ = 1;             // drives deferred-free + bump retire
+    Resources* resources_ = nullptr;       // owner back-pointer (set in Resources::Init)
+
+    // Native-handle resolution. Definitions in rhi/webgpu/resources.cpp.
+    WGPUBuffer GetWgpuBuffer(Allocator& alloc, Handle<Buffer> h, uint32_t* out_offset);
+    uint8_t* MappedPtr(Allocator& alloc, Handle<Buffer> h);
+    WGPUBuffer GetBumpMasterBuffer(Allocator& alloc, Memory mem) const;
+};
 
 }  // namespace cairns::rhi

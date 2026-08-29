@@ -244,6 +244,9 @@ target_compile_definitions(cairns_render_thread PRIVATE
 if (CAIRNS_GFX_BACKEND_VULKAN AND APPLE)
     target_link_libraries(cairns_render_thread PRIVATE Vulkan::Vulkan)
 endif()
+if (CAIRNS_GFX_BACKEND_WEBGPU)
+    target_link_libraries(cairns_render_thread PRIVATE wgpu_native)
+endif()
 
 # =============================================================================
 # cairns_core -- the engine library. Everything in src/ except the entry-point

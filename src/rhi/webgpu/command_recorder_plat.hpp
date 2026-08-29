@@ -1,12 +1,16 @@
 // rhi/webgpu/command_recorder_plat.hpp
-// W2 STUB: empty CommandRecorderPlat so the cross-backend header resolves the webgpu arm.
-// Real members come with the rhi/webgpu/*.cpp implementations (W2/W3+).
 #pragma once
 
 #include <webgpu/webgpu.h>
 
 namespace cairns::rhi {
 
-struct CommandRecorderPlat {};
+struct CommandRecorderPlat {
+    WGPUDevice device_ = nullptr;
+    WGPUQueue queue_ = nullptr;
+    WGPUCommandEncoder cmd_ = nullptr;
+    WGPURenderPassEncoder enc_ = nullptr;
+    WGPUComputePassEncoder comp_ = nullptr;
+};
 
 }  // namespace cairns::rhi
