@@ -335,7 +335,10 @@ public:
 
         cairns::Timer t_build("build opaque draw list", 4);
         world_.root_transform = rot_matrix;
-        cairns::Extract(world_, proxies_);
+        {
+            cairns::Timer t_flatten("scene flatten", 5);
+            cairns::Extract(world_, proxies_);
+        }
         for (const cairns::MeshProxy& mp : proxies_.meshes.data) {
             const BufHandle pos = mp.pos;
             [[maybe_unused]] const BufHandle attr = mp.attr;
@@ -787,6 +790,7 @@ public:
             return true;
         }
 
+        cairns::Timer t_rg_build("render graph build", 6);
         graph_.Reset();
         rhi::GraphTexture depth_tex;
         rhi::GraphTexture color_tex;
@@ -897,9 +901,15 @@ public:
                 }
             });
         graph_.SetOutput(swap_tex);
-        if (!graph_.Bake() || !graph_.Execute(fc, swapchain_)) {
+        if (!graph_.Bake()) {
             return false;
         }
+        t_rg_build.End();
+        cairns::Timer t_rg_exec("render graph execute", 7);
+        if (!graph_.Execute(fc, swapchain_)) {
+            return false;
+        }
+        t_rg_exec.End();
         t_record.End();
         rhi_.frames.End(swapchain_, fc);
         t_frame.End();

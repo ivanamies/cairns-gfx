@@ -56,13 +56,14 @@ else()
 endif()
 
 # GCC and Clang (Linux, macOS, Android, Emscripten)
-target_compile_options(${EXECUTABLE_NAME} PRIVATE 
-  -Wall 
-  -Wextra 
+target_compile_options(${EXECUTABLE_NAME} PRIVATE
+  -Wall
+  -Wextra
   -Werror
   -fno-exceptions # no crutches to hide behind
   -fno-rtti # ditto
-  # -O2
+  $<$<CONFIG:Release>:-O3>
+  $<$<CONFIG:Release>:-DNDEBUG>
 )
 
 
