@@ -21,9 +21,12 @@
 #include <glm/gtx/quaternion.hpp>
 
 #include <cassert>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <span>
+#include <string>
 
 namespace cairns {
 
@@ -205,6 +208,52 @@ inline void ComputeNodeWorldMatrices(const std::vector<Node>& nodes,
 // converts mesh-local positions into joint-local space before the joint
 // transform is applied. Pass mesh_node_world_inv pre-computed (caller can
 // share it across multiple skins binding the same mesh node).
+// #221 Phase 9: pick the "walking" clip in a Scene. Case-insensitive
+// substring match against common animation names; falls back to clip 0
+// when no match. Returns -1 only when clips is empty. The user-curated
+// rule: prefer "walk", then "run", then first.
+inline int SelectWalkingClip(const std::vector<Clip>& clips) {
+    if (clips.empty()) {
+        return -1;
+    }
+    auto contains_ci = [](const std::string& s, const char* needle) {
+        auto lower = [](char c) { return static_cast<char>(std::tolower(c)); };
+        const size_t n = std::strlen(needle);
+        if (s.size() < n) {
+            return false;
+        }
+        for (size_t i = 0; i + n <= s.size(); ++i) {
+            bool ok = true;
+            for (size_t k = 0; k < n; ++k) {
+                if (lower(s[i + k]) != lower(needle[k])) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) {
+                return true;
+            }
+        }
+        return false;
+    };
+    int best_walk = -1;
+    int best_run = -1;
+    for (size_t i = 0; i < clips.size(); ++i) {
+        if (best_walk < 0 && contains_ci(clips[i].name, "walk")) {
+            best_walk = static_cast<int>(i);
+        } else if (best_run < 0 && contains_ci(clips[i].name, "run")) {
+            best_run = static_cast<int>(i);
+        }
+    }
+    if (best_walk >= 0) {
+        return best_walk;
+    }
+    if (best_run >= 0) {
+        return best_run;
+    }
+    return 0;
+}
+
 inline void ComputeSkinningPalette(const Skin& skin,
                                    std::span<const glm::mat4> node_world,
                                    const glm::mat4& mesh_node_world_inv,

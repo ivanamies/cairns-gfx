@@ -25,6 +25,7 @@
 #include "render/worker_context.hpp"
 #include "util/cpu_arena.hpp"
 #include "util/cpu_pool.hpp"  // #221 Phase 3: RangePool for skin_output_pool_.
+#include "util/animation_runtime.hpp"  // #221 Phase 9: SelectWalkingClip + sampler.
 #include "render/render_proxy.hpp"  // #221 Phase 3: SkinnedAttachment Hot/Cold.
 
 #include "gfx_api.hpp"
@@ -923,6 +924,18 @@ public:
                     rdr.layer_mask = 0xFFFFFFFFu;
                     rdr.flags = cairns::kProxyVisible;
                     reg.emplace<cairns::Renderable>(e, rdr);
+                    // #221 Phase 9: opportunistic SkinRef attach. Picks
+                    // the walking clip + first skinned mesh; stamps a
+                    // per-actor time phase so the 9 demo entities animate
+                    // out of sync (so the scene reads as alive).
+                    const float time_phase =
+                        static_cast<float>(i) * 0.137f;
+                    cairns::SkinId sid =
+                        TryCreateSkinForScene(scene_ids_[scene_idx],
+                                               time_phase);
+                    if (!sid.IsNull()) {
+                        reg.emplace<cairns::SkinRef>(e, cairns::SkinRef{sid});
+                    }
                 }
             }
             world_proxies_.resize(1);  // active_world_ uses slot 0
@@ -2245,6 +2258,63 @@ public:
         float velocity[2];
         float color[4];
     };
+
+    // #221 Phase 9: opportunistic SkinnedAttachment factory. Resolves the
+    // scene, picks the walking clip (`SelectWalkingClip`), finds the first
+    // skinned mesh (cpuSkinAttrs non-empty), allocates a skin_output_pool_
+    // slice sized to that mesh's vertex count, and returns the new SkinId.
+    // Null on any miss (no skins, no skinned mesh, no clips, no pool
+    // capacity left). The actor's per-frame palette uses the stored
+    // clip_index + time_offset and writes deformed verts at slice.offset.
+    cairns::SkinId TryCreateSkinForScene(cairns::SceneId scene_id,
+                                          float time_offset) {
+        cairns::Scene::Hot* shot = scenes_.GetHot(scene_id);
+        cairns::Scene::Cold* scold = scenes_.GetCold(scene_id);
+        if (!shot || !scold || scold->skins.empty() ||
+            scold->clips.empty()) {
+            return cairns::SkinId::Null;
+        }
+        const int clip_idx =
+            cairns::SelectWalkingClip(scold->clips);
+        if (clip_idx < 0) {
+            return cairns::SkinId::Null;
+        }
+        cairns::Handle<cairns::Mesh> skinned_mesh;
+        uint32_t vert_count = 0;
+        for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
+            cairns::Mesh::Cold* mcold = meshes_.GetCold(mid);
+            if (mcold && !mcold->cpuSkinAttrs.empty()) {
+                skinned_mesh = mid;
+                vert_count =
+                    static_cast<uint32_t>(mcold->cpuPositions.size());
+                break;
+            }
+        }
+        if (skinned_mesh.IsNull() || vert_count == 0) {
+            return cairns::SkinId::Null;
+        }
+        cairns::PoolSlice slice = skin_output_pool_.Alloc(vert_count);
+        if (!slice.IsValid()) {
+            return cairns::SkinId::Null;
+        }
+        cairns::SkinId sid = skins_.Acquire();
+        if (auto* h = skins_.GetHot(sid)) {
+            *h = cairns::SkinnedAttachment::Hot{};
+            h->slice = slice;
+            h->joint_count =
+                static_cast<uint32_t>(scold->skins[0].jointNodes.size());
+            h->clip_index = clip_idx;
+            h->time_offset = time_offset;
+            h->time_scale = 1.0f;
+            h->mesh = skinned_mesh;
+        }
+        if (auto* c = skins_.GetCold(sid)) {
+            *c = cairns::SkinnedAttachment::Cold{};
+            c->scene = scene_id;
+            c->skin_index = 0;
+        }
+        return sid;
+    }
 
     // #221 Phase 5: per-frame skin pipeline (game-thread side). Walks the
     // active world for SkinRef entities, samples each actor's clip into a
