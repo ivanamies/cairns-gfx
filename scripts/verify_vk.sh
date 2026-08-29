@@ -19,7 +19,7 @@ for c in /opt/homebrew/etc/vulkan/icd.d/MoltenVK_icd.json /usr/local/share/vulka
 done
 [ -z "$icd" ] && { echo "MoltenVK_icd.json not found; install molten-vk" >&2; exit 1; }
 
-VK_ICD_FILENAMES="$icd" CAIRNS_FREEZE_ROT=45 CAIRNS_DUMP="$cur" \
+VK_ICD_FILENAMES="$icd" CAIRNS_N=9 CAIRNS_FREEZE_ROT=45 CAIRNS_DUMP="$cur" \
   build/vk/Debug/sdl-min.app/Contents/MacOS/sdl-min || true
 
 [ -f "$cur" ] || { echo "VK: no frame dumped" >&2; exit 1; }
