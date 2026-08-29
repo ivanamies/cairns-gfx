@@ -304,7 +304,7 @@ struct BufferBinding {
 
 struct SamplerBinding {
     uint32_t slot = 0;
-    uint32_t sampler_id = 0;  // app-side sampler cache
+    Handle<Sampler> sampler;
     ShaderStage stages = kStageAll;
 };
 

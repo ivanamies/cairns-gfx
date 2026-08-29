@@ -287,6 +287,14 @@ void Resources::Deinit() {
         return;
     }
     VkDevice dev = device_;
+    if (material_pool_) {
+        vkDestroyDescriptorPool(dev, material_pool_, nullptr);
+        material_pool_ = VK_NULL_HANDLE;
+    }
+    if (material_set_layout_) {
+        vkDestroyDescriptorSetLayout(dev, material_set_layout_, nullptr);
+        material_set_layout_ = VK_NULL_HANDLE;
+    }
     textures.ForEachLive([dev](Texture::Hot& hot, Texture::Cold& cold) {
         if (hot.api_view) {
             vkDestroyImageView(dev, static_cast<VkImageView>(hot.api_view), nullptr);
@@ -574,8 +582,68 @@ Handle<Sampler> Resources::CreateSampler(const SamplerDesc& d) {
     return h;
 }
 
-Handle<BindGroup> Resources::CreateBindGroup(const BindGroupDesc&) {
-    return Handle<BindGroup>::Null;
+VkDescriptorSetLayout Resources::MaterialSetLayout() {
+    if (material_set_layout_ != VK_NULL_HANDLE) {
+        return material_set_layout_;
+    }
+    VkDescriptorSetLayoutBinding b{};
+    b.binding = 0;
+    b.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b.descriptorCount = 1;
+    b.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo li{};
+    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = 1;
+    li.pBindings = &b;
+    vkCreateDescriptorSetLayout(device_, &li, nullptr, &material_set_layout_);
+
+    VkDescriptorPoolSize ps{};
+    ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    ps.descriptorCount = 4096;
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = 4096;
+    pi.poolSizeCount = 1;
+    pi.pPoolSizes = &ps;
+    vkCreateDescriptorPool(device_, &pi, nullptr, &material_pool_);
+    return material_set_layout_;
+}
+
+Handle<BindGroup> Resources::CreateBindGroup(const BindGroupDesc& desc) {
+    MaterialSetLayout();  // ensure shared layout + pool exist
+    VkDescriptorSetAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool = material_pool_;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &material_set_layout_;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    if (vkAllocateDescriptorSets(device_, &ai, &set) != VK_SUCCESS) {
+        return Handle<BindGroup>::Null;
+    }
+    // set 2 = one combined image+sampler: pair textures[0] with samplers[0].
+    VkDescriptorImageInfo img{};
+    img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    if (!desc.textures.empty()) {
+        img.imageView = static_cast<VkImageView>(
+            textures.GetHot(desc.textures[0].texture)->api_view);
+    }
+    if (!desc.samplers.empty()) {
+        img.sampler = static_cast<VkSampler>(
+            samplers.GetHot(desc.samplers[0].sampler)->api_sampler);
+    }
+    VkWriteDescriptorSet w{};
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = set;
+    w.dstBinding = 0;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.descriptorCount = 1;
+    w.pImageInfo = &img;
+    vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
+
+    Handle<BindGroup> h = bind_groups.Acquire();
+    bind_groups.GetHot(h)->api_descriptor_set = set;
+    bind_groups.GetCold(h)->debug_name = desc.debug_name;
+    return h;
 }
 
 Handle<DynamicBuffers> Resources::CreateDynamicBuffers(
