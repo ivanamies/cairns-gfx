@@ -1075,7 +1075,7 @@ public:
         // get_offscreen_fb wouldn't match the new dims so they'd grow
         // unboundedly. Wipe them on resize; render passes (keyed on format,
         // not dims) survive.
-        rhi_.frames.offscreen_target_cache_.FlushFramebuffers();
+        rhi_.frames.plat.offscreen_target_cache_.FlushFramebuffers();
 #endif
         if (!final_target_.IsNull() &&
             (resize_pending_w_ != final_target_w_ ||

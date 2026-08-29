@@ -75,15 +75,15 @@ bool Frames::Init(Device& device) {
     if (inited_) {
         return true;
     }
-    device_ = device.plat.device_;
-    queue_ = device.plat.queue_;
+    plat.device_ = device.plat.device_;
+    plat.queue_ = device.plat.queue_;
 
-    frame_semaphore_ = dispatch_semaphore_create(kFramesInFlight);
+    plat.frame_semaphore_ = dispatch_semaphore_create(kFramesInFlight);
     {
         MTL::DepthStencilDescriptor* dsd = MTL::DepthStencilDescriptor::alloc()->init();
         dsd->setDepthCompareFunction(MTL::CompareFunctionLessEqual);
         dsd->setDepthWriteEnabled(true);
-        depth_stencil_ = device_->newDepthStencilState(dsd);
+        plat.depth_stencil_ = plat.device_->newDepthStencilState(dsd);
         dsd->release();
     }
     inited_ = true;
@@ -94,16 +94,16 @@ bool Frames::Init(Device& device) {
 // textures; created after scene textures load (call post scene load).
 bool Frames::InitTargets(Resources& resources, Allocator& alloc,
                           uint32_t width, uint32_t height) {
-    make_render_targets(resources, alloc, width, height, msaa_handle_,
-                        depth_handle_);
-    if (msaa_handle_.IsNull() || depth_handle_.IsNull()) {
+    make_render_targets(resources, alloc, width, height, plat.msaa_handle_,
+                        plat.depth_handle_);
+    if (plat.msaa_handle_.IsNull() || plat.depth_handle_.IsNull()) {
         return false;
     }
-    MTL::Texture* msaa = resources.GetHot(msaa_handle_)->api_view;
-    MTL::Texture* depth = resources.GetHot(depth_handle_)->api_view;
+    MTL::Texture* msaa = resources.GetHot(plat.msaa_handle_)->api_view;
+    MTL::Texture* depth = resources.GetHot(plat.depth_handle_)->api_view;
     // Resolve target is bound per-frame in Begin() from the SwapResolveTarget;
     // here we just allocate the descriptor with a null resolve attachment.
-    init_render_pass_desc(render_pass_desc_, msaa, depth, nullptr);
+    init_render_pass_desc(plat.render_pass_desc_, msaa, depth, nullptr);
     return true;
 }
 
@@ -111,11 +111,11 @@ void Frames::Deinit() {
     if (!inited_) {
         return;
     }
-    if (depth_stencil_) {
-        depth_stencil_->release();
+    if (plat.depth_stencil_) {
+        plat.depth_stencil_->release();
     }
-    if (render_pass_desc_) {
-        render_pass_desc_->release();
+    if (plat.render_pass_desc_) {
+        plat.render_pass_desc_->release();
     }
     inited_ = false;
 }
@@ -126,38 +126,38 @@ void Frames::SetDumpPath(const std::filesystem::path& path) {
 
 FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
                             const SwapResolveTarget& target) {
-    dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(frame_semaphore_),
+    dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(plat.frame_semaphore_),
                             DISPATCH_TIME_FOREVER);
     resources.AdvanceFrame(alloc);  // bump ring reset
 
     MTL::Texture* swap_tex = target.texture;
-    Texture::Hot* msaa_hot = resources.GetHot(msaa_handle_);
+    Texture::Hot* msaa_hot = resources.GetHot(plat.msaa_handle_);
     if (swap_tex &&
         (!msaa_hot || msaa_hot->api_view->width() != swap_tex->width() ||
          msaa_hot->api_view->height() != swap_tex->height())) {
-        if (!msaa_handle_.IsNull()) {
-            resources.Destroy(alloc, msaa_handle_);
+        if (!plat.msaa_handle_.IsNull()) {
+            resources.Destroy(alloc, plat.msaa_handle_);
         }
-        if (!depth_handle_.IsNull()) {
-            resources.Destroy(alloc, depth_handle_);
+        if (!plat.depth_handle_.IsNull()) {
+            resources.Destroy(alloc, plat.depth_handle_);
         }
         make_render_targets(resources, alloc,
                             static_cast<uint32_t>(swap_tex->width()),
                             static_cast<uint32_t>(swap_tex->height()),
-                            msaa_handle_, depth_handle_);
+                            plat.msaa_handle_, plat.depth_handle_);
     }
-    MTL::Texture* msaa = resources.GetHot(msaa_handle_)->api_view;
-    MTL::Texture* depth = resources.GetHot(depth_handle_)->api_view;
-    update_render_pass_desc(render_pass_desc_, msaa, depth, swap_tex);
+    MTL::Texture* msaa = resources.GetHot(plat.msaa_handle_)->api_view;
+    MTL::Texture* depth = resources.GetHot(plat.depth_handle_)->api_view;
+    update_render_pass_desc(plat.render_pass_desc_, msaa, depth, swap_tex);
 
     FrameContext fc;
     fc.frame_index = 0;
     fc.swapchain_image_index = 0;
     fc.cmd.cmd_ = nullptr;
-    fc.cmd.queue_ = queue_;
+    fc.cmd.queue_ = plat.queue_;
     fc.cmd.enc_ = nullptr;
-    fc.cmd.render_pass_desc_ = render_pass_desc_;
-    fc.cmd.depth_stencil_ = depth_stencil_;
+    fc.cmd.render_pass_desc_ = plat.render_pass_desc_;
+    fc.cmd.depth_stencil_ = plat.depth_stencil_;
     fc.cmd.pending_name_ = nullptr;
     fc.cmd.pending_slot_ = -1;
     return fc;
@@ -172,7 +172,7 @@ void Frames::End(const SwapResolveTarget& target, FrameContext& fc) {
         ri.cmd_ = nullptr;
     }
 
-    MTL::CommandBuffer* term = queue_->commandBuffer();
+    MTL::CommandBuffer* term = plat.queue_->commandBuffer();
     MTL::Texture* swap_tex = target.texture;
     CA::MetalDrawable* drawable = target.drawable;
 
@@ -181,7 +181,7 @@ void Frames::End(const SwapResolveTarget& target, FrameContext& fc) {
         const NS::UInteger h = swap_tex->height();
         const NS::UInteger bytesPerRow = w * 4;
         const NS::UInteger bufSize = bytesPerRow * h;
-        MTL::Buffer* readback = device_->newBuffer(bufSize, MTL::ResourceStorageModeShared);
+        MTL::Buffer* readback = plat.device_->newBuffer(bufSize, MTL::ResourceStorageModeShared);
         MTL::BlitCommandEncoder* blitEnc = term->blitCommandEncoder();
         blitEnc->copyFromTexture(swap_tex, 0, 0, MTL::Origin{0, 0, 0}, MTL::Size{w, h, 1},
                                  readback, 0, bytesPerRow, 0);
@@ -189,7 +189,7 @@ void Frames::End(const SwapResolveTarget& target, FrameContext& fc) {
         if (drawable) {
             term->presentDrawable(drawable);
         }
-        dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(frame_semaphore_);
+        dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(plat.frame_semaphore_);
         term->addCompletedHandler([sem](MTL::CommandBuffer*) { dispatch_semaphore_signal(sem); });
         term->commit();
         term->waitUntilCompleted();
@@ -209,7 +209,7 @@ void Frames::End(const SwapResolveTarget& target, FrameContext& fc) {
         if (drawable) {
             term->presentDrawable(drawable);
         }
-        dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(frame_semaphore_);
+        dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(plat.frame_semaphore_);
         term->addCompletedHandler([sem](MTL::CommandBuffer*) { dispatch_semaphore_signal(sem); });
         term->commit();
         if (!drawable) {

@@ -155,78 +155,78 @@ bool Frames::Init(Device& device) {
     if (inited_) {
         return true;
     }
-    device_ = device.plat.device_;
-    command_pool_ = device.plat.command_pool_;
-    physical_ = device.plat.physical_;
-    graphics_queue_ = device.plat.graphics_queue_;
-    compute_queue_ = device.plat.compute_queue_;
-    present_queue_ = device.plat.present_queue_;
-    ts_period_ns_ = device.plat.timestamp_period_ns_;
-    host_query_reset_ = device.plat.host_query_reset_;
-    vk_reset_query_pool_ = device.plat.vk_reset_query_pool_;
+    plat.device_ = device.plat.device_;
+    plat.command_pool_ = device.plat.command_pool_;
+    plat.physical_ = device.plat.physical_;
+    plat.graphics_queue_ = device.plat.graphics_queue_;
+    plat.compute_queue_ = device.plat.compute_queue_;
+    plat.present_queue_ = device.plat.present_queue_;
+    plat.ts_period_ns_ = device.plat.timestamp_period_ns_;
+    plat.host_query_reset_ = device.plat.host_query_reset_;
+    plat.vk_reset_query_pool_ = device.plat.vk_reset_query_pool_;
     {
         VkQueryPoolCreateInfo qpi{};
         qpi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
         qpi.queryType = VK_QUERY_TYPE_TIMESTAMP;
         qpi.queryCount = 2 * kMaxPasses * kFramesInFlight;
-        if (vkCreateQueryPool(device_, &qpi, nullptr, &ts_pool_) != VK_SUCCESS) {
+        if (vkCreateQueryPool(plat.device_, &qpi, nullptr, &plat.ts_pool_) != VK_SUCCESS) {
             return false;
         }
-        pass_names_.assign(kFramesInFlight, {});
-        pass_count_.assign(kFramesInFlight, 0);
+        plat.pass_names_.assign(kFramesInFlight, {});
+        plat.pass_count_.assign(kFramesInFlight, 0);
     }
 
     {  // per-frame command buffers + sync
         const uint32_t n = kFramesInFlight;
-        frames_in_flight_ = n;
-        graphics_cmds_.resize(n);
-        compute_cmds_.resize(n);
+        plat.frames_in_flight_ = n;
+        plat.graphics_cmds_.resize(n);
+        plat.compute_cmds_.resize(n);
         VkCommandBufferAllocateInfo cai{};
         cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        cai.commandPool = command_pool_;
+        cai.commandPool = plat.command_pool_;
         cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         cai.commandBufferCount = n;
-        if (vkAllocateCommandBuffers(device_, &cai,
-                                     graphics_cmds_.data()) != VK_SUCCESS ||
-            vkAllocateCommandBuffers(device_, &cai,
-                                     compute_cmds_.data()) != VK_SUCCESS) {
+        if (vkAllocateCommandBuffers(plat.device_, &cai,
+                                     plat.graphics_cmds_.data()) != VK_SUCCESS ||
+            vkAllocateCommandBuffers(plat.device_, &cai,
+                                     plat.compute_cmds_.data()) != VK_SUCCESS) {
             return false;
         }
 
-        image_available_.resize(n);
-        render_finished_.resize(n);
-        compute_finished_.resize(n);
-        in_flight_.resize(n);
-        compute_in_flight_.resize(n);
+        plat.image_available_.resize(n);
+        plat.render_finished_.resize(n);
+        plat.compute_finished_.resize(n);
+        plat.in_flight_.resize(n);
+        plat.compute_in_flight_.resize(n);
         VkSemaphoreCreateInfo sci{};
         sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
         VkFenceCreateInfo fci{};
         fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
         for (uint32_t i = 0; i < n; ++i) {
-            if (vkCreateSemaphore(device_, &sci, nullptr,
-                                  &image_available_[i]) != VK_SUCCESS ||
-                vkCreateSemaphore(device_, &sci, nullptr,
-                                  &render_finished_[i]) != VK_SUCCESS ||
-                vkCreateSemaphore(device_, &sci, nullptr,
-                                  &compute_finished_[i]) != VK_SUCCESS ||
-                vkCreateFence(device_, &fci, nullptr,
-                              &in_flight_[i]) != VK_SUCCESS ||
-                vkCreateFence(device_, &fci, nullptr,
-                              &compute_in_flight_[i]) != VK_SUCCESS) {
+            if (vkCreateSemaphore(plat.device_, &sci, nullptr,
+                                  &plat.image_available_[i]) != VK_SUCCESS ||
+                vkCreateSemaphore(plat.device_, &sci, nullptr,
+                                  &plat.render_finished_[i]) != VK_SUCCESS ||
+                vkCreateSemaphore(plat.device_, &sci, nullptr,
+                                  &plat.compute_finished_[i]) != VK_SUCCESS ||
+                vkCreateFence(plat.device_, &fci, nullptr,
+                              &plat.in_flight_[i]) != VK_SUCCESS ||
+                vkCreateFence(plat.device_, &fci, nullptr,
+                              &plat.compute_in_flight_[i]) != VK_SUCCESS) {
                 return false;
             }
         }
     }
 
     {  // descriptor layouts + pool + per-frame sets (non-bindless)
-        VkDevice dev = device_;
+        VkDevice dev = plat.device_;
         const uint32_t n = kFramesInFlight;
 
         {  // point layout (empty: particle render reads ssbo as a vertex buffer)
             VkDescriptorSetLayoutCreateInfo li{};
             li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &point_layout_) !=
+            if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &plat.point_layout_) !=
                 VK_SUCCESS) {
                 return false;
             }
@@ -249,7 +249,7 @@ bool Frames::Init(Device& device) {
             li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
             li.bindingCount = 3;
             li.pBindings = b;
-            if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &compute_layout_) !=
+            if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &plat.compute_layout_) !=
                 VK_SUCCESS) {
                 return false;
             }
@@ -269,8 +269,8 @@ bool Frames::Init(Device& device) {
             li.pBindings = &b;
             return vkCreateDescriptorSetLayout(dev, &li, nullptr, out) == VK_SUCCESS;
         };
-        if (!make_dyn_ubo_layout(&globals_set_layout_) ||
-            !make_dyn_ubo_layout(&drawtmp_set_layout_)) {
+        if (!make_dyn_ubo_layout(&plat.globals_set_layout_) ||
+            !make_dyn_ubo_layout(&plat.drawtmp_set_layout_)) {
             return false;
         }
 
@@ -287,7 +287,7 @@ bool Frames::Init(Device& device) {
             li.bindingCount = 1;
             li.pBindings = &b;
             if (vkCreateDescriptorSetLayout(dev, &li, nullptr,
-                                            &composite_set_layout_) !=
+                                            &plat.composite_set_layout_) !=
                 VK_SUCCESS) {
                 return false;
             }
@@ -315,7 +315,7 @@ bool Frames::Init(Device& device) {
         // 3 single-set layouts + compute (kMaxStepsPerFrame) + composite
         // (kCompositeRingSize) per slot.
         pci.maxSets = 3 * n + n * kMaxStepsPerFrame + n * kCompositeRingSize;
-        if (vkCreateDescriptorPool(dev, &pci, nullptr, &descriptor_pool_) !=
+        if (vkCreateDescriptorPool(dev, &pci, nullptr, &plat.descriptor_pool_) !=
             VK_SUCCESS) {
             return false;
         }
@@ -325,25 +325,25 @@ bool Frames::Init(Device& device) {
             std::vector<VkDescriptorSetLayout> layouts(n, layout);
             VkDescriptorSetAllocateInfo ai{};
             ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            ai.descriptorPool = descriptor_pool_;
+            ai.descriptorPool = plat.descriptor_pool_;
             ai.descriptorSetCount = n;
             ai.pSetLayouts = layouts.data();
             out.resize(n);
             return vkAllocateDescriptorSets(dev, &ai, out.data()) == VK_SUCCESS;
         };
-        if (!alloc_sets(point_layout_, point_sets_) ||
-            !alloc_sets(globals_set_layout_, globals_sets_) ||
-            !alloc_sets(drawtmp_set_layout_, drawtmp_sets_)) {
+        if (!alloc_sets(plat.point_layout_, plat.point_sets_) ||
+            !alloc_sets(plat.globals_set_layout_, plat.globals_sets_) ||
+            !alloc_sets(plat.drawtmp_set_layout_, plat.drawtmp_sets_)) {
             return false;
         }
-        compute_sets_.resize(n);
+        plat.compute_sets_.resize(n);
         {
             const uint32_t total = n * kMaxStepsPerFrame;
-            std::vector<VkDescriptorSetLayout> layouts(total, compute_layout_);
+            std::vector<VkDescriptorSetLayout> layouts(total, plat.compute_layout_);
             std::vector<VkDescriptorSet> flat(total);
             VkDescriptorSetAllocateInfo ai{};
             ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            ai.descriptorPool = descriptor_pool_;
+            ai.descriptorPool = plat.descriptor_pool_;
             ai.descriptorSetCount = total;
             ai.pSetLayouts = layouts.data();
             if (vkAllocateDescriptorSets(dev, &ai, flat.data()) != VK_SUCCESS) {
@@ -351,18 +351,18 @@ bool Frames::Init(Device& device) {
             }
             for (uint32_t f = 0; f < n; ++f) {
                 for (uint32_t k = 0; k < kMaxStepsPerFrame; ++k) {
-                    compute_sets_[f][k] = flat[f * kMaxStepsPerFrame + k];
+                    plat.compute_sets_[f][k] = flat[f * kMaxStepsPerFrame + k];
                 }
             }
         }
-        composite_sets_.resize(n);
+        plat.composite_sets_.resize(n);
         {
             const uint32_t total = n * kCompositeRingSize;
-            std::vector<VkDescriptorSetLayout> layouts(total, composite_set_layout_);
+            std::vector<VkDescriptorSetLayout> layouts(total, plat.composite_set_layout_);
             std::vector<VkDescriptorSet> flat(total);
             VkDescriptorSetAllocateInfo ai{};
             ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            ai.descriptorPool = descriptor_pool_;
+            ai.descriptorPool = plat.descriptor_pool_;
             ai.descriptorSetCount = total;
             ai.pSetLayouts = layouts.data();
             if (vkAllocateDescriptorSets(dev, &ai, flat.data()) != VK_SUCCESS) {
@@ -370,11 +370,11 @@ bool Frames::Init(Device& device) {
             }
             for (uint32_t f = 0; f < n; ++f) {
                 for (uint32_t k = 0; k < kCompositeRingSize; ++k) {
-                    composite_sets_[f][k] = flat[f * kCompositeRingSize + k];
+                    plat.composite_sets_[f][k] = flat[f * kCompositeRingSize + k];
                 }
             }
         }
-        offscreen_target_cache_.device = dev;
+        plat.offscreen_target_cache_.device = dev;
     }
     inited_ = true;
     return true;
@@ -389,36 +389,36 @@ void Frames::Deinit() {
     if (!inited_) {
         return;
     }
-    VkDevice dev = device_;
-    for (uint32_t i = 0; i < frames_in_flight_; ++i) {
-        vkDestroySemaphore(dev, image_available_[i], nullptr);
-        vkDestroySemaphore(dev, render_finished_[i], nullptr);
-        vkDestroySemaphore(dev, compute_finished_[i], nullptr);
-        vkDestroyFence(dev, in_flight_[i], nullptr);
-        vkDestroyFence(dev, compute_in_flight_[i], nullptr);
+    VkDevice dev = plat.device_;
+    for (uint32_t i = 0; i < plat.frames_in_flight_; ++i) {
+        vkDestroySemaphore(dev, plat.image_available_[i], nullptr);
+        vkDestroySemaphore(dev, plat.render_finished_[i], nullptr);
+        vkDestroySemaphore(dev, plat.compute_finished_[i], nullptr);
+        vkDestroyFence(dev, plat.in_flight_[i], nullptr);
+        vkDestroyFence(dev, plat.compute_in_flight_[i], nullptr);
     }
-    if (descriptor_pool_) {
-        vkDestroyDescriptorPool(dev, descriptor_pool_, nullptr);
+    if (plat.descriptor_pool_) {
+        vkDestroyDescriptorPool(dev, plat.descriptor_pool_, nullptr);
     }
-    if (globals_set_layout_) {
-        vkDestroyDescriptorSetLayout(dev, globals_set_layout_, nullptr);
+    if (plat.globals_set_layout_) {
+        vkDestroyDescriptorSetLayout(dev, plat.globals_set_layout_, nullptr);
     }
-    if (drawtmp_set_layout_) {
-        vkDestroyDescriptorSetLayout(dev, drawtmp_set_layout_, nullptr);
+    if (plat.drawtmp_set_layout_) {
+        vkDestroyDescriptorSetLayout(dev, plat.drawtmp_set_layout_, nullptr);
     }
-    if (compute_layout_) {
-        vkDestroyDescriptorSetLayout(dev, compute_layout_, nullptr);
+    if (plat.compute_layout_) {
+        vkDestroyDescriptorSetLayout(dev, plat.compute_layout_, nullptr);
     }
-    if (point_layout_) {
-        vkDestroyDescriptorSetLayout(dev, point_layout_, nullptr);
+    if (plat.point_layout_) {
+        vkDestroyDescriptorSetLayout(dev, plat.point_layout_, nullptr);
     }
-    if (composite_set_layout_) {
-        vkDestroyDescriptorSetLayout(dev, composite_set_layout_, nullptr);
+    if (plat.composite_set_layout_) {
+        vkDestroyDescriptorSetLayout(dev, plat.composite_set_layout_, nullptr);
     }
-    offscreen_target_cache_.Deinit();
-    if (ts_pool_) {
-        vkDestroyQueryPool(dev, ts_pool_, nullptr);
-        ts_pool_ = VK_NULL_HANDLE;
+    plat.offscreen_target_cache_.Deinit();
+    if (plat.ts_pool_) {
+        vkDestroyQueryPool(dev, plat.ts_pool_, nullptr);
+        plat.ts_pool_ = VK_NULL_HANDLE;
     }
     inited_ = false;
 }
@@ -433,67 +433,67 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     // render-to-texture vk path (future) will land alongside the metal
     // shape and drop this assert.
     SwapChain& sc = *target.swap_chain;
-    const uint32_t cf = recorder_frame_;
-    VkDevice dev = device_;
+    const uint32_t cf = plat.recorder_frame_;
+    VkDevice dev = plat.device_;
 
-    vkWaitForFences(dev, 1, &compute_in_flight_[cf], VK_TRUE, UINT64_MAX);
-    vkWaitForFences(dev, 1, &in_flight_[cf], VK_TRUE, UINT64_MAX);
+    vkWaitForFences(dev, 1, &plat.compute_in_flight_[cf], VK_TRUE, UINT64_MAX);
+    vkWaitForFences(dev, 1, &plat.in_flight_[cf], VK_TRUE, UINT64_MAX);
 
     // Both queues' slot-`cf` timestamps are now resolved -- read them BEFORE
     // resetting fences / cmd buffers / the query pool itself.
     {
-        const uint32_t np = pass_count_[cf];
+        const uint32_t np = plat.pass_count_[cf];
         if (np > 0) {
             std::array<uint64_t, 2 * kMaxPasses> ticks{};
-            vkGetQueryPoolResults(dev, ts_pool_, 2 * kMaxPasses * cf, 2 * np,
+            vkGetQueryPoolResults(dev, plat.ts_pool_, 2 * kMaxPasses * cf, 2 * np,
                                   ticks.size() * sizeof(uint64_t), ticks.data(),
                                   sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
             for (uint32_t p = 0; p < np; ++p) {
                 const double ns =
                     (static_cast<double>(ticks[2 * p + 1] - ticks[2 * p])) *
-                    static_cast<double>(ts_period_ns_);
-                const char* nm = pass_names_[cf][p];
+                    static_cast<double>(plat.ts_period_ns_);
+                const char* nm = plat.pass_names_[cf][p];
                 if (nm) {
                     TimerStorage::Span(TimerStorage::SlotForPass(nm), nm,
                                        static_cast<uint64_t>(ns / 1000.0));
                 }
             }
         }
-        pass_count_[cf] = 0;
+        plat.pass_count_[cf] = 0;
     }
-    if (host_query_reset_) {
-        vk_reset_query_pool_(dev, ts_pool_, 2 * kMaxPasses * cf,
+    if (plat.host_query_reset_) {
+        plat.vk_reset_query_pool_(dev, plat.ts_pool_, 2 * kMaxPasses * cf,
                              2 * kMaxPasses);
     }
 
-    vkResetFences(dev, 1, &compute_in_flight_[cf]);
-    vkResetCommandBuffer(compute_cmds_[cf], 0);
+    vkResetFences(dev, 1, &plat.compute_in_flight_[cf]);
+    vkResetCommandBuffer(plat.compute_cmds_[cf], 0);
     resources.AdvanceFrame(alloc);  // bump ring reset
 
     uint32_t image_index = 0;
     VkResult acquire = vkAcquireNextImageKHR(dev, sc.swapChain, UINT64_MAX,
-                                             image_available_[cf], VK_NULL_HANDLE,
+                                             plat.image_available_[cf], VK_NULL_HANDLE,
                                              &image_index);
     if (acquire == VK_ERROR_OUT_OF_DATE_KHR) {
         sc.RecreateSwapChain();
-        vkAcquireNextImageKHR(dev, sc.swapChain, UINT64_MAX, image_available_[cf],
+        vkAcquireNextImageKHR(dev, sc.swapChain, UINT64_MAX, plat.image_available_[cf],
                               VK_NULL_HANDLE, &image_index);
     }
-    vkResetFences(dev, 1, &in_flight_[cf]);
-    vkResetCommandBuffer(graphics_cmds_[cf], 0);
+    vkResetFences(dev, 1, &plat.in_flight_[cf]);
+    vkResetCommandBuffer(plat.graphics_cmds_[cf], 0);
 
     VkCommandBufferBeginInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    vkBeginCommandBuffer(compute_cmds_[cf], &bi);
-    vkBeginCommandBuffer(graphics_cmds_[cf], &bi);
+    vkBeginCommandBuffer(plat.compute_cmds_[cf], &bi);
+    vkBeginCommandBuffer(plat.graphics_cmds_[cf], &bi);
 
     // Fallback path when hostQueryReset is unavailable: per-queue cmd reset
     // so the compute subrange's reset is ordered against this frame's compute
     // writes, and likewise for graphics.
-    if (!host_query_reset_) {
-        vkCmdResetQueryPool(compute_cmds_[cf], ts_pool_, 2 * kMaxPasses * cf,
+    if (!plat.host_query_reset_) {
+        vkCmdResetQueryPool(plat.compute_cmds_[cf], plat.ts_pool_, 2 * kMaxPasses * cf,
                             2 * kMaxPasses);
-        vkCmdResetQueryPool(graphics_cmds_[cf], ts_pool_, 2 * kMaxPasses * cf,
+        vkCmdResetQueryPool(plat.graphics_cmds_[cf], plat.ts_pool_, 2 * kMaxPasses * cf,
                             2 * kMaxPasses);
     }
 
@@ -502,19 +502,19 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     fc.swapchain_image_index = image_index;
     fc.cmd.frame_ = cf;
     fc.cmd.image_index_ = image_index;
-    fc.cmd.gfx_ = graphics_cmds_[cf];
-    fc.cmd.comp_ = compute_cmds_[cf];
+    fc.cmd.gfx_ = plat.graphics_cmds_[cf];
+    fc.cmd.comp_ = plat.compute_cmds_[cf];
     fc.cmd.device_ = dev;
-    fc.cmd.globals_set_ = globals_sets_[cf];
-    fc.cmd.drawtmp_set_ = drawtmp_sets_[cf];
-    fc.cmd.compute_sets_ = compute_sets_[cf];
-    fc.cmd.point_set_ = point_sets_[cf];
-    fc.cmd.composite_sets_ = composite_sets_[cf];
+    fc.cmd.globals_set_ = plat.globals_sets_[cf];
+    fc.cmd.drawtmp_set_ = plat.drawtmp_sets_[cf];
+    fc.cmd.compute_sets_ = plat.compute_sets_[cf];
+    fc.cmd.point_set_ = plat.point_sets_[cf];
+    fc.cmd.composite_sets_ = plat.composite_sets_[cf];
     fc.cmd.composite_next_idx_ = 0;
-    fc.cmd.offscreen_ = &offscreen_target_cache_;
-    fc.cmd.ts_pool_ = ts_pool_;
-    fc.cmd.pass_names_ = &pass_names_[cf];
-    fc.cmd.pass_count_ = &pass_count_[cf];
+    fc.cmd.offscreen_ = &plat.offscreen_target_cache_;
+    fc.cmd.ts_pool_ = plat.ts_pool_;
+    fc.cmd.pass_names_ = &plat.pass_names_[cf];
+    fc.cmd.pass_count_ = &plat.pass_count_[cf];
     fc.cmd.pass_cb_ = VK_NULL_HANDLE;
     fc.cmd.pending_pass_idx_ = UINT32_MAX;
     fc.cmd.pending_name_ = nullptr;
@@ -531,41 +531,41 @@ void Frames::End(const SwapResolveTarget& target, FrameContext& fc) {
     VkSubmitInfo csi{};
     csi.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     csi.commandBufferCount = 1;
-    csi.pCommandBuffers = &compute_cmds_[cf];
+    csi.pCommandBuffers = &plat.compute_cmds_[cf];
     csi.signalSemaphoreCount = 1;
-    csi.pSignalSemaphores = &compute_finished_[cf];
-    vkQueueSubmit(compute_queue_, 1, &csi, compute_in_flight_[cf]);
+    csi.pSignalSemaphores = &plat.compute_finished_[cf];
+    vkQueueSubmit(plat.compute_queue_, 1, &csi, plat.compute_in_flight_[cf]);
 
     vkEndCommandBuffer(ri.gfx_);
     VkSubmitInfo gsi{};
     gsi.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    VkSemaphore wait_sems[2] = {compute_finished_[cf],
-                                image_available_[cf]};
+    VkSemaphore wait_sems[2] = {plat.compute_finished_[cf],
+                                plat.image_available_[cf]};
     VkPipelineStageFlags wait_stages[2] = {VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
                                            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
     gsi.waitSemaphoreCount = 2;
     gsi.pWaitSemaphores = wait_sems;
     gsi.pWaitDstStageMask = wait_stages;
     gsi.commandBufferCount = 1;
-    gsi.pCommandBuffers = &graphics_cmds_[cf];
+    gsi.pCommandBuffers = &plat.graphics_cmds_[cf];
     gsi.signalSemaphoreCount = 1;
-    gsi.pSignalSemaphores = &render_finished_[cf];
-    vkQueueSubmit(graphics_queue_, 1, &gsi, in_flight_[cf]);
+    gsi.pSignalSemaphores = &plat.render_finished_[cf];
+    vkQueueSubmit(plat.graphics_queue_, 1, &gsi, plat.in_flight_[cf]);
 
     VkPresentInfoKHR pi{};
     pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     pi.waitSemaphoreCount = 1;
-    pi.pWaitSemaphores = &render_finished_[cf];
+    pi.pWaitSemaphores = &plat.render_finished_[cf];
     VkSwapchainKHR swapchains[1] = {sc.swapChain};
     pi.swapchainCount = 1;
     pi.pSwapchains = swapchains;
     pi.pImageIndices = &fc.swapchain_image_index;
-    const VkResult present = vkQueuePresentKHR(present_queue_, &pi);
+    const VkResult present = vkQueuePresentKHR(plat.present_queue_, &pi);
 
     if (!dump_path_.empty()) {
-        vkQueueWaitIdle(present_queue_);
-        dump_swapchain_image(device_, physical_,
-                             command_pool_, graphics_queue_,
+        vkQueueWaitIdle(plat.present_queue_);
+        dump_swapchain_image(plat.device_, plat.physical_,
+                             plat.command_pool_, plat.graphics_queue_,
                              sc.swapChainImages[fc.swapchain_image_index],
                              sc.swapChainImageFormat,
                              sc.swapChainExtent.width,
@@ -578,7 +578,7 @@ void Frames::End(const SwapResolveTarget& target, FrameContext& fc) {
         sc.RecreateSwapChain();
     }
 
-    recorder_frame_ = (cf + 1) % frames_in_flight_;
+    plat.recorder_frame_ = (cf + 1) % plat.frames_in_flight_;
 }
 
 }  // namespace cairns::rhi

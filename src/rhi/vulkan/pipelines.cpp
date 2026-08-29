@@ -386,11 +386,11 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     std::vector<VkDescriptorSetLayout> set_layouts;
     VkDescriptorSetLayout imgui_set_layout = VK_NULL_HANDLE;
     if (ls == "unlit" || ls == "unlit_offscreen") {
-        set_layouts = {frames.globals_set_layout_,      // set 0: globals (once/frame)
+        set_layouts = {frames.plat.globals_set_layout_,      // set 0: globals (once/frame)
                        resources.MaterialSetLayout(),   // set 1: per-material
-                       frames.drawtmp_set_layout_};     // set 2: drawtmp (per draw)
+                       frames.plat.drawtmp_set_layout_};     // set 2: drawtmp (per draw)
     } else if (ls == "composite_pip" || ls == "depthviz") {
-        set_layouts = {frames.composite_set_layout_};   // 1 COMBINED_IMAGE_SAMPLER frag
+        set_layouts = {frames.plat.composite_set_layout_};   // 1 COMBINED_IMAGE_SAMPLER frag
     } else if (ls == "imgui") {
         VkDescriptorSetLayoutBinding b{};
         b.binding = 0;
@@ -404,7 +404,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
         vkCreateDescriptorSetLayout(device, &dl, nullptr, &imgui_set_layout);
         set_layouts = {imgui_set_layout};
     } else {
-        set_layouts = {frames.point_layout_};
+        set_layouts = {frames.plat.point_layout_};
     }
     VkPipelineLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -511,7 +511,7 @@ Handle<Kernel> Pipelines::CreateComputePipeline(
     stage.module = comp_mod;
     stage.pName = "main";
 
-    const VkDescriptorSetLayout compute_layouts[1] = {frames.compute_layout_};
+    const VkDescriptorSetLayout compute_layouts[1] = {frames.plat.compute_layout_};
     VkPipelineLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layout_info.setLayoutCount = 1;
