@@ -18,9 +18,10 @@
 namespace cairns::rhi {
 
 struct Resources::Impl {
-    MTL::Device* device = nullptr;  // mirrored from Device
-    Allocator* alloc = nullptr;     // borrowed
-    uint32_t frame_index = 1;       // drives deferred-free + bump retire
+    MTL::Device* device = nullptr;        // mirrored from Device
+    MTL::CommandQueue* queue = nullptr;   // mirrored from Device
+    Allocator* alloc = nullptr;           // borrowed
+    uint32_t frame_index = 1;             // drives deferred-free + bump retire
 };
 
 }  // namespace cairns::rhi
