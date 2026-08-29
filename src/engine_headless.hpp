@@ -96,6 +96,11 @@ uint32_t SpawnHero(Engine* engine, uint32_t scene_idx,
                     float x, float y, float z, float scale,
                     float time_phase);
 uint32_t NumScenes(Engine* engine);
+float SceneMeshExtentMax(Engine* engine, uint32_t scene_idx);
+std::vector<uint32_t> ListActiveWorldEntities(Engine* engine);
+bool SetEntityTransform(Engine* engine, uint32_t entity_int,
+                         float x, float y, float z, float scale);
+uint32_t ClearActiveWorld(Engine* engine);
 
 }  // namespace headless
 }  // namespace cairns

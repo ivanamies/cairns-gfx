@@ -39,9 +39,14 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.world.clear",
         /*schema=*/json::object(),
-        /*doc=*/"Reset a world's entity set. Stub.",
-        [](const json& args) -> json {
-            return {{"world", args.value("world", uint64_t{0})}};
+        /*doc=*/"#269: nuke every entity in active_world_. Returns "
+                "{cleared:N}. Leaks any held skin_output_pool_ slices + "
+                "alias buffer handles (no skin Release path yet); fine "
+                "for occasional debug-session resets, do not loop.",
+        [&engine](const json&) -> json {
+            const uint32_t n =
+                cairns::headless::ClearActiveWorld(&engine);
+            return {{"cleared", n}};
         });
 
     registry.Register(
@@ -235,6 +240,62 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         "Number of pre-loaded scenes (GLBs). Spawn args clamp to [0, N).",
         [&engine](const json&) -> json {
             return {{"count", cairns::headless::NumScenes(&engine)}};
+        });
+
+    // #269: scene-extent query. Returned in WORLD units (the scale a
+    // SpawnHero arg of 1.0 produces). Callers divide a target on-screen
+    // cell size by this to get per-actor scale, normalizing the visual
+    // size of a heterogeneous GLB set.
+    registry.Register(
+        "cairns.world.sceneDims",
+        json::object(),
+        "Bind-pose extent (max axis component, world units) of the "
+        "scene's first skinned mesh. Args: {scene_idx}. Returns: "
+        "{extent_max} or {extent_max:0} when unavailable.",
+        [&engine](const json& args) -> json {
+            const uint32_t scene_idx = args.value("scene_idx", uint32_t{0});
+            return {{"extent_max",
+                     cairns::headless::SceneMeshExtentMax(&engine,
+                                                           scene_idx)},
+                    {"scene_idx", scene_idx}};
+        });
+
+    // #269: enumerate active_world_ entities. Used by no-flash relayout
+    // -- caller queries the list, reposts setTransform for each, then
+    // appends N-existing via spawnHero.
+    registry.Register(
+        "cairns.world.listEntities",
+        json::object(),
+        "List every entity in active_world_. Returns "
+        "{entities:[uint32 ids], count:N}.",
+        [&engine](const json&) -> json {
+            std::vector<uint32_t> ents =
+                cairns::headless::ListActiveWorldEntities(&engine);
+            json arr = json::array();
+            for (uint32_t e : ents) {
+                arr.push_back(e);
+            }
+            return {{"entities", std::move(arr)},
+                    {"count", static_cast<uint32_t>(ents.size())}};
+        });
+
+    // #269: mutate one entity's WorldTransform. Pairs with listEntities
+    // for the no-flash relayout. translation + uniform scale only --
+    // matches the spawnHero argument shape.
+    registry.Register(
+        "cairns.world.setTransform",
+        json::object(),
+        "Overwrite an entity's WorldTransform. Args: "
+        "{entity, x, y, z, scale}. Returns: {ok}.",
+        [&engine](const json& args) -> json {
+            const uint32_t e = args.value("entity", uint32_t{0});
+            const float x = args.value("x", 0.0f);
+            const float y = args.value("y", 0.0f);
+            const float z = args.value("z", -3.0f);
+            const float scale = args.value("scale", 1.0f);
+            return {{"ok", cairns::headless::SetEntityTransform(
+                              &engine, e, x, y, z, scale)},
+                    {"entity", e}};
         });
 }
 

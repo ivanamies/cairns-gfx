@@ -183,4 +183,30 @@ uint32_t NumScenes(Engine* engine) {
     return engine ? engine->NumScenes() : 0;
 }
 
+float SceneMeshExtentMax(Engine* engine, uint32_t scene_idx) {
+    return engine ? engine->SceneMeshExtentMax(scene_idx) : 0.0f;
+}
+
+std::vector<uint32_t> ListActiveWorldEntities(Engine* engine) {
+    if (!engine) {
+        return {};
+    }
+    return engine->ListActiveWorldEntities();
+}
+
+bool SetEntityTransform(Engine* engine, uint32_t entity_int,
+                         float x, float y, float z, float scale) {
+    if (!engine) {
+        return false;
+    }
+    glm::mat4 m(1.0f);
+    m = glm::translate(m, glm::vec3(x, y, z));
+    m = glm::scale(m, glm::vec3(scale));
+    return engine->SetEntityTransform(entity_int, m);
+}
+
+uint32_t ClearActiveWorld(Engine* engine) {
+    return engine ? engine->ClearActiveWorld() : 0;
+}
+
 }  // namespace cairns::headless

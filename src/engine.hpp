@@ -257,6 +257,92 @@ public:
         return static_cast<uint32_t>(scene_ids_.size());
     }
 
+    // #269: bind-pose extent (max axis component of aabb_max - aabb_min)
+    // of the scene's first skinned mesh -- the unit a caller normalizes
+    // to when picking per-actor scale so heroes occupy a uniform cell
+    // on screen. Returns 0 if scene_idx is out of range, no mesh has a
+    // bind-pose AABB, or the AABB is degenerate.
+    float SceneMeshExtentMax(uint32_t scene_idx) {
+        if (scene_idx >= scene_ids_.size()) {
+            return 0.0f;
+        }
+        cairns::Scene::Hot* shot = scenes_.GetHot(scene_ids_[scene_idx]);
+        if (!shot) {
+            return 0.0f;
+        }
+        for (cairns::Handle<cairns::Mesh> mid : shot->meshes) {
+            cairns::Mesh::Hot* mh = meshes_.GetHot(mid);
+            if (!mh) {
+                continue;
+            }
+            if (mh->bind_aabb_min.x > mh->bind_aabb_max.x) {
+                continue;
+            }
+            const glm::vec3 ext = mh->bind_aabb_max - mh->bind_aabb_min;
+            return std::max(ext.x, std::max(ext.y, ext.z));
+        }
+        return 0.0f;
+    }
+
+    // #269: list every live entity in active_world_'s registry. The
+    // values are entt::to_integral(entity), the same encoding SpawnHero
+    // returns. Caller pairs them with SetEntityTransform to drive a
+    // no-flash relayout when the spawn count grows.
+    std::vector<uint32_t> ListActiveWorldEntities() {
+        std::vector<uint32_t> out;
+        cairns::World::Cold* wc = worlds_.GetCold(active_world_);
+        if (!wc) {
+            return out;
+        }
+        const auto& reg = wc->registry;
+        out.reserve(reg.storage<entt::entity>()->size());
+        for (const entt::entity e : reg.view<cairns::WorldTransform>()) {
+            out.push_back(static_cast<uint32_t>(entt::to_integral(e)));
+        }
+        return out;
+    }
+
+    // #269: overwrite an entity's WorldTransform. Used by the spawn-
+    // relayout path so existing actors slide to new grid cells without
+    // the visible empty-then-full flash a clear+respawn produces.
+    // Returns false if entity isn't live in active_world_'s registry.
+    bool SetEntityTransform(uint32_t entity_int, const glm::mat4& world) {
+        cairns::World::Cold* wc = worlds_.GetCold(active_world_);
+        if (!wc) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!reg.valid(e) || !reg.all_of<cairns::WorldTransform>(e)) {
+            return false;
+        }
+        reg.get<cairns::WorldTransform>(e).world = world;
+        if (auto* wh = worlds_.GetHot(active_world_)) {
+            wh->dirty = true;
+        }
+        return true;
+    }
+
+    // #269: nuke every entity in active_world_'s registry. Best-effort:
+    // the registry is cleared but skin_output_pool_ slices + per-actor
+    // alias buffer handles are leaked (no skin Release path yet). Fine
+    // for a handful of clears during a debug session; do NOT loop this
+    // unbounded -- the pool fills. Returns the entity count cleared.
+    uint32_t ClearActiveWorld() {
+        cairns::World::Cold* wc = worlds_.GetCold(active_world_);
+        if (!wc) {
+            return 0;
+        }
+        auto& reg = wc->registry;
+        const uint32_t n =
+            static_cast<uint32_t>(reg.storage<entt::entity>().size());
+        reg.clear();
+        if (auto* wh = worlds_.GetHot(active_world_)) {
+            wh->dirty = true;
+        }
+        return n;
+    }
+
     // P1 input surface for main.cpp. Both no-op under CAIRNS_CAM_POSE so a
     // byte-gate dump can't be perturbed by an event that snuck through.
 
