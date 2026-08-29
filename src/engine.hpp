@@ -1556,9 +1556,13 @@ public:
     bool ImguiInGolden() const { return imgui_in_golden_; }
 
     // #229 P7: per-frame SIM determinism digest (golden mode only; 0 otherwise).
-    // Stable frame-to-frame under FixedClock + a static scene, and run-to-run
-    // across independent Engine instances. test_state_hash asserts both.
+    // Stable run-to-run across independent Engine instances (advances frame-to-
+    // frame with the sim clock). test_state_hash asserts run-to-run equality.
     uint64_t LastSimHash() const { return last_sim_hash_; }
+    // #229 P7: per-frame RENDER digest -- the bytes EncodeDraws feeds the GPU.
+    // Stable run-to-run => GPU input deterministic; a flake past this point is
+    // GPU-execution nondeterminism.
+    uint64_t LastRenderHash() const { return last_render_hash_; }
 
     // A.12: read the currently-bound particle ssbo bytes for the G1
     // cross-platform buffer SECTION. Gated on A.10 (Resources::ReadBackBuffer)
@@ -3067,6 +3071,33 @@ public:
         // Compute kernel sees the fixed sim dt, NOT wall dt -- particles step
         // at a constant rate regardless of frame timing.
         *dt_ptr = pkt.fixed_dt;
+
+        // #229 P7 RENDER hash: the bytes we just encoded for the GPU this frame
+        // -- per-viewport globals UBO content + bump offsets, per-draw model
+        // matrix + entity id + the two dynamic offsets, and the dt offset. A
+        // SEMANTIC hash of the encode outputs (not a raw ring dump), so it is
+        // immune to the bump ring's alignment padding and is identical metal/vk.
+        // Stable run-to-run => the GPU input is deterministic; when pixels still
+        // flake the divergence is pure GPU execution (the next-phase target).
+        if (golden_) {
+            cairns::Fnv1a render;
+            for (int v = 0; v < active_viewport_count_; ++v) {
+                render.Write(&s.pending_globals[v],
+                             sizeof(cairns::rhi::RenderPassGlobals));
+                render.WritePod(s.globals_offset[v]);
+            }
+            for (size_t i = 0; i < s.drawList.size(); ++i) {
+                render.WritePod(s.drawList[i].dynamic_buffer_offsets[0]);
+                render.WritePod(s.drawList[i].dynamic_buffer_offsets[1]);
+                render.WritePod(s.draw_world_matrices[i]);
+                render.WritePod(s.draw_entity_ids[i]);
+            }
+            render.WritePod(s.dt_off);
+            last_render_hash_ = render.Digest();
+            std::fprintf(stderr, "[STATEHASH] frame=%u render=%016llx draws=%zu\n",
+                         frame_, (unsigned long long)last_render_hash_,
+                         s.drawList.size());
+        }
     }
 
     // Drain in-flight work, settle GPU, invalidate any caches keyed on the
@@ -5905,6 +5936,9 @@ private:
     // #229 P7: last per-frame SIM determinism digest (FixedClock + static scene
     // => byte-identical every frame and run-to-run). Read by test_state_hash.
     uint64_t last_sim_hash_ = 0;
+    // #229 P7: last per-frame RENDER digest (the GPU-input bytes EncodeDraws
+    // stamps: globals UBOs + bump offsets + per-draw model/entity + dt offset).
+    uint64_t last_render_hash_ = 0;
     bool golden_ = false;
     // Subset of golden_: only true when dump_path != "" (the CLI byte-gate
     // path). Tests use use_fixed_clock => golden_=true, dump_and_exit_=false.

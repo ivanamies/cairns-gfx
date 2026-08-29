@@ -18,6 +18,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include "engine.hpp"
@@ -29,8 +30,12 @@ namespace seam = cairns::test_seams;
 
 namespace {
 
+// {SIM digest, RENDER digest} stamped during one frame.
+using FrameHash = std::pair<uint64_t, uint64_t>;
+using Seq = std::vector<FrameHash>;
+
 // Boot a headless 512x512 fixed-clock engine. use_fixed_clock => golden_=true,
-// so the SIM determinism hash is stamped every frame.
+// so both determinism hashes are stamped every frame.
 void BootGolden(cairns::Engine& e) {
     cairns::rhi::InitConfig icfg{};
     icfg.surfaceless = true;
@@ -41,16 +46,16 @@ void BootGolden(cairns::Engine& e) {
     REQUIRE(e.GreaterInit(icfg, ecfg));
 }
 
-// Advance exactly one frame and return the SIM digest stamped during it.
-uint64_t StepHash(cairns::Engine& e) {
+// Advance exactly one frame and return the {sim, render} digests from it.
+FrameHash StepHash(cairns::Engine& e) {
     cairns::golden::DriveJs(
         e,
         R"JS(cairns.dispatch("cairns.render.advanceFrames", { count: 1 });)JS");
-    return e.LastSimHash();
+    return {e.LastSimHash(), e.LastRenderHash()};
 }
 
-std::vector<uint64_t> Sequence(cairns::Engine& e, int frames) {
-    std::vector<uint64_t> seq;
+Seq Sequence(cairns::Engine& e, int frames) {
+    Seq seq;
     seq.reserve(static_cast<size_t>(frames));
     for (int i = 0; i < frames; ++i) {
         seq.push_back(StepHash(e));
@@ -69,19 +74,19 @@ SCENARIO("sim hash is reproducible run-to-run (two engines, one process)",
 
     cairns::Engine a;
     BootGolden(a);
-    const std::vector<uint64_t> seq_a = Sequence(a, kFrames);
+    const Seq seq_a = Sequence(a, kFrames);
 
     cairns::Engine b;
     BootGolden(b);
-    const std::vector<uint64_t> seq_b = Sequence(b, kFrames);
+    const Seq seq_b = Sequence(b, kFrames);
 
     REQUIRE(seq_a.size() == static_cast<size_t>(kFrames));
-    REQUIRE(seq_a == seq_b);
-    // Non-trivial: the digest is real (nonzero) and tracks the sim clock
+    REQUIRE(seq_a == seq_b);  // both SIM and RENDER digests, frame by frame
+    // Non-trivial: the SIM digest is real (nonzero) and tracks the sim clock
     // (advances across frames) -- proves it isn't a constant the equality
     // above would pass vacuously.
-    REQUIRE(seq_a.front() != 0);
-    REQUIRE(seq_a.front() != seq_a.back());
+    REQUIRE(seq_a.front().first != 0);
+    REQUIRE(seq_a.front().first != seq_a.back().first);
 }
 
 // (2) Reproducibility with a real GLB scene loaded through the block-backed
@@ -106,15 +111,18 @@ SCENARIO("sim hash is reproducible with a loaded scene (two engines)",
     cairns::Engine a;
     BootGolden(a);
     cairns::golden::DriveJs(a, kScene);
-    const std::vector<uint64_t> seq_a = Sequence(a, kFrames);
+    const Seq seq_a = Sequence(a, kFrames);
 
     cairns::Engine b;
     BootGolden(b);
     cairns::golden::DriveJs(b, kScene);
-    const std::vector<uint64_t> seq_b = Sequence(b, kFrames);
+    const Seq seq_b = Sequence(b, kFrames);
 
     REQUIRE(seq_a == seq_b);
-    REQUIRE(seq_a.front() != 0);
+    REQUIRE(seq_a.front().first != 0);
+    // The scene has draws => the RENDER digest is exercised (not the empty-scene
+    // globals-only path).
+    REQUIRE(seq_a.front().second != 0);
 }
 
 // (3) Discrimination: same prefab, different instantiate X => different draw
@@ -143,12 +151,12 @@ SCENARIO("sim hash discriminates a scene perturbation",
     cairns::Engine a;
     BootGolden(a);
     cairns::golden::DriveJs(a, kSceneA);
-    const std::vector<uint64_t> seq_a = Sequence(a, 16);
+    const Seq seq_a = Sequence(a, 16);
 
     cairns::Engine b;
     BootGolden(b);
     cairns::golden::DriveJs(b, kSceneB);
-    const std::vector<uint64_t> seq_b = Sequence(b, 16);
+    const Seq seq_b = Sequence(b, 16);
 
     REQUIRE(seq_a != seq_b);
 }
