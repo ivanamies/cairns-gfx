@@ -33,9 +33,11 @@ public:
     AgentStdinDrain(const AgentStdinDrain&) = delete;
     AgentStdinDrain& operator=(const AgentStdinDrain&) = delete;
 
-    // No-op if CAIRNS_AGENT_STDIN env var is unset; in that case Enabled()
-    // returns false and Drain() is a fast no-op.
-    void Start();
+    // Shell-side caller decides whether to enable (sdl-min reads
+    // CAIRNS_AGENT_STDIN; the agent transport is shell policy, not engine
+    // policy). When |enabled| is false, Enabled() returns false and Drain()
+    // is a fast no-op.
+    void Start(bool enabled);
     void Stop();
 
     bool Enabled() const { return enabled_; }

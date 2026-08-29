@@ -21,6 +21,7 @@
 
 #include "engine.hpp"
 #include "rhi/init_config.hpp"
+#include "shell/env_config.hpp"
 #include "shell/sdl_rhi_glue.hpp"
 #include "util/task_guard.hpp"
 
@@ -113,7 +114,9 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     void* shell_handle = cairns::shell::AttachWindow(window, rhi_cfg);
 
     engine = new cairns::Engine;
-    if (!engine->GreaterInit(rhi_cfg)) {
+    const cairns::EngineConfig ecfg =
+        cairns::shell::LoadEngineConfigFromEnv();
+    if (!engine->GreaterInit(rhi_cfg, ecfg)) {
         return SDL_Fail();
     }
 
@@ -137,7 +140,7 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     cairns::control::RegisterRenderOps(registry, engine);
     cairns::control::RegisterSceneOps(registry, engine);
     cairns::control::RegisterSelectionOps(registry, engine);
-    app_ctx->agent_drain.Start();
+    app_ctx->agent_drain.Start(cairns::shell::AgentStdinEnabledFromEnv());
     if (app_ctx->agent_drain.Enabled()) {
         std::fprintf(stderr,
                      "[Agent] stdin transport on -- send NDJSON to drive "

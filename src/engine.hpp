@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <string_view>
 #include <filesystem>
+#include <optional>
 #include <thread>
 #include <chrono>
 #include <fstream>
@@ -67,6 +68,40 @@ inline static constexpr uint32_t kMockTranslucency = 0;
 inline static constexpr uint32_t kMockViewport = 0;
 inline static constexpr uint32_t kMockViewportLayer = 0;
 inline static constexpr uint32_t kMockFullscreenLayer = 0;
+
+// Engine-level startup options. The shell (sdl-min / cairns_serve) lowers
+// CAIRNS_* env knobs into this struct at startup so the engine never reads
+// std::getenv directly. Empty / default-constructed values mean "use the
+// engine's built-in default" so partial population is safe.
+struct EngineConfig {
+    // CAIRNS_DUMP: when non-empty, FixedClock + one-shot dump on
+    // kGoldenDumpFrame to this path, then exit(0). Drives byte-gates.
+    std::filesystem::path dump_path;
+
+    // CAIRNS_TINY_QUAD: tiny-quad parity render path.
+    bool tiny_quad = false;
+
+    // CAIRNS_CAM_POSE: pin every viewport's fly controller to this fixed
+    // (pos, yaw_rad, pitch_rad). Disables live fly input.
+    struct CamPose {
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        float yaw = 0.0f;
+        float pitch = 0.0f;
+    };
+    std::optional<CamPose> cam_pose;
+
+    // CAIRNS_GLB: comma-separated list of glb names / paths. Empty =>
+    // engine default (kDebugGlbs window).
+    std::vector<std::string> glb_overrides;
+
+    // CAIRNS_N: total entity count override. 0 = engine default.
+    int entity_count = 0;
+
+    // CAIRNS_SCALE: per-entity scale override. 0 = engine default.
+    float entity_scale = 0.0f;
+};
 
 class Engine {
 public:
@@ -352,30 +387,24 @@ public:
         return true;
     }
     
-    bool GreaterInit(const rhi::InitConfig& cfg) {
-        // Clock selection: CAIRNS_DUMP => FixedClock (golden); else WallClock.
-        golden_ = (std::getenv("CAIRNS_DUMP") != nullptr);
-        tiny_quad_test_ = (std::getenv("CAIRNS_TINY_QUAD") != nullptr);
+    bool GreaterInit(const rhi::InitConfig& cfg, const EngineConfig& ecfg) {
+        engine_cfg_ = ecfg;
+        // Clock selection: a dump_path => FixedClock (golden); else WallClock.
+        golden_ = !engine_cfg_.dump_path.empty();
+        tiny_quad_test_ = engine_cfg_.tiny_quad;
 
-        // CAIRNS_CAM_POSE=x,y,z,yaw_rad,pitch_rad pins fly_[0] to a fixed
-        // pose so byte-gate dumps are deterministic. The pre-P1 reference
-        // pose -- origin looking down -Z -- is CAIRNS_CAM_POSE=0,0,0,0,0.
-        if (const char* p = std::getenv("CAIRNS_CAM_POSE")) {
-            float v[5] = {0};
-            int n = std::sscanf(p, "%f,%f,%f,%f,%f", &v[0], &v[1], &v[2],
-                                 &v[3], &v[4]);
-            if (n == 5) {
-                // Pin BOTH viewports' controllers to the same pose so the
-                // side-by-side composite is deterministic regardless of
-                // which viewport ends up active. Diverging the second
-                // viewport for a multi-pose byte-gate is the P3 follow-up.
-                for (int vi = 0; vi < kNumViewports; ++vi) {
-                    fly_[vi].position = glm::vec3(v[0], v[1], v[2]);
-                    fly_[vi].yaw = v[3];
-                    fly_[vi].pitch = v[4];
-                }
-                cam_pose_override_ = true;
+        // Pin every viewport's fly controller to the override pose so byte-
+        // gate dumps are deterministic. Pre-P1 reference pose is
+        // (0,0,0,0,0). Diverging viewports for multi-pose byte-gates is the
+        // P3 follow-up.
+        if (engine_cfg_.cam_pose.has_value()) {
+            const EngineConfig::CamPose& p = *engine_cfg_.cam_pose;
+            for (int vi = 0; vi < kNumViewports; ++vi) {
+                fly_[vi].position = glm::vec3(p.x, p.y, p.z);
+                fly_[vi].yaw = p.yaw;
+                fly_[vi].pitch = p.pitch;
             }
+            cam_pose_override_ = true;
         }
         if (golden_) {
             clock_ = std::make_unique<cairns::FixedClock>(cairns::kFixedDt);
@@ -428,30 +457,21 @@ public:
         }
         { // init debug assets
             std::vector<std::filesystem::path> glb_paths;
-            if (const char* env_glb = std::getenv("CAIRNS_GLB")) {
-                std::string spec(env_glb);
-                size_t start = 0;
-                while (start <= spec.size()) {
-                    size_t comma = spec.find(',', start);
-                    std::string tok = spec.substr(
-                        start, comma == std::string::npos ? std::string::npos
-                                                          : comma - start);
-                    if (!tok.empty()) {
-                        std::filesystem::path p(tok);
-                        if (p.is_absolute()) {
-                            glb_paths.push_back(p);
-                        } else {
-                            std::filesystem::path resolved;
-                            if (!cairns::GetStaticResourceFilepath(tok, resolved)) {
-                                return false;
-                            }
-                            glb_paths.push_back(resolved);
+            if (!engine_cfg_.glb_overrides.empty()) {
+                for (const std::string& tok : engine_cfg_.glb_overrides) {
+                    if (tok.empty()) {
+                        continue;
+                    }
+                    std::filesystem::path p(tok);
+                    if (p.is_absolute()) {
+                        glb_paths.push_back(p);
+                    } else {
+                        std::filesystem::path resolved;
+                        if (!cairns::GetStaticResourceFilepath(tok, resolved)) {
+                            return false;
                         }
+                        glb_paths.push_back(resolved);
                     }
-                    if (comma == std::string::npos) {
-                        break;
-                    }
-                    start = comma + 1;
                 }
             } else {
                 // Range invariant is enforced at compile time by a
@@ -471,17 +491,16 @@ public:
 
             const int kHeroSlices = 33;
             const int loaded_heroes = static_cast<int>(glb_paths.size());
-            const int instance_count =
-                std::getenv("CAIRNS_N") ? std::atoi(std::getenv("CAIRNS_N"))
-                                        : loaded_heroes * kHeroSlices;
+            const int instance_count = engine_cfg_.entity_count > 0
+                                            ? engine_cfg_.entity_count
+                                            : loaded_heroes * kHeroSlices;
             const int grid_n = std::max(
                 1, static_cast<int>(std::ceil(std::sqrt(
                        static_cast<float>(instance_count)))));
             const float spacing = 4.0f / static_cast<float>(grid_n);
-            const float scale =
-                std::getenv("CAIRNS_SCALE")
-                    ? static_cast<float>(std::atof(std::getenv("CAIRNS_SCALE")))
-                    : 0.013f / static_cast<float>(grid_n);
+            const float scale = engine_cfg_.entity_scale > 0.0f
+                                    ? engine_cfg_.entity_scale
+                                    : 0.013f / static_cast<float>(grid_n);
             const float start = -spacing * static_cast<float>(grid_n - 1) * 0.5f;
             debugSceneXforms_ = cairns::GenerateDebugGridTransforms(
                 glm::vec3(start, start, -3), grid_n, spacing, spacing, 1.0f, scale,
@@ -912,9 +931,10 @@ public:
         s.pkt.request_dump = false;
         s.pkt.dump_path.clear();
         if (golden_ && !dump_emitted_ && sim_frame_ >= cairns::kGoldenDumpFrame) {
-            const char* dump = std::getenv("CAIRNS_DUMP");
             s.pkt.request_dump = true;
-            s.pkt.dump_path = dump ? dump : "/tmp/cairns_dump.png";
+            s.pkt.dump_path = engine_cfg_.dump_path.empty()
+                                   ? std::filesystem::path("/tmp/cairns_dump.png")
+                                   : engine_cfg_.dump_path;
             dump_emitted_ = true;
             dump_emit_frame_ = frame_;
         }
@@ -1072,7 +1092,7 @@ public:
         // Also drain in surfaceless mode (cairns_serve) so the next
         // io.dumpTexture op sees the rendered pixels rather than reading
         // final_target_ while the render thread is still working on it.
-        if (std::getenv("CAIRNS_DUMP") || !final_target_.IsNull()) {
+        if (golden_ || !final_target_.IsNull()) {
             render_thread_->Drain();
         }
 
@@ -1759,6 +1779,9 @@ private:
     // identical, geometry throughput ~700x smaller. Isolates draw-submission
     // overhead vs geometry-throughput in the forward pass cost.
     bool tiny_quad_test_ = false;
+    // Shell-lowered startup options (env-vars are read shell-side and
+    // populated here). Engine never reads std::getenv.
+    EngineConfig engine_cfg_;
     // cpu frame-time history (wall-clock between draw() calls) for the imgui graph
     static constexpr int kCpuMsHistory = 128;
     float cpu_ms_history_[kCpuMsHistory] = {};

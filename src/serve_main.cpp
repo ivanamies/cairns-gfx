@@ -28,6 +28,7 @@
 #include "control/transport_stdio.hpp"
 #include "engine.hpp"
 #include "rhi/init_config.hpp"
+#include "shell/env_config.hpp"
 
 int main() {
     auto& registry = cairns::control::CommandRegistry::Instance();
@@ -45,7 +46,9 @@ int main() {
     cfg.surfaceless = true;
     cfg.width = 1280;
     cfg.height = 720;
-    const bool engine_ok = engine->GreaterInit(cfg);
+    const cairns::EngineConfig ecfg =
+        cairns::shell::LoadEngineConfigFromEnv();
+    const bool engine_ok = engine->GreaterInit(cfg, ecfg);
     if (!engine_ok) {
         std::fprintf(stderr,
                      "[Engine] surfaceless GreaterInit failed -- lifecycle "

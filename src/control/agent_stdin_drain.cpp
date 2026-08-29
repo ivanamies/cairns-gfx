@@ -1,6 +1,5 @@
 #include "control/agent_stdin_drain.hpp"
 
-#include <cstdlib>
 #include <iostream>
 #include <utility>
 
@@ -11,8 +10,8 @@ namespace cairns::control {
 
 AgentStdinDrain::~AgentStdinDrain() { Stop(); }
 
-void AgentStdinDrain::Start() {
-    if (!std::getenv("CAIRNS_AGENT_STDIN")) {
+void AgentStdinDrain::Start(bool enabled) {
+    if (!enabled) {
         return;
     }
     enabled_ = true;
