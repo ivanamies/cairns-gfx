@@ -126,7 +126,7 @@ bool check_device_extension_support(VkPhysicalDevice device) {
     vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr);
     std::vector<VkExtensionProperties> available(count);
     vkEnumerateDeviceExtensionProperties(device, nullptr, &count, available.data());
-    std::set<std::string> required(kDeviceExtensions.begin(), kDeviceExtensions.end());
+    std::set<std::string> required(kDeviceExtensions.begin(), kDeviceExtensions.end());  // INIT ONLY
     for (const auto& ext : available) {
         required.erase(ext.extensionName);
     }
@@ -296,7 +296,7 @@ bool Device::Init(const InitConfig& cfg) {
         : find_queue_families(plat.physical_, plat.surface_);
 
     {  // logical device + queues
-        std::set<uint32_t> unique = {indices.graphics_compute.value(),
+        std::set<uint32_t> unique = {indices.graphics_compute.value(),  // INIT ONLY
                                      indices.present.value()};
         std::vector<VkDeviceQueueCreateInfo> queue_cis;
         const float priority = 1.0f;

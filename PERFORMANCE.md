@@ -5,6 +5,92 @@ Newest first.
 
 ---
 
+## `dc9b669+` (2026-06-06) — #201 / #202 / #204 / #205 landed + Frames::End -> EndSubmit/Present split (vkQueuePresentKHR hoisted to main)
+
+What changed since `0b51ce3+`:
+- #201 platform `#ifdef`s removed from `engine.hpp` + `main.cpp`. Engine-side
+  surfaceless / dump / clear / resize paths moved into `rhi::Resources` +
+  `rhi::Frames` + `rhi::Device`. SDL/RHI glue split into
+  `src/shell/sdl_rhi_glue_{metal,vulkan}.cpp`.
+- #202 `CAIRNS_*` env vars lowered into `EngineConfig` at the shell
+  boundary (`src/shell/env_config.{hpp,cpp}`). Engine never reads
+  `std::getenv`.
+- #204 / #205 protocol facade `Engine*` -> `Engine&`,
+  `bool* quit_flag` -> `bool&`. Dead null-check throws removed.
+- `Frames::End` split into `EndSubmit` (render-thread-safe) +
+  `Present` (main-thread-only). `vkQueuePresentKHR` on MoltenVK reaches
+  into `CALayer` which is documented main-thread-only -- crashed under
+  Instruments with `CA_ASSERT_MAIN_THREAD_TRANSACTIONS`. Per-slot
+  `PresentPacket` (FrameContext + SwapResolveTarget + `present_ready`
+  bool) on `PerSlot`; render thread stashes after EndSubmit, main
+  thread waits + presents under `present_m_`. Metal `Present` is a
+  no-op (presentDrawable via command buffer is already thread-safe),
+  kept symmetric across backends so future ones (WebGPU on weird
+  Android GL) don't re-learn it.
+
+Workload: `100 GLBs × 33 slices = 3300 entities`, 11220 draws. Release.
+Steady-state medians (last 3 of 4 timer reports per backend; first
+report dropped as warm-up). 1280 × 720 logical (2560 × 1440 HiDPI on
+M2 Max). V-synced at 60 Hz on macOS.
+
+### macOS Metal Release — M2 Max, 1280×720
+
+| Pass                  | avg      | vs `0b51ce3+` |
+|-----------------------|----------|---------------|
+| `frame` (CPU)         |  2.10 ms | -0.91 (build_draws + record split sharper) |
+| `build_draws` (CPU)   |  2.10 ms | -0.25 |
+| `record` (CPU)        |  1.34 ms | -0.15 |
+| `particle_sim` (GPU)  |  0.010 ms| flat |
+| `forward_vp0` (GPU)   |  9.13 ms | -1.51 |
+| `swap` (GPU)          |  0.28 ms | -0.05 |
+| GPU total             | ~9.42 ms | -1.56 |
+
+v-sync cap (16.66 ms = 60 fps). The CPU `frame` slot is no longer the
+sum-of-passes -- the present-on-main split moved the present wait off
+the timed path, so `frame` now reads just the bracket around the slot
+work plus the present wait. The GPU pass numbers (forward_vp0 + swap)
+are the meaningful tracking targets.
+
+### macOS Vulkan Release (MoltenVK) — M2 Max, 1280×720
+
+| Pass                  | avg      | vs `0b51ce3+` |
+|-----------------------|----------|---------------|
+| `frame` (CPU)         |  1.97 ms | -0.97 |
+| `build_draws` (CPU)   |  1.98 ms | -0.31 |
+| `record` (CPU)        |  0.56 ms | -0.09 |
+| `particle_sim` (GPU)  |  0.017 ms| +0.002 |
+| `forward_vp0` (GPU)   | 10.57 ms | +0.49 (variance; range 10.2–11.1 within run) |
+| `swap` (GPU)          |  0.045 ms| +0.005 |
+| GPU total             |~10.63 ms | +0.49 |
+
+v-sync cap. MoltenVK `record` is still ~2.4× cheaper than Metal record
+(0.56 vs 1.34 ms) -- vk's wider command-buffer surface is being
+exercised more aggressively. `forward_vp0` is consistently a hair
+higher on vk than metal at this commit (~10.6 vs ~9.1).
+
+### Android Vulkan Release — Samsung Galaxy S22 (SM-S901U, Adreno 730), 2115×1008
+
+Cold-start single window (the user signalled "fine, record now" after
+one report at ~5 s in, before thermal saturation). Workload here is
+slightly lighter than macOS: 98 of 100 GLBs loaded (the apk's asset
+copy missed 2; same 33-slice grid -> 3234 entities / 10890 draws).
+
+| Pass                  | avg (cold start) | vs `0b51ce3+` thermal-saturated |
+|-----------------------|------------------|---------------------------------|
+| `frame` (CPU)         | 144.11 ms        | +136 (driving GPU @ 7 fps) |
+| `build_draws` (CPU)   |   8.11 ms        | +0.15 |
+| `record` (CPU)        |  11.01 ms        | +1.95 |
+| `particle_sim` (GPU)  |   0     ms       | compute disabled on this run |
+| `forward_vp0` (GPU)   |  99.42 ms        | -30.6 (cold start; previous figure was sustained-thermal ~130) |
+| `swap` (GPU)          |   0.77 ms        | +0.04 |
+
+Single-report sample only -- the thermal ramp to ~130 ms forward GPU
+that the previous entry recorded isn't visible here because the run
+was cut short. The cold-start 99 ms forward is consistent with the
+previous note ("ramps from cold 97 ms to sustained ~130 ms").
+
+---
+
 ## `0b51ce3+` (2026-06-06) — P0–P4 cameras+viewports+selection landed, rhi composition refactor, kNumViewports=1
 
 P0–P4 of the Resizing & Cameras plan all landed (`#188`–`#192`), plus
