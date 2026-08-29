@@ -269,6 +269,36 @@ if (NOT ANDROID AND NOT IOS AND NOT EMSCRIPTEN)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/serve_main.cpp"
     )
     target_link_libraries(cairns_serve PRIVATE cairns_core cairns_control)
+
+    # Shaders + a small smoke-test GLB copied next to the cairns_serve binary
+    # so the engine's SDL_GetBasePath()-based asset lookup resolves. The
+    # sdl-min path puts them inside the .app bundle's Resources/ dir, but
+    # cairns_serve is unbundled and SDL_GetBasePath returns the binary's dir.
+    set(_cairns_serve_assets
+        "unlit.vert.spv" "unlit.frag.spv"
+        "particle.vert.spv" "particle.frag.spv" "particle.comp.spv"
+        "imgui.vert.spv" "imgui.frag.spv"
+        "composite_pip.vert.spv" "composite_pip.frag.spv"
+        "depthviz.frag.spv"
+    )
+    if (APPLE)
+        # Metal needs the .metal source files (compile_metal_library reads
+        # them via fopen at runtime). Glob to catch all of them.
+        file(GLOB _cairns_serve_metal_files
+            RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/*.metal")
+        list(APPEND _cairns_serve_assets ${_cairns_serve_metal_files})
+    endif()
+    foreach(_asset ${_cairns_serve_assets})
+        if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/${_asset}")
+            add_custom_command(POST_BUILD
+                TARGET cairns_serve
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${CMAKE_CURRENT_SOURCE_DIR}/assets/${_asset}"
+                    "${CMAKE_BINARY_DIR}/$<CONFIGURATION>/${_asset}"
+            )
+        endif()
+    endforeach()
 endif()
 
 # Also link cairns_control into the SDL app so ImGui-routed registry dispatch

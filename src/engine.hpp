@@ -380,6 +380,15 @@ public:
             }
             world_proxies_.resize(2);  // secondary_world_ uses slot 1
         }
+        // P1B: in surfaceless mode, stop here. InitTargets reads
+        // swapchain_.Width()/Height() (uninit -> kInvalidSize) and
+        // InitRenderPassDescriptor reads swapchain_.GetDrawable()->texture()
+        // (null in headless). Both need P1C's final_target_ retarget to work
+        // without a real swapchain. For now the headless engine comes up far
+        // enough for lifecycle ops + a future render.frame op once P1C lands.
+        if (cfg.surfaceless) {
+            return true;
+        }
         if ( !initRenderPipeline() ) {
             CAIRNS_PRINT("GreaterInit: initRenderPipeline failed\n");
             return false;
