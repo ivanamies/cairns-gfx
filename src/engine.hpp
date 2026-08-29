@@ -86,7 +86,7 @@ public:
     // the render thread reads slot ~S. Capacity grows on demand; .clear()/
     // .resize() preserve buffers across frame reuse. pending_globals etc. are
     // staged by Build and consumed by EncodeDraws.
-    static constexpr int kNumViewportsPerSlot = 2;
+    static constexpr int kNumViewportsPerSlot = 1;
     struct PerSlot {
         cairns::RenderProxyArrays proxies;
         std::vector<cairns::Draw> drawList;
@@ -1888,7 +1888,7 @@ private:
     // cam_pose_override_ pins both controllers to a fixed (pos, yaw, pitch)
     // from CAIRNS_CAM_POSE so byte-gate dumps are deterministic regardless of
     // any keyboard/mouse input on this run.
-    static constexpr int kNumViewports = 2;
+    static constexpr int kNumViewports = 1;
     std::array<cairns::Viewport, kNumViewports> viewports_{};
     std::array<cairns::FlyController, kNumViewports> fly_{};
     int active_viewport_ = 0;

@@ -5,6 +5,78 @@ Newest first.
 
 ---
 
+## `0b51ce3+` (2026-06-06) — P0–P4 cameras+viewports+selection landed, rhi composition refactor, kNumViewports=1
+
+P0–P4 of the Resizing & Cameras plan all landed (`#188`–`#192`), plus
+the rhi composition-not-ifdef refactor across Pipelines/Device/Frames/
+Resources/Allocator/CommandRecorder/SwapResolveTarget/InitConfig/
+resource_manager. P2's two-viewport composite is now gated behind
+`kNumViewports = 1` -- rendering the same world twice from two cameras
+is wasteful for the default workload; multi-viewport returns when
+multi-world content (#195) gives the second viewport something
+different to render. The per-viewport plumbing (per-viewport globals,
+per-viewport draw lists, split `forward_vp<i>` passes, half-width
+composite) all stayed; only the count flipped from 2 to 1.
+
+Workload: `100 GLBs × 33 slices = 3300 entities`, 11517 draws. Release.
+Steady-state medians (last 3 of 9–10 timer reports, warmup window dropped).
+1280×720 (2560×1440 HiDPI).
+
+### macOS Metal Release — M2 Max, 1280×720
+| Pass                  | avg      | vs `757f552` |
+|-----------------------|----------|--------------|
+| `frame` (CPU)         |  3.01 ms | +0.19 |
+| `build_draws` (CPU)   |  2.35 ms | +0.14 |
+| `record` (CPU)        |  1.49 ms | +0.04 |
+| `particle_sim` (GPU)  |  0.011 ms | flat |
+| `forward_vp0` (GPU)   | 10.64 ms | +1.54 (vs 9.10) |
+| `swap` (GPU)          |  0.33 ms | -0.12 |
+| GPU total             | ~10.98 ms | +1.43 |
+
+### macOS Vulkan Release (MoltenVK) — M2 Max, 1280×720
+| Pass                  | avg      | vs `757f552` |
+|-----------------------|----------|--------------|
+| `frame` (CPU)         |  2.94 ms | n/a (P2 forward split visible) |
+| `build_draws` (CPU)   |  2.29 ms | n/a |
+| `record` (CPU)        |  0.65 ms | -0.17 |
+| `particle_sim` (GPU)  |  0.015 ms | flat |
+| `forward_vp0` (GPU)   | 10.08 ms | +1.0 |
+| `swap` (GPU)          |  0.04 ms | -0.06 |
+| GPU total             | ~10.14 ms | +0.94 |
+
+### Android Vulkan Release — Samsung Galaxy S22 (SM-S901U, Adreno)
+**Crashes at `Engine::GreaterInit+1244` -- SIGSEGV null-pointer deref in
+strlen.** Built clean via `third_party/SDL/android-project/gradlew
+assembleRelease`, installed cleanly to the connected device. APK
+bundles all 100 GLBs in `assets/`. Crash is on the SDLThread during
+engine init; backtrace lines up with the asset-loading loop or the
+swap-pass-target plumbing. Last-known-good Android perf is `f87198d`
+on S22 Vulkan; lots of churn since (P0–P4, SwapResolveTarget refactor,
+rhi composition refactor, viewport count flip). Not investigated this
+session.
+
+### iOS Release — iPhone 15
+Not measured this commit. Needs device deploy; the iOS Xcode target
+builds clean (`build/ios/`) but the run is a separate step.
+
+### Reading the numbers
+- macOS GPU forward got slightly heavier (+1 to +1.5 ms vs the
+  `757f552` single-viewport baseline). Cause is structural: the
+  per-viewport forward pass now writes to an offscreen at
+  fb_w/kNumViewports × fb_h (with kNumViewports = 1 that's the full
+  swap-target dimensions, so no shrinkage benefit). The composite is
+  doing one fullscreen `DrawFullscreen` instead of going straight to
+  the swapchain, which is the small but real cost.
+- Vk `record` got CHEAPER (-0.17 ms) despite the indirection -- the
+  vk offscreen framebuffer cache pays off on the second-and-later
+  frames. The framebuffer cache is exactly what P3's
+  `OffscreenTargetCache::FlushFramebuffers` invalidates on resize.
+- Vk `swap` is ~8× smaller than Metal's (0.04 vs 0.33 ms). Same
+  observation as before: metal's swap pass rebuilds its
+  RenderPassDescriptor inline every frame. Low-hanging optimization.
+
+---
+
 ## `757f552` (2026-06-06) — studio surface Day 1 (Unity-shaped scripting via `studio.js`)
 
 Day 1 of the Unity-shaped op surface landed: `RegisterAlias` +
