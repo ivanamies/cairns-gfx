@@ -25,6 +25,7 @@ struct ResourceManager::Impl {
     Pool<BindGroup> bind_groups;
     Pool<DynamicBuffers> dynamic_buffers;
     Pool<Shader> shaders;
+    Pool<Kernel> kernels;
 
     uint32_t frame_index = 1;
 };
@@ -347,6 +348,18 @@ void ResourceManager::Destroy(Handle<Shader> h) {
     impl_->shaders.Release(h);
 }
 
+void ResourceManager::Destroy(Handle<Kernel> h) {
+    Kernel::Hot* hot = impl_->kernels.GetHot(h);
+    if (!hot) {
+        return;
+    }
+    if (hot->api_pso) {
+        hot->api_pso->release();
+        hot->api_pso = nullptr;
+    }
+    impl_->kernels.Release(h);
+}
+
 Buffer::Hot* ResourceManager::GetHot(Handle<Buffer> h) {
     return impl_->buffers.GetHot(h);
 }
@@ -371,6 +384,10 @@ Shader::Hot* ResourceManager::GetHot(Handle<Shader> h) {
     return impl_->shaders.GetHot(h);
 }
 
+Kernel::Hot* ResourceManager::GetHot(Handle<Kernel> h) {
+    return impl_->kernels.GetHot(h);
+}
+
 Handle<Shader> ResourceManager::CreateShader(const ShaderDesc& d) {
     if (!d.api_pso) {
         return Handle<Shader>::Null;
@@ -379,6 +396,18 @@ Handle<Shader> ResourceManager::CreateShader(const ShaderDesc& d) {
     Shader::Hot* hot = impl_->shaders.GetHot(h);
     hot->api_pso = d.api_pso;
     Shader::Cold* cold = impl_->shaders.GetCold(h);
+    cold->debug_name = d.debug_name;
+    return h;
+}
+
+Handle<Kernel> ResourceManager::CreateKernel(const KernelDesc& d) {
+    if (!d.api_pso) {
+        return Handle<Kernel>::Null;
+    }
+    Handle<Kernel> h = impl_->kernels.Acquire();
+    Kernel::Hot* hot = impl_->kernels.GetHot(h);
+    hot->api_pso = d.api_pso;
+    Kernel::Cold* cold = impl_->kernels.GetCold(h);
     cold->debug_name = d.debug_name;
     return h;
 }

@@ -325,10 +325,13 @@ public:
         if ( !initRenderPipeline() ) {
             return false;
         }
-        
+        if ( !initParticles() ) {
+            return false;
+        }
+
         return true;
     }
-    
+
     // tagiamies
     DynBufId getDynamicBuffers() {
         return dynBufs_.Acquire();
@@ -579,18 +582,47 @@ public:
             dispatch_semaphore_signal(frameSemaphore);
         });
         
+        const uint64_t now_ticks = SDL_GetTicks();
+        float delta_time = 0.016f;
+#if !defined(CAIRNS_FREEZE_ROT) || !CAIRNS_FREEZE_ROT
+        if (last_ticks_ > 0) {
+            delta_time = static_cast<float>(now_ticks - last_ticks_) / 1000.0f;
+        }
+#endif
+        last_ticks_ = now_ticks;
+
         cairns::Timer timer0("timer 0", 0);
-        
+
         if ( !BuildMeshOpaqueDraws()) {
             return false;
         }
-        
+
         { // sort materials next to each other
             std::sort(drawListSorted_.begin(),drawListSorted_.end());
         }
-        
+
         timer0.End();
-        
+
+        uint32_t out_off = 0;
+        MTL::Buffer* out_buf = rm_.GetMtlBuffer(particle_ssbo_[1 - particle_parity_], &out_off);
+
+        {
+            MTL::ComputeCommandEncoder* cenc = cmdBuf->computeCommandEncoder();
+            cenc->setComputePipelineState(rm_.GetHot(particle_kernel_)->api_pso);
+            float* dt_ptr = static_cast<float*>(
+                rm_.BumpAllocate(sizeof(float), sizeof(float), rhi::Memory::kDynamic));
+            *dt_ptr = delta_time;
+            MTL::Buffer* dyn_master = rm_.GetBumpMasterBuffer(rhi::Memory::kDynamic);
+            cenc->setBuffer(dyn_master, rm_.BumpOffset(dt_ptr), 0);
+            uint32_t in_off = 0;
+            MTL::Buffer* in_buf = rm_.GetMtlBuffer(particle_ssbo_[particle_parity_], &in_off);
+            cenc->setBuffer(in_buf, in_off, 1);
+            cenc->setBuffer(out_buf, out_off, 2);
+            cenc->dispatchThreadgroups(MTL::Size{kParticleCount / 256, 1, 1},
+                                       MTL::Size{256, 1, 1});
+            cenc->endEncoding();
+        }
+
         cairns::Timer timer1("timer 1", 1);
         MTL::RenderCommandEncoder* encoder = nullptr;
         {
@@ -685,6 +717,12 @@ public:
             printf("draws %d triangles %d\n",(int)drawListSorted_.size(),triangles);
         }
 
+        {
+            encoder->setRenderPipelineState(rm_.GetHot(particle_render_pso_)->api_pso);
+            encoder->setVertexBuffer(out_buf, out_off, 0);
+            encoder->drawPrimitives(MTL::PrimitiveTypePoint, NS::UInteger(0), NS::UInteger(kParticleCount));
+        }
+
         encoder->endEncoding();
         timer1.End();
 
@@ -717,13 +755,16 @@ public:
             printf("viewport dumped -> %s\n", dumpPath_.string().c_str());
             readback->release();
             dumpPath_.clear();
+            particle_parity_ ^= 1;
             return true;
         }
+
+        particle_parity_ ^= 1;
 
         // 5. Present and Commit
         cmdBuf->presentDrawable(swapChain_->GetDrawable());
         cmdBuf->commit();
-        
+
         return true;
     }
     
@@ -876,14 +917,117 @@ public:
         return true;
     }
     
+    bool initParticles() {
+#if CAIRNS_APPLE
+        auto basePathPtr = SDL_GetBasePath();
+        if (!basePathPtr) {
+            return false;
+        }
+        const std::filesystem::path basePath = basePathPtr;
+#else
+        const std::filesystem::path basePath = "";
+#endif
+        MTL::Library* lib = compileMetalShader(device_, (basePath / "particle.metal").string().c_str());
+        if (!lib) {
+            return false;
+        }
+
+        {
+            MTL::Function* fn = lib->newFunction(NS::String::string("particle_compute", NS::ASCIIStringEncoding));
+            if (!fn) {
+                lib->release();
+                return false;
+            }
+            NS::Error* err = nullptr;
+            MTL::ComputePipelineState* cps = device_->newComputePipelineState(fn, &err);
+            fn->release();
+            if (!cps) {
+                lib->release();
+                return false;
+            }
+            particle_kernel_ = rm_.CreateKernel({.api_pso = cps, .debug_name = "particle_compute"});
+        }
+
+        {
+            MTL::Function* vfn = lib->newFunction(NS::String::string("particle_vertex", NS::ASCIIStringEncoding));
+            MTL::Function* ffn = lib->newFunction(NS::String::string("particle_fragment", NS::ASCIIStringEncoding));
+            if (!vfn || !ffn) {
+                lib->release();
+                return false;
+            }
+            MTL::RenderPipelineDescriptor* rpd = MTL::RenderPipelineDescriptor::alloc()->init();
+            rpd->setVertexFunction(vfn);
+            rpd->setFragmentFunction(ffn);
+            const MTL::PixelFormat pf = static_cast<MTL::PixelFormat>(swapChain_->GetPixelFormat());
+            rpd->colorAttachments()->object(0)->setPixelFormat(pf);
+            rpd->colorAttachments()->object(0)->setBlendingEnabled(true);
+            rpd->colorAttachments()->object(0)->setSourceRGBBlendFactor(MTL::BlendFactorSourceAlpha);
+            rpd->colorAttachments()->object(0)->setDestinationRGBBlendFactor(MTL::BlendFactorOneMinusSourceAlpha);
+            rpd->colorAttachments()->object(0)->setSourceAlphaBlendFactor(MTL::BlendFactorOne);
+            rpd->colorAttachments()->object(0)->setDestinationAlphaBlendFactor(MTL::BlendFactorZero);
+            rpd->setSampleCount(sampleCount);
+            rpd->setDepthAttachmentPixelFormat(MTL::PixelFormatDepth32Float);
+            rpd->setInputPrimitiveTopology(MTL::PrimitiveTopologyClassPoint);
+            NS::Error* err = nullptr;
+            MTL::RenderPipelineState* rps = device_->newRenderPipelineState(rpd, &err);
+            rpd->release();
+            vfn->release();
+            ffn->release();
+            if (!rps) {
+                lib->release();
+                return false;
+            }
+            particle_render_pso_ = rm_.CreateShader({.api_pso = rps, .debug_name = "particle_render"});
+        }
+
+        lib->release();
+
+        struct Particle {
+            float position[2];
+            float velocity[2];
+            float color[4];
+        };
+        std::vector<Particle> particles(kParticleCount);
+        for (uint32_t i = 0; i < kParticleCount; ++i) {
+            const float r = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+            const float theta = r * 2.0f * static_cast<float>(std::numbers::pi);
+            const float radius = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+            particles[i].position[0] = radius * std::cos(theta);
+            particles[i].position[1] = radius * std::sin(theta);
+            const float vx = (static_cast<float>(rand()) / static_cast<float>(RAND_MAX) - 0.5f) * 0.5f;
+            const float vy = (static_cast<float>(rand()) / static_cast<float>(RAND_MAX) - 0.5f) * 0.5f;
+            particles[i].velocity[0] = vx;
+            particles[i].velocity[1] = vy;
+            const float t = static_cast<float>(i) / static_cast<float>(kParticleCount);
+            particles[i].color[0] = t;
+            particles[i].color[1] = 1.0f - t;
+            particles[i].color[2] = 0.5f;
+            particles[i].color[3] = 1.0f;
+        }
+
+        const rhi::Span<const uint8_t> init_data(
+            reinterpret_cast<const uint8_t*>(particles.data()),
+            particles.size() * sizeof(Particle));
+        rhi::BufferDesc bd;
+        bd.byte_size = static_cast<uint32_t>(particles.size() * sizeof(Particle));
+        bd.usage = rhi::kUsageStorage | rhi::kUsageVertex;
+        bd.memory = rhi::Memory::kDefault;
+        bd.initial_data = init_data;
+        particle_ssbo_[0] = rm_.CreateBuffer(bd);
+        bd.initial_data = init_data;
+        particle_ssbo_[1] = rm_.CreateBuffer(bd);
+
+        return !particle_ssbo_[0].IsNull() && !particle_ssbo_[1].IsNull();
+    }
+
     bool deinit() {
         // Metal Cleanup
         // Note: metal-cpp objects are wrappers. If we used NS::SharedPtr we could just let them destruct.
         // Since we have raw pointers from create/new, we should release them.
         if (metalCommandQueue) metalCommandQueue->release();
-        
+
         swapChain_->Deinit();
-        
+
         return true;
     }
     
@@ -934,6 +1078,13 @@ private:
     // shaders
     ShaderHandle unlit_ = ShaderHandle::Null;
     MTL::DepthStencilState* depthStencilState = nullptr;
+    // particles
+    static constexpr uint32_t kParticleCount = 512;
+    rhi::Handle<rhi::Kernel> particle_kernel_;
+    rhi::Handle<rhi::Shader> particle_render_pso_;
+    rhi::Handle<rhi::Buffer> particle_ssbo_[2];
+    uint32_t particle_parity_ = 0;
+    uint64_t last_ticks_ = 0;
     // render pass
     static constexpr size_t sampleCount = 4;
     TexHandle msaaHandle_ = TexHandle::Null;

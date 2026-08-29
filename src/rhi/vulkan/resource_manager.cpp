@@ -24,6 +24,7 @@ struct ResourceManager::Impl {
     Pool<Sampler> samplers;
     Pool<BindGroup> bind_groups;
     Pool<DynamicBuffers> dynamic_buffers;
+    Pool<Kernel> kernels;
 
     uint32_t frame_index = 0;
     uint32_t uniform_align = 256;
@@ -555,6 +556,18 @@ void ResourceManager::Destroy(Handle<BindGroup> h) {
 
 void ResourceManager::Destroy(Handle<DynamicBuffers> h) {
     impl_->dynamic_buffers.Release(h);
+}
+
+Handle<Kernel> ResourceManager::CreateKernel(const KernelDesc&) {
+    return Handle<Kernel>::Null;
+}
+
+void ResourceManager::Destroy(Handle<Kernel> h) {
+    impl_->kernels.Release(h);
+}
+
+Kernel::Hot* ResourceManager::GetHot(Handle<Kernel> h) {
+    return impl_->kernels.GetHot(h);
 }
 
 Buffer::Hot* ResourceManager::GetHot(Handle<Buffer> h) {

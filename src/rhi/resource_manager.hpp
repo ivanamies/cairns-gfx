@@ -37,6 +37,7 @@ class Heap;
 class Texture;
 class SamplerState;
 class RenderPipelineState;
+class ComputePipelineState;
 }  // namespace MTL
 #endif  // CAIRNS_METAL
 
@@ -47,11 +48,13 @@ using ApiTextureHandle = MTL::Texture*;
 using ApiSamplerHandle = MTL::SamplerState*;
 using ApiPsoHandle = MTL::RenderPipelineState*;
 using ApiArgBufferHandle = MTL::Buffer*;
+using ApiKernelHandle = MTL::ComputePipelineState*;
 #else
 using ApiTextureHandle = void*;
 using ApiSamplerHandle = void*;
 using ApiPsoHandle = void*;
 using ApiArgBufferHandle = void*;
+using ApiKernelHandle = void*;
 #endif
 
 class ResourceManager;
@@ -61,6 +64,7 @@ struct Sampler;
 struct BindGroup;
 struct DynamicBuffers;
 struct Shader;
+struct Kernel;
 
 template <typename T>
 struct Handle {
@@ -397,6 +401,20 @@ struct ShaderDesc {
     const char* debug_name = nullptr;
 };
 
+struct Kernel {
+    struct Hot {
+        ApiKernelHandle api_pso = nullptr;  // MTLComputePipelineState
+    };
+    struct Cold {
+        const char* debug_name = nullptr;
+    };
+};
+
+struct KernelDesc {
+    ApiKernelHandle api_pso = nullptr;  // engine-compiled; rhi takes ownership
+    const char* debug_name = nullptr;
+};
+
 #if CAIRNS_VULKAN
 struct BackendInitParams {
     VkInstance instance = VK_NULL_HANDLE;
@@ -437,6 +455,7 @@ public:
     Handle<BindGroup> CreateBindGroup(const BindGroupDesc& desc);
     Handle<DynamicBuffers> CreateDynamicBuffers(const DynamicBuffersDesc& desc);
     Handle<Shader> CreateShader(const ShaderDesc& desc);
+    Handle<Kernel> CreateKernel(const KernelDesc& desc);
 
     void Destroy(Handle<Buffer> h);
     void Destroy(Handle<Texture> h);
@@ -444,6 +463,7 @@ public:
     void Destroy(Handle<BindGroup> h);
     void Destroy(Handle<DynamicBuffers> h);
     void Destroy(Handle<Shader> h);
+    void Destroy(Handle<Kernel> h);
 
     Buffer::Hot* GetHot(Handle<Buffer> h);
     Texture::Hot* GetHot(Handle<Texture> h);
@@ -451,6 +471,7 @@ public:
     BindGroup::Hot* GetHot(Handle<BindGroup> h);
     DynamicBuffers::Hot* GetHot(Handle<DynamicBuffers> h);
     Shader::Hot* GetHot(Handle<Shader> h);
+    Kernel::Hot* GetHot(Handle<Kernel> h);
 
     // Per-frame bump ring (transient data). Returns a CPU-writable pointer that
     // maps directly into the bump ring's master platform buffer.
