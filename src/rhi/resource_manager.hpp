@@ -462,7 +462,7 @@ struct BindlessRegistryDesc {
 // visible vs FIF=2. PerSlot + descriptor sets + sync vectors scale
 // linearly; cpu_arena.hpp's FrameArena ring kMaxFrames=4 still covers
 // us. See PERFORMANCE.md triple-buffer ledger for the bill.
-inline constexpr uint32_t kFramesInFlight = 3;
+inline constexpr uint32_t kFramesInFlight = 2;
 inline constexpr uint32_t kHeapBlockBytes = 128u * 1024u * 1024u;
 inline constexpr uint32_t kLargeThreshold = 64u * 1024u * 1024u;
 

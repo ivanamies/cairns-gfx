@@ -1900,8 +1900,13 @@ public:
         // MB) drops into the dedicated-block path in
         // MemoryAllocator::AllocBuffer, so we land in our own VkDeviceMemory.
         {
+#ifdef __ANDROID__
+            static constexpr uint32_t kSkinOutputBytes =
+                256u * 1024u * 1024u;
+#else
             static constexpr uint32_t kSkinOutputBytes =
                 1024u * 1024u * 1024u;
+#endif
             rhi::BufferDesc bd{};
             bd.byte_size = kSkinOutputBytes;
             bd.usage = rhi::kUsageStorage | rhi::kUsageVertex;
@@ -3906,7 +3911,12 @@ public:
         }
         cairns::PoolSlice slice = skin_output_pool_.Alloc(vert_count);
         if (!slice.IsValid()) {
-            return fail("skin_output_pool_.Alloc exhausted");
+            CAIRNS_PRINT_ERR(
+                "[FATAL] skin_output_pool_ exhausted at 256 MB cap "
+                "(Adreno maxStorageBufferRange floor). vert_count=%u. "
+                "Reduce hero count or bake skin output offline.\n",
+                vert_count);
+            std::abort();
         }
         cairns::SkinId sid = skins_.Acquire();
         cairns::Prefab::Hot* scene_hot = prefabs_.GetHot(scene_id);
