@@ -7,6 +7,8 @@
 #include "rhi/resources.hpp"
 #include "rhi/allocator.hpp"
 
+#include <webgpu/webgpu.h>
+
 namespace cairns::rhi {
 
 void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDispatch& d) {
@@ -26,7 +28,30 @@ void CommandRecorder::DispatchAnimEval(Resources& res, Allocator& alloc, Handle<
 void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& target,
                                       const RenderPassDesc& desc,
                                       std::span<const ResourceBarrier> invalidate) {
-    (void)res; (void)target; (void)desc; (void)invalidate;
+    (void)invalidate;
+    if (plat.enc_) { wgpuRenderPassEncoderEnd(plat.enc_); plat.enc_ = nullptr; }
+    if (!plat.cmd_) { return; }
+    WGPUTextureView view = nullptr;
+    if (!desc.color.empty() && !desc.color[0].target.IsNull()) {
+        Texture::Hot* hot = res.GetHot(desc.color[0].target);
+        if (hot) { view = static_cast<WGPUTextureView>(hot->api_view); }
+    }
+    if (!view) { view = static_cast<WGPUTextureView>(target.plat.view); }
+    if (!view) { return; }
+    WGPURenderPassColorAttachment ca = {};
+    ca.view = view;
+    ca.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+    ca.loadOp = (!desc.color.empty() && desc.color[0].load == LoadOp::kLoad)
+                    ? WGPULoadOp_Load : WGPULoadOp_Clear;
+    ca.storeOp = WGPUStoreOp_Store;
+    if (!desc.color.empty()) {
+        ca.clearValue = {desc.color[0].clear[0], desc.color[0].clear[1],
+                         desc.color[0].clear[2], desc.color[0].clear[3]};
+    }
+    WGPURenderPassDescriptor rp = {};
+    rp.colorAttachmentCount = 1;
+    rp.colorAttachments = &ca;
+    plat.enc_ = wgpuCommandEncoderBeginRenderPass(plat.cmd_, &rp);
 }
 void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list) {
     (void)res; (void)alloc; (void)list;
@@ -48,6 +73,7 @@ void CommandRecorder::PassTimerBegin(const char* name, bool is_compute) { (void)
 void CommandRecorder::PassTimerEnd() {}
 void CommandRecorder::EndRenderPass(Resources& res, std::span<const Handle<Texture>> flush) {
     (void)res; (void)flush;
+    if (plat.enc_) { wgpuRenderPassEncoderEnd(plat.enc_); plat.enc_ = nullptr; }
 }
 
 }  // namespace cairns::rhi

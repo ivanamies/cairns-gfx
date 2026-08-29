@@ -11,6 +11,9 @@
 #include "rhi/offscreen_targets.hpp"
 #include "rhi/frame_capture.hpp"
 
+#include <webgpu/webgpu.h>
+#include <webgpu/wgpu.h>
+
 namespace cairns::rhi {
 
 Frames::~Frames() {}
@@ -31,15 +34,28 @@ bool Frames::InitTargets(Resources& resources, Allocator& alloc, uint32_t width,
 
 FrameContext Frames::Begin(Resources& resources, Allocator& alloc, GpuProfiler& gpu_profiler,
                            OffscreenTargets& offscreen_targets, const SwapResolveTarget& target) {
-    (void)resources; (void)alloc; (void)gpu_profiler; (void)offscreen_targets; (void)target;
+    (void)gpu_profiler; (void)offscreen_targets; (void)target;
+    resources.AdvanceFrame(alloc);
+    resources.DrainDeferredFrees(alloc, resources.FrameIndex());
     FrameContext fc{};
     fc.cmd.plat.device_ = plat.device_;
     fc.cmd.plat.queue_ = plat.queue_;
+    fc.cmd.plat.cmd_ = wgpuDeviceCreateCommandEncoder(plat.device_, nullptr);
     return fc;
 }
 
 void Frames::EndSubmit(const SwapResolveTarget& target, FrameCapture& frame_capture, FrameContext& fc) {
-    (void)target; (void)frame_capture; (void)fc;
+    (void)target; (void)frame_capture;
+    CommandRecorder& ri = fc.cmd;
+    if (ri.plat.enc_) { wgpuRenderPassEncoderEnd(ri.plat.enc_); ri.plat.enc_ = nullptr; }
+    if (ri.plat.cmd_) {
+        WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(ri.plat.cmd_, nullptr);
+        wgpuQueueSubmit(plat.queue_, 1, &cmd);
+        wgpuCommandBufferRelease(cmd);
+        wgpuCommandEncoderRelease(ri.plat.cmd_);
+        ri.plat.cmd_ = nullptr;
+    }
+    wgpuDevicePoll(plat.device_, /*wait=*/true, nullptr);
 }
 void Frames::Present(const SwapResolveTarget& target, FrameCapture& frame_capture, FrameContext& fc) {
     (void)target; (void)frame_capture; (void)fc;
