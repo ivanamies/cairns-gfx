@@ -785,7 +785,12 @@ public:
                 return false;
             }
         }
-        if (!rhi_.frames.Init(rhi_.device)) {
+        // #222 Phase F.1: profiler owned by Rhi; Frames stashes a pointer.
+        if (!rhi_.gpu_profiler.Init(rhi_.device)) {
+            CAIRNS_PRINT("GreaterInit: gpu_profiler.Init failed\n");
+            return false;
+        }
+        if (!rhi_.frames.Init(rhi_.device, rhi_.gpu_profiler)) {
             CAIRNS_PRINT("GreaterInit: frames.Init failed\n");
             return false;
         }
@@ -3616,6 +3621,9 @@ public:
         swapchain_.Deinit();
         rhi_.pipelines.Deinit(rhi_.resources);
         rhi_.frames.Deinit();
+        // #222 Phase F.1: profiler teardown after frames (frames stops
+        // reading via plat.gpu_profiler_ once it's torn down).
+        rhi_.gpu_profiler.Deinit();
         rhi_.resources.Deinit();
         rhi_.alloc.Deinit();
         rhi_.device.Deinit();

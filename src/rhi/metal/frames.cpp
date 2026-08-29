@@ -72,7 +72,7 @@ void update_render_pass_desc(MTL::RenderPassDescriptor* rpd,
 
 Frames::~Frames() { Deinit(); }
 
-bool Frames::Init(Device& device) {
+bool Frames::Init(Device& device, GpuProfiler& /*gpu_profiler*/) {
     if (inited_) {
         return true;
     }

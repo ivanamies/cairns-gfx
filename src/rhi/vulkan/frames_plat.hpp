@@ -13,6 +13,11 @@
 #include "rhi/command_recorder.hpp"  // OffscreenTargetCache + kMaxPasses + kCompositeRingSize
 
 namespace cairns::rhi {
+class GpuProfiler;
+}  // namespace cairns::rhi
+
+
+namespace cairns::rhi {
 
 struct FramesPlat {
     VkDevice device_ = VK_NULL_HANDLE;          // mirrored from Device
@@ -58,19 +63,10 @@ struct FramesPlat {
     // last-bound-wins fix).
     std::vector<std::array<VkDescriptorSet, kCompositeRingSize>> composite_sets_;
     OffscreenTargetCache offscreen_target_cache_;
-    // #222 Phase F.1: GpuProfiler — all timestamp-query state lives here.
-    // Frames owns it; CommandRecorder reads via plat.profiler_->ts_pool_
-    // etc. (kept as a pointer so the recorder doesn't drag the full struct
-    // header). Metal has no analog -- it uses cmdbuf->GPUStartTime/EndTime.
-    struct GpuProfiler {
-        VkQueryPool ts_pool_ = VK_NULL_HANDLE;
-        float ts_period_ns_ = 0.0f;
-        bool host_query_reset_ = false;
-        PFN_vkResetQueryPool vk_reset_query_pool_ = nullptr;
-        std::vector<std::array<const char*, kMaxPasses>> pass_names_;
-        std::vector<uint32_t> pass_count_;
-        std::vector<uint32_t> compute_pass_count_;
-    } profiler_;
+    // #222 Phase F.1: GpuProfiler state moved out of Frames. The recorder
+    // pointer chain (CommandRecorderPlat::profiler_) is stamped by
+    // Frames::Begin to address into Rhi::gpu_profiler.plat instead.
+    GpuProfiler* gpu_profiler_ = nullptr;
 };
 
 }  // namespace cairns::rhi

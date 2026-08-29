@@ -27,6 +27,7 @@ namespace cairns::rhi {
 class Device;
 class Resources;
 class Allocator;
+class GpuProfiler;
 struct SwapChain;
 
 class Frames {
@@ -36,8 +37,10 @@ public:
     Frames(const Frames&) = delete;
     Frames& operator=(const Frames&) = delete;
 
-    // CALLER: ENGINE.
-    [[nodiscard]] bool Init(Device& device);
+    // CALLER: ENGINE. #222 Phase F.1: profiler owned by Rhi; Frames
+    // stashes a pointer so Begin can stamp it onto the recorder + run
+    // the per-FIF readback against ts_pool_.
+    [[nodiscard]] bool Init(Device& device, GpuProfiler& gpu_profiler);
     // CALLER: ENGINE.
     void Deinit();
 

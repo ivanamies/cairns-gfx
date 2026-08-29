@@ -12,6 +12,7 @@
 
 #include "rhi/frames.hpp"
 #include "rhi/device.hpp"
+#include "rhi/gpu_profiler.hpp"
 #include "rhi/resources.hpp"
 #include "rhi/resource_manager.hpp"  // kFramesInFlight
 #include "rhi/swap_chain.hpp"
@@ -153,7 +154,8 @@ void dump_swapchain_image(VkDevice device, VkPhysicalDevice phys,
 
 Frames::~Frames() { Deinit(); }
 
-bool Frames::Init(Device& device) {
+bool Frames::Init(Device& device, GpuProfiler& gpu_profiler) {
+    plat.gpu_profiler_ = &gpu_profiler;
     if (inited_) {
         return true;
     }
@@ -163,21 +165,8 @@ bool Frames::Init(Device& device) {
     plat.graphics_queue_ = device.plat.graphics_queue_;
     plat.compute_queue_ = device.plat.compute_queue_;
     plat.present_queue_ = device.plat.present_queue_;
-    plat.profiler_.ts_period_ns_ = device.plat.timestamp_period_ns_;
-    plat.profiler_.host_query_reset_ = device.plat.host_query_reset_;
-    plat.profiler_.vk_reset_query_pool_ = device.plat.vk_reset_query_pool_;
-    {
-        VkQueryPoolCreateInfo qpi{};
-        qpi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-        qpi.queryType = VK_QUERY_TYPE_TIMESTAMP;
-        qpi.queryCount = 2 * kMaxPasses * kFramesInFlight;
-        if (vkCreateQueryPool(plat.device_, &qpi, nullptr, &plat.profiler_.ts_pool_) != VK_SUCCESS) {
-            return false;
-        }
-        plat.profiler_.pass_names_.assign(kFramesInFlight, {});
-        plat.profiler_.pass_count_.assign(kFramesInFlight, 0);
-        plat.profiler_.compute_pass_count_.assign(kFramesInFlight, 0);
-    }
+    // #222 Phase F.1: query pool + per-FIF tracker init moved to
+    // GpuProfiler::Init (called from engine before Frames::Init).
 
     {  // per-frame command buffers + sync
         const uint32_t n = kFramesInFlight;
@@ -491,10 +480,7 @@ void Frames::Deinit() {
         vkDestroyDescriptorSetLayout(dev, plat.composite_set_layout_, nullptr);
     }
     plat.offscreen_target_cache_.Deinit();
-    if (plat.profiler_.ts_pool_) {
-        vkDestroyQueryPool(dev, plat.profiler_.ts_pool_, nullptr);
-        plat.profiler_.ts_pool_ = VK_NULL_HANDLE;
-    }
+    // #222 Phase F.1: profiler teardown moved to GpuProfiler::Deinit.
     inited_ = false;
 }
 
@@ -565,20 +551,21 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
 
     // Both queues' slot-`cf` timestamps are now resolved -- read them BEFORE
     // resetting fences / cmd buffers / the query pool itself.
+    GpuProfilerPlat& gp = plat.gpu_profiler_->plat;
     {
-        const uint32_t ncomp = plat.profiler_.compute_pass_count_[cf];
-        const uint32_t ngfx = plat.profiler_.pass_count_[cf];
+        const uint32_t ncomp = gp.compute_pass_count_[cf];
+        const uint32_t ngfx = gp.pass_count_[cf];
         if (ncomp > 0 || ngfx > 0) {
             std::array<uint64_t, 2 * kMaxPasses> ticks{};
-            vkGetQueryPoolResults(dev, plat.profiler_.ts_pool_, 2 * kMaxPasses * cf,
+            vkGetQueryPoolResults(dev, gp.ts_pool_, 2 * kMaxPasses * cf,
                                   2 * kMaxPasses,
                                   ticks.size() * sizeof(uint64_t), ticks.data(),
                                   sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
             auto report = [&](uint32_t pass_idx) {
                 const double ns =
                     (static_cast<double>(ticks[2 * pass_idx + 1] - ticks[2 * pass_idx])) *
-                    static_cast<double>(plat.profiler_.ts_period_ns_);
-                const char* nm = plat.profiler_.pass_names_[cf][pass_idx];
+                    static_cast<double>(gp.ts_period_ns_);
+                const char* nm = gp.pass_names_[cf][pass_idx];
                 if (nm) {
                     TimerStorage::Span(TimerStorage::SlotForPass(nm), nm,
                                        static_cast<uint64_t>(ns / 1000.0));
@@ -591,12 +578,12 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
                 report(kMaxComputePasses + p);
             }
         }
-        plat.profiler_.pass_count_[cf] = 0;
-        plat.profiler_.compute_pass_count_[cf] = 0;
+        gp.pass_count_[cf] = 0;
+        gp.compute_pass_count_[cf] = 0;
     }
-    if (plat.profiler_.host_query_reset_) {
-        plat.profiler_.vk_reset_query_pool_(dev, plat.profiler_.ts_pool_, 2 * kMaxPasses * cf,
-                             2 * kMaxPasses);
+    if (gp.host_query_reset_) {
+        gp.vk_reset_query_pool_(dev, gp.ts_pool_, 2 * kMaxPasses * cf,
+                                 2 * kMaxPasses);
     }
 
     vkResetFences(dev, 1, &plat.compute_in_flight_[cf]);
@@ -629,11 +616,11 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     // Fallback path when hostQueryReset is unavailable: per-queue cmd reset
     // so the compute subrange's reset is ordered against this frame's compute
     // writes, and likewise for graphics.
-    if (!plat.profiler_.host_query_reset_) {
-        vkCmdResetQueryPool(plat.compute_cmds_[cf], plat.profiler_.ts_pool_,
+    if (!gp.host_query_reset_) {
+        vkCmdResetQueryPool(plat.compute_cmds_[cf], gp.ts_pool_,
                             2 * kMaxPasses * cf,
                             2 * kMaxComputePasses);
-        vkCmdResetQueryPool(plat.graphics_cmds_[cf], plat.profiler_.ts_pool_,
+        vkCmdResetQueryPool(plat.graphics_cmds_[cf], gp.ts_pool_,
                             2 * kMaxPasses * cf + 2 * kMaxComputePasses,
                             2 * (kMaxPasses - kMaxComputePasses));
     }
@@ -652,10 +639,10 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     fc.cmd.plat.composite_sets_ = plat.composite_sets_[cf];
     fc.cmd.plat.composite_next_idx_ = 0;
     fc.cmd.plat.offscreen_ = &plat.offscreen_target_cache_;
-    fc.cmd.plat.profiler_.ts_pool_ = plat.profiler_.ts_pool_;
-    fc.cmd.plat.profiler_.pass_names_ = &plat.profiler_.pass_names_[cf];
-    fc.cmd.plat.profiler_.pass_count_ = &plat.profiler_.pass_count_[cf];
-    fc.cmd.plat.profiler_.compute_pass_count_ = &plat.profiler_.compute_pass_count_[cf];
+    fc.cmd.plat.profiler_.ts_pool_ = gp.ts_pool_;
+    fc.cmd.plat.profiler_.pass_names_ = &gp.pass_names_[cf];
+    fc.cmd.plat.profiler_.pass_count_ = &gp.pass_count_[cf];
+    fc.cmd.plat.profiler_.compute_pass_count_ = &gp.compute_pass_count_[cf];
     fc.cmd.plat.pass_cb_ = VK_NULL_HANDLE;
     fc.cmd.plat.pending_pass_idx_ = UINT32_MAX;
     fc.cmd.pending_name_ = nullptr;
