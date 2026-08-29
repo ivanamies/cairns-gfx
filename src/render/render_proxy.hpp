@@ -84,17 +84,24 @@ struct SkinnedAttachment {
     struct Hot {
         cairns::PoolSlice slice;
         uint32_t joint_count = 0;
-        // Scene-local clip index (-1 = bind pose / no animation).
-        int32_t clip_index = -1;
         // Sim-time phase + speed for clip eval (TODO determinism).
         float time_offset = 0.0f;
         float time_scale = 1.0f;
         // Mesh the slice was sized for; kernel uses mesh.vert_count.
         cairns::Handle<Mesh> mesh;
+        // #222 Phase H.5: cached at skin-create so BuildSkinFrame avoids
+        // skins_.GetCold + scenes_.GetHot + scenes_.GetCold per actor
+        // per frame. UINT32_MAX means scene not registered with anim_eval.
+        uint32_t gpu_scene_header_idx = UINT32_MAX;
+        float gpu_clip_duration = 1.0f;
     };
     struct Cold {
         cairns::SceneId scene;
         uint32_t skin_index = 0;
+        // #222 Phase H.5: clip_index demoted; not read on the per-frame
+        // GPU eval path (the scene header carries the channel/sampler
+        // bounds). Kept for debug + future late-toggle.
+        int32_t clip_index = -1;
         std::string name;
     };
 };

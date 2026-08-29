@@ -1115,6 +1115,17 @@ public:
         initSkinKernel();  // best-effort; missing shader doesn't fail GreaterInit.
         initAnimEvalKernel();  // best-effort; failure -> GPU palette eval off.
         uploadAnimTablesGpu();  // flattens + uploads all scene tables.
+        // #222 Phase H.5: skins were Acquired BEFORE this call, so their
+        // cached gpu_scene_header_idx (UINT32_MAX) is stale. Backfill from
+        // each skin's scene now that the headers exist.
+        skins_.ForEachLive(
+            [&](cairns::SkinnedAttachment::Hot& h,
+                cairns::SkinnedAttachment::Cold& c) {
+                cairns::Scene::Hot* sht = scenes_.GetHot(c.scene);
+                if (sht) {
+                    h.gpu_scene_header_idx = sht->gpu_scene_header_idx;
+                }
+            });
         // #221 Phase 9 (vk): write the per-frame skin_group_b descriptors
         // ONCE here (kernel + pool both ready). Per-dispatch we just bind
         // with 3 dynamic byte offsets, avoiding VUID-03047 (set in use by
@@ -2694,20 +2705,27 @@ public:
             return cairns::SkinId::Null;
         }
         cairns::SkinId sid = skins_.Acquire();
+        cairns::Scene::Hot* scene_hot = scenes_.GetHot(scene_id);
         if (auto* h = skins_.GetHot(sid)) {
             *h = cairns::SkinnedAttachment::Hot{};
             h->slice = slice;
             h->joint_count =
                 static_cast<uint32_t>(scold->skins[0].jointNodes.size());
-            h->clip_index = clip_idx;
             h->time_offset = time_offset;
             h->time_scale = 1.0f;
             h->mesh = skinned_mesh;
+            // #222 Phase H.5: cache the per-frame double-resolve.
+            h->gpu_scene_header_idx =
+                scene_hot ? scene_hot->gpu_scene_header_idx : UINT32_MAX;
+            h->gpu_clip_duration =
+                (scold->gpu_clip_duration > 0.0f) ? scold->gpu_clip_duration
+                                                   : 1.0f;
         }
         if (auto* c = skins_.GetCold(sid)) {
             *c = cairns::SkinnedAttachment::Cold{};
             c->scene = scene_id;
             c->skin_index = 0;
+            c->clip_index = clip_idx;
         }
         return sid;
     }
@@ -2843,11 +2861,13 @@ public:
         for (auto e : view) {
             const cairns::SkinRef& sr = view.get<const cairns::SkinRef>(e);
             auto* sh = skins_.GetHot(sr.id);
-            auto* sc = skins_.GetCold(sr.id);
-            if (!sh || !sc) {
+            if (!sh) {
                 continue;
             }
             if (sh->mesh.index >= kBucketCap) {
+                continue;
+            }
+            if (sh->gpu_scene_header_idx == UINT32_MAX) {
                 continue;
             }
             const uint32_t bi = bucket_remap[sh->mesh.index];
@@ -2855,13 +2875,6 @@ public:
                 continue;
             }
             cairns::SkinBatchGpu& b = batches[bi];
-            cairns::Scene::Hot* shot = scenes_.GetHot(sc->scene);
-            if (!shot) {
-                continue;
-            }
-            if (shot->gpu_scene_header_idx == UINT32_MAX) {
-                continue;
-            }
             const uint32_t cursor = bucket_inst_cursor[bi];
             if (cursor >= b.instance_count) {
                 continue;
@@ -2873,18 +2886,16 @@ public:
             instance_meta[actor_idx] =
                 glm::uvec2(cursor * b.joint_count, sh->slice.offset);
 
-            cairns::Scene::Cold* scold = scenes_.GetCold(sc->scene);
-            const double dur =
-                (scold && scold->gpu_clip_duration > 0.0f)
-                    ? static_cast<double>(scold->gpu_clip_duration)
-                    : 1.0;
+            // #222 Phase H.5: duration cached on Hot at skin-create; no
+            // per-actor scenes_.GetCold this frame.
+            const double dur = static_cast<double>(sh->gpu_clip_duration);
             const double scaled =
                 anim_t_d * static_cast<double>(sh->time_scale) +
                 static_cast<double>(sh->time_offset);
             const double wrapped = scaled - dur * std::floor(scaled / dur);
 
             cairns::GpuActorRecord& rec = actor_records[actor_idx];
-            rec.scene_idx = shot->gpu_scene_header_idx;
+            rec.scene_idx = sh->gpu_scene_header_idx;
             rec.world_scratch_base = actor_idx * kAnimMaxNodes;
             rec.palette_out_base = palette_slot_base;
             rec.time = static_cast<float>(wrapped);
