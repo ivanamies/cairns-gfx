@@ -74,7 +74,7 @@ target_compile_options(${EXECUTABLE_NAME} PRIVATE
 
 # To get an app icon on Apple platforms, add it to your executable.
 # Afterward, the image file in Info.plist.in.
-if(APPLE)
+if(APPLE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/logo.png")
     target_sources("${EXECUTABLE_NAME}" PRIVATE "assets/logo.png")
 endif()
 
@@ -192,15 +192,19 @@ if (APPLE)
 
     # This macro ensures files end up in the "Resources" folder of the .app bundle
     macro(add_resource FILE)
-        # We target_sources so Xcode sees the file in the project tree
-        target_sources(${EXECUTABLE_NAME} PRIVATE "${FILE}")
-        
-        # We strip the path to get just the filename
-        get_filename_component(FILENAME "${FILE}" NAME)
-        
-        # We force the file into the "Resources" root. 
-        # On iOS and macOS, this is where the app looks by default.
-        set_property(SOURCE "${FILE}" PROPERTY MACOSX_PACKAGE_LOCATION "Resources")
+        if(EXISTS "${FILE}")
+            # We target_sources so Xcode sees the file in the project tree
+            target_sources(${EXECUTABLE_NAME} PRIVATE "${FILE}")
+
+            # We strip the path to get just the filename
+            get_filename_component(FILENAME "${FILE}" NAME)
+
+            # We force the file into the "Resources" root.
+            # On iOS and macOS, this is where the app looks by default.
+            set_property(SOURCE "${FILE}" PROPERTY MACOSX_PACKAGE_LOCATION "Resources")
+        else()
+            message(WARNING "add_resource: missing, skipping ${FILE}")
+        endif()
     endmacro()
 
     # 1. Add specific known files
