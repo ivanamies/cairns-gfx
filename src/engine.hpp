@@ -27,6 +27,7 @@
 #include "util/cpu_arena.hpp"
 #include "util/cpu_pool.hpp"  // #221 Phase 3: RangePool for skin_output_pool_.
 #include "util/chunk_allocator.hpp"  // #229 M0b: the one owning CPU block.
+#include "util/fnv1a.hpp"  // #229 M0b: per-frame determinism hash.
 #include "util/device_caps.hpp"  // boot-invariant + HUD/skin fit predicates
 #include "util/hud_stats.hpp"
 #include "util/animation_runtime.hpp"  // #221 Phase 9: SelectWalkingClip + sampler.
@@ -2085,6 +2086,12 @@ public:
             // follow-on. The arena data is hashed directly regardless.)
             void* slab = cpu_block_.Allocate(
                 static_cast<uint32_t>(kArenaBytesPerSlot), 16, kRegionFrame);
+            // Zero the slab so the arena's alignment padding (bytes never written
+            // by AllocateArray) is deterministic 0 -- else the [0,Used) hash picks
+            // up fresh-malloc garbage and diverges run-to-run. (Restores the old
+            // arena_storage.assign(..,0) behavior; oversize block allocs aren't
+            // 0xCC-prefilled like the chunk pool.)
+            std::memset(slab, 0, kArenaBytesPerSlot);
             s.arena.Init(slab, kArenaBytesPerSlot);
         }
         return true;
@@ -3402,6 +3409,22 @@ public:
                 IM_DELETE(s.pkt.imgui_snapshot);
                 s.pkt.imgui_snapshot = nullptr;
             }
+        }
+
+        // #229 M0b determinism probe (SIM): hash the per-frame sim input -- the
+        // arena's [0,Used) (drawList/sorted/matrices/entity_ids/proxies, all POD
+        // in the block) + the sim drivers. Under FixedClock + a static scene this
+        // MUST be byte-identical every frame AND run-to-run; a diverging sim hash
+        // localizes CPU-side nondeterminism (vs the render/GPU side).
+        if (golden_) {
+            cairns::Fnv1a sim;
+            sim.Write(s.arena.Resolve(0), s.arena.Used());
+            sim.WritePod(render_angle_deg_);
+            sim.WritePod(accumulator_);
+            sim.WritePod(sim_frame_);
+            std::fprintf(stderr, "[STATEHASH] frame=%u sim=%016llx used=%zu\n",
+                         frame_, (unsigned long long)sim.Digest(),
+                         s.arena.Used());
         }
 
         // Hand the slot to the render thread BEFORE main-thread Submit.
