@@ -99,11 +99,15 @@ struct CommandRecorderPlat {
     std::array<VkDescriptorSet, kCompositeRingSize> composite_sets_{};
     uint32_t composite_next_idx_ = 0;
     OffscreenTargetCache* offscreen_ = nullptr;  // owned by Frames
-    // Per-pass timing (populated by Frames::Begin; written by PassTimerBegin).
-    VkQueryPool ts_pool_ = VK_NULL_HANDLE;
-    std::array<const char*, kMaxPasses>* pass_names_ = nullptr;
-    uint32_t* pass_count_ = nullptr;
-    uint32_t* compute_pass_count_ = nullptr;
+    // #222 Phase F.1: Per-pass timing (populated by Frames::Begin; written
+    // by PassTimerBegin). Grouped into a profiler_ sub-struct so the GPU
+    // profiler state is named as a unit on both Frames + CommandRecorder.
+    struct Profiler {
+        VkQueryPool ts_pool_ = VK_NULL_HANDLE;
+        std::array<const char*, kMaxPasses>* pass_names_ = nullptr;
+        uint32_t* pass_count_ = nullptr;
+        uint32_t* compute_pass_count_ = nullptr;
+    } profiler_;
     VkCommandBuffer pass_cb_ = VK_NULL_HANDLE;
     uint32_t pending_pass_idx_ = UINT32_MAX;
 };

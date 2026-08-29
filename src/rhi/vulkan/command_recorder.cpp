@@ -248,7 +248,7 @@ void CommandRecorder::DispatchSkinBatches(
         plat.pass_cb_ == VK_NULL_HANDLE) {
         plat.pass_cb_ = plat.comp_;
         vkCmdWriteTimestamp(plat.pass_cb_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                            plat.ts_pool_,
+                            plat.profiler_.ts_pool_,
                             2 * kMaxPasses * plat.frame_ +
                                 2 * plat.pending_pass_idx_);
     }
@@ -305,7 +305,7 @@ void CommandRecorder::DispatchAnimEval(
         plat.pass_cb_ == VK_NULL_HANDLE) {
         plat.pass_cb_ = plat.comp_;
         vkCmdWriteTimestamp(plat.pass_cb_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                            plat.ts_pool_,
+                            plat.profiler_.ts_pool_,
                             2 * kMaxPasses * plat.frame_ +
                                 2 * plat.pending_pass_idx_);
     }
@@ -333,7 +333,7 @@ void CommandRecorder::Dispatch(Resources& res, Allocator& alloc, const ComputeDi
     if (plat.pending_pass_idx_ != UINT32_MAX && plat.pass_cb_ == VK_NULL_HANDLE) {
         plat.pass_cb_ = plat.comp_;
         vkCmdWriteTimestamp(plat.pass_cb_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                            plat.ts_pool_,
+                            plat.profiler_.ts_pool_,
                             2 * kMaxPasses * plat.frame_ + 2 * plat.pending_pass_idx_);
     }
     Kernel::Hot* k = res.GetHot(d.kernel);
@@ -396,7 +396,7 @@ void CommandRecorder::BeginRenderPass(Resources& res, const SwapResolveTarget& t
     if (plat.pending_pass_idx_ != UINT32_MAX && plat.pass_cb_ == VK_NULL_HANDLE) {
         plat.pass_cb_ = plat.gfx_;
         vkCmdWriteTimestamp(plat.pass_cb_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                            plat.ts_pool_,
+                            plat.profiler_.ts_pool_,
                             2 * kMaxPasses * plat.frame_ + 2 * plat.pending_pass_idx_);
     }
 
@@ -784,36 +784,36 @@ void CommandRecorder::EndRenderPass() {
 void CommandRecorder::PassTimerBegin(const char* name, bool is_compute) {
     pending_name_ = name;
     pending_slot_ = TimerStorage::SlotForPass(name);
-    if (plat.pass_count_ == nullptr || plat.pass_names_ == nullptr) {
+    if (plat.profiler_.pass_count_ == nullptr || plat.profiler_.pass_names_ == nullptr) {
         return;
     }
     uint32_t idx;
     if (is_compute) {
-        if (*plat.compute_pass_count_ >= kMaxComputePasses) {
+        if (*plat.profiler_.compute_pass_count_ >= kMaxComputePasses) {
             plat.pending_pass_idx_ = UINT32_MAX;
             return;
         }
-        idx = (*plat.compute_pass_count_)++;
+        idx = (*plat.profiler_.compute_pass_count_)++;
     } else {
-        if (*plat.pass_count_ >= kMaxPasses) {
+        if (*plat.profiler_.pass_count_ >= kMaxPasses) {
             plat.pending_pass_idx_ = UINT32_MAX;
             return;
         }
-        idx = kMaxComputePasses + ((*plat.pass_count_)++);
+        idx = kMaxComputePasses + ((*plat.profiler_.pass_count_)++);
         if (idx >= kMaxPasses) {
             plat.pending_pass_idx_ = UINT32_MAX;
             return;
         }
     }
     plat.pending_pass_idx_ = idx;
-    (*plat.pass_names_)[idx] = name;
+    (*plat.profiler_.pass_names_)[idx] = name;
     plat.pass_cb_ = VK_NULL_HANDLE;
 }
 
 void CommandRecorder::PassTimerEnd() {
     if (plat.pending_pass_idx_ != UINT32_MAX && plat.pass_cb_ != VK_NULL_HANDLE) {
         vkCmdWriteTimestamp(plat.pass_cb_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                            plat.ts_pool_,
+                            plat.profiler_.ts_pool_,
                             2 * kMaxPasses * plat.frame_ + 2 * plat.pending_pass_idx_ + 1);
     }
     plat.pending_pass_idx_ = UINT32_MAX;
