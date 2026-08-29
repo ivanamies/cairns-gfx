@@ -168,40 +168,23 @@ public:
         return !final_target_.IsNull();
     }
 
-    // Headless (cairns_serve) minimum render: clear final_target_ to the
-    // engine's clear color. Synchronous (waits for GPU completion). Returns
-    // false if final_target_ isn't allocated (i.e. windowed mode -- caller
-    // should use the normal draw() path instead). P2+ replaces the clear-only
-    // body with the full scene render once final_target_ is wired into the
-    // render graph.
+    // Headless (cairns_serve) one-frame render: drives the windowed draw()
+    // path once. Swap pass writes into final_target_ instead of swapchain
+    // drawable (Frames + SwapChain headless mode set up in GreaterInit).
+    // Synchronous: render thread (if used) drained before return; the
+    // metal/vulkan Frames::End waitUntilCompleted's the dump path. Returns
+    // false if not surfaceless.
     bool RenderHeadlessFrame() {
         if (final_target_.IsNull()) {
             return false;
         }
 #if CAIRNS_METAL
-        MTL::Texture* tex =
-            rhi_.resources.GetHot(final_target_)->api_view;
-        if (!tex) {
-            return false;
-        }
-        MTL::RenderPassDescriptor* rpd =
-            MTL::RenderPassDescriptor::alloc()->init();
-        MTL::RenderPassColorAttachmentDescriptor* ca =
-            rpd->colorAttachments()->object(0);
-        ca->setTexture(tex);
-        ca->setLoadAction(MTL::LoadActionClear);
-        // Match the existing forward-pass clear color in the windowed path.
-        ca->setClearColor(MTL::ClearColor(41.0 / 255.0, 42.0 / 255.0,
-                                          48.0 / 255.0, 1.0));
-        ca->setStoreAction(MTL::StoreActionStore);
-        MTL::CommandBuffer* cb = rhi_.device.queue_->commandBuffer();
-        MTL::RenderCommandEncoder* enc = cb->renderCommandEncoder(rpd);
-        enc->endEncoding();
-        cb->commit();
-        cb->waitUntilCompleted();
-        rpd->release();
-        return true;
+        return draw();
 #elif CAIRNS_VULKAN
+        // vk headless full-scene render not yet wired (see GreaterInit
+        // comment). Fall back to a one-shot clear so io.dumpTexture sees
+        // the engine's clear color until vk Frames learns the headless
+        // path.
         VkImage img = static_cast<VkImage>(
             rhi_.resources.textures.GetCold(final_target_)->api_image);
         if (img == VK_NULL_HANDLE) {
@@ -678,12 +661,14 @@ public:
             }
             world_proxies_.resize(2);  // secondary_world_ uses slot 1
         }
-        // P1C: in surfaceless mode, allocate the offscreen final_target_ and
-        // stop before initRenderPipeline / Frames::InitTargets (those assume a
-        // real swapchain). render.frame and io.dumpTexture use a minimal
-        // clear-only path through final_target_. Full scene rendering through
-        // final_target_ lands when P2's viewport/camera ops + the render-graph
-        // retarget come in.
+        // P0.5: in surfaceless mode, allocate the offscreen final_target_,
+        // tell the SwapChain its (headless) size, tell Frames to route the
+        // swap-pass resolve into final_target_, and CONTINUE through the
+        // normal init flow. The engine's draw path is shared with the
+        // windowed app -- the only behavioral split is the swap pass writes
+        // into final_target_ instead of the swapchain drawable, and there's
+        // no NextDrawable / presentDrawable in headless. Replaces the
+        // earlier P1C clear-only short-circuit.
         if (cfg.surfaceless) {
             final_target_w_ = cfg.width;
             final_target_h_ = cfg.height;
@@ -700,7 +685,19 @@ public:
                 CAIRNS_PRINT("GreaterInit: final_target_ create failed\n");
                 return false;
             }
+            swapchain_.SetHeadlessSize(cfg.width, cfg.height);
+#if CAIRNS_METAL
+            MTL::Texture* tex =
+                rhi_.resources.GetHot(final_target_)->api_view;
+            rhi_.frames.SetHeadlessSwapTarget(tex);
+#else
+            // vk headless full-scene render not yet wired -- Frames::Begin
+            // would call vkAcquireNextImageKHR with VK_NULL_HANDLE. Fall
+            // back to the earlier P1C clear-only short-circuit until the
+            // vk side of P0.5 lands (the render_pass + framebuffer +
+            // VkImageView surrogate for the swapchain image).
             return true;
+#endif
         }
         if ( !initRenderPipeline() ) {
             CAIRNS_PRINT("GreaterInit: initRenderPipeline failed\n");
@@ -995,7 +992,11 @@ public:
         s.pkt.resident_textures = std::span<const rhi::Handle<rhi::Texture>>(
             s.resident_textures.data(), s.resident_textures.size());
 
-        const bool draw_imgui = !golden_;
+        // Skip ImGui in golden-dump mode (windowed CAIRNS_DUMP, no overlay
+        // in the byte-gate) AND in surfaceless mode (cairns_serve has no
+        // SDL3 platform backend init'd; ImGui_ImplSDL3_NewFrame would
+        // assert. final_target_ being non-null is the surfaceless marker).
+        const bool draw_imgui = !golden_ && final_target_.IsNull();
         if (draw_imgui) {
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
@@ -1068,7 +1069,11 @@ public:
         // render thread to fully complete this frame before the next iteration
         // queues another. Keeps frame 5's dump output byte-identical regardless
         // of threading (Drain forces same parity sequence as single-threaded).
-        if (std::getenv("CAIRNS_DUMP")) {
+        //
+        // Also drain in surfaceless mode (cairns_serve) so the next
+        // io.dumpTexture op sees the rendered pixels rather than reading
+        // final_target_ while the render thread is still working on it.
+        if (std::getenv("CAIRNS_DUMP") || !final_target_.IsNull()) {
             render_thread_->Drain();
         }
 

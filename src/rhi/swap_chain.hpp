@@ -81,6 +81,18 @@ struct SwapChain {
     uint32_t Width() const { return swapChainExtent.width; }
     uint32_t Height() const { return swapChainExtent.height; }
 
+    // Headless mode entry: SwapChain::Init is skipped (no surface). Engine
+    // sets the dims directly so downstream Width()/Height() return valid
+    // values for MSAA target sizing. The vk render-pass path that needs a
+    // VkFramebuffer is not yet wired here -- vk cairns_serve full scene
+    // render is the next item; today only metal cairns_serve renders. This
+    // method exists so the build is symmetric across backends.
+    void SetHeadlessSize(uint32_t w, uint32_t h) {
+        swapChainExtent.width = w;
+        swapChainExtent.height = h;
+    }
+    bool IsHeadless() const { return surface == VK_NULL_HANDLE; }
+
     void RecreateSwapChain() {
         int width = 0;
         int height = 0;
@@ -683,7 +695,21 @@ struct SwapChain {
 
     void Deinit() {}
 
+    // Headless mode entry: SwapChain::Init is skipped (no layer); engine
+    // sets the dims directly so downstream Width()/Height() return valid
+    // values for MSAA target sizing. metalLayer_ stays null; NextDrawable
+    // / GetDrawable still work in windowed mode.
+    void SetHeadlessSize(uint32_t width, uint32_t height) {
+        size_ = cairns::Size(width, height);
+    }
+    bool IsHeadless() const { return metalLayer_ == nullptr; }
+
     bool NextDrawable() {
+        if (!metalLayer_) {
+            // Headless: no drawable; per-frame the swap-target override
+            // is what the render pass binds.
+            return false;
+        }
         metalDrawable_ = metalLayer_->nextDrawable();
         return metalDrawable_ != nullptr;
     }
@@ -692,14 +718,19 @@ struct SwapChain {
 
     void SetDrawableSize(uint32_t width, uint32_t height) {
         size_ = cairns::Size(width, height);
-        metalLayer_->setDrawableSize(CGSizeMake(width, height));
+        if (metalLayer_) {
+            metalLayer_->setDrawableSize(CGSizeMake(width, height));
+        }
     }
 
     Size GetDrawableSize() const { return size_; }
     uint32_t Width() const { return size_.width; }
     uint32_t Height() const { return size_.height; }
 
-    MTL::PixelFormat GetPixelFormat() const { return metalLayer_->pixelFormat(); }
+    MTL::PixelFormat GetPixelFormat() const {
+        return metalLayer_ ? metalLayer_->pixelFormat()
+                           : MTL::PixelFormatBGRA8Unorm;
+    }
 
 private:
     Size size_ = cairns::kInvalidSize;
@@ -707,16 +738,25 @@ private:
     CA::MetalLayer* metalLayer_ = nullptr;
 };
 
+// resolve_override: when non-null, used as the MSAA-resolve texture
+// instead of swap_chain.GetDrawable()->texture(). Headless mode passes
+// the engine's final_target_ texture so the swap pass writes into it
+// directly instead of a swapchain drawable.
 inline bool InitRenderPassDescriptor(MTL::RenderPassDescriptor*& renderPassDescriptor,
                                      MTL::Texture* msaa, MTL::Texture* depth,
-                                     SwapChain& swap_chain) {
+                                     SwapChain& swap_chain,
+                                     MTL::Texture* resolve_override = nullptr) {
     renderPassDescriptor = MTL::RenderPassDescriptor::alloc()->init();
     MTL::RenderPassColorAttachmentDescriptor* colorAttachment =
         renderPassDescriptor->colorAttachments()->object(0);
     MTL::RenderPassDepthAttachmentDescriptor* depthAttachment =
         renderPassDescriptor->depthAttachment();
     colorAttachment->setTexture(msaa);
-    colorAttachment->setResolveTexture(swap_chain.GetDrawable()->texture());
+    MTL::Texture* resolve_tex = resolve_override
+        ? resolve_override
+        : (swap_chain.GetDrawable() ? swap_chain.GetDrawable()->texture()
+                                    : nullptr);
+    colorAttachment->setResolveTexture(resolve_tex);
     colorAttachment->setLoadAction(MTL::LoadActionClear);
     colorAttachment->setClearColor(MTL::ClearColor(41.0f / 255.0f, 42.0f / 255.0f,
                                                    48.0f / 255.0f, 1.0));
@@ -730,10 +770,14 @@ inline bool InitRenderPassDescriptor(MTL::RenderPassDescriptor*& renderPassDescr
 
 inline bool UpdateRenderPassDescriptor(MTL::RenderPassDescriptor* render_pass_desc,
                                        MTL::Texture* msaa, MTL::Texture* depth,
-                                       SwapChain& swap_chain) {
+                                       SwapChain& swap_chain,
+                                       MTL::Texture* resolve_override = nullptr) {
     render_pass_desc->colorAttachments()->object(0)->setTexture(msaa);
-    render_pass_desc->colorAttachments()->object(0)->setResolveTexture(
-        swap_chain.GetDrawable()->texture());
+    MTL::Texture* resolve_tex = resolve_override
+        ? resolve_override
+        : (swap_chain.GetDrawable() ? swap_chain.GetDrawable()->texture()
+                                    : nullptr);
+    render_pass_desc->colorAttachments()->object(0)->setResolveTexture(resolve_tex);
     render_pass_desc->depthAttachment()->setTexture(depth);
     return true;
 }

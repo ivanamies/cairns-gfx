@@ -73,7 +73,8 @@ bool Frames::InitTargets(Resources& resources, Allocator& alloc, SwapChain& sc) 
     }
     MTL::Texture* msaa = resources.GetHot(msaa_handle_)->api_view;
     MTL::Texture* depth = resources.GetHot(depth_handle_)->api_view;
-    return InitRenderPassDescriptor(render_pass_desc_, msaa, depth, sc);
+    return InitRenderPassDescriptor(render_pass_desc_, msaa, depth, sc,
+                                     headless_swap_target_);
 }
 
 void Frames::Deinit() {
@@ -98,12 +99,21 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
                             DISPATCH_TIME_FOREVER);
     resources.AdvanceFrame(alloc);  // bump ring reset
 
-    sc.NextDrawable();
-    MTL::Texture* drawable_tex = sc.GetDrawable()->texture();
+    // Acquire the swap target -- drawable in windowed mode, final_target_
+    // in headless. The MSAA/depth resize check uses this target's dims.
+    MTL::Texture* swap_tex = nullptr;
+    if (headless_swap_target_) {
+        swap_tex = headless_swap_target_;
+    } else {
+        sc.NextDrawable();
+        if (sc.GetDrawable()) {
+            swap_tex = sc.GetDrawable()->texture();
+        }
+    }
     Texture::Hot* msaa_hot = resources.GetHot(msaa_handle_);
-    if (drawable_tex &&
-        (!msaa_hot || msaa_hot->api_view->width() != drawable_tex->width() ||
-         msaa_hot->api_view->height() != drawable_tex->height())) {
+    if (swap_tex &&
+        (!msaa_hot || msaa_hot->api_view->width() != swap_tex->width() ||
+         msaa_hot->api_view->height() != swap_tex->height())) {
         if (!msaa_handle_.IsNull()) {
             resources.Destroy(alloc, msaa_handle_);
         }
@@ -111,13 +121,14 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
             resources.Destroy(alloc, depth_handle_);
         }
         make_render_targets(resources, alloc,
-                            static_cast<uint32_t>(drawable_tex->width()),
-                            static_cast<uint32_t>(drawable_tex->height()),
+                            static_cast<uint32_t>(swap_tex->width()),
+                            static_cast<uint32_t>(swap_tex->height()),
                             msaa_handle_, depth_handle_);
     }
     MTL::Texture* msaa = resources.GetHot(msaa_handle_)->api_view;
     MTL::Texture* depth = resources.GetHot(depth_handle_)->api_view;
-    UpdateRenderPassDescriptor(render_pass_desc_, msaa, depth, sc);
+    UpdateRenderPassDescriptor(render_pass_desc_, msaa, depth, sc,
+                                headless_swap_target_);
 
     FrameContext fc;
     fc.frame_index = 0;
@@ -143,18 +154,25 @@ void Frames::End(SwapChain& sc, FrameContext& fc) {
 
     MTL::CommandBuffer* term = queue_->commandBuffer();
 
-    if (!dump_path_.empty()) {
-        MTL::Texture* drawableTex = sc.GetDrawable()->texture();
-        const NS::UInteger w = drawableTex->width();
-        const NS::UInteger h = drawableTex->height();
+    // Pick the texture the swap pass wrote into: headless override or the
+    // swapchain drawable.
+    MTL::Texture* swapTex = headless_swap_target_
+        ? headless_swap_target_
+        : (sc.GetDrawable() ? sc.GetDrawable()->texture() : nullptr);
+
+    if (!dump_path_.empty() && swapTex) {
+        const NS::UInteger w = swapTex->width();
+        const NS::UInteger h = swapTex->height();
         const NS::UInteger bytesPerRow = w * 4;
         const NS::UInteger bufSize = bytesPerRow * h;
         MTL::Buffer* readback = device_->newBuffer(bufSize, MTL::ResourceStorageModeShared);
         MTL::BlitCommandEncoder* blitEnc = term->blitCommandEncoder();
-        blitEnc->copyFromTexture(drawableTex, 0, 0, MTL::Origin{0, 0, 0}, MTL::Size{w, h, 1},
+        blitEnc->copyFromTexture(swapTex, 0, 0, MTL::Origin{0, 0, 0}, MTL::Size{w, h, 1},
                                  readback, 0, bytesPerRow, 0);
         blitEnc->endEncoding();
-        term->presentDrawable(sc.GetDrawable());
+        if (!headless_swap_target_) {
+            term->presentDrawable(sc.GetDrawable());
+        }
         dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(frame_semaphore_);
         term->addCompletedHandler([sem](MTL::CommandBuffer*) { dispatch_semaphore_signal(sem); });
         term->commit();
@@ -172,10 +190,17 @@ void Frames::End(SwapChain& sc, FrameContext& fc) {
         readback->release();
         dump_path_.clear();
     } else {
-        term->presentDrawable(sc.GetDrawable());
+        if (!headless_swap_target_ && sc.GetDrawable()) {
+            term->presentDrawable(sc.GetDrawable());
+        }
         dispatch_semaphore_t sem = static_cast<dispatch_semaphore_t>(frame_semaphore_);
         term->addCompletedHandler([sem](MTL::CommandBuffer*) { dispatch_semaphore_signal(sem); });
         term->commit();
+        if (headless_swap_target_) {
+            // Headless: synchronous so RenderHeadlessFrame returns after the
+            // dump's pixels are visible to a subsequent io.dumpTexture.
+            term->waitUntilCompleted();
+        }
     }
 }
 
