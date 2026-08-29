@@ -123,50 +123,8 @@ bool LoadMeshGpu(Mesh& mesh, rhi2::ResourceManager& rm) {
     return true;
 }
 
-bool LoadSamplerGpu(ResourceManager<Sampler>& sampler_mgr, Handle<Sampler> h,
-                    rhi2::ResourceManager& rm) {
-    auto& info = *sampler_mgr.GetDesc(h);
-    auto& obj = *sampler_mgr.GetObj(h);
-
-    auto map_filter = [](SamplerFilter f) {
-        return f == SamplerFilter::Nearest ? rhi2::Filter::kNearest : rhi2::Filter::kLinear;
-    };
-    auto map_mip = [](SamplerMipFilter f) {
-        return f == SamplerMipFilter::Linear ? rhi2::Filter::kLinear : rhi2::Filter::kNearest;
-    };
-    auto map_addr = [](SamplerAddressMode m) {
-        switch (m) {
-            case SamplerAddressMode::MirroredRepeat: return rhi2::AddressMode::kMirroredRepeat;
-            case SamplerAddressMode::ClampToEdge:    return rhi2::AddressMode::kClampToEdge;
-            case SamplerAddressMode::ClampToBorder:  return rhi2::AddressMode::kClampToBorder;
-            default:                                  return rhi2::AddressMode::kRepeat;
-        }
-    };
-
-    rhi2::SamplerDesc d;
-    d.min_filter = map_filter(info.minFilter);
-    d.mag_filter = map_filter(info.magFilter);
-    d.mip_filter = map_mip(info.mipFilter);
-    d.address_mode = map_addr(info.addressModeU);
-    d.max_anisotropy = 8.0f;
-
-    rhi2::Handle<rhi2::Sampler> rhi2_h = rm.CreateSampler(d);
-    if (rhi2_h.IsNull()) {
-        return false;
-    }
-    obj.sampler_state = static_cast<MTL::SamplerState*>(rm.GetHot(rhi2_h)->api_sampler);
-    return true;
-}
-
-bool LoadSceneGpu(Scene& scene,
-                  ResourceManager<Sampler>& sampler_mgr,
-                  rhi2::ResourceManager& rm)
+bool LoadSceneGpu(Scene& scene, rhi2::ResourceManager& rm)
 {
-    for ( const auto& h : scene.samplerHandles ) {
-        if ( !LoadSamplerGpu(sampler_mgr, h, rm)) {
-            return false;
-        }
-    }
     for ( size_t i = 0; i < scene.meshes.size(); ++i ) {
         auto& mesh = scene.meshes[i];
         if ( !LoadMeshGpu(mesh, rm) ) {
@@ -219,7 +177,7 @@ public:
     using DynBufId = uint32_t;
     using ShaderHandle = rhi2::Handle<rhi2::Shader>;
     using MatId = uint32_t;
-    using SamplerHandle = cairns::rhi::Handle<cairns::rhi::Sampler>;
+    using SamplerHandle = rhi2::Handle<rhi2::Sampler>;
     using BindGroupId = uint32_t;
     
     Engine() :
@@ -296,7 +254,6 @@ public:
         using namespace cairns::rhi;
         renderPassTexManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Texture>>(hot_arena_, hot_arena_, 2);
         // 4 because we're only pretending to be a real UGC engine at this point
-        samplerManager_ = cairns::make_unique<cairns::rhi::ResourceManager<cairns::rhi::Sampler>>(hot_arena_, hot_arena_, 256);
         return true;
     }
     
@@ -354,9 +311,9 @@ public:
                 if (!cairns::LoadSceneFromGltf(filepath, scene)) {
                     return false;
                 }
-                cairns::PrepareSceneResources(scene, rm_, *samplerManager_, materials_);
+                cairns::PrepareSceneResources(scene, rm_, materials_);
 
-                if (!cairns::rhi::LoadSceneGpu(scene, *samplerManager_, rm_)) {
+                if (!cairns::rhi::LoadSceneGpu(scene, rm_)) {
                     return false;
                 }
 
@@ -536,7 +493,7 @@ public:
                     const SamplerHandle sampler_handle = materials_[mat_id].sampler;
                     
                     const uint32_t gpu_tex_id = tex_handle.index;
-                    const uint32_t gpu_sampler_id = sampler_id_map_[sampler_handle.get_id()];
+                    const uint32_t gpu_sampler_id = sampler_id_map_[sampler_handle.index];
                     const uint32_t gpu_attr_idx = mesh_attr_id_map_[mesh.attrHandle.index];
                     
                     //                    cairns::Timer timer7("timer7", 7);
@@ -878,7 +835,7 @@ public:
             arg_encoder->setArgumentBuffer(arg_buf, arg_off);
 
             mesh_attr_id_map_.clear();
-            sampler_id_map_.resize(samplerManager_->GetCapacity(), 0);
+            sampler_id_map_.clear();
 
             uint32_t num_tex = 0;
             uint32_t num_attr = 0;
@@ -910,10 +867,11 @@ public:
                 }
                 for (size_t j = 0; j < scene.samplerHandles.size(); ++j) {
                     auto h = scene.samplerHandles[j];
-                    auto* sobj = samplerManager_->GetObj(h);
-                    arg_encoder->setSamplerState(sobj->sampler_state,
+                    MTL::SamplerState* samp =
+                        static_cast<MTL::SamplerState*>(rm_.GetHot(h)->api_sampler);
+                    arg_encoder->setSamplerState(samp,
                         cairns::rhi::GpuSceneRegistry::kSamplersSlotOffset + num_sampler);
-                    sampler_id_map_[h.get_id()] = num_sampler;
+                    sampler_id_map_[h.index] = num_sampler;
                     ++num_sampler;
                 }
             }
@@ -965,7 +923,6 @@ private:
     std::vector<glm::mat4> debugSceneXforms_;
     
     cairns::FrameTransientCache<cairns::DynamicBuffersAssoc> dynBufs_;
-    cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Sampler>> samplerManager_;
     std::vector<cairns::LoadedMaterial> materials_;
     cairns::unique_ptr<cairns::rhi::ResourceManager<cairns::rhi::Texture>> renderPassTexManager_;
 
@@ -978,7 +935,7 @@ private:
     MTL::Buffer* mesh_master_buf_ = nullptr;
     rhi2::Handle<rhi2::BindGroup> bindless_bg_handle_;
     std::unordered_map<uint32_t, uint32_t> mesh_attr_id_map_;
-    std::vector<uint32_t> sampler_id_map_;
+    std::unordered_map<uint32_t, uint32_t> sampler_id_map_;
 
     std::unique_ptr<cairns::rhi::GpuAllocatorHeap> allocTransientHeap_;
     

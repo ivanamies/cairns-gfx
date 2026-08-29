@@ -78,9 +78,17 @@ struct LoadedTexture {
     unsigned char* src_image = nullptr;
 };
 
+struct LoadedSampler {
+    rhi::SamplerFilter minFilter = rhi::SamplerFilter::Linear;
+    rhi::SamplerFilter magFilter = rhi::SamplerFilter::Linear;
+    rhi::SamplerMipFilter mipFilter = rhi::SamplerMipFilter::None;
+    rhi::SamplerAddressMode addressModeU = rhi::SamplerAddressMode::Repeat;
+    rhi::SamplerAddressMode addressModeV = rhi::SamplerAddressMode::Repeat;
+};
+
 struct LoadedMaterial {
     rhi2::Handle<rhi2::Texture> color;
-    rhi::Handle<rhi::Sampler> sampler = rhi::Handle<rhi::Sampler>::Null;
+    rhi2::Handle<rhi2::Sampler> sampler;
 };
 
 struct Scene {
@@ -91,7 +99,7 @@ struct Scene {
     nodes(cairns::Allocator<Node>(arena_)),
     rootNodes(cairns::Allocator<int32_t>(arena_)),
     textureHandles(cairns::Allocator<rhi2::Handle<rhi2::Texture>>(arena_)),
-    samplerHandles(cairns::Allocator<rhi::Handle<rhi::Sampler>>(arena_)),
+    samplerHandles(cairns::Allocator<rhi2::Handle<rhi2::Sampler>>(arena_)),
     materialIds(cairns::Allocator<uint32_t>(arena_))
     { }
     
@@ -103,7 +111,7 @@ struct Scene {
     
     /////////////////
     // temporaries //
-    std::vector<rhi::ResourceDescriptor<rhi::Sampler>> loaded_samplers;
+    std::vector<LoadedSampler> loaded_samplers;
     std::vector<LoadedTexture> loaded_textures;
     std::vector<uint32_t> materialToTextureIndex;
     std::vector<uint32_t> materialToSamplerIndex;
@@ -111,7 +119,7 @@ struct Scene {
     
     // Bindless Registry Data
     std::vector<rhi2::Handle<rhi2::Texture>, cairns::Allocator<rhi2::Handle<rhi2::Texture>>> textureHandles;
-    std::vector<rhi::Handle<rhi::Sampler>, cairns::Allocator<rhi::Handle<rhi::Sampler>>> samplerHandles;
+    std::vector<rhi2::Handle<rhi2::Sampler>, cairns::Allocator<rhi2::Handle<rhi2::Sampler>>> samplerHandles;
     std::vector<uint32_t, cairns::Allocator<uint32_t>> materialIds;
 
     void CleanupTmps() {
@@ -254,7 +262,7 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene) {
     // 2. Samplers
     // todo @iamies implement mip-mapped samplers
     for (const auto& s : asset.samplers) {
-        rhi::ResourceDescriptor<rhi::Sampler> info;
+        LoadedSampler info;
         // todo @iamies remove this mipmap injection hack
         if (s.minFilter || !s.minFilter) {
             fastgltf::Filter f;
@@ -346,7 +354,7 @@ inline bool LoadSceneFromGltf(const std::filesystem::path& path, Scene& scene) {
     return true;
 }
 
-inline void PrepareSceneResources(Scene& scene, rhi2::ResourceManager& rm, rhi::ResourceManager<rhi::Sampler>& sampler_mgr, std::vector<LoadedMaterial>& materials) {
+inline void PrepareSceneResources(Scene& scene, rhi2::ResourceManager& rm, std::vector<LoadedMaterial>& materials) {
     // Textures
     for (const auto& texDescIn : scene.loaded_textures) {
         rhi2::TextureDesc d;
@@ -365,11 +373,28 @@ inline void PrepareSceneResources(Scene& scene, rhi2::ResourceManager& rm, rhi::
     }
     
     // Samplers
-    for (const auto& samplerDesc : scene.loaded_samplers) {
-        rhi::Handle<rhi::Sampler> h = sampler_mgr.New();
-        rhi::ResourceDescriptor<rhi::Sampler>* d = sampler_mgr.GetDesc(h);
-        *d = samplerDesc;
-        scene.samplerHandles.push_back(h);
+    for (const auto& info : scene.loaded_samplers) {
+        auto map_filter = [](rhi::SamplerFilter f) {
+            return f == rhi::SamplerFilter::Nearest ? rhi2::Filter::kNearest : rhi2::Filter::kLinear;
+        };
+        auto map_mip = [](rhi::SamplerMipFilter f) {
+            return f == rhi::SamplerMipFilter::Linear ? rhi2::Filter::kLinear : rhi2::Filter::kNearest;
+        };
+        auto map_addr = [](rhi::SamplerAddressMode m) {
+            switch (m) {
+                case rhi::SamplerAddressMode::MirroredRepeat: return rhi2::AddressMode::kMirroredRepeat;
+                case rhi::SamplerAddressMode::ClampToEdge:    return rhi2::AddressMode::kClampToEdge;
+                case rhi::SamplerAddressMode::ClampToBorder:  return rhi2::AddressMode::kClampToBorder;
+                default:                                      return rhi2::AddressMode::kRepeat;
+            }
+        };
+        rhi2::SamplerDesc d;
+        d.min_filter = map_filter(info.minFilter);
+        d.mag_filter = map_filter(info.magFilter);
+        d.mip_filter = map_mip(info.mipFilter);
+        d.address_mode = map_addr(info.addressModeU);
+        d.max_anisotropy = 8.0f;
+        scene.samplerHandles.push_back(rm.CreateSampler(d));
     }
     
     // ONLY DOES UNLIT MATERIALS
