@@ -45,36 +45,6 @@ bool AdvanceToGoldenFrame(cairns::Engine& engine);
 // 55 -- two refs per rung per platform.
 bool AdvanceFrames(cairns::Engine& engine, uint32_t n);
 
-// Compose a ladder scene from glb file names + instance count. Returns true
-// iff the requested entities are live. When `glbs` is empty, configures the
-// tiny_quad path (L1 triangle rung).
-bool BuildScene(cairns::Engine& engine,
-                      const std::vector<std::string>& glbs,
-                      uint32_t instances, bool animated);
-
-// Same shape but for scenarios: load a set of glbs and spawn one instance
-// per name. Used by G2 hot reload + G3/G4 multi-instance.
-bool SpawnGlbs(cairns::Engine& engine,
-               const std::vector<std::string>& glbs, bool animated);
-
-// Clear all spawned entities; the asset registry retains its slots but the
-// scene goes empty. Used by G2 hot reload between checkpoint passes.
-bool ClearSpawned(cairns::Engine& engine);
-
-// G3 helper: open viewport 1 alongside viewport 0, place a glb there, opt-in
-// to particle rendering only on that viewport.
-bool OpenSecondViewport(cairns::Engine& engine, const char* glb,
-                        float yaw_rad, bool with_particles);
-
-// G4 helper: program the render graph for one color + resolved-depth +
-// third-camera pass.
-bool ConfigureNestedGraph(cairns::Engine& engine);
-
-// G5 helper: spawn N inside the active frustum + M outside it. The cull
-// counter scenario asserts draw_calls == in and culled == out.
-bool SpawnInsideOutsideSplit(cairns::Engine& engine, const char* glb,
-                             uint32_t inside, uint32_t outside);
-
 struct FrameStats {
     uint32_t draw_calls = 0;
     uint64_t verts_processed = 0;
@@ -87,17 +57,6 @@ bool LastFrameStats(cairns::Engine& engine, FrameStats& out);
 // G1: deterministic particle SSBO readback. Until production particle init
 // switches to cairns::ParticleRng, this returns false and the scenario SKIPs.
 bool ReadParticleBuffer(cairns::Engine& engine, std::vector<uint8_t>& out);
-
-// G6: imgui overlay toggle.
-bool EnableImguiOverlay(cairns::Engine& engine, bool on);
-
-// G6: pump fixed HUD numbers into the overlay so the screen is byte-stable.
-bool InjectHudStats(cairns::Engine& engine, const cairns::HudStats& s);
-
-// G1: enable / disable particle compute + draw at the engine level. Tests
-// that need particles (G1, G3 right viewport) flip this true; everything
-// else lives with the default-off Phase A.2 gate.
-bool EnableParticles(cairns::Engine& engine, bool on);
 
 // Ladder & scenario screen readback. Same surface as
 // Engine::ReadFinalTargetRgba; mirrored here so tests don't include

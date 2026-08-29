@@ -74,9 +74,9 @@
 
 namespace cairns {
 
-// A.5 forward decl: OpenSecondViewport (engine.hpp body) calls into the
-// headless free-function layer, but engine_headless.hpp transitively
-// includes engine.hpp -- this avoids the include cycle.
+// Forward decl: the JS-composed scene primitives (SpawnFitted etc.) call
+// into the headless free-function layer, but engine_headless.hpp
+// transitively includes engine.hpp -- this avoids the include cycle.
 class Engine;
 namespace headless {
 uint32_t RuntimeLoadGlbPath(Engine* engine, const std::string& path);
@@ -1554,48 +1554,6 @@ public:
     // The "resolved-depth" readback is wired to ReadResolvedDepth in
     // test_seams; that path stays SKIP until the ReadBackBuffer salvage
     // (A.10) lands. Returns true iff both extra viewports came up.
-    // A.8: deterministic spawn helper for G5 frustum-cull test. Loads `glb`
-    // once, then instantiates `inside` actors near the origin (visible to
-    // the default cam) and `outside` actors at +99x / +99y / +50z (far off
-    // the active frustum). Real cull stage isn't implemented yet
-    // (cull_stage_implemented==false on the FrameStats) -- G5 SKIPs based
-    // on that flag, this method just sets the scene up for when it lands.
-    bool SpawnInsideOutsideSplit(const std::string& glb, uint32_t inside,
-                                 uint32_t outside) {
-        const uint32_t prefab_idx =
-            cairns::headless::RuntimeLoadGlbPath(this, glb);
-        if (prefab_idx == UINT32_MAX) {
-            return false;
-        }
-        for (uint32_t i = 0; i < inside; ++i) {
-            glm::mat4 world(1.0f);
-            world[3] = glm::vec4(
-                static_cast<float>(i) * 1.5f - 1.5f, 0.0f, 0.0f, 1.0f);
-            if (InstantiatePrefab(prefab_idx, world, 0.0f) == UINT32_MAX) {
-                return false;
-            }
-        }
-        const glm::vec4 out_offsets[3] = {
-            { 99.0f,   0.0f,  0.0f, 1.0f},
-            {  0.0f,  99.0f,  0.0f, 1.0f},
-            {  0.0f,   0.0f, 50.0f, 1.0f},
-        };
-        for (uint32_t i = 0; i < outside; ++i) {
-            glm::mat4 world(1.0f);
-            world[3] = out_offsets[i % 3];
-            // Distribute beyond the first 3 axis directions by scaling.
-            if (i >= 3) {
-                world[3].x *= static_cast<float>(1 + i / 3);
-                world[3].y *= static_cast<float>(1 + i / 3);
-                world[3].z *= static_cast<float>(1 + i / 3);
-            }
-            if (InstantiatePrefab(prefab_idx, world, 0.0f) == UINT32_MAX) {
-                return false;
-            }
-        }
-        return true;
-    }
-
     // A.7: per-frame draw / cull / vert counters. Populated at the end of
     // BuildMeshOpaqueDraws each frame. `culled` is 0 today -- the engine
     // doesn't yet run a frustum cull stage (frustum.hpp is currently only
@@ -1612,90 +1570,6 @@ public:
     bool LastFrameStats(FrameStats& out) const {
         out = last_frame_stats_;
         return true;
-    }
-
-    bool ConfigureNestedGraph() {
-        if (active_viewport_count_ >= kNumViewports - 1) {
-            return false;  // need room for vp1 + vp2
-        }
-        constexpr float kSideYaw = 1.0471975511965976f;  // 60° in radians
-        const uint32_t name1 = OpenViewport();
-        if (name1 == UINT32_MAX) {
-            return false;
-        }
-        if (auto* vc = viewports_.GetCold(
-                viewport_ids_[active_viewport_count_ - 1])) {
-            vc->fly.yaw = kSideYaw;
-            vc->particles_enabled = false;
-        }
-        const uint32_t name2 = OpenViewport();
-        if (name2 == UINT32_MAX) {
-            return false;
-        }
-        if (auto* vc = viewports_.GetCold(
-                viewport_ids_[active_viewport_count_ - 1])) {
-            vc->fly.yaw = -kSideYaw;
-            vc->particles_enabled = false;
-        }
-        nested_graph_mode_ = true;
-        return true;
-    }
-
-    bool OpenSecondViewport(const std::string& glb_name, float yaw_rad,
-                            bool particles_on) {
-        const uint32_t name = OpenViewport();
-        if (name == UINT32_MAX) {
-            return false;
-        }
-        // Newest viewport is at the highest index (OpenViewport appends).
-        const int vp_idx = active_viewport_count_ - 1;
-        cairns::ViewportId vid = viewport_ids_[vp_idx];
-        cairns::Viewport::Hot* vh = viewports_.GetHot(vid);
-        cairns::Viewport::Cold* vc = viewports_.GetCold(vid);
-        if (!vh || !vc) {
-            return false;
-        }
-        vc->fly.yaw = yaw_rad;
-        vc->particles_enabled = particles_on;
-        vh->camera_dirty = true;
-
-        // Load + instantiate. Path resolution goes through the engine's
-        // static-resource lookup (GetStaticResourceFilepath); the seam can
-        // pass a bare name like "aatrox.glb".
-        const uint32_t prefab_idx =
-            cairns::headless::RuntimeLoadGlbPath(this, glb_name);
-        if (prefab_idx == UINT32_MAX) {
-            return false;
-        }
-        // Normalize + place in front of the origin camera, same as the ladder
-        // spawn path, so the (large) champion fits the viewport instead of
-        // engulfing it.
-        const float extent = PrefabExtentMax(prefab_idx);
-        const std::vector<glm::mat4> worlds =
-            FitGridToViewport(1, std::span<const float>(&extent, 1));
-        const glm::vec3 center = PrefabAabbCenter(prefab_idx);
-        const glm::mat4 world =
-            worlds[0] * glm::translate(glm::mat4(1.0f), -center);
-        const uint32_t entity = InstantiatePrefab(prefab_idx, world,
-                                                   /*time_phase=*/0.0f);
-        return entity != UINT32_MAX;
-    }
-
-    // Load + normalize-to-frame + center one hero, spawn into the CURRENT
-    // active_scene_. animated=false uses the no-skin variant.
-    uint32_t SpawnHeroFramed(const std::string& glb, bool animated) {
-        const uint32_t pidx = cairns::headless::RuntimeLoadGlbPath(this, glb);
-        if (pidx == UINT32_MAX) {
-            return UINT32_MAX;
-        }
-        const float extent = PrefabExtentMax(pidx);
-        const std::vector<glm::mat4> worlds =
-            FitGridToViewport(1, std::span<const float>(&extent, 1));
-        const glm::vec3 center = PrefabAabbCenter(pidx);
-        const glm::mat4 world =
-            worlds[0] * glm::translate(glm::mat4(1.0f), -center);
-        return animated ? InstantiatePrefab(pidx, world, /*time_phase=*/0.0f)
-                        : InstantiatePrefabNoSkin(pidx, world);
     }
 
     // ---- General scene/viewport primitives composed from JS (cairns.dispatch).
@@ -5933,10 +5807,10 @@ private:
     // Engine::EnableParticles(bool). Tests default false; CLI shells default
     // true via shell/env_config.cpp.
     bool particles_enabled_ = false;
-    // A.6: flag indicating ConfigureNestedGraph has been called. Currently
+    // Set via SetNestedGraphMode (JS render.nestedGraph op). Currently
     // informational only -- the engine's render graph composes the right
     // shape (multiple forward passes, one per active viewport) regardless.
-    // Will gate the resolved-depth path once A.10 (ReadBackBuffer salvage)
+    // Will gate the resolved-depth path once the ReadBackBuffer salvage
     // is wired.
     bool nested_graph_mode_ = false;
     // A.7: stamped at end of BuildMeshOpaqueDraws every frame.

@@ -116,100 +116,6 @@ bool AdvanceFrames(cairns::Engine& engine, uint32_t n) {
     return true;
 }
 
-bool BuildScene(cairns::Engine& engine,
-                      const std::vector<std::string>& glbs,
-                      uint32_t instances, bool animated) {
-    EnsureImguiContextImpl();
-    if (glbs.empty()) {
-        // L1 triangle path: tiny_quad was set on EngineConfig at
-        // GreaterInit. Nothing else to do.
-        return true;
-    }
-    // C.16: resolve each glb name explicitly via RuntimeLoadGlbPath rather
-    // than cycling kDebugGlbs[cursor]. Now L4 viking_room actually loads
-    // viking_room.glb, L5/L6/L7 actually load ahri/akali/alistar.
-    std::vector<uint32_t> prefab_idxs;
-    prefab_idxs.reserve(glbs.size());
-    for (const std::string& name : glbs) {
-        const uint32_t idx = cairns::headless::RuntimeLoadGlbPath(&engine, name);
-        if (idx == UINT32_MAX) {
-            return false;
-        }
-        prefab_idxs.push_back(idx);
-    }
-    if (prefab_idxs.empty()) {
-        return false;
-    }
-    // Reframe: normalize each actor to a uniform on-screen footprint and place
-    // it in front of the origin camera (z=-4) via the engine's own content-fit.
-    // Self-tuning for arbitrary GLB scale -- the prior raw-scale placement +
-    // hand-tuned cam_pose cropped the (large) champions to the waist.
-    std::vector<float> extents(instances);
-    for (uint32_t i = 0; i < instances; ++i) {
-        extents[i] = engine.PrefabExtentMax(prefab_idxs[i % prefab_idxs.size()]);
-    }
-    const std::vector<glm::mat4> worlds =
-        engine.FitGridToViewport(instances, extents);
-    for (uint32_t i = 0; i < instances; ++i) {
-        const uint32_t scene_idx = prefab_idxs[i % prefab_idxs.size()];
-        // Center each actor's bind-AABB in its grid cell (feet-origin would
-        // otherwise push the body out the top of frame).
-        const glm::vec3 center = engine.PrefabAabbCenter(scene_idx);
-        const glm::mat4 world =
-            worlds[i] * glm::translate(glm::mat4(1.0f), -center);
-        // C.17: honor `animated`. Static rungs use the no-skin variant so
-        // L5 actually diverges from L6 instead of being byte-identical.
-        const uint32_t out = animated
-            ? engine.InstantiatePrefab(scene_idx, world, /*time_phase=*/0.0f)
-            : engine.InstantiatePrefabNoSkin(scene_idx, world);
-        if (out == UINT32_MAX) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool SpawnGlbs(cairns::Engine& engine,
-               const std::vector<std::string>& glbs, bool animated) {
-    return BuildScene(engine, glbs,
-                            static_cast<uint32_t>(glbs.size()), animated);
-}
-
-bool ClearSpawned(cairns::Engine& engine) {
-    // A.4: Engine already exposes ClearActiveScene() (engine.hpp:1086).
-    // Drains every entity in the active scene's entt::registry; asset slots
-    // (prefab pool, materials, meshes) stay valid -- that's the #228 recycle
-    // path G2 verifies. The return is the count of entities cleared (>= 0);
-    // for the seam we just need success.
-    (void)engine.ClearActiveScene();
-    return true;
-}
-
-bool OpenSecondViewport(cairns::Engine& engine, const char* glb,
-                        float yaw_rad, bool with_particles) {
-    // A.5: routes to Engine::OpenSecondViewport (engine.hpp). Opens viewport
-    // 1, places it at the right half (uniform tile), spawns one glb, sets
-    // the per-viewport particle gate. Returns false on viewport-cap or
-    // asset-resolve failure.
-    return engine.OpenSecondViewport(glb ? glb : "", yaw_rad, with_particles);
-}
-
-bool ConfigureNestedGraph(cairns::Engine& engine) {
-    // A.6: opens vp1 + vp2 at ±60° yaw so the existing render graph
-    // composes 3 forward passes (G4's "third camera" + nested). The
-    // resolved-depth SECTION still SKIPs until ReadBackBuffer salvage
-    // (A.10) is applied.
-    return engine.ConfigureNestedGraph();
-}
-
-bool SpawnInsideOutsideSplit(cairns::Engine& engine, const char* glb,
-                             uint32_t inside, uint32_t outside) {
-    // A.8: routes to Engine::SpawnInsideOutsideSplit. inside actors at
-    // origin (visible), outside actors at +99 axis offsets (off-frustum).
-    // G5 SECTION will still SKIP until the cull stage is real (A.7 note).
-    return engine.SpawnInsideOutsideSplit(glb ? glb : "", inside, outside);
-}
-
 bool LastFrameStats(cairns::Engine& engine, FrameStats& out) {
     // A.7: routes to Engine::LastFrameStats which populates the existing
     // submitted / draw_calls / verts_processed counters. `culled` is 0
@@ -237,25 +143,6 @@ bool ReadParticleBuffer(cairns::Engine& engine, std::vector<uint8_t>& out) {
     // is now *meaningful*; the readback itself is gated on A.10
     // (Resources::ReadBackBuffer) which is deferred. Returns false today.
     return engine.ReadParticleBuffer(out);
-}
-
-bool EnableImguiOverlay(cairns::Engine& engine, bool on) {
-    // A.9: routes to Engine::SetImguiInGolden, which lifts the "no imgui in
-    // golden" guard. Combined with SetInjectedHudStats (HudStats::Mock()),
-    // the rendered HUD is byte-stable so G6 image SECTION can compare an
-    // actual overlay capture to its baked ref.
-    engine.SetImguiInGolden(on);
-    return true;
-}
-
-bool InjectHudStats(cairns::Engine& engine, const cairns::HudStats& s) {
-    engine.SetInjectedHudStats(s);
-    return true;
-}
-
-bool EnableParticles(cairns::Engine& engine, bool on) {
-    engine.EnableParticles(on);
-    return true;
 }
 
 bool ReadFinalTargetRgba(cairns::Engine& engine,

@@ -16,7 +16,6 @@
 #include "engine_headless.hpp"
 #include "test_seams.hpp"
 #include "test_refs.hpp"
-#include "golden_subject.hpp"
 #include "golden_js.hpp"
 #include "util/hud_stats.hpp"
 
