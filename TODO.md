@@ -62,6 +62,15 @@ flaky, so investigate with a real repro before "fixing."
 
 ## #webgpu-browser-strictness — animated champions in Chrome (2026-06-22)
 
+**RESOLVED 2026-06-23 — the WebGPU/Chrome web app reached metal/vulkan SDL
+parity.** Same imgui scenario picker + HUD; all scenarios (triangle, dice,
+viking, static + ANIMATED champions, 20-champ + depth strip); CPU ray-cast
+pick + selection highlight; click-to-pick. The Dawn-strictness rejections below
+are fixed (anim_eval barrier, depthviz sampler), and the bundle was replaced
+with lazy GLB fetch-on-demand so the tab no longer OOMs. Remaining browser-only
+follow-ups (not parity blockers): the depthviz non-filtering note, async
+JS-dispatch under ASYNCIFY, the resize bug class.
+
 WebGPU reached full parity with metal in the **native/headless golden gate**
 (16 passed / 1 skipped / 282 assertions, identical to metal). The browser
 (Chrome/Dawn, the W6/W7 target) is STRICTER than native wgpu-native, so a few
