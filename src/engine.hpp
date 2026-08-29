@@ -145,6 +145,29 @@ public:
     void SetRandomSeed(uint32_t seed) { random_seed_ = seed; }
     uint32_t GetRandomSeed() const { return random_seed_; }
 
+    uint32_t GetFinalTargetWidth() const { return final_target_w_; }
+    uint32_t GetFinalTargetHeight() const { return final_target_h_; }
+
+    // Reallocate final_target_ at the new dimensions. Surfaceless mode only.
+    bool ResizeFinalTarget(uint32_t w, uint32_t h) {
+        if (final_target_.IsNull()) {
+            return false;
+        }
+        rhi_.resources.Destroy(rhi_.alloc, final_target_);
+        final_target_ = rhi::Handle<rhi::Texture>::Null;
+        final_target_w_ = w;
+        final_target_h_ = h;
+        rhi::TextureDesc td{};
+        td.debug_name = "final_target";
+        td.dimensions = {static_cast<int32_t>(w), static_cast<int32_t>(h), 1};
+        td.format = rhi::Format::kBgra8Unorm;
+        td.usage = rhi::kTexUsageColorTarget | rhi::kTexUsageSampled |
+                   rhi::kTexUsageTransferSrc;
+        td.memory = rhi::Memory::kDefault;
+        final_target_ = rhi_.resources.CreateTexture(rhi_.alloc, td);
+        return !final_target_.IsNull();
+    }
+
     // Headless (cairns_serve) minimum render: clear final_target_ to the
     // engine's clear color. Synchronous (waits for GPU completion). Returns
     // false if final_target_ isn't allocated (i.e. windowed mode -- caller

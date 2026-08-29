@@ -127,6 +127,7 @@ add_library(cairns_control STATIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/lifecycle_ops.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/perf_ops.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/render_ops.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/scene_ops.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/script_ops.cpp")
 target_include_directories(cairns_control PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src"

@@ -25,4 +25,25 @@ void SetRandomSeed(Engine* engine, uint32_t seed) {
     engine->SetRandomSeed(seed);
 }
 
+bool ResizeFinalTarget(Engine* engine, uint32_t w, uint32_t h) {
+    if (!engine) {
+        return false;
+    }
+    return engine->ResizeFinalTarget(w, h);
+}
+
+uint32_t GetFinalTargetWidth(Engine* engine) {
+    if (!engine) {
+        return 0;
+    }
+    return engine->GetFinalTargetWidth();
+}
+
+uint32_t GetFinalTargetHeight(Engine* engine) {
+    if (!engine) {
+        return 0;
+    }
+    return engine->GetFinalTargetHeight();
+}
+
 }  // namespace cairns::headless

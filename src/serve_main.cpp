@@ -22,6 +22,7 @@
 #include "control/handlers/lifecycle_ops.hpp"
 #include "control/handlers/perf_ops.hpp"
 #include "control/handlers/render_ops.hpp"
+#include "control/handlers/scene_ops.hpp"
 #include "control/handlers/script_ops.hpp"
 #include "control/transport_stdio.hpp"
 #include "engine.hpp"
@@ -52,7 +53,10 @@ int main() {
         std::fprintf(stderr, "[Engine] surfaceless GreaterInit ok.\n");
     }
     cairns::control::RegisterRenderOps(registry, engine_ok ? engine : nullptr);
+    cairns::control::RegisterSceneOps(registry, engine_ok ? engine : nullptr);
     cairns::control::RegisterPerfOps(registry, engine_ok ? engine : nullptr);
+    // Script ops must come LAST so tools.list inside script.eval reflects
+    // every other op already registered.
     cairns::control::RegisterScriptOps(registry);
 
     cairns::control::StdioTransport::Run(registry, std::cin, std::cout, &quit);

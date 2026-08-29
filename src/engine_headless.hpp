@@ -25,5 +25,13 @@ bool DumpFinalTarget(Engine* engine, const std::filesystem::path& path);
 // field but leaves the in-flight particle state alone.
 void SetRandomSeed(Engine* engine, uint32_t seed);
 
+// Reallocate final_target_ at the given dims. Returns false if the engine
+// is null, not surfaceless, or the allocation failed. Used by
+// window.resize in headless mode.
+bool ResizeFinalTarget(Engine* engine, uint32_t w, uint32_t h);
+
+uint32_t GetFinalTargetWidth(Engine* engine);
+uint32_t GetFinalTargetHeight(Engine* engine);
+
 }  // namespace headless
 }  // namespace cairns
