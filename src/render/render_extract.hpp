@@ -10,10 +10,7 @@ namespace cairns {
 
 inline void Extract(const SceneWorld& world, RenderProxyArrays& out) {
     out.Clear();
-    // Reuse the traversal stack across frames -- capacity persists, only the
-    // size resets to 0 via clear(). thread_local so a future multi-threaded
-    // Extract caller stays correct.
-    static thread_local std::vector<int32_t> stack;
+    std::vector<int32_t> stack;
     for (const SceneEntity& entity : world.entities) {
         if (entity.scene_index >= world.scene_count) {
             continue;

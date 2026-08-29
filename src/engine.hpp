@@ -459,9 +459,7 @@ public:
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.1f, 0.1f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_PlotLines, ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
-            ImGui::SetNextWindowSize(ImVec2(420.0f, 0.0f), ImGuiCond_Always);
             ImGui::Begin("cairns", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
-            ImGui::SetWindowFontScale(2.0f);
             const float fps = cpu_ms_last_ > 0.0f ? 1000.0f / cpu_ms_last_ : 0.0f;
             float ms_max = 1.0f;
             float ms_avg = 0.0f;
@@ -715,9 +713,10 @@ public:
             // width so HiDPI / mobile displays don't render a postage-stamp
             // overlay. 1280px is the desktop reference width.
             ImGuiIO& io = ImGui::GetIO();
-            const float kRefWidth = 1280.0f;
-            const float dpi_scale =
-                std::max(1.0f, static_cast<float>(swapchain_.Width()) / kRefWidth);
+            const float kRefWidth = 900.0f;
+            const float raw_scale =
+                static_cast<float>(swapchain_.Width()) / kRefWidth;
+            const float dpi_scale = std::clamp(raw_scale, 1.0f, 2.0f);
             ImFontConfig fc;
             fc.SizePixels = 13.0f * dpi_scale;
             io.Fonts->Clear();
