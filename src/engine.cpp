@@ -315,6 +315,17 @@ bool Engine::deinit() {
         rhi_.resources.Deinit();
         rhi_.alloc.Deinit();
         rhi_.device.Deinit();
+        // Return the oversize BumpArena slabs carved from cpu_block_ (the
+        // per-slot frame arenas + the prefab interning arena). BumpArena doesn't
+        // own its slab, and cpu_block_'s Deinit reclaims only the chunk pool --
+        // NOT oversize mallocs -- so without this they leak (Release) and trip
+        // cpu_block_'s outstanding-balance assert (Debug) when it destructs.
+        for (PerSlot& s : slots_) {
+            cpu_block_.Free(s.arena.Base());
+            s.arena.Init(nullptr, 0);  // idempotent if deinit() runs twice
+        }
+        cpu_block_.Free(prefab_arena_.Base());
+        prefab_arena_.Init(nullptr, 0);
         return true;
     }
 

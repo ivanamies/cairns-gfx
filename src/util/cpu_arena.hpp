@@ -113,6 +113,9 @@ struct BumpArena {
     size_t Capacity() const { return capacity_; }
     // Peak bytes since Init -- size the slab from a real run instead of guessing.
     size_t HighWater() const { return high_water_; }
+    // The caller-provided slab base. BumpArena never owns/frees it; the owner
+    // that carved it (from cpu_block_ etc.) returns it there at teardown.
+    void* Base() const { return base_; }
 
 private:
     uint8_t* base_ = nullptr;
