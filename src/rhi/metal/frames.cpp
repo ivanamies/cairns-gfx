@@ -129,6 +129,13 @@ void Frames::SetDumpPath(const std::filesystem::path& path) {
 // to flush.
 void Frames::OnSurfaceResize() {}
 
+void Frames::WriteSkinGroupBDescriptors(Resources& /*resources*/,
+                                          Allocator& /*alloc*/,
+                                          Handle<Buffer> /*output_pool*/) {
+    // Metal: compute path binds buffers directly per batch via
+    // setBuffer:offset:atIndex: in DispatchSkinBatches; no Group B set.
+}
+
 FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
                             const SwapResolveTarget& target) {
     dispatch_semaphore_wait(static_cast<dispatch_semaphore_t>(plat.frame_semaphore_),

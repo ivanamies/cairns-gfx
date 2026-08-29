@@ -247,43 +247,13 @@ void CommandRecorder::DispatchSkinBatches(
     if (!k) {
         return;
     }
-    VkBuffer dyn_master =
-        res.plat.GetVkBumpMasterBuffer(alloc, Memory::kDynamic);
-    uint32_t pool_master_off = 0;
-    VkBuffer pool_buf = res.plat.GetVkBuffer(alloc, output_pool_buffer,
-                                                &pool_master_off);
-
-    // Group B writes (once per call). Dynamic bindings use a SAFE per-batch
-    // upper bound for `range`; the per-dispatch dynamic offset selects the
-    // active window starting at that byte. Params 64B, Palettes 64KB (1024
-    // joints * mat4), InstanceMeta 16KB (1024 instances * uvec2). The pool
-    // is bound whole at its master base offset.
-    VkDescriptorBufferInfo bi[4]{};
-    VkWriteDescriptorSet w[4]{};
-    bi[0].buffer = dyn_master;
-    bi[0].offset = 0;
-    bi[0].range = 64u;
-    bi[1].buffer = dyn_master;
-    bi[1].offset = 0;
-    bi[1].range = 65536u;
-    bi[2].buffer = dyn_master;
-    bi[2].offset = 0;
-    bi[2].range = 16384u;
-    bi[3].buffer = pool_buf;
-    bi[3].offset = pool_master_off;
-    bi[3].range = VK_WHOLE_SIZE;
-    for (uint32_t i = 0; i < 4; ++i) {
-        w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[i].dstSet = plat.skin_group_b_set_;
-        w[i].dstBinding = i;
-        w[i].descriptorCount = 1;
-        w[i].pBufferInfo = &bi[i];
-    }
-    w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-    w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
-    w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
-    w[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    vkUpdateDescriptorSets(plat.device_, 4, w, 0, nullptr);
+    // Group B descriptors are written ONCE at engine init
+    // (Frames::WriteSkinGroupBDescriptors). Per-dispatch we just provide
+    // 3 dynamic byte offsets at vkCmdBindDescriptorSets time -- avoids
+    // VUID-vkUpdateDescriptorSets-None-03047 (set in use by pending cmd
+    // buffer) that fires when re-writing a sets-in-flight set every frame.
+    (void)alloc;
+    (void)output_pool_buffer;
 
     vkCmdBindPipeline(plat.comp_, VK_PIPELINE_BIND_POINT_COMPUTE,
                        k->plat.vk_pipeline);

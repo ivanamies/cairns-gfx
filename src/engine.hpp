@@ -1044,6 +1044,14 @@ public:
             return false;
         }
         initSkinKernel();  // best-effort; missing shader doesn't fail GreaterInit.
+        // #221 Phase 9 (vk): write the per-frame skin_group_b descriptors
+        // ONCE here (kernel + pool both ready). Per-dispatch we just bind
+        // with 3 dynamic byte offsets, avoiding VUID-03047 (set in use by
+        // pending cmd) that fires when re-writing each frame. Metal: no-op.
+        if (!skin_kernel_.IsNull() && !skin_output_pool_buffer_.IsNull()) {
+            rhi_.frames.WriteSkinGroupBDescriptors(
+                rhi_.resources, rhi_.alloc, skin_output_pool_buffer_);
+        }
         if ( !initParticles() ) {
             CAIRNS_PRINT("GreaterInit: initParticles failed\n");
             return false;

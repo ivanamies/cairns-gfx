@@ -72,6 +72,17 @@ public:
     // Request a one-shot swapchain dump on the next End(). CALLER: ENGINE.
     void SetDumpPath(const std::filesystem::path& path);
 
+    // #221 Phase 9 (vk): one-time descriptor write for every skin_group_b
+    // set (kFramesInFlight of them) once the kDynamic master buffer + the
+    // skin output pool are both real. Group B's three DYNAMIC bindings
+    // (Params/Palettes/InstanceMeta) are aliased onto the master kDynamic
+    // buffer with per-binding `range` set to a safe per-batch upper bound;
+    // the per-dispatch dynamic offset selects the active window. Group B
+    // binding 3 (OutputPool) is bound whole. Metal: no-op. CALLER: ENGINE
+    // (post initSkinKernel + skin_output_pool_buffer_ create).
+    void WriteSkinGroupBDescriptors(Resources& resources, Allocator& alloc,
+                                     rhi::Handle<rhi::Buffer> output_pool);
+
     // Called by the engine after a window-resize is applied. Metal no-op
     // (drawable resize is handled implicitly per-frame). Vk wipes the
     // offscreen-target-cache framebuffers (sized at create-time against

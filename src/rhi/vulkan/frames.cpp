@@ -522,6 +522,53 @@ void Frames::OnSurfaceResize() {
     plat.offscreen_target_cache_.FlushFramebuffers();
 }
 
+void Frames::WriteSkinGroupBDescriptors(Resources& resources,
+                                          Allocator& alloc,
+                                          Handle<Buffer> output_pool) {
+    if (plat.skin_group_b_sets_.empty() || output_pool.IsNull()) {
+        return;
+    }
+    VkBuffer dyn_master =
+        resources.plat.GetVkBumpMasterBuffer(alloc, Memory::kDynamic);
+    uint32_t pool_master_off = 0;
+    VkBuffer pool_buf = resources.plat.GetVkBuffer(alloc, output_pool,
+                                                    &pool_master_off);
+    if (dyn_master == VK_NULL_HANDLE || pool_buf == VK_NULL_HANDLE) {
+        return;
+    }
+    for (VkDescriptorSet set : plat.skin_group_b_sets_) {
+        if (set == VK_NULL_HANDLE) {
+            continue;
+        }
+        VkDescriptorBufferInfo bi[4]{};
+        VkWriteDescriptorSet w[4]{};
+        bi[0].buffer = dyn_master;
+        bi[0].offset = 0;
+        bi[0].range = 64u;
+        bi[1].buffer = dyn_master;
+        bi[1].offset = 0;
+        bi[1].range = 65536u;
+        bi[2].buffer = dyn_master;
+        bi[2].offset = 0;
+        bi[2].range = 16384u;
+        bi[3].buffer = pool_buf;
+        bi[3].offset = pool_master_off;
+        bi[3].range = VK_WHOLE_SIZE;
+        for (uint32_t i = 0; i < 4; ++i) {
+            w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[i].dstSet = set;
+            w[i].dstBinding = i;
+            w[i].descriptorCount = 1;
+            w[i].pBufferInfo = &bi[i];
+        }
+        w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+        w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+        w[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        vkUpdateDescriptorSets(plat.device_, 4, w, 0, nullptr);
+    }
+}
+
 FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
                             const SwapResolveTarget& target) {
     // Surfaceless mode (target.plat.swap_chain == nullptr): no swapchain
