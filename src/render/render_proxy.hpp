@@ -2,16 +2,23 @@
 
 #include "core/handle.hpp"  // #220 Step 1: cairns::Handle template
 #include "rhi/resource_manager.hpp"
+#include "util/cpu_pool.hpp"  // #221 Phase 3: PoolSlice for SkinnedAttachment
 
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <string>
 
 namespace cairns {
 
 // #220 Step 1: forward-decl so PrimitiveProxy::material_id can be a
 // Handle<LoadedMaterial> without dragging in gltf_loader.hpp.
 struct LoadedMaterial;
+// #221 Phase 3: forward-decl for SkinnedAttachment::Hot::mesh handle.
+struct Mesh;
+// #221 Phase 3: SceneId forward-pass (real def in asset_registry.hpp).
+struct Scene;
+using SceneId = Handle<Scene>;
 
 static constexpr uint32_t kInvalidSkin = 0xFFFFFFFFu;
 
@@ -63,10 +70,35 @@ struct PointProxy {
     uint32_t is_2d_overlay = 0;
 };
 
+// #221 Skinning Phase 3: Aaltonen Hot/Cold split for SkinnedAttachment.
+// Pooled via cairns::ResourceManager<SkinnedAttachment> on Engine; SkinId
+// = Handle<SkinnedAttachment>. Hot is what the per-frame skin path reads
+// every dispatch (slice + joint_count + clip ref + time); Cold carries
+// the scene/skin-index resolution path used at palette eval to recover
+// the joint set + inverse binds, plus a debug name.
+//
+// The slice is the per-actor slab in skin_output_pool_, measured in vec4
+// (16 B) vertex units. Skinned draws point stream 0 at
+// (pool_buffer, slice.offset * 16).
 struct SkinnedAttachment {
-    rhi::Handle<rhi::Buffer> joint_matrices;
-    uint32_t joint_count = 0;
+    struct Hot {
+        cairns::PoolSlice slice;
+        uint32_t joint_count = 0;
+        // Scene-local clip index (-1 = bind pose / no animation).
+        int32_t clip_index = -1;
+        // Sim-time phase + speed for clip eval (TODO determinism).
+        float time_offset = 0.0f;
+        float time_scale = 1.0f;
+        // Mesh the slice was sized for; kernel uses mesh.vert_count.
+        cairns::Handle<Mesh> mesh;
+    };
+    struct Cold {
+        cairns::SceneId scene;
+        uint32_t skin_index = 0;
+        std::string name;
+    };
 };
+using SkinId = Handle<SkinnedAttachment>;
 
 struct LightProxy {
     glm::vec4 position = glm::vec4(0.0f);

@@ -31,6 +31,7 @@
 
 #pragma once
 
+#include "core/handle.hpp"  // #221 Phase 3: Handle for SkinId.
 #include "scene/asset_registry.hpp"
 
 #include <entt/entt.hpp>
@@ -42,6 +43,11 @@
 #include <string>
 
 namespace cairns {
+
+// #221 Skinning Phase 3: forward-decl so Skin can carry a SkinId without
+// pulling render/render_proxy.hpp into the component header.
+struct SkinnedAttachment;
+using SkinId = Handle<SkinnedAttachment>;
 
 // Authored: position + rotation + scale. Composed into a 4x4 by the
 // transform propagation pass (P7).
@@ -84,6 +90,20 @@ struct DirtyTransform {};
 // signature explicitly does not get the Name component).
 struct Name {
     std::string value;
+};
+
+// #221 Skinning Phase 3: per-entity Skin reference. Carries a SkinId
+// into Engine::skins_ (ResourceManager<SkinnedAttachment>). The actor's
+// per-frame palette + skin compute dispatch are driven by this id; the
+// generational handle catches stale references when an actor despawns
+// and a new actor reuses the slot.
+//
+// Named SkinRef (not Skin) to avoid colliding with the glTF Skin schema
+// type in src/util/gltf_loader.hpp -- this component holds a SkinId
+// into a pool whose Cold->scene + skin_index point back at one of those
+// glTF skins. Audit comment above predates the disambiguation.
+struct SkinRef {
+    SkinId id;
 };
 
 // Camera role #2 (Camera as a placed entity, per the resizing+cameras

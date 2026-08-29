@@ -24,6 +24,8 @@
 
 #include "render/worker_context.hpp"
 #include "util/cpu_arena.hpp"
+#include "util/cpu_pool.hpp"  // #221 Phase 3: RangePool for skin_output_pool_.
+#include "render/render_proxy.hpp"  // #221 Phase 3: SkinnedAttachment Hot/Cold.
 
 #include "gfx_api.hpp"
 #include "rhi/init_config.hpp"
@@ -727,6 +729,27 @@ public:
         if (!rhi_.resources.Init(rhi_.device)) {
             CAIRNS_PRINT("GreaterInit: resources.Init failed\n");
             return false;
+        }
+        // #221 Skinning Phase 3: persistent 256 MB skin output pool. Buffer
+        // is private-heap (kDefault); RangePool measures slices in vec4
+        // vertex units. Sized once at init; Phase 5 fails loudly on
+        // exhaustion (Alloc returns invalid slice). >kHeapBlockBytes (128
+        // MB) drops into the dedicated-block path in
+        // MemoryAllocator::AllocBuffer, so we land in our own VkDeviceMemory.
+        {
+            static constexpr uint32_t kSkinOutputBytes =
+                256u * 1024u * 1024u;
+            rhi::BufferDesc bd{};
+            bd.byte_size = kSkinOutputBytes;
+            bd.usage = rhi::kUsageStorage | rhi::kUsageVertex;
+            bd.memory = rhi::Memory::kDefault;
+            skin_output_pool_buffer_ = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
+            if (skin_output_pool_buffer_.IsNull()) {
+                CAIRNS_PRINT("GreaterInit: skin_output_pool_buffer_ alloc failed\n");
+                return false;
+            }
+            // Slices in vec4 units (16 B). Capacity = total / 16.
+            skin_output_pool_.Init(kSkinOutputBytes / 16u);
         }
         if (!rhi_.frames.Init(rhi_.device)) {
             CAIRNS_PRINT("GreaterInit: frames.Init failed\n");
@@ -2408,6 +2431,16 @@ private:
     // holds std::vector<MeshId>.
     cairns::ResourceManager<cairns::Mesh> meshes_;
 
+    // #221 Skinning Phase 3: handle-pilled SkinnedAttachment pool +
+    // persistent GPU output pool. skin_output_pool_ is a RangePool over
+    // skin_output_pool_buffer_ (256 MB private heap) measured in vec4
+    // vertex units (Alloc(n) -> slice for n verts; bind offset =
+    // slice.offset * sizeof(vec4)). skins_ wraps generation counters
+    // around the per-actor SkinnedAttachment::Hot/Cold records.
+    cairns::ResourceManager<cairns::SkinnedAttachment> skins_;
+    rhi::Handle<rhi::Buffer> skin_output_pool_buffer_;
+    cairns::RangePool skin_output_pool_;
+
     // Per-slot frame buffers (drawList / drawListSorted / proxies /
     // resident_textures / draw_world_matrices / pending_globals / globals_offset
     // / dt_off / FramePacket). See PerSlot above.
@@ -2473,12 +2506,13 @@ private:
     uint8_t viewport_names_count_ = 0;
     uint32_t next_viewport_name_ = 0;
 
-    // #210 per-slot CPU arena capacity. 4 MiB headroom covers
-    // RenderGraph::Bake scratch + PassRecord int spans + CommandRecorder
-    // dispatch scratch + everything else the record path needs. Stored on
-    // PerSlot (the slot IS the lock). Initialized in initCpuAllocators,
-    // Reset()'d at slot Acquire (render thread already drained).
-    static constexpr size_t kArenaBytesPerSlot = 4u * 1024u * 1024u;
+    // #210 per-slot CPU arena capacity. #221 Phase 3 raise to 16 MiB to
+    // cover the per-frame palette/InstanceMeta/SkinMeshBatch arrays the
+    // skin pipeline parks here (Phase 5 will print HighWater() and we'll
+    // resize from data). Stored on PerSlot (the slot IS the lock).
+    // Initialized in initCpuAllocators, Reset()'d at slot Acquire (render
+    // thread already drained).
+    static constexpr size_t kArenaBytesPerSlot = 16u * 1024u * 1024u;
 
     rhi::Rhi rhi_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;

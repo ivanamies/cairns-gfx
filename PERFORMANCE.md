@@ -5,6 +5,26 @@ Newest first.
 
 ---
 
+## `<skinning P3>` (2026-06-09) — #221 Skinning Phase 3: ring growth + persistent skin output pool
+
+Memory budget note (no perf rows yet -- skinned content not loaded yet):
+
+- `kDynamic` per-slot ring grown 16 MB -> 32 MB on both backends
+  (`src/rhi/vulkan/memory_allocator.cpp:73` + Metal mirror at
+  `src/rhi/metal/memory_allocator.cpp:91`). Cost: +16 MB / slot *
+  `kFramesInFlight` host-visible memory per backend. Drives palette /
+  InstanceMeta / Params bumps in Phase 5 (palettes alone ~12 MB at the
+  v7 3000-actor target).
+- `kArenaBytesPerSlot` raised 4 MiB -> 16 MiB
+  (`src/engine.hpp:kArenaBytesPerSlot`). Covers per-frame skin staging on
+  the per-slot CPU arena; Phase 5 will print `BumpArena::HighWater()` and
+  the constant may be revised from data in that commit.
+- `skin_output_pool_buffer_` 256 MB persistent storage buffer (dedicated
+  block via `MemoryAllocator::AllocBuffer`'s >`kHeapBlockBytes` path),
+  wrapped by `cairns::RangePool skin_output_pool_` in vec4 units.
+
+---
+
 ## `88f7d70+` (2026-06-08) — #220 Steps 1+2+3 (handle-ify LoadedMaterial / Mesh / Scene) + render_graph PassRecord vectors -> std::array push_or_die + multithreaded build_draws experiment (WorkerPool, max-4 cap)
 
 What changed since `dc9b669+`:

@@ -88,7 +88,9 @@ bool MemoryAllocator::Init(MTL::Device* device) {
 
     // Per-slot byte budget for each Memory type. Heap = sum * kFramesInFlight.
     bump_.slot_size[mem_index(Memory::kUpload)]   = 64u * 1024u * 1024u;
-    bump_.slot_size[mem_index(Memory::kDynamic)]  = 16u * 1024u * 1024u;
+    // #221 Phase 3: 16 -> 32 MB. Matches the Vulkan side; reasoning is in
+    // src/rhi/vulkan/memory_allocator.cpp's Phase-3 comment.
+    bump_.slot_size[mem_index(Memory::kDynamic)]  = 32u * 1024u * 1024u;
     bump_.slot_size[mem_index(Memory::kReadback)] =  8u * 1024u * 1024u;
     bump_.slot_size[mem_index(Memory::kDefault)]  = 0;
     bump_.slot_size[mem_index(Memory::kTransient)] = 0;

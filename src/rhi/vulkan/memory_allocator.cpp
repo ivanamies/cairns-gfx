@@ -70,7 +70,11 @@ bool MemoryAllocator::Init(VkDevice device, VkPhysicalDevice phys,
     vkGetPhysicalDeviceMemoryProperties(physical_, &mem_props_);
 
     bump_.slot_size[static_cast<size_t>(Memory::kUpload)]   = 64u * 1024u * 1024u;
-    bump_.slot_size[static_cast<size_t>(Memory::kDynamic)]  = 16u * 1024u * 1024u;
+    // #221 Phase 3: 16 -> 32 MB. Palettes alone are ~12 MB at the v7 3000-
+    // skinned-actor target (3000 * 64 joints * sizeof(mat4) = 12 MB);
+    // existing UBO traffic + InstanceMeta + Params + headroom needs the
+    // doubling. Host-visible memory cost: +16 MB / slot * kFramesInFlight.
+    bump_.slot_size[static_cast<size_t>(Memory::kDynamic)]  = 32u * 1024u * 1024u;
     bump_.slot_size[static_cast<size_t>(Memory::kReadback)] =  8u * 1024u * 1024u;
 
     uint32_t running = 0;
