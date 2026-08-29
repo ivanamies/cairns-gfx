@@ -1203,6 +1203,11 @@ public:
         rhi_.resources.Deinit();
         rhi_.alloc.Deinit();
         rhi_.device.Deinit();
+        // Return the FrameArena slab to B before its destructor runs.
+        if (frame_arena_slab_ != nullptr) {
+            hot_arena_.Free(frame_arena_slab_);
+            frame_arena_slab_ = nullptr;
+        }
         return true;
     }
     
