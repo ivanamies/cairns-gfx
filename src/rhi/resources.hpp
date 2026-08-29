@@ -33,13 +33,7 @@ class Allocator;
 // into final_target_ via the swap pass; vk's render-to-texture (#199) isn't
 // wired yet, so surfaceless mode bails before the render thread spins up.
 // Engine consults this instead of #if CAIRNS_METAL.
-inline constexpr bool kSupportsSurfacelessRender =
-#if CAIRNS_METAL
-    true
-#else
-    false
-#endif
-    ;
+inline constexpr bool kSupportsSurfacelessRender = true;
 
 class Resources {
 public:

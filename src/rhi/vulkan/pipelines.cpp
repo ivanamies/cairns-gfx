@@ -436,7 +436,7 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     // Swapchain pipelines bind the swapchain's (MSAA) render pass; offscreen
     // pipelines build a single-sample compat render pass, destroyed below.
     VkRenderPass compat_rp = VK_NULL_HANDLE;
-    if (desc.swap_chain) {
+    if (desc.swap_chain && desc.swap_chain->plat.renderPass != VK_NULL_HANDLE) {
         pi.renderPass = desc.swap_chain->plat.renderPass;
     } else {
         const bool has_color = desc.color_format != Format::kUndefined;

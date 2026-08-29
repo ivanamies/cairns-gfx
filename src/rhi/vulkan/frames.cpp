@@ -437,10 +437,13 @@ void Frames::OnSurfaceResize() {
 
 FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
                             const SwapResolveTarget& target) {
-    // vk path is window-bound today; target.plat.swap_chain must be set. The
-    // render-to-texture vk path (future) will land alongside the metal
-    // shape and drop this assert.
-    SwapChain& sc = *target.plat.swap_chain;
+    // Surfaceless mode (target.plat.swap_chain == nullptr): no swapchain
+    // image to acquire, no image_available semaphore to signal, no present.
+    // Frames goes through the same render-pass + offscreen-framebuffer path
+    // (BeginRenderPass routes via the offscreen target cache when the swap
+    // pass's color target is non-null final_target_).
+    const bool surfaceless = target.plat.swap_chain == nullptr;
+    SwapChain* sc = surfaceless ? nullptr : target.plat.swap_chain;
     const uint32_t cf = plat.recorder_frame_;
     VkDevice dev = plat.device_;
 
@@ -479,13 +482,15 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
     resources.AdvanceFrame(alloc);  // bump ring reset
 
     uint32_t image_index = 0;
-    VkResult acquire = vkAcquireNextImageKHR(dev, sc.plat.swapChain, UINT64_MAX,
-                                             plat.image_available_[cf], VK_NULL_HANDLE,
-                                             &image_index);
-    if (acquire == VK_ERROR_OUT_OF_DATE_KHR) {
-        sc.plat.RecreateSwapChain();
-        vkAcquireNextImageKHR(dev, sc.plat.swapChain, UINT64_MAX, plat.image_available_[cf],
-                              VK_NULL_HANDLE, &image_index);
+    if (sc) {
+        VkResult acquire = vkAcquireNextImageKHR(dev, sc->plat.swapChain, UINT64_MAX,
+                                                 plat.image_available_[cf], VK_NULL_HANDLE,
+                                                 &image_index);
+        if (acquire == VK_ERROR_OUT_OF_DATE_KHR) {
+            sc->plat.RecreateSwapChain();
+            vkAcquireNextImageKHR(dev, sc->plat.swapChain, UINT64_MAX,
+                                  plat.image_available_[cf], VK_NULL_HANDLE, &image_index);
+        }
     }
     vkResetFences(dev, 1, &plat.in_flight_[cf]);
     vkResetCommandBuffer(plat.graphics_cmds_[cf], 0);
@@ -532,7 +537,8 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc,
 
 // Render-thread safe. End all open command buffers + vkQueueSubmit both
 // queues. Does NOT call vkQueuePresentKHR -- see Present below.
-void Frames::EndSubmit(const SwapResolveTarget& /*target*/, FrameContext& fc) {
+void Frames::EndSubmit(const SwapResolveTarget& target, FrameContext& fc) {
+    const bool surfaceless = target.plat.swap_chain == nullptr;
     CommandRecorder& ri = fc.cmd;
     const uint32_t cf = fc.frame_index;
 
@@ -548,17 +554,19 @@ void Frames::EndSubmit(const SwapResolveTarget& /*target*/, FrameContext& fc) {
     vkEndCommandBuffer(ri.plat.gfx_);
     VkSubmitInfo gsi{};
     gsi.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    // Surfaceless: no image_available (no acquire). Wait only on compute.
     VkSemaphore wait_sems[2] = {plat.compute_finished_[cf],
                                 plat.image_available_[cf]};
     VkPipelineStageFlags wait_stages[2] = {VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
                                            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-    gsi.waitSemaphoreCount = 2;
+    gsi.waitSemaphoreCount = surfaceless ? 1u : 2u;
     gsi.pWaitSemaphores = wait_sems;
     gsi.pWaitDstStageMask = wait_stages;
     gsi.commandBufferCount = 1;
     gsi.pCommandBuffers = &plat.graphics_cmds_[cf];
-    gsi.signalSemaphoreCount = 1;
-    gsi.pSignalSemaphores = &plat.render_finished_[cf];
+    // Surfaceless: nobody will wait on render_finished (no present).
+    gsi.signalSemaphoreCount = surfaceless ? 0u : 1u;
+    gsi.pSignalSemaphores = surfaceless ? nullptr : &plat.render_finished_[cf];
     vkQueueSubmit(plat.graphics_queue_, 1, &gsi, plat.in_flight_[cf]);
 }
 
@@ -567,8 +575,16 @@ void Frames::EndSubmit(const SwapResolveTarget& /*target*/, FrameContext& fc) {
 // Calling from a render-thread worker fires CA_ASSERT_MAIN_THREAD_TRANSACTIONS
 // under Instruments (and is undefined behavior otherwise).
 void Frames::Present(const SwapResolveTarget& target, FrameContext& fc) {
-    SwapChain& sc = *target.plat.swap_chain;
     const uint32_t cf = fc.frame_index;
+    // Surfaceless: no swapchain to present to. Wait for the graphics
+    // submit to finish so io.dumpTexture / final_target_ sampling sees
+    // the rendered pixels, then advance the frame counter.
+    if (target.plat.swap_chain == nullptr) {
+        vkWaitForFences(plat.device_, 1, &plat.in_flight_[cf], VK_TRUE, UINT64_MAX);
+        plat.recorder_frame_ = (cf + 1) % plat.frames_in_flight_;
+        return;
+    }
+    SwapChain& sc = *target.plat.swap_chain;
 
     VkPresentInfoKHR pi{};
     pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;

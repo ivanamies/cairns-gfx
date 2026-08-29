@@ -907,11 +907,20 @@ bool Resources::ClearColorTexture(Handle<Texture> h, const float color[4]) {
     return true;
 }
 
-// vk render-to-texture (#199) not yet wired -- engine bails on surfaceless
-// init before render_thread_ is constructed, so this stub is never reached.
+// vk surfaceless render-to-texture (#199): target.plat.swap_chain stays
+// null (sentinel for "no swapchain"); Frames::Begin / EndSubmit / Present
+// + CommandRecorder::BeginRenderPass all gate on swap_chain == nullptr.
+// The graph's swap pass writes final_target_ as desc.color[0].target, so
+// BeginRenderPass picks up the offscreen framebuffer over the texture's
+// VkImageView via the existing offscreen-target cache -- nothing new on
+// the renderpass side.
 SwapResolveTarget Resources::MakeSurfacelessSwapResolveTarget(
-    Handle<Texture> /*h*/, uint32_t /*w*/, uint32_t /*h_px*/) {
-    return SwapResolveTarget{};
+    Handle<Texture> /*h*/, uint32_t w, uint32_t h_px) {
+    SwapResolveTarget t;
+    t.width = w;
+    t.height = h_px;
+    t.plat.swap_chain = nullptr;
+    return t;
 }
 
 }  // namespace cairns::rhi

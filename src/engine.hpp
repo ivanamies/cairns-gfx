@@ -225,8 +225,11 @@ public:
     // now"; the highlight set names "what should glow". Both live on Engine
     // today; multi-world will move them onto World once #195 lands. The GPU
     // ID buffer + outline shader + the actual pick readback are a separate
-    // follow-up (#204..#206); RequestPick just records the click coordinate
-    // so the handler can resolve it once the GPU side is wired.
+    // follow-up (#206..#208); RequestPick just records the click coordinate
+    // so the handler can resolve it once the GPU side is wired. Full
+    // screen->world ray picking is NOT a follow-up -- it was deliberately
+    // replaced by the ID-buffer + readback path: O(1) per click, exact (no
+    // geometry-vs-ray accuracy gap), cheap GPU-side, no scene-graph traversal.
 
     const std::vector<cairns::SelectionTarget>& Selection() const { return selection_; }
     const std::vector<cairns::SelectionTarget>& Highlights() const { return highlights_; }
@@ -347,17 +350,7 @@ public:
         if (final_target_.IsNull()) {
             return false;
         }
-        if constexpr (rhi::kSupportsSurfacelessRender) {
-            return draw();
-        } else {
-            // vk surfaceless full-scene render not wired yet (#199). Clear
-            // to the engine's background so io.dumpTexture has something
-            // deterministic to hand back.
-            constexpr float kEngineClearColor[4] = {
-                41.0f / 255.0f, 42.0f / 255.0f, 48.0f / 255.0f, 1.0f};
-            return rhi_.resources.ClearColorTexture(final_target_,
-                                                     kEngineClearColor);
-        }
+        return draw();
     }
 
     // Headless texture readback: blit final_target_ -> Shared buffer ->
@@ -649,13 +642,6 @@ public:
             if (final_target_.IsNull()) {
                 CAIRNS_PRINT("GreaterInit: final_target_ create failed\n");
                 return false;
-            }
-            if constexpr (!rhi::kSupportsSurfacelessRender) {
-                // vk render-to-texture not yet wired (needs a render_pass +
-                // framebuffer over final_target_'s VkImageView, replacing
-                // the SwapChain ones). RenderHeadlessFrame falls back to a
-                // clear; the render thread never spins up.
-                return true;
             }
         }
         if ( !initRenderPipeline() ) {
@@ -1295,7 +1281,14 @@ public:
                 rhi::GraphTextureDesc td{};
                 td.width = fb_w;
                 td.height = fb_h;
-                swap_tex = b.ImportTexture(rhi::Handle<rhi::Texture>::Null, td);
+                // Surfaceless: import final_target_ as the swap output so
+                // BeginRenderPass routes through the offscreen-target-cache
+                // (target.IsNull() == false). Windowed: import null and let
+                // BeginRenderPass take the is_swapchain branch.
+                const rhi::Handle<rhi::Texture> swap_handle =
+                    final_target_.IsNull() ? rhi::Handle<rhi::Texture>::Null
+                                            : final_target_;
+                swap_tex = b.ImportTexture(swap_handle, td);
                 b.AddColorOutput("swapchain", swap_tex, rhi::LoadOp::kClear, clear);
                 for (int v = 0; v < kNumViewports; ++v) {
                     b.AddAttachmentInput(color_off[v]);
