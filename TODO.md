@@ -7,6 +7,39 @@ here.
 
 ---
 
+## #webgpu-browser-strictness — animated champions in Chrome (2026-06-22)
+
+WebGPU reached full parity with metal in the **native/headless golden gate**
+(16 passed / 1 skipped / 282 assertions, identical to metal). The browser
+(Chrome/Dawn, the W6/W7 target) is STRICTER than native wgpu-native, so a few
+things that pass the native gate are rejected in Chrome. STATIC champions render
+fine in-browser (W7 move-a-champion works); ANIMATED (skinned) champions hit:
+
+- **anim_eval has 12 storage buffers; Chrome's `maxStorageBuffersPerShaderStage`
+  is 10** (Dawn-Metal cap; `web_main.cpp` already requests the adapter max).
+  → `CreateBindGroupLayout` fails in-browser, so the anim_eval dyn bindings are
+  invalid (warning, but skinning is silently disabled). Fix: pack 2+ of the 12
+  anim SSBOs into fewer buffers (e.g. concatenate the small int index streams
+  parent/topo/joint_nodes behind global offsets, or fold world_scratch into the
+  palette pool). Engine-side change to the anim-table flatten (`uploadAnimTablesGpu`)
+  + the kernel indexing, across all 3 backends + a re-bake. Native is unaffected
+  (its adapter exposes ≥12).
+- **anim_eval `workgroupBarrier()` is in non-uniform control flow** (Dawn rejects;
+  wgpu-native accepts). The stage-4 early `return` before the barrier + reads from
+  the read_write `headers` SSBO make the barrier non-uniform. Fix: declare the
+  read-only anim SSBOs `var<storage, read>` (uniform reads) AND restructure so all
+  threads reach every barrier (guard the work, don't early-return before a barrier).
+  Spec-correctness win on native too.
+- **depthviz samples a depth texture with a filtering sampler** — Dawn warns
+  ("TextureSampleType::Depth used with a Filtering sampler"). Native is silent.
+  Fix: bind a non-filtering sampler for the depthviz pass (point-sample is fine for
+  the debug PIP). Only affects nested mode in-browser.
+
+W7 deliverable (CDP-driven `scripts/web_move_champion.mjs`: list → select → move a
+champion, before/after capture) is DONE with static champions.
+
+---
+
 ## #229 scenario launcher + Unity-components refactor (2026-06-21)
 
 Remaining work:
