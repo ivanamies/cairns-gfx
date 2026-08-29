@@ -1828,8 +1828,19 @@ public:
             dst->FramebufferScale = src->FramebufferScale;
             dst->OwnerViewport = src->OwnerViewport;
             dst->Textures = src->Textures;
+            // #222 windowed-crash fix: ImDrawData::AddDrawList ->
+            // AddDrawListToDrawDataEx asserts _VtxWritePtr == VtxBuffer.Data
+            // + VtxBuffer.Size on the input draw list. ImDrawList::CloneOutput()
+            // only copies CmdBuffer/IdxBuffer/VtxBuffer/Flags -- it does NOT
+            // restore _VtxWritePtr / _IdxWritePtr / _VtxCurrentIdx on the
+            // freshly-constructed clone, so the assertion fires. Bypass
+            // AddDrawList and replicate its bookkeeping ourselves.
             for (int i = 0; i < src->CmdLists.Size; ++i) {
-                dst->AddDrawList(src->CmdLists[i]->CloneOutput());
+                ImDrawList* cloned = src->CmdLists[i]->CloneOutput();
+                dst->CmdLists.push_back(cloned);
+                dst->CmdListsCount++;
+                dst->TotalVtxCount += cloned->VtxBuffer.Size;
+                dst->TotalIdxCount += cloned->IdxBuffer.Size;
             }
             s.pkt.imgui_snapshot = dst;
         } else {
