@@ -7,6 +7,8 @@
 #include "rhi/vulkan/memory_allocator.hpp"
 
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 
 namespace cairns::rhi::vulkan {
 
@@ -148,6 +150,15 @@ bool MemoryAllocator::CreateBumpHeap() {
     void* mapped = nullptr;
     vkMapMemory(device_, memory, 0, VK_WHOLE_SIZE, 0, &mapped);
 
+    // Defensive: paint freshly-allocated bytes with 0xCC. Real init happens
+    // at first use (UploadBuffer / LoadOp::kClear); pre-init reads surface
+    // as 0xCCCCCCCC instead of silently working off a coincidentally-good
+    // value. See metal allocator for the long-form rationale.
+    if (mapped) {
+        const uint8_t pat = std::getenv("CAIRNS_HEAP_ZERO") ? 0x00 : 0xCC;
+        std::memset(mapped, pat, total);
+    }
+
     uint64_t bda = 0;
     if (bda_enabled_) {
         VkBufferDeviceAddressInfo info{};
@@ -283,7 +294,21 @@ bool MemoryAllocator::CreateBufferBlock(uint32_t bytes, BufferUsage usage,
         mem_props_.memoryTypes[type_idx].propertyFlags;
     if (prop_flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
         vkMapMemory(device_, memory, 0, VK_WHOLE_SIZE, 0, &mapped);
+        // Garbage-init -- see metal allocator + the CreateBumpHeap comment
+        // for the long-form rationale.
+        if (mapped) {
+            const uint8_t pat = std::getenv("CAIRNS_HEAP_ZERO") ? 0x00 : 0xCC;
+            std::memset(mapped, pat, bytes);
+        }
     }
+    // DEVICE_LOCAL-only memory cannot be CPU-memset and the MemoryAllocator
+    // doesn't currently own a queue + command pool to issue a
+    // vkCmdFillBuffer. On Apple (MoltenVK / unified memory) this branch is
+    // not taken -- HOST_VISIBLE memory typically IS device-local. On a
+    // discrete-GPU Vulkan path we'd need to extend Init to take the
+    // graphics queue + a one-shot command pool. Left as TODO; the
+    // symptom-on-leak guarantee only holds for HOST_VISIBLE-backed
+    // allocations until then.
 
     uint64_t bda = 0;
     if (bda_enabled_) {

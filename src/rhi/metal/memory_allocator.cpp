@@ -9,6 +9,8 @@
 #include <Metal/Metal.hpp>
 
 #include <cassert>
+#include <cstdlib>
+#include <cstring>
 #include <utility>
 
 namespace cairns::rhi::metal {
@@ -127,6 +129,22 @@ bool MemoryAllocator::CreateBumpHeap() {
         return false;
     }
 
+    // Paint every freshly-allocated byte with 0xCC at allocation time;
+    // proper initialization happens at first use (UploadBuffer for buffers,
+    // LoadOp::kClear for render targets). The point is to surface any
+    // read-before-proper-init path LOUDLY: an uninitialized read gets
+    // 0xCCCCCCCC everywhere instead of an accidentally-zeroed value that
+    // might render "fine" by coincidence. Set CAIRNS_HEAP_ZERO=1 to fall
+    // back to 0x00 fill (useful when chasing whether 0xCC itself perturbs
+    // pixels). Empirical note 2026-06-05: Metal pre-zeros newBuffer +
+    // heap newBuffer at allocation -- proven by hexdump under
+    // CAIRNS_HEAPDUMP=1 -- but driver behavior is not contract, and we
+    // want the symptom-on-first-leak guarantee regardless.
+    if (void* ptr = master->contents()) {
+        const uint8_t pat = std::getenv("CAIRNS_HEAP_ZERO") ? 0x00 : 0xCC;
+        std::memset(ptr, pat, total);
+    }
+
     HeapBlock blk;
     blk.heap = nullptr;
     blk.master_buffer = master;
@@ -162,6 +180,20 @@ bool MemoryAllocator::CreateBufferBlock(uint32_t bytes, Memory mem,
             heap->release();
             return false;
         }
+        // Private memory cannot be CPU-memset. Paint via a blit fillBuffer
+        // so anything reading pre-UploadBuffer hits 0xCC (see bump heap
+        // comment above for the rationale). One-shot queue; init path only.
+        const uint8_t pat = std::getenv("CAIRNS_HEAP_ZERO") ? 0x00 : 0xCC;
+        MTL::CommandQueue* q = device_->newCommandQueue();
+        if (q) {
+            MTL::CommandBuffer* cb = q->commandBuffer();
+            MTL::BlitCommandEncoder* blit = cb->blitCommandEncoder();
+            blit->fillBuffer(master, NS::Range::Make(0, bytes), pat);
+            blit->endEncoding();
+            cb->commit();
+            cb->waitUntilCompleted();
+            q->release();
+        }
     } else {
         // Shared / memoryless: skip the heap wrapper. iOS Simulator's
         // MTLSimDevice rejects any non-Private heap, and on real Apple devices
@@ -170,6 +202,11 @@ bool MemoryAllocator::CreateBufferBlock(uint32_t bytes, Memory mem,
         master = device_->newBuffer(bytes, options_for(mem));
         if (!master) {
             return false;
+        }
+        // Same garbage-init as bump heap.
+        if (void* p = master->contents()) {
+            const uint8_t pat = std::getenv("CAIRNS_HEAP_ZERO") ? 0x00 : 0xCC;
+            std::memset(p, pat, bytes);
         }
     }
 
