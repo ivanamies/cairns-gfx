@@ -21,14 +21,14 @@ enum class SelectionType : uint8_t {
 struct SelectionTarget {
     SelectionType type = SelectionType::kEntity;
     uint32_t id = 0;
-    // WorldId.index, packed flat so selection/highlight ops over the protocol
+    // SceneId.index, packed flat so selection/highlight ops over the protocol
     // can name a target without a typed handle. 0 today; non-zero once
-    // multi-world rendering past two lands (#195).
-    uint32_t world = 0;
+    // multi-scene rendering past two lands (#195).
+    uint32_t scene = 0;
 };
 
 inline bool operator==(const SelectionTarget& a, const SelectionTarget& b) {
-    return a.type == b.type && a.id == b.id && a.world == b.world;
+    return a.type == b.type && a.id == b.id && a.scene == b.scene;
 }
 
 // Pack/unpack for the GPU ID buffer. type lives in the top byte so a draw's
@@ -37,11 +37,11 @@ inline uint32_t PackSelectionId(SelectionType t, uint32_t id) {
     return (static_cast<uint32_t>(t) << 24) | (id & 0x00FFFFFFu);
 }
 
-inline SelectionTarget UnpackSelectionId(uint32_t packed, uint32_t world = 0) {
+inline SelectionTarget UnpackSelectionId(uint32_t packed, uint32_t scene = 0) {
     SelectionTarget t;
     t.type = static_cast<SelectionType>((packed >> 24) & 0xFFu);
     t.id = packed & 0x00FFFFFFu;
-    t.world = world;
+    t.scene = scene;
     return t;
 }
 

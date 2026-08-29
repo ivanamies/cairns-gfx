@@ -30,7 +30,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
         "cairns.world.create",
         /*schema=*/json::object(),
         /*doc=*/"Allocate a new world. Returns a synthetic world id; the "
-                "engine-side EnTT registry pre-allocates kMaxWorlds slots "
+                "engine-side EnTT registry pre-allocates kMaxScenes slots "
                 "but doesn't yet track these ids -- stub until P2 lands.",
         [](const json&) -> json {
             return {{"world", g_world_counter.fetch_add(1)}};
@@ -39,7 +39,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.Register(
         "cairns.world.clear",
         /*schema=*/json::object(),
-        /*doc=*/"#269: nuke every entity in active_world_. Returns "
+        /*doc=*/"#269: nuke every entity in active_scene_. Returns "
                 "{cleared:N}. Leaks any held skin_output_pool_ slices + "
                 "alias buffer handles (no skin Release path yet); fine "
                 "for occasional debug-session resets, do not loop.",
@@ -211,7 +211,7 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
     registry.RegisterAlias("viewport.setWorld", "cairns.viewport.setWorld");
     registry.RegisterAlias("window.resize", "cairns.window.resize");
 
-    // #269: real spawn op. Inserts one hero entity in active_world_
+    // #269: real spawn op. Inserts one hero entity in active_scene_
     // from a pre-loaded scene (scene_idx in [0, NumScenes())). The
     // auto-spawn grid in Engine::GreaterInit retires once this path
     // replaces the env-driven entity count.
@@ -260,13 +260,13 @@ void RegisterSceneOps(CommandRegistry& registry, cairns::Engine& engine) {
                     {"scene_idx", scene_idx}};
         });
 
-    // #269: enumerate active_world_ entities. Used by no-flash relayout
+    // #269: enumerate active_scene_ entities. Used by no-flash relayout
     // -- caller queries the list, reposts setTransform for each, then
     // appends N-existing via spawnHero.
     registry.Register(
         "cairns.world.listEntities",
         json::object(),
-        "List every entity in active_world_. Returns "
+        "List every entity in active_scene_. Returns "
         "{entities:[uint32 ids], count:N}.",
         [&engine](const json&) -> json {
             std::vector<uint32_t> ents =

@@ -211,7 +211,7 @@ public:
         return true;
     }
 
-    // #269: spawn one hero entity in active_world_ from a pre-loaded
+    // #269: spawn one hero entity in active_scene_ from a pre-loaded
     // scene. Returns the new entt entity id (0 on failure: bad
     // scene_idx, no active world, prefab_ids_ not populated, etc.).
     // Caller supplies the full world transform; rendered immediately
@@ -223,7 +223,7 @@ public:
             scene_idx >= per_prefab_asset_.size()) {
             return 0;
         }
-        cairns::World::Cold* wc = worlds_.GetCold(active_world_);
+        cairns::Scene::Cold* wc = scenes_.GetCold(active_scene_);
         if (!wc) {
             return 0;
         }
@@ -245,7 +245,7 @@ public:
             reg.emplace<cairns::SkinRef>(e, cairns::SkinRef{sid});
         }
         // Mark world dirty so the proxy extract picks up the new entity.
-        if (auto* wh = worlds_.GetHot(active_world_)) {
+        if (auto* wh = scenes_.GetHot(active_scene_)) {
             wh->dirty = true;
         }
         return static_cast<uint32_t>(entt::to_integral(e));
@@ -284,13 +284,13 @@ public:
         return 0.0f;
     }
 
-    // #269: list every live entity in active_world_'s registry. The
+    // #269: list every live entity in active_scene_'s registry. The
     // values are entt::to_integral(entity), the same encoding SpawnHero
     // returns. Caller pairs them with SetEntityTransform to drive a
     // no-flash relayout when the spawn count grows.
     std::vector<uint32_t> ListActiveWorldEntities() {
         std::vector<uint32_t> out;
-        cairns::World::Cold* wc = worlds_.GetCold(active_world_);
+        cairns::Scene::Cold* wc = scenes_.GetCold(active_scene_);
         if (!wc) {
             return out;
         }
@@ -305,9 +305,9 @@ public:
     // #269: overwrite an entity's WorldTransform. Used by the spawn-
     // relayout path so existing actors slide to new grid cells without
     // the visible empty-then-full flash a clear+respawn produces.
-    // Returns false if entity isn't live in active_world_'s registry.
+    // Returns false if entity isn't live in active_scene_'s registry.
     bool SetEntityTransform(uint32_t entity_int, const glm::mat4& world) {
-        cairns::World::Cold* wc = worlds_.GetCold(active_world_);
+        cairns::Scene::Cold* wc = scenes_.GetCold(active_scene_);
         if (!wc) {
             return false;
         }
@@ -317,19 +317,19 @@ public:
             return false;
         }
         reg.get<cairns::WorldTransform>(e).world = world;
-        if (auto* wh = worlds_.GetHot(active_world_)) {
+        if (auto* wh = scenes_.GetHot(active_scene_)) {
             wh->dirty = true;
         }
         return true;
     }
 
-    // #269: nuke every entity in active_world_'s registry. Best-effort:
+    // #269: nuke every entity in active_scene_'s registry. Best-effort:
     // the registry is cleared but skin_output_pool_ slices + per-actor
     // alias buffer handles are leaked (no skin Release path yet). Fine
     // for a handful of clears during a debug session; do NOT loop this
     // unbounded -- the pool fills. Returns the entity count cleared.
     uint32_t ClearActiveWorld() {
-        cairns::World::Cold* wc = worlds_.GetCold(active_world_);
+        cairns::Scene::Cold* wc = scenes_.GetCold(active_scene_);
         if (!wc) {
             return 0;
         }
@@ -337,7 +337,7 @@ public:
         const uint32_t n =
             static_cast<uint32_t>(reg.storage<entt::entity>().size());
         reg.clear();
-        if (auto* wh = worlds_.GetHot(active_world_)) {
+        if (auto* wh = scenes_.GetHot(active_scene_)) {
             wh->dirty = true;
         }
         return n;
@@ -402,7 +402,7 @@ public:
         // slot doesn't carry over.
         if (auto* h = viewports_.GetHot(id)) {
             *h = cairns::Viewport::Hot{};
-            h->world = active_world_;
+            h->scene = active_scene_;
         }
         if (auto* c = viewports_.GetCold(id)) {
             *c = cairns::Viewport::Cold{};
@@ -774,7 +774,7 @@ public:
         if (auto* h = viewports_.GetHot(id)) {
             *h = cairns::Viewport::Hot{};
             h->layout_rect = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
-            h->world = active_world_;
+            h->scene = active_scene_;
         }
         if (auto* c = viewports_.GetCold(id)) {
             *c = cairns::Viewport::Cold{};
@@ -1130,14 +1130,14 @@ public:
         // the active world's registry. SceneEntity / SceneWorld are
         // gone -- the entt::registry IS the source of truth.
         if (!prefab_ids_.empty()) {
-            // Pre-allocate hot/cold cells up to kMaxWorlds so Acquire
+            // Pre-allocate hot/cold cells up to kMaxScenes so Acquire
             // doesn't trigger a vector growth that would move
-            // World::Cold and invalidate any cached pointers. The
+            // Scene::Cold and invalidate any cached pointers. The
             // unique_ptr<entt::registry> inside Cold is the second
             // safety layer.
-            for (uint32_t w = 0; w < kMaxWorlds; ++w) {
-                cairns::WorldId tmp = worlds_.Acquire();
-                worlds_.Release(tmp);
+            for (uint32_t w = 0; w < kMaxScenes; ++w) {
+                cairns::SceneId tmp = scenes_.Acquire();
+                scenes_.Release(tmp);
             }
 
             // Shared GPU buffer handles -- all GLBs alias the same
@@ -1168,29 +1168,29 @@ public:
             // empty after Acquire; spawn entities via the
             // cairns.world.spawnHero NDJSON op (cairns_serve) or any
             // in-process caller of Engine::SpawnHero.
-            active_world_ = worlds_.Acquire();
-            if (cairns::World::Hot* wh = worlds_.GetHot(active_world_)) {
-                if (cairns::World::Cold* wc =
-                        worlds_.GetCold(active_world_)) {
-                    *wc = cairns::World::Cold{};
+            active_scene_ = scenes_.Acquire();
+            if (cairns::Scene::Hot* wh = scenes_.GetHot(active_scene_)) {
+                if (cairns::Scene::Cold* wc =
+                        scenes_.GetCold(active_scene_)) {
+                    *wc = cairns::Scene::Cold{};
                     wh->proxy_slot = 0;
                     wh->dirty = true;
                 }
             }
-            world_proxies_.resize(1);
+            scene_proxies_.resize(1);
 
             // P6 multi-world coexistence: secondary slot is acquired but
             // left empty. Pre-#269 it received half of the debug-grid.
-            secondary_world_ = worlds_.Acquire();
-            if (cairns::World::Hot* wh2 = worlds_.GetHot(secondary_world_)) {
-                if (cairns::World::Cold* wc2 =
-                        worlds_.GetCold(secondary_world_)) {
-                    *wc2 = cairns::World::Cold{};
+            secondary_scene_ = scenes_.Acquire();
+            if (cairns::Scene::Hot* wh2 = scenes_.GetHot(secondary_scene_)) {
+                if (cairns::Scene::Cold* wc2 =
+                        scenes_.GetCold(secondary_scene_)) {
+                    *wc2 = cairns::Scene::Cold{};
                     wh2->proxy_slot = 1;
                     wh2->dirty = true;
                 }
             }
-            world_proxies_.resize(2);
+            scene_proxies_.resize(2);
         }
         // Surfaceless mode: allocate the offscreen final_target_ and CONTINUE
         // through normal init. The engine -- not the RHI -- is the one that
@@ -1378,7 +1378,7 @@ public:
         // owns a WorldTransform (pose) + CameraComponent (intrinsics) in
         // the active world's registry. WorldTransform.world is the camera-
         // to-world matrix; the view matrix is its inverse.
-        cairns::World::Cold* wc_cam = worlds_.GetCold(active_world_);
+        cairns::Scene::Cold* wc_cam = scenes_.GetCold(active_scene_);
         for (int v = 0; v < active_viewport_count_; ++v) {
             cairns::Viewport::Cold* vpc =
                 viewports_.GetCold(viewport_ids_[v]);
@@ -1438,10 +1438,10 @@ public:
         // extract. Extract composes node.globalTransform * (world *
         // root_transform).
         // Fan-out: extract from EVERY world that any viewport binds to (set
-        // built from viewports_[].world; deduped via the worlds_ pool's
-        // contiguous slot indices). The active_world_'s extract result lives
+        // built from viewports_[].world; deduped via the scenes_ pool's
+        // contiguous slot indices). The active_scene_'s extract result lives
         // in s.proxies (the per-slot single draw list); secondary worlds'
-        // proxies land in world_proxies_[wh->proxy_slot] for downstream
+        // proxies land in scene_proxies_[wh->proxy_slot] for downstream
         // per-viewport draw consumers (#194 / #190's two-viewport path uses
         // these). Today s.proxies still drives BuildMeshOpaqueDraws's draw
         // list -- per-viewport draw fan-out lands when the multi-pass split
@@ -1452,39 +1452,39 @@ public:
         // stay on default heap (untouched in current code).
         s.proxies.Reset(s.arena);
         for (int v = 0; v < active_viewport_count_; ++v) {
-            const cairns::WorldId wid =
-                viewports_.GetHot(viewport_ids_[v])->world;
-            cairns::World::Hot* wh = worlds_.GetHot(wid);
-            cairns::World::Cold* wc = worlds_.GetCold(wid);
+            const cairns::SceneId wid =
+                viewports_.GetHot(viewport_ids_[v])->scene;
+            cairns::Scene::Hot* wh = scenes_.GetHot(wid);
+            cairns::Scene::Cold* wc = scenes_.GetCold(wid);
             if (!wh || !wc) {
                 continue;
             }
             wh->root_transform = rot_matrix;
             cairns::PropagateTransforms(*wc, glm::mat4(1.0f));
-            if (wid.index == active_world_.index) {
-                cairns::ExtractFromWorld(*wc, wh->root_transform, assets_,
+            if (wid.index == active_scene_.index) {
+                cairns::ExtractFromScene(*wc, wh->root_transform, assets_,
                                          prefabs_, meshes_, s.proxies);
             } else {
-                if (wh->proxy_slot < world_proxies_.size()) {
+                if (wh->proxy_slot < scene_proxies_.size()) {
                     // #219 Chunk B: secondary-world proxies share this CPU
                     // slot's arena. Caps smaller than s.proxies' since
                     // secondary scenes are lighter today. No reader of
-                    // world_proxies_[i] exists yet (#194/#190 path stub).
-                    world_proxies_[wh->proxy_slot].Reset(s.arena, 2048, 8192);
-                    cairns::ExtractFromWorld(*wc, wh->root_transform, assets_,
+                    // scene_proxies_[i] exists yet (#194/#190 path stub).
+                    scene_proxies_[wh->proxy_slot].Reset(s.arena, 2048, 8192);
+                    cairns::ExtractFromScene(*wc, wh->root_transform, assets_,
                                              prefabs_, meshes_,
-                                             world_proxies_[wh->proxy_slot]);
+                                             scene_proxies_[wh->proxy_slot]);
                 }
             }
         }
-        // Always extract active_world_ even if no viewport currently binds to
+        // Always extract active_scene_ even if no viewport currently binds to
         // it (legacy contract: BuildMeshOpaqueDraws consumes s.proxies).
-        if (cairns::World::Hot* wh_a = worlds_.GetHot(active_world_)) {
-            if (cairns::World::Cold* wc_a = worlds_.GetCold(active_world_)) {
+        if (cairns::Scene::Hot* wh_a = scenes_.GetHot(active_scene_)) {
+            if (cairns::Scene::Cold* wc_a = scenes_.GetCold(active_scene_)) {
                 bool already_extracted = false;
                 for (int v = 0; v < active_viewport_count_; ++v) {
-                    if (viewports_.GetHot(viewport_ids_[v])->world.index
-                            == active_world_.index) {
+                    if (viewports_.GetHot(viewport_ids_[v])->scene.index
+                            == active_scene_.index) {
                         already_extracted = true;
                         break;
                     }
@@ -1492,7 +1492,7 @@ public:
                 if (!already_extracted) {
                     wh_a->root_transform = rot_matrix;
                     cairns::PropagateTransforms(*wc_a, glm::mat4(1.0f));
-                    cairns::ExtractFromWorld(*wc_a, wh_a->root_transform,
+                    cairns::ExtractFromScene(*wc_a, wh_a->root_transform,
                                              assets_, prefabs_, meshes_,
                                              s.proxies);
                 }
@@ -1691,7 +1691,7 @@ public:
                                 static_cast<float>(std::max(1, active_viewport_count_));
             const float aspect_ratio = vp_w / static_cast<float>(FrameHeight());
             size_t entity_count = 0;
-            if (auto* wc = worlds_.GetCold(active_world_)) {
+            if (auto* wc = scenes_.GetCold(active_scene_)) {
                 entity_count = wc->registry.storage<entt::entity>().size();
             }
             fprintf(stderr,
@@ -2100,8 +2100,8 @@ public:
                 }
                 // Resolve world AABB via the entity's WorldTransform + the
                 // scene's first mesh bind-pose AABB (matches the cull path).
-                if (cairns::World::Cold* wcc =
-                        worlds_.GetCold(active_world_)) {
+                if (cairns::Scene::Cold* wcc =
+                        scenes_.GetCold(active_scene_)) {
                     entt::entity ent{eid};
                     if (wcc->registry.valid(ent)) {
                         // #222: animated? entity gets a SkinRef when
@@ -2177,7 +2177,7 @@ public:
         if (frame_ % 120 == 0) {
             const size_t loaded = prefab_ids_.size();
             size_t entities = 0;
-            if (auto* wc = worlds_.GetCold(active_world_)) {
+            if (auto* wc = scenes_.GetCold(active_scene_)) {
                 entities = wc->registry.storage<entt::entity>().size();
             }
             const size_t slices = loaded > 0 ? entities / loaded : 0;
@@ -3050,7 +3050,7 @@ public:
         if (anim_eval_kernel_.IsNull() || !anim_eval_tables_uploaded_) {
             return;
         }
-        cairns::World::Cold* wc = worlds_.GetCold(active_world_);
+        cairns::Scene::Cold* wc = scenes_.GetCold(active_scene_);
         if (!wc) {
             return;
         }
@@ -3854,15 +3854,15 @@ private:
     // std::thread::hardware_concurrency().
     std::unique_ptr<cairns::WorkerPool> build_pool_;
 
-    // EnTT scene-layer path. worlds_ pre-reserved at startup
-    // (kMaxWorlds Acquire+Release cycle) to keep World::Cold* pointer
+    // EnTT scene-layer path. scenes_ pre-reserved at startup
+    // (kMaxScenes Acquire+Release cycle) to keep Scene::Cold* pointer
     // stable across real Acquire later.
-    static constexpr uint32_t kMaxWorlds = 8;
+    static constexpr uint32_t kMaxScenes = 8;
     cairns::AssetRegistry assets_;
-    cairns::ResourceManager<cairns::World> worlds_;
-    std::vector<cairns::RenderProxyArrays> world_proxies_;
-    cairns::WorldId active_world_;
-    cairns::WorldId secondary_world_;  // P6 multi-world coexistence test
+    cairns::ResourceManager<cairns::Scene> scenes_;
+    std::vector<cairns::RenderProxyArrays> scene_proxies_;
+    cairns::SceneId active_scene_;
+    cairns::SceneId secondary_scene_;  // P6 multi-world coexistence test
 
     // #220 Step 4: handle-pilled Viewport pool. viewports_ owns Hot+Cold;
     // viewport_ids_[0..active_viewport_count_) carry the slot ordering

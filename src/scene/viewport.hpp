@@ -50,7 +50,7 @@ struct FlyController {
 // controller, both read once per frame.
 struct Viewport {
     struct Hot {
-        WorldId world;
+        SceneId scene;
         Camera camera;
         rhi::Handle<rhi::Texture> target;
         rhi::Handle<rhi::Texture> depth_target;

@@ -57,7 +57,7 @@ struct RenderProxyArrays {
     }
 
     // Default-allocator fallback (no arena bind). Used today only by
-    // world_proxies_[i] when that path is exercised on a non-PerSlot owner.
+    // scene_proxies_[i] when that path is exercised on a non-PerSlot owner.
     // Idempotent; safe to call whether Reset(arena) ran or not.
     void Clear() {
         meshes.clear();

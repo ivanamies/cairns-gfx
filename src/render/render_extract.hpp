@@ -22,7 +22,7 @@ namespace cairns {
 // references threaded through so the inner walk can resolve each
 // Asset::cpu_graph (now PrefabId) to Prefab::Hot+Cold and each Scene
 // mesh entry (MeshId) to Mesh::Hot.
-inline void ExtractFromWorld(World::Cold& wc, const glm::mat4& root,
+inline void ExtractFromScene(Scene::Cold& wc, const glm::mat4& root,
                              AssetRegistry& assets,
                              cairns::ResourceManager<Prefab>& prefabs_pool,
                              cairns::ResourceManager<Mesh>& meshes_pool,

@@ -51,7 +51,7 @@ struct Asset {
         // unique_ptr<Scene> once AssetRegistry::Load is the real load
         // path. Forward-declared so this header doesn't pull stb_image.
         // #220 Step 3: was const Scene*. Now PrefabId into Engine::prefabs_;
-        // ExtractFromWorld resolves via the threaded prefabs_pool. Null
+        // ExtractFromScene resolves via the threaded prefabs_pool. Null
         // sentinel is Handle::Null (rather than nullptr).
         PrefabId cpu_graph;
         // Suballoc slices into the shared packed buffers (deferred; the

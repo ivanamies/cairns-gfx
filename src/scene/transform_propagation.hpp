@@ -32,7 +32,7 @@ inline glm::mat4 ComposeTRS(const Transform& t) {
     return m;
 }
 
-inline void PropagateTransforms(World::Cold& wc, const glm::mat4& root) {
+inline void PropagateTransforms(Scene::Cold& wc, const glm::mat4& root) {
     auto& reg = wc.registry;
 
     // Roots: entities with Transform but no Parent.

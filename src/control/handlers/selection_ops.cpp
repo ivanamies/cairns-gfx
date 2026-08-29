@@ -35,7 +35,7 @@ cairns::SelectionTarget ParseTarget(const json& j) {
     cairns::SelectionTarget t;
     t.type = ParseType(j.value("type", std::string{"entity"}));
     t.id = static_cast<uint32_t>(j.value("id", uint64_t{0}));
-    t.world = static_cast<uint32_t>(j.value("world", uint64_t{0}));
+    t.scene = static_cast<uint32_t>(j.value("world", uint64_t{0}));
     return t;
 }
 
@@ -55,7 +55,7 @@ std::vector<cairns::SelectionTarget> ParseTargets(const json& args) {
 json EncodeTarget(const cairns::SelectionTarget& t) {
     return {{"type", TypeName(t.type)},
             {"id", t.id},
-            {"world", t.world}};
+            {"world", t.scene}};
 }
 
 json EncodeTargets(const std::vector<cairns::SelectionTarget>& v) {
