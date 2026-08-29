@@ -87,6 +87,8 @@ void* AttachWindow(SDL_Window* window, rhi::InitConfig& cfg) {
         emscripten_sleep(1);
     }
     if (!areq.adapter) {
+        wgpuSurfaceRelease(surface);
+        wgpuInstanceRelease(instance);
         return nullptr;
     }
 
@@ -109,6 +111,9 @@ void* AttachWindow(SDL_Window* window, rhi::InitConfig& cfg) {
         emscripten_sleep(1);
     }
     if (!dreq.device) {
+        wgpuAdapterRelease(areq.adapter);
+        wgpuSurfaceRelease(surface);
+        wgpuInstanceRelease(instance);
         return nullptr;
     }
 
@@ -130,8 +135,10 @@ void* AttachWindow(SDL_Window* window, rhi::InitConfig& cfg) {
     // adapter/device here (unlike the browser) -- wgpuInstanceProcessEvents
     // drives the AllowProcessEvents callbacks -- so acquire the whole chain and
     // hand it to Device::Init's adopt path. Surface + present-by-copy identical
-    // to web. NOTE: adopt sets owns_handles=false, so these handles + the surface
-    // leak at process exit (no webgpu windowed path releases them yet) -- TODO.
+    // to web. NOTE: on the SUCCESS path Device::Init adopts with
+    // owns_handles=false, so the handles + surface leak at process exit (no
+    // webgpu windowed path releases them yet) -- TODO. The error paths below DO
+    // release what they minted.
     SDL_MetalView view = SDL_Metal_CreateView(window);
     if (!view) {
         return nullptr;
@@ -156,6 +163,7 @@ void* AttachWindow(SDL_Window* window, rhi::InitConfig& cfg) {
     surf_desc.nextInChain = &metal_src.chain;
     WGPUSurface surface = wgpuInstanceCreateSurface(instance, &surf_desc);
     if (!surface) {
+        wgpuInstanceRelease(instance);
         SDL_Metal_DestroyView(view);
         return nullptr;
     }
@@ -177,6 +185,8 @@ void* AttachWindow(SDL_Window* window, rhi::InitConfig& cfg) {
         wgpuInstanceProcessEvents(instance);
     }
     if (!areq.adapter) {
+        wgpuSurfaceRelease(surface);
+        wgpuInstanceRelease(instance);
         SDL_Metal_DestroyView(view);
         return nullptr;
     }
@@ -200,6 +210,9 @@ void* AttachWindow(SDL_Window* window, rhi::InitConfig& cfg) {
         wgpuInstanceProcessEvents(instance);
     }
     if (!dreq.device) {
+        wgpuAdapterRelease(areq.adapter);
+        wgpuSurfaceRelease(surface);
+        wgpuInstanceRelease(instance);
         SDL_Metal_DestroyView(view);
         return nullptr;
     }

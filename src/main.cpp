@@ -118,6 +118,17 @@ extern "C" {
 
 EMSCRIPTEN_KEEPALIVE
 char* cairns_dispatch(const char* op, const char* args_json) {
+    // The bridge is published to JS (shell.html onRuntimeInitialized) BEFORE
+    // SDL_AppInit wires g_web_registry, and AppInit yields to the JS loop
+    // mid-init (ASYNCIFY device bootstrap). A dispatch in that window must not
+    // deref null -- that aborts the WASM and crashes the tab.
+    if (g_web_registry == nullptr) {
+        const char* kBooting = "{\"ok\":false,\"error\":\"engine still booting\"}";
+        const size_t n = std::strlen(kBooting) + 1;
+        char* out = static_cast<char*>(std::malloc(n));
+        std::memcpy(out, kBooting, n);
+        return out;
+    }
     cairns::json req;
     req["op"] = op ? op : "";
     if (args_json && args_json[0]) {
