@@ -451,8 +451,33 @@ clean (anim/skin gpu_* tables block-backed + consumed). **Follow-on:** Node::chi
 /name, Skin/Clip inner vectors, and strings (names/glb_paths_) stay on malloc —
 string-interning pass.
 
-**Remaining:**
-- **P5** fastgltf temporary PMR (P3 destinations now block-backed).
-- **P7 finish:** RENDER (kDynamic) hash, first-divergence dump, `tests/test_state_hash.cpp`,
-  the counting-`new` Q2 verifier. Plus the `JsState`/`CommandRegistry` de-singleton
-  (P0c deferred) before the run-to-run *test* (the run-to-run *hash* already verified).
+**P7 done** (2026-06-21): `LastSimHash()` + `LastRenderHash()` exposed.
+`tests/test_state_hash.cpp` ([golden][statehash], 178 assertions green metal+vk):
+two independent Engine instances in ONE process produce byte-identical {sim,render}
+hash sequences (run-to-run determinism + JS-pristine), with a real GLB scene through
+the block-backed pools, and a discrimination test (perturbed instantiate → digests
+differ). RENDER hash = semantic FNV-1a over EncodeDraws outputs (globals UBOs + bump
+offsets + per-draw model/entity + dt offset); padding-immune, identical metal/vk.
+**Instrument complete:** sim+render hashes stable run-to-run ⇒ the three_champ flake
+is pure GPU-execution nondeterminism (the next-phase target).
+
+**P5 — requirements already met by the existing fastgltf integration:** the build
+compiles `FASTGLTF_DISABLE_CUSTOM_MEMORY_POOL=0`, so fastgltf already uses an
+internal `std::pmr` pool; `src/` has **zero** `pmr`/`memory_resource` references
+(verified); the `Asset` (+ its PMR) is a `LoadPrefabFromGltf` local destroyed at
+parse return; kept data is evacuated into the P3 block-backed Cold vectors. So
+"PMR for fastgltf, immediately deleted, never in our code" holds today. The only
+unfulfilled delta — backing fastgltf's pool with a `cpu_block_` load-scratch slice
+(Q1 cap on transient parse bytes) — is high-risk (third_party parser-internals
+patch) with **zero** determinism value (gone before any frame); deferred, needs
+supervision.
+
+**Genuinely remaining (low-priority follow-on):**
+- String interning: `Node`/`Skin`/`Clip` inner heap + names + `glb_paths_` stay on
+  malloc (a `{offset,len}` block name-table pass; the `ArenaSlice` DS is staged).
+- `JsState`/`CommandRegistry` de-singleton (the two-engine run-to-run *test* already
+  passes, empirically proving no cross-engine state leak — so this is hygiene, not a
+  correctness gap).
+- Counting-`new` Q2 verifier: deferred — a per-frame measurement via the JS-driven
+  advance is confounded by QuickJS-dispatch heap traffic; needs a JS-free frame seam.
+- fastgltf pool → `cpu_block_` slice (P5 delta above).
