@@ -17,8 +17,9 @@
 #include <vulkan/vulkan_beta.h>
 
 // stb_image.h (decls + impl) comes from util/gltf_loader.hpp, included by
-// main.cpp before this header. stb_image_write.h comes from metal_engine.hpp.
-// Do not include/define their implementations again here.
+// main.cpp before this header. The implementations live in util/stb_impl.cpp.
+// Do not define their implementations again here.
+#include <stb_image_write.h>
 
 #include <fastgltf/glm_element_traits.hpp>
 #include <fastgltf/core.hpp>
