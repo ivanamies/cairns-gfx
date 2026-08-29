@@ -2,7 +2,11 @@
 
 #include "util/offset_allocator.hpp"
 
+#include <cassert>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <limits>
 #include <map>
 
 namespace cairns {

@@ -105,16 +105,27 @@ target_link_libraries(imgui PUBLIC SDL3::SDL3)
 add_library(cairns_control STATIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/command_registry.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/transport_stdio.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/lifecycle_ops.cpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/lifecycle_ops.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/render_ops.cpp")
 target_include_directories(cairns_control PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_BINARY_DIR}/generated"
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/glm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/taskflow"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/entt/single_include")
 target_compile_features(cairns_control PUBLIC cxx_std_20)
 target_compile_options(cairns_control PRIVATE -Wall -Wextra)
 target_compile_definitions(cairns_control PRIVATE
     $<$<BOOL:${CAIRNS_GFX_BACKEND_METAL}>:CAIRNS_METAL=1>
     $<$<BOOL:${CAIRNS_GFX_BACKEND_VULKAN}>:CAIRNS_VULKAN=1>)
+# render_ops.cpp pulls engine.hpp which transitively needs every header
+# cairns_core sees -- glm/stb/entt above, plus the backend framework includes
+# and SDL. cairns_core declared its dependencies PUBLIC so linking it here is
+# enough to surface them at compile time without circularity (cairns_core
+# does not include or link cairns_control).
+target_link_libraries(cairns_control PRIVATE cairns_core)
 
 # Taskflow needs exceptions + has size_t->int narrowing in its headers, so the
 # one TU that includes it lives in its own static library with relaxed flags.
@@ -149,18 +160,33 @@ file(GLOB_RECURSE CAIRNS_CORE_SOURCES
   "src/*.cpp"
   "src/*.hpp"
 )
+list(FILTER CAIRNS_CORE_SOURCES EXCLUDE REGEX "/src/control/")
+# Exclude:
+#  - entry points (main.cpp, serve_main.cpp)
+#  - render_thread.cpp (separate lib, exceptions enabled)
+#  - src/control/** (lives in cairns_control STATIC lib; nlohmann/json wants
+#    exceptions which cairns_core forbids)
 list(REMOVE_ITEM CAIRNS_CORE_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/serve_main.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/render/render_thread.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/control/command_registry.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/control/command_registry.hpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/control/transport_stdio.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/control/transport_stdio.hpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/lifecycle_ops.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/lifecycle_ops.hpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/render_ops.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/render_ops.hpp"
 )
 
 add_library(cairns_core STATIC ${CAIRNS_CORE_SOURCES})
 
-target_compile_options(cairns_core PUBLIC
+# PRIVATE -- these compile options govern cairns_core's own TUs. They must
+# NOT be inherited by consumers: cairns_control links cairns_core and uses
+# nlohmann/json (needs exceptions). Apps (sdl-min, cairns_serve) carry their
+# own compile options on their main TU.
+target_compile_options(cairns_core PRIVATE
   -Wall
   -Wextra
   -Werror

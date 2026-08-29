@@ -12,7 +12,11 @@
 #include <fastgltf/tools.hpp>
 #include <fastgltf/util.hpp>
 
-#define STB_IMAGE_IMPLEMENTATION
+// stb_image implementation symbols live in src/util/stb_impl.cpp (alongside
+// stb_image_write's). Defining STB_IMAGE_IMPLEMENTATION here meant every TU
+// that pulled gltf_loader.hpp (transitively, via engine.hpp) emitted them --
+// fine when only main.cpp included engine.hpp, but breaks once the headless
+// facade or other TUs do.
 #include <stb_image.h>
 
 #include <glm/glm.hpp>

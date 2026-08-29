@@ -4,10 +4,11 @@
 
 #if CAIRNS_METAL
 
-#define NS_PRIVATE_IMPLEMENTATION
-#define CA_PRIVATE_IMPLEMENTATION
-#define MTL_PRIVATE_IMPLEMENTATION
-
+// metal-cpp implementation symbols live in gfx_impl.cpp (exactly one TU);
+// here we only pull in the type declarations. Defining the *_PRIVATE_
+// IMPLEMENTATION macros here produced duplicate symbols once engine.hpp
+// started being included from more than one TU (e.g. cairns_control's
+// render_ops via engine_headless.hpp).
 #include <Foundation/Foundation.hpp>
 #include <Metal/Metal.hpp>
 #include <QuartzCore/QuartzCore.hpp>

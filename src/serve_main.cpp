@@ -20,6 +20,7 @@
 
 #include "control/command_registry.hpp"
 #include "control/handlers/lifecycle_ops.hpp"
+#include "control/handlers/render_ops.hpp"
 #include "control/transport_stdio.hpp"
 #include "engine.hpp"
 #include "rhi/init_config.hpp"
@@ -48,6 +49,7 @@ int main() {
     } else {
         std::fprintf(stderr, "[Engine] surfaceless GreaterInit ok.\n");
     }
+    cairns::control::RegisterRenderOps(registry, engine_ok ? engine : nullptr);
 
     cairns::control::StdioTransport::Run(registry, std::cin, std::cout, &quit);
 

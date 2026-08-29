@@ -138,6 +138,96 @@ public:
         rhi_.frames.SetDumpPath(path);
         return true;
     }
+
+    // Headless (cairns_serve) minimum render: clear final_target_ to the
+    // engine's clear color. Synchronous (waits for GPU completion). Returns
+    // false if final_target_ isn't allocated (i.e. windowed mode -- caller
+    // should use the normal draw() path instead). P2+ replaces the clear-only
+    // body with the full scene render once final_target_ is wired into the
+    // render graph.
+    bool RenderHeadlessFrame() {
+        if (final_target_.IsNull()) {
+            return false;
+        }
+#if CAIRNS_METAL
+        MTL::Texture* tex =
+            rhi_.resources.GetHot(final_target_)->api_view;
+        if (!tex) {
+            return false;
+        }
+        MTL::RenderPassDescriptor* rpd =
+            MTL::RenderPassDescriptor::alloc()->init();
+        MTL::RenderPassColorAttachmentDescriptor* ca =
+            rpd->colorAttachments()->object(0);
+        ca->setTexture(tex);
+        ca->setLoadAction(MTL::LoadActionClear);
+        // Match the existing forward-pass clear color in the windowed path.
+        ca->setClearColor(MTL::ClearColor(41.0 / 255.0, 42.0 / 255.0,
+                                          48.0 / 255.0, 1.0));
+        ca->setStoreAction(MTL::StoreActionStore);
+        MTL::CommandBuffer* cb = rhi_.device.queue_->commandBuffer();
+        MTL::RenderCommandEncoder* enc = cb->renderCommandEncoder(rpd);
+        enc->endEncoding();
+        cb->commit();
+        cb->waitUntilCompleted();
+        rpd->release();
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    // Headless texture readback: blit final_target_ -> Shared buffer ->
+    // PNG. Mirrors the windowed dump in metal/frames.cpp::End() but reads
+    // from the offscreen target instead of the swapchain drawable. Apple
+    // origin is top-left so no Y-flip needed (matches the windowed dump's
+    // contract). BGRA -> RGBA swizzle on the host side.
+    bool DumpFinalTarget(const std::filesystem::path& path) {
+        if (final_target_.IsNull()) {
+            return false;
+        }
+#if CAIRNS_METAL
+        MTL::Texture* tex =
+            rhi_.resources.GetHot(final_target_)->api_view;
+        if (!tex) {
+            return false;
+        }
+        const NS::UInteger w = tex->width();
+        const NS::UInteger h = tex->height();
+        const NS::UInteger bpr = w * 4;
+        const NS::UInteger bufSize = bpr * h;
+        MTL::Buffer* readback = rhi_.device.device_->newBuffer(
+            bufSize, MTL::ResourceStorageModeShared);
+        if (!readback) {
+            return false;
+        }
+        MTL::CommandBuffer* cb = rhi_.device.queue_->commandBuffer();
+        MTL::BlitCommandEncoder* blit = cb->blitCommandEncoder();
+        blit->copyFromTexture(tex, 0, 0, MTL::Origin{0, 0, 0},
+                              MTL::Size{w, h, 1}, readback, 0, bpr, 0);
+        blit->endEncoding();
+        cb->commit();
+        cb->waitUntilCompleted();
+        std::vector<uint8_t> rgba(bufSize);
+        const uint8_t* bgra =
+            static_cast<const uint8_t*>(readback->contents());
+        for (NS::UInteger i = 0; i < w * h; ++i) {
+            rgba[i * 4 + 0] = bgra[i * 4 + 2];
+            rgba[i * 4 + 1] = bgra[i * 4 + 1];
+            rgba[i * 4 + 2] = bgra[i * 4 + 0];
+            rgba[i * 4 + 3] = bgra[i * 4 + 3];
+        }
+        const bool ok = stbi_write_png(
+            path.string().c_str(), static_cast<int>(w),
+            static_cast<int>(h), 4, rgba.data(),
+            static_cast<int>(bpr)) != 0;
+        readback->release();
+        return ok;
+#else
+        (void)path;
+        return false;
+#endif
+    }
     
     bool initCpuAllocators() {
         return true;
@@ -380,13 +470,28 @@ public:
             }
             world_proxies_.resize(2);  // secondary_world_ uses slot 1
         }
-        // P1B: in surfaceless mode, stop here. InitTargets reads
-        // swapchain_.Width()/Height() (uninit -> kInvalidSize) and
-        // InitRenderPassDescriptor reads swapchain_.GetDrawable()->texture()
-        // (null in headless). Both need P1C's final_target_ retarget to work
-        // without a real swapchain. For now the headless engine comes up far
-        // enough for lifecycle ops + a future render.frame op once P1C lands.
+        // P1C: in surfaceless mode, allocate the offscreen final_target_ and
+        // stop before initRenderPipeline / Frames::InitTargets (those assume a
+        // real swapchain). render.frame and io.dumpTexture use a minimal
+        // clear-only path through final_target_. Full scene rendering through
+        // final_target_ lands when P2's viewport/camera ops + the render-graph
+        // retarget come in.
         if (cfg.surfaceless) {
+            final_target_w_ = cfg.width;
+            final_target_h_ = cfg.height;
+            rhi::TextureDesc td{};
+            td.debug_name = "final_target";
+            td.dimensions = {static_cast<int32_t>(cfg.width),
+                             static_cast<int32_t>(cfg.height), 1};
+            td.format = rhi::Format::kBgra8Unorm;
+            td.usage = rhi::kTexUsageColorTarget | rhi::kTexUsageSampled |
+                       rhi::kTexUsageTransferSrc;
+            td.memory = rhi::Memory::kDefault;
+            final_target_ = rhi_.resources.CreateTexture(rhi_.alloc, td);
+            if (final_target_.IsNull()) {
+                CAIRNS_PRINT("GreaterInit: final_target_ create failed\n");
+                return false;
+            }
             return true;
         }
         if ( !initRenderPipeline() ) {
@@ -1332,6 +1437,14 @@ private:
     uint64_t latest_parity_frame_ = 0;
     bool dump_emitted_ = false;
     uint32_t dump_emit_frame_ = 0;
+
+    // Headless / surfaceless mode (cairns_serve): swap pass writes into this
+    // offscreen target instead of the swapchain drawable. Allocated when
+    // cfg.surfaceless == true in GreaterInit; null otherwise. P1C uses a
+    // minimal clear-only render path; P2+ wires the full scene path through it.
+    rhi::Handle<rhi::Texture> final_target_ = rhi::Handle<rhi::Texture>::Null;
+    uint32_t final_target_w_ = 0;
+    uint32_t final_target_h_ = 0;
     // Fiedler fixed-timestep accumulator state. Game-thread only -- never
     // touched by the render thread. clock_ is WallClock in live mode,
     // FixedClock under CAIRNS_DUMP.
