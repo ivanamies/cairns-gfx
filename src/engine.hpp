@@ -505,6 +505,25 @@ public:
                    std::chrono::duration<double, std::milli>(
                        std::chrono::steady_clock::now() - t_cleanup).count());
 
+        // ── build set2 bind group for any material that doesn't yet have
+        //     one. (initRenderPipeline does this once at boot via
+        //     materials_.ForEachLive -- with L9's empty boot, it
+        //     iterated zero materials. Runtime-loaded materials need
+        //     the same treatment, idempotent skip-if-built.) ──
+        materials_.ForEachLive(
+            [&](cairns::Material::Hot& hot,
+                cairns::Material::Cold& cold) {
+                if (!hot.set2.IsNull()) {
+                    return;
+                }
+                const rhi::TextureBinding tb{0, cold.color};
+                const rhi::SamplerBinding sb{0, cold.sampler};
+                rhi::BindGroupDesc bgd{};
+                bgd.textures = std::span<const rhi::TextureBinding>(&tb, 1);
+                bgd.samplers = std::span<const rhi::SamplerBinding>(&sb, 1);
+                hot.set2 = rhi_.resources.CreateBindGroup(bgd);
+            });
+
         // ── append the new prefabs' textureHandles to resident_textures_
         //     so DrawMeshes' bindless sampler array sees them. (Pre-#224
         //     this was rebuilt from scratch in GreaterInit post-load;
