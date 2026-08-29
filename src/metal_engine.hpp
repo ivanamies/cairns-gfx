@@ -34,44 +34,6 @@
 #include "util/unique_ptr.hpp"
 #include "rhi/resource_manager.hpp"
 
-namespace {
-
-MTL::Library* compileMetalShader(MTL::Device* pDevice, std::string_view shaderPath) {
-    // 2. Read the shader source code into a C++ string
-    std::string shaderSource = cairns::ReadFileToString(shaderPath);
-    if (shaderSource.empty()) {
-        std::cerr << "Failed to load shader source from: " << shaderPath << std::endl;
-        return nullptr;
-    }
-    
-    // 3. Convert C++ string to Metal::NSString
-    NS::String* sourceString = NS::String::string(shaderSource.c_str(), NS::StringEncoding::UTF8StringEncoding);
-    
-    // 4. Create compilation options
-    MTL::CompileOptions* options = MTL::CompileOptions::alloc()->init();
-    // Set a specific Metal language version for compatibility
-    options->setLanguageVersion(MTL::LanguageVersion::LanguageVersion2_4);
-    // You can add more options here, like preprocessor macros (setPreprocessorMacros)
-    
-    // 5. Compile the library
-    NS::Error* error = nullptr;
-    // newLibrary takes the source string, options, and returns any error
-    MTL::Library* pLibrary = pDevice->newLibrary(sourceString, options, &error);
-    
-    // 6. Check for errors and release temporary objects
-    if (error) {
-        // Output the descriptive error message from Metal/Foundation
-        std::cerr << "Metal Compilation Error: " << error->localizedDescription()->utf8String() << std::endl;
-    }
-    
-    // Release objects that we retained with alloc/init
-    options->release();
-    
-    return pLibrary;
-}
-
-} // anonymous namespace
-
 namespace cairns::rhi {
 
 bool InitRenderPassDescriptor(MTL::RenderPassDescriptor*& renderPassDescriptor, MTL::Texture* msaa, MTL::Texture* depth,
@@ -753,63 +715,29 @@ public:
     }
     
     bool initRenderPipeline() {
-        MTL::Library* metal_default_library = nullptr;
-        {
-#if CAIRNS_ANDROID
-            std::filesystem::path basePath = "";   // on Android we do not want to use basepath. Instead, assets are available at the root directory.
-#elif CAIRNS_APPLE
-            auto basePathPtr = SDL_GetBasePath();
-            if (not basePathPtr){
-                return false;
+        {  // unlit graphics pipeline via rhi
+            const char* base = SDL_GetBasePath();
+            const std::string shader_dir = base ? base : "";
+            const rhi::VertexInputAttribute pos_attr{
+                0, cairns::kMeshPosBindSlot, rhi::Format::kRgba32F, 0};
+            const rhi::VertexBufferLayout pos_layout{
+                cairns::kMeshPosBindSlot, static_cast<uint32_t>(sizeof(glm::vec4))};
+            rhi::GraphicsPipelineDesc desc{};
+            desc.logical_shader = "unlit";
+            desc.shader_dir = shader_dir.c_str();
+            desc.vertex_attributes =
+                rhi::Span<const rhi::VertexInputAttribute>(&pos_attr, 1);
+            desc.vertex_buffers =
+                rhi::Span<const rhi::VertexBufferLayout>(&pos_layout, 1);
+            desc.color_format = rhi::Format::kBgra8Unorm;
+            desc.depth_format = rhi::Format::kD32F;
+            desc.sample_count = sampleCount;
+            desc.debug_name = "unlit";
+            unlit_ = rm_.CreateGraphicsPipeline(desc);
+            if (unlit_.IsNull()) {
+                std::exit(0);
             }
-            const std::filesystem::path basePath = basePathPtr;
-#endif // CAIRNS_ANDROID
-            const auto cubeShaderPath = basePath / "unlit.metal";
-
-            metal_default_library = compileMetalShader(device_, cubeShaderPath.string().c_str());
         }
-
-        MTL::Function* vertexShader = metal_default_library->newFunction(NS::String::string("cube::vertexShader", NS::ASCIIStringEncoding));
-        assert(vertexShader);
-        MTL::Function* fragmentShader = metal_default_library->newFunction(NS::String::string("cube::fragmentShader", NS::ASCIIStringEncoding));
-        assert(fragmentShader);
-        
-        MTL::RenderPipelineDescriptor* renderPipelineDescriptor = MTL::RenderPipelineDescriptor::alloc()->init();
-        renderPipelineDescriptor->setVertexFunction(vertexShader);
-        renderPipelineDescriptor->setFragmentFunction(fragmentShader);
-        assert(renderPipelineDescriptor);
-        MTL::PixelFormat pixelFormat = (MTL::PixelFormat)swapChain_->GetPixelFormat();
-        renderPipelineDescriptor->colorAttachments()->object(0)->setPixelFormat(pixelFormat);
-        renderPipelineDescriptor->setSampleCount(sampleCount);
-        renderPipelineDescriptor->setDepthAttachmentPixelFormat(MTL::PixelFormatDepth32Float);
-        
-        {
-            MTL::VertexDescriptor* vertex_desc = nullptr;
-            vertex_desc = MTL::VertexDescriptor::alloc()->init();
-            MTL::VertexAttributeDescriptor* const attr0 = vertex_desc->attributes()->object(0);
-            attr0->setFormat(MTL::VertexFormatFloat4);
-            attr0->setOffset(0);
-            attr0->setBufferIndex(cairns::kMeshPosBindSlot);
-            
-            MTL::VertexBufferLayoutDescriptor* const layout0 = vertex_desc->layouts()->object(0);
-            layout0->setStride(sizeof(glm::vec4));
-            layout0->setStepFunction(MTL::VertexStepFunctionPerVertex);
-            layout0->setStepRate(1);
-            renderPipelineDescriptor->setVertexDescriptor(vertex_desc);
-            vertex_desc = nullptr;
-        }
-        
-        NS::Error* error = nullptr;
-
-        MTL::RenderPipelineState* pso =
-            device_->newRenderPipelineState(renderPipelineDescriptor, &error);
-
-        if (pso == nullptr) {
-            std::cout << "Error creating render pipeline state: " << error << std::endl;
-            std::exit(0);
-        }
-
-        unlit_ = rm_.CreateShader({.api_pso = pso, .debug_name = "unlit"});
 
         { // bindless resources set up via rhi
             auto* texArg = MTL::ArgumentDescriptor::alloc()->init();
@@ -894,77 +822,42 @@ public:
         depthStencilDescriptor->setDepthWriteEnabled(true);
         depthStencilState = device_->newDepthStencilState(depthStencilDescriptor);
         
-        renderPipelineDescriptor->release();
-        vertexShader->release();
-        fragmentShader->release();
         
         return true;
     }
     
     bool initParticles() {
-#if CAIRNS_APPLE
-        auto basePathPtr = SDL_GetBasePath();
-        if (!basePathPtr) {
-            return false;
-        }
-        const std::filesystem::path basePath = basePathPtr;
-#else
-        const std::filesystem::path basePath = "";
-#endif
-        MTL::Library* lib = compileMetalShader(device_, (basePath / "particle.metal").string().c_str());
-        if (!lib) {
-            return false;
-        }
-
-        {
-            MTL::Function* fn = lib->newFunction(NS::String::string("particle_compute", NS::ASCIIStringEncoding));
-            if (!fn) {
-                lib->release();
+        const char* base = SDL_GetBasePath();
+        const std::string shader_dir = base ? base : "";
+        {  // particle compute kernel via rhi
+            rhi::ComputePipelineDesc desc{};
+            desc.logical_shader = "particle";
+            desc.shader_dir = shader_dir.c_str();
+            desc.debug_name = "particle_compute";
+            particle_kernel_ = rm_.CreateComputePipeline(desc);
+            if (particle_kernel_.IsNull()) {
                 return false;
             }
-            NS::Error* err = nullptr;
-            MTL::ComputePipelineState* cps = device_->newComputePipelineState(fn, &err);
-            fn->release();
-            if (!cps) {
-                lib->release();
-                return false;
-            }
-            particle_kernel_ = rm_.CreateKernel({.api_pso = cps, .debug_name = "particle_compute"});
         }
-
-        {
-            MTL::Function* vfn = lib->newFunction(NS::String::string("particle_vertex", NS::ASCIIStringEncoding));
-            MTL::Function* ffn = lib->newFunction(NS::String::string("particle_fragment", NS::ASCIIStringEncoding));
-            if (!vfn || !ffn) {
-                lib->release();
+        {  // particle render pipeline via rhi
+            rhi::GraphicsPipelineDesc desc{};
+            desc.logical_shader = "particle";
+            desc.shader_dir = shader_dir.c_str();
+            desc.topology = rhi::PrimitiveTopology::kPointList;
+            desc.blend.enable = true;
+            desc.blend.src_color = rhi::BlendFactor::kSrcAlpha;
+            desc.blend.dst_color = rhi::BlendFactor::kOneMinusSrcAlpha;
+            desc.blend.src_alpha = rhi::BlendFactor::kOne;
+            desc.blend.dst_alpha = rhi::BlendFactor::kZero;
+            desc.color_format = rhi::Format::kBgra8Unorm;
+            desc.depth_format = rhi::Format::kD32F;
+            desc.sample_count = sampleCount;
+            desc.debug_name = "particle_render";
+            particle_render_pso_ = rm_.CreateGraphicsPipeline(desc);
+            if (particle_render_pso_.IsNull()) {
                 return false;
             }
-            MTL::RenderPipelineDescriptor* rpd = MTL::RenderPipelineDescriptor::alloc()->init();
-            rpd->setVertexFunction(vfn);
-            rpd->setFragmentFunction(ffn);
-            const MTL::PixelFormat pf = static_cast<MTL::PixelFormat>(swapChain_->GetPixelFormat());
-            rpd->colorAttachments()->object(0)->setPixelFormat(pf);
-            rpd->colorAttachments()->object(0)->setBlendingEnabled(true);
-            rpd->colorAttachments()->object(0)->setSourceRGBBlendFactor(MTL::BlendFactorSourceAlpha);
-            rpd->colorAttachments()->object(0)->setDestinationRGBBlendFactor(MTL::BlendFactorOneMinusSourceAlpha);
-            rpd->colorAttachments()->object(0)->setSourceAlphaBlendFactor(MTL::BlendFactorOne);
-            rpd->colorAttachments()->object(0)->setDestinationAlphaBlendFactor(MTL::BlendFactorZero);
-            rpd->setSampleCount(sampleCount);
-            rpd->setDepthAttachmentPixelFormat(MTL::PixelFormatDepth32Float);
-            rpd->setInputPrimitiveTopology(MTL::PrimitiveTopologyClassPoint);
-            NS::Error* err = nullptr;
-            MTL::RenderPipelineState* rps = device_->newRenderPipelineState(rpd, &err);
-            rpd->release();
-            vfn->release();
-            ffn->release();
-            if (!rps) {
-                lib->release();
-                return false;
-            }
-            particle_render_pso_ = rm_.CreateShader({.api_pso = rps, .debug_name = "particle_render"});
         }
-
-        lib->release();
 
         struct Particle {
             float position[2];
