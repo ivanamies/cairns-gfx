@@ -39,6 +39,7 @@
 #include "control/handlers/perf_ops.hpp"
 #include "control/handlers/render_ops.hpp"
 #include "control/handlers/scene_ops.hpp"
+#include "control/handlers/entity_ops.hpp"
 #include "control/handlers/script_ops.hpp"
 #include "control/handlers/selection_ops.hpp"
 #include "util/json.hpp"
@@ -168,6 +169,7 @@ SDL_AppResult SDL_AppInit(void** appstate, [[maybe_unused]] int argc, [[maybe_un
     // there's nothing to "render once" through the registry).
     cairns::control::RegisterRenderOps(registry, *engine);
     cairns::control::RegisterSceneOps(registry, *engine);
+    cairns::control::RegisterEntityOps(registry, *engine);
     cairns::control::RegisterSelectionOps(registry, *engine);
     // Script ops LAST so tools.list inside script.eval reflects every
     // other op already registered. Mirrors serve_main's ordering.

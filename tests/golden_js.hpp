@@ -24,6 +24,7 @@
 #include "control/handlers/perf_ops.hpp"
 #include "control/handlers/render_ops.hpp"
 #include "control/handlers/scene_ops.hpp"
+#include "control/handlers/entity_ops.hpp"
 #include "control/handlers/script_ops.hpp"
 #include "control/handlers/selection_ops.hpp"
 #include "util/json.hpp"
@@ -98,6 +99,7 @@ inline cairns::control::CommandRegistry& SetupJs(cairns::Engine& engine) {
     cairns::control::RegisterLifecycleOps(reg, quit);
     cairns::control::RegisterRenderOps(reg, engine);
     cairns::control::RegisterSceneOps(reg, engine);
+    cairns::control::RegisterEntityOps(reg, engine);
     cairns::control::RegisterPerfOps(reg, engine);
     cairns::control::RegisterSelectionOps(reg, engine);
     cairns::control::RegisterScriptOps(reg, script_host);  // binds cairns.dispatch

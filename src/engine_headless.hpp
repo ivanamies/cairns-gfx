@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 #include "scene/selection.hpp"
@@ -101,6 +102,19 @@ float PrefabExtentMax(Engine* engine, uint32_t scene_idx);
 std::vector<uint32_t> ListActiveSceneEntities(Engine* engine);
 bool SetEntityTransform(Engine* engine, uint32_t entity_int,
                          float x, float y, float z, float scale);
+// #229 C4.2 entity ops. scene_index -1 = active. TRS as plain float arrays so
+// the control layer (json / -fno-exceptions) needs no glm.
+bool DestroyEntity(Engine* engine, int scene_index, uint32_t entity);
+bool SetEntityTRS(Engine* engine, int scene_index, uint32_t entity,
+                  const float t3[3], const float r4[4], const float s3[3]);
+bool GetEntityTRS(Engine* engine, int scene_index, uint32_t entity,
+                  float out_t3[3], float out_r4[4], float out_s3[3]);
+bool SetEntityParent(Engine* engine, int scene_index, uint32_t entity,
+                     uint32_t parent, bool clear);
+uint32_t FindEntityByName(Engine* engine, int scene_index,
+                          const std::string& name);
+bool SetEntityName(Engine* engine, int scene_index, uint32_t entity,
+                   const std::string& name);
 uint32_t ClearActiveScene(Engine* engine);
 // #229 M0b: per-Engine synthetic scene id (was the g_scene_counter global).
 uint64_t NextSceneId(Engine* engine);

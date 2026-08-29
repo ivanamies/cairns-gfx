@@ -218,6 +218,7 @@ add_library(cairns_control STATIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/boot_run.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/command_registry.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/transport_stdio.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/entity_ops.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/lifecycle_ops.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/perf_ops.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/control/handlers/render_ops.cpp"

@@ -539,7 +539,10 @@ public:
         }
         const auto& reg = wc->registry;
         out.reserve(reg.storage<entt::entity>()->size());
-        for (const entt::entity e : reg.view<cairns::WorldTransform>()) {
+        // #229 C4.1: Transform is the authoritative spawn marker now
+        // (WorldTransform is created lazily by PropagateTransforms, so a
+        // just-spawned entity has no WorldTransform until the next frame).
+        for (const entt::entity e : reg.view<cairns::Transform>()) {
             out.push_back(static_cast<uint32_t>(entt::to_integral(e)));
         }
         return out;
@@ -550,6 +553,153 @@ public:
     // the visible empty-then-full flash a clear+respawn produces.
     // Returns false if entity isn't live in scene_mgr_.active's registry.
     bool SetEntityTransform(uint32_t entity_int, const glm::mat4& world);
+
+    // #229 C4.2 entity ops. scene_index: 0 primary / 1 secondary, -1 = active.
+    // [N-node] explicit-scene-first; the ops default to the active scene only
+    // as a convenience.
+    cairns::Scene::Cold* EntitySceneCold(int scene_index) {
+        const cairns::SceneId sid =
+            (scene_index < 0) ? scene_mgr_.active
+                              : SceneByIndex(static_cast<uint32_t>(scene_index));
+        return scene_mgr_.pool.GetCold(sid);
+    }
+    void MarkSceneDirty(int scene_index) {
+        const cairns::SceneId sid =
+            (scene_index < 0) ? scene_mgr_.active
+                              : SceneByIndex(static_cast<uint32_t>(scene_index));
+        if (auto* wh = scene_mgr_.pool.GetHot(sid)) {
+            wh->dirty = true;
+        }
+    }
+    bool DestroyEntity(int scene_index, uint32_t entity_int) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!wc->registry.valid(e)) {
+            return false;
+        }
+        wc->registry.destroy(e);
+        // Scrub dangling selection/highlight targets so the outline pass never
+        // reads a destroyed id (matched by type+id; cross-scene id collisions
+        // are rare and a stale selection is worse than a rare over-scrub).
+        auto scrub = [&](std::vector<cairns::SelectionTarget>& v, uint32_t& rev) {
+            size_t w = 0;
+            for (size_t i = 0; i < v.size(); ++i) {
+                if (!(v[i].type == cairns::SelectionType::kEntity &&
+                      v[i].id == entity_int)) {
+                    v[w++] = v[i];
+                }
+            }
+            if (w != v.size()) {
+                v.resize(w);
+                ++rev;
+            }
+        };
+        scrub(picking_.selection, picking_.selection_rev);
+        scrub(picking_.highlights, picking_.highlights_rev);
+        MarkSceneDirty(scene_index);
+        return true;
+    }
+    bool SetEntityTRS(int scene_index, uint32_t entity_int, const glm::vec3& t,
+                      const glm::quat& r, const glm::vec3& s) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!reg.valid(e)) {
+            return false;
+        }
+        reg.emplace_or_replace<cairns::Transform>(e, cairns::Transform{t, r, s});
+        if (!reg.all_of<cairns::DirtyTransform>(e)) {
+            reg.emplace<cairns::DirtyTransform>(e);
+        }
+        MarkSceneDirty(scene_index);
+        return true;
+    }
+    bool GetEntityTRS(int scene_index, uint32_t entity_int, glm::vec3& out_t,
+                      glm::quat& out_r, glm::vec3& out_s) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!reg.valid(e) || !reg.all_of<cairns::Transform>(e)) {
+            return false;
+        }
+        const cairns::Transform& tr = reg.get<cairns::Transform>(e);
+        out_t = tr.t;
+        out_r = tr.r;
+        out_s = tr.s;
+        return true;
+    }
+    // parent_int ignored when clear=true (unparent). Cycle guard walks up from
+    // parent; a parent chain that reaches the child is rejected.
+    bool SetEntityParent(int scene_index, uint32_t entity_int,
+                         uint32_t parent_int, bool clear) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!reg.valid(e)) {
+            return false;
+        }
+        if (clear) {
+            reg.remove<cairns::Parent>(e);
+        } else {
+            const entt::entity p = static_cast<entt::entity>(parent_int);
+            if (!reg.valid(p) || p == e) {
+                return false;
+            }
+            entt::entity cur = p;
+            for (int guard = 0; guard < 4096 && cur != entt::null; ++guard) {
+                if (cur == e) {
+                    return false;  // would create a cycle
+                }
+                auto* par = reg.try_get<cairns::Parent>(cur);
+                cur = par ? par->value : entt::null;
+            }
+            reg.emplace_or_replace<cairns::Parent>(e, cairns::Parent{p});
+        }
+        if (!reg.all_of<cairns::DirtyTransform>(e)) {
+            reg.emplace<cairns::DirtyTransform>(e);
+        }
+        MarkSceneDirty(scene_index);
+        return true;
+    }
+    uint32_t FindEntityByName(int scene_index, const std::string& name) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return UINT32_MAX;
+        }
+        auto view = wc->registry.view<const cairns::Name>();
+        for (const entt::entity e : view) {
+            if (view.get<const cairns::Name>(e).value == name) {
+                return static_cast<uint32_t>(entt::to_integral(e));
+            }
+        }
+        return UINT32_MAX;
+    }
+    bool SetEntityName(int scene_index, uint32_t entity_int,
+                       const std::string& name) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!reg.valid(e)) {
+            return false;
+        }
+        reg.emplace_or_replace<cairns::Name>(e, cairns::Name{name});
+        return true;
+    }
 
     uint32_t ClearActiveScene() {
         cairns::Scene::Cold* wc = scene_mgr_.pool.GetCold(scene_mgr_.active);

@@ -34,6 +34,7 @@
 #include "control/handlers/perf_ops.hpp"
 #include "control/handlers/render_ops.hpp"
 #include "control/handlers/scene_ops.hpp"
+#include "control/handlers/entity_ops.hpp"
 #include "control/handlers/script_ops.hpp"
 #include "control/handlers/selection_ops.hpp"
 #include "engine.hpp"
@@ -219,6 +220,7 @@ void StartEngine(WebApp* app) {
     cairns::control::RegisterLifecycleOps(reg, app->quit);
     cairns::control::RegisterRenderOps(reg, *app->engine);
     cairns::control::RegisterSceneOps(reg, *app->engine);
+    cairns::control::RegisterEntityOps(reg, *app->engine);
     cairns::control::RegisterPerfOps(reg, *app->engine);
     cairns::control::RegisterSelectionOps(reg, *app->engine);
     cairns::control::RegisterScriptOps(reg, app->script_host);

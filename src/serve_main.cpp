@@ -36,6 +36,7 @@
 #include "control/handlers/perf_ops.hpp"
 #include "control/handlers/render_ops.hpp"
 #include "control/handlers/scene_ops.hpp"
+#include "control/handlers/entity_ops.hpp"
 #include "control/handlers/script_ops.hpp"
 #include "control/handlers/selection_ops.hpp"
 #include "control/transport_stdio.hpp"
@@ -78,6 +79,7 @@ int main() {
     if (engine_ok) {
         cairns::control::RegisterRenderOps(registry, *engine);
         cairns::control::RegisterSceneOps(registry, *engine);
+        cairns::control::RegisterEntityOps(registry, *engine);
         cairns::control::RegisterPerfOps(registry, *engine);
         cairns::control::RegisterSelectionOps(registry, *engine);
     }

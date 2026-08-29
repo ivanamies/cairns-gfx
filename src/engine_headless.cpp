@@ -205,6 +205,56 @@ bool SetEntityTransform(Engine* engine, uint32_t entity_int,
     return engine->SetEntityTransform(entity_int, m);
 }
 
+bool DestroyEntity(Engine* engine, int scene_index, uint32_t entity) {
+    return engine ? engine->DestroyEntity(scene_index, entity) : false;
+}
+bool SetEntityTRS(Engine* engine, int scene_index, uint32_t entity,
+                  const float t3[3], const float r4[4], const float s3[3]) {
+    if (!engine) {
+        return false;
+    }
+    // r4 is (x,y,z,w); glm::quat ctor is (w,x,y,z).
+    return engine->SetEntityTRS(
+        scene_index, entity, glm::vec3(t3[0], t3[1], t3[2]),
+        glm::quat(r4[3], r4[0], r4[1], r4[2]), glm::vec3(s3[0], s3[1], s3[2]));
+}
+bool GetEntityTRS(Engine* engine, int scene_index, uint32_t entity,
+                  float out_t3[3], float out_r4[4], float out_s3[3]) {
+    if (!engine) {
+        return false;
+    }
+    glm::vec3 t;
+    glm::quat r;
+    glm::vec3 s;
+    if (!engine->GetEntityTRS(scene_index, entity, t, r, s)) {
+        return false;
+    }
+    out_t3[0] = t.x;
+    out_t3[1] = t.y;
+    out_t3[2] = t.z;
+    out_r4[0] = r.x;
+    out_r4[1] = r.y;
+    out_r4[2] = r.z;
+    out_r4[3] = r.w;
+    out_s3[0] = s.x;
+    out_s3[1] = s.y;
+    out_s3[2] = s.z;
+    return true;
+}
+bool SetEntityParent(Engine* engine, int scene_index, uint32_t entity,
+                     uint32_t parent, bool clear) {
+    return engine ? engine->SetEntityParent(scene_index, entity, parent, clear)
+                  : false;
+}
+uint32_t FindEntityByName(Engine* engine, int scene_index,
+                          const std::string& name) {
+    return engine ? engine->FindEntityByName(scene_index, name) : UINT32_MAX;
+}
+bool SetEntityName(Engine* engine, int scene_index, uint32_t entity,
+                   const std::string& name) {
+    return engine ? engine->SetEntityName(scene_index, entity, name) : false;
+}
+
 uint32_t ClearActiveScene(Engine* engine) {
     return engine ? engine->ClearActiveScene() : 0;
 }
