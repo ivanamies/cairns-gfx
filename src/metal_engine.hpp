@@ -159,43 +159,38 @@ bool LoadMeshGpu(ResourceManager<Buffer>& mgr, Mesh& mesh,
     return true;
 }
 
-bool LoadSamplerGpu(Device& device, ResourceManager<Sampler>& sampler_mgr, Handle<Sampler> h) {
-    // samplers
-    MTL::SamplerDescriptor* desc = MTL::SamplerDescriptor::alloc()->init();
+bool LoadSamplerGpu([[maybe_unused]] Device& device, ResourceManager<Sampler>& sampler_mgr,
+                    Handle<Sampler> h, rhi2::ResourceManager& rm) {
     auto& info = *sampler_mgr.GetDesc(h);
-    desc->setSupportArgumentBuffers(true);
-    desc->setMinFilter(metal::MapMinMag(info.minFilter));
-    desc->setMagFilter(metal::MapMinMag(info.magFilter));
-    switch(info.mipFilter) {
-        case SamplerMipFilter::None:
-            desc->setMipFilter(MTL::SamplerMipFilterNotMipmapped);
-            break;
-        case SamplerMipFilter::Nearest:
-            desc->setMipFilter(MTL::SamplerMipFilterNearest);
-            break;
-        case SamplerMipFilter::Linear:
-            desc->setMipFilter(MTL::SamplerMipFilterLinear);
-            break;
-    }
-    
-    auto translateWrap = [](SamplerAddressMode m) {
-        if (m == SamplerAddressMode::ClampToEdge) return MTL::SamplerAddressModeClampToEdge;
-        if (m == SamplerAddressMode::MirroredRepeat) return MTL::SamplerAddressModeMirrorRepeat;
-        return MTL::SamplerAddressModeRepeat;
-    };
-    desc->setSAddressMode(translateWrap(info.addressModeU));
-    desc->setTAddressMode(translateWrap(info.addressModeV));
-    
-    //////////////////////////////////////////////////////////////////
-    // WARNING: IAMIES YOU ARE TAKING AN FPT HIT FOR CLEARER IMAGES //
-    // the internet says you should use it and I'm using it because the shimmering is annoying me
-     desc->setMaxAnisotropy(8);
-    //////////////////////////////////////////////////////////////////
-    
     auto& obj = *sampler_mgr.GetObj(h);
-    obj.sampler_state = device.get()->newSamplerState(desc);
-    desc->release();
-    
+
+    auto map_filter = [](SamplerFilter f) {
+        return f == SamplerFilter::Nearest ? rhi2::Filter::kNearest : rhi2::Filter::kLinear;
+    };
+    auto map_mip = [](SamplerMipFilter f) {
+        return f == SamplerMipFilter::Linear ? rhi2::Filter::kLinear : rhi2::Filter::kNearest;
+    };
+    auto map_addr = [](SamplerAddressMode m) {
+        switch (m) {
+            case SamplerAddressMode::MirroredRepeat: return rhi2::AddressMode::kMirroredRepeat;
+            case SamplerAddressMode::ClampToEdge:    return rhi2::AddressMode::kClampToEdge;
+            case SamplerAddressMode::ClampToBorder:  return rhi2::AddressMode::kClampToBorder;
+            default:                                  return rhi2::AddressMode::kRepeat;
+        }
+    };
+
+    rhi2::SamplerDesc d;
+    d.min_filter = map_filter(info.minFilter);
+    d.mag_filter = map_filter(info.magFilter);
+    d.mip_filter = map_mip(info.mipFilter);
+    d.address_mode = map_addr(info.addressModeU);
+    d.max_anisotropy = 8.0f;
+
+    rhi2::Handle<rhi2::Sampler> rhi2_h = rm.CreateSampler(d);
+    if (rhi2_h.IsNull()) {
+        return false;
+    }
+    obj.sampler_state = static_cast<MTL::SamplerState*>(rm.GetHot(rhi2_h)->api_sampler);
     return true;
 }
 
@@ -208,7 +203,7 @@ bool LoadSceneGpu(Device& device,
 {
     // 1. Load Samplers
     for ( const auto& h : scene.samplerHandles ) {
-        if ( !LoadSamplerGpu(device, sampler_mgr, h)) {
+        if ( !LoadSamplerGpu(device, sampler_mgr, h, rm)) {
             return false;
         }
     }

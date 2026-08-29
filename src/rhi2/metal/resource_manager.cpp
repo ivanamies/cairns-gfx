@@ -73,6 +73,25 @@ MTL::TextureUsage to_mtl_texture_usage(TextureUsage u, uint32_t mip_levels) {
     return static_cast<MTL::TextureUsage>(out);
 }
 
+MTL::SamplerMinMagFilter to_mtl_min_mag(Filter f) {
+    return f == Filter::kNearest ? MTL::SamplerMinMagFilterNearest
+                                 : MTL::SamplerMinMagFilterLinear;
+}
+
+MTL::SamplerMipFilter to_mtl_mip_filter(Filter f) {
+    return f == Filter::kNearest ? MTL::SamplerMipFilterNearest
+                                 : MTL::SamplerMipFilterLinear;
+}
+
+MTL::SamplerAddressMode to_mtl_address_mode(AddressMode m) {
+    switch (m) {
+        case AddressMode::kMirroredRepeat: return MTL::SamplerAddressModeMirrorRepeat;
+        case AddressMode::kClampToEdge:    return MTL::SamplerAddressModeClampToEdge;
+        case AddressMode::kClampToBorder:  return MTL::SamplerAddressModeClampToZero;
+        default:                           return MTL::SamplerAddressModeRepeat;
+    }
+}
+
 }  // namespace
 
 ResourceManager::~ResourceManager() {
@@ -226,8 +245,36 @@ Handle<Texture> ResourceManager::CreateTexture(const TextureDesc& d) {
     return h;
 }
 
-Handle<Sampler> ResourceManager::CreateSampler(const SamplerDesc&) {
-    return Handle<Sampler>::Null;
+Handle<Sampler> ResourceManager::CreateSampler(const SamplerDesc& d) {
+    MTL::SamplerDescriptor* desc = MTL::SamplerDescriptor::alloc()->init();
+    desc->setSupportArgumentBuffers(true);
+    desc->setMinFilter(to_mtl_min_mag(d.min_filter));
+    desc->setMagFilter(to_mtl_min_mag(d.mag_filter));
+    desc->setMipFilter(to_mtl_mip_filter(d.mip_filter));
+    desc->setSAddressMode(to_mtl_address_mode(d.address_mode));
+    desc->setTAddressMode(to_mtl_address_mode(d.address_mode));
+    desc->setRAddressMode(to_mtl_address_mode(d.address_mode));
+    if (d.max_anisotropy > 0.0f) {
+        desc->setMaxAnisotropy(static_cast<NS::UInteger>(d.max_anisotropy));
+    }
+    if (d.max_lod > 0.0f) {
+        desc->setLodMaxClamp(d.max_lod);
+    }
+
+    MTL::SamplerState* sampler = impl_->params.device->newSamplerState(desc);
+    desc->release();
+    if (!sampler) {
+        return Handle<Sampler>::Null;
+    }
+
+    Handle<Sampler> h = impl_->samplers.Acquire();
+    Sampler::Hot* hot = impl_->samplers.GetHot(h);
+    hot->api_sampler = sampler;
+
+    Sampler::Cold* cold = impl_->samplers.GetCold(h);
+    cold->debug_name = d.debug_name;
+
+    return h;
 }
 
 Handle<BindGroup> ResourceManager::CreateBindGroup(const BindGroupDesc&) {
