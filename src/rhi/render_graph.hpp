@@ -140,10 +140,25 @@ private:
         std::vector<ColorOutput> color_outputs;
         bool has_depth = false;
         DepthOutput depth_output;
+        std::vector<ColorAttachment> baked_color;
+        DepthAttachment baked_depth;
+        std::vector<Handle<Texture>> baked_inputs;
+    };
+
+    struct PooledTex {
+        GraphTextureDesc desc;
+        Handle<Texture> handle;
+    };
+
+    struct PooledBuf {
+        GraphBufferDesc desc;
+        Handle<Buffer> handle;
     };
 
     GraphTexture AddTexture(const TexRecord& rec);
     GraphBuffer AddBuffer(const BufRecord& rec);
+    Handle<Texture> AcquireTransientTex(const GraphTextureDesc& desc,
+                                        std::vector<uint8_t>& claimed);
 
     Resources& resources_;
     Allocator& alloc_;
@@ -156,6 +171,10 @@ private:
     std::vector<uint32_t> topo_order_;
     std::vector<Handle<Texture>> resolved_tex_;
     std::vector<Handle<Buffer>> resolved_buf_;
+    std::vector<PooledTex> tex_pool_;
+    std::vector<PooledBuf> buf_pool_;
 };
+
+void RenderGraphToyTest(Resources& resources, Allocator& alloc);
 
 }  // namespace cairns::rhi

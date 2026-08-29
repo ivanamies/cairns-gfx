@@ -32,6 +32,7 @@
 #include "scene/scene_world.hpp"
 #include "render/render_extract.hpp"
 #include "render/render_scene.hpp"
+#include "rhi/render_graph.hpp"
 #include "rhi/rhi.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/command_recorder.hpp"
@@ -247,6 +248,10 @@ public:
         if ( !initParticles() ) {
             CAIRNS_PRINT("GreaterInit: initParticles failed\n");
             return false;
+        }
+
+        if (std::getenv("CAIRNS_RG_TOY")) {
+            cairns::rhi::RenderGraphToyTest(rhi_.resources, rhi_.alloc);
         }
 
         return true;
