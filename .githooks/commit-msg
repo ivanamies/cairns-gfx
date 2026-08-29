@@ -1,0 +1,4 @@
+#!/bin/sh
+# Joint work; the trailer survives whichever tool writes the message.
+git interpret-trailers --in-place --if-exists addIfDifferent \
+    --trailer "Co-authored-by: Claude <noreply@anthropic.com>" "$1"
