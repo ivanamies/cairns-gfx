@@ -238,23 +238,24 @@ bool Frames::Init(Device& device) {
                 return false;
             }
         }
-        {  // dynamic-UBO layout: globals@0, material@1, drawtmp@2
-            VkDescriptorSetLayoutBinding b[3]{};
-            for (uint32_t i = 0; i < 3; ++i) {
-                b[i].binding = i;
-                b[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-                b[i].descriptorCount = 1;
-                b[i].stageFlags =
-                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-            }
+        // Per-frequency single dynamic-UBO layouts (Aaltonen split): set 0 globals
+        // (once/frame), set 2 drawtmp (per draw). Structurally identical but kept as
+        // distinct named layouts.
+        auto make_dyn_ubo_layout = [&](VkDescriptorSetLayout* out) -> bool {
+            VkDescriptorSetLayoutBinding b{};
+            b.binding = 0;
+            b.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+            b.descriptorCount = 1;
+            b.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             VkDescriptorSetLayoutCreateInfo li{};
             li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            li.bindingCount = 3;
-            li.pBindings = b;
-            if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &dyn_ubo_layout_) !=
-                VK_SUCCESS) {
-                return false;
-            }
+            li.bindingCount = 1;
+            li.pBindings = &b;
+            return vkCreateDescriptorSetLayout(dev, &li, nullptr, out) == VK_SUCCESS;
+        };
+        if (!make_dyn_ubo_layout(&globals_set_layout_) ||
+            !make_dyn_ubo_layout(&drawtmp_set_layout_)) {
+            return false;
         }
 
         VkDescriptorPoolSize sizes[3]{};
@@ -263,12 +264,12 @@ bool Frames::Init(Device& device) {
         sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         sizes[1].descriptorCount = 2 * n;
         sizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        sizes[2].descriptorCount = 3 * n;
+        sizes[2].descriptorCount = 2 * n;
         VkDescriptorPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pci.poolSizeCount = 3;
         pci.pPoolSizes = sizes;
-        pci.maxSets = 3 * n;
+        pci.maxSets = 4 * n;
         if (vkCreateDescriptorPool(dev, &pci, nullptr, &descriptor_pool_) !=
             VK_SUCCESS) {
             return false;
@@ -287,7 +288,8 @@ bool Frames::Init(Device& device) {
         };
         if (!alloc_sets(point_layout_, point_sets_) ||
             !alloc_sets(compute_layout_, compute_sets_) ||
-            !alloc_sets(dyn_ubo_layout_, dyn_ubo_sets_)) {
+            !alloc_sets(globals_set_layout_, globals_sets_) ||
+            !alloc_sets(drawtmp_set_layout_, drawtmp_sets_)) {
             return false;
         }
     }
@@ -315,8 +317,11 @@ void Frames::Deinit() {
     if (descriptor_pool_) {
         vkDestroyDescriptorPool(dev, descriptor_pool_, nullptr);
     }
-    if (dyn_ubo_layout_) {
-        vkDestroyDescriptorSetLayout(dev, dyn_ubo_layout_, nullptr);
+    if (globals_set_layout_) {
+        vkDestroyDescriptorSetLayout(dev, globals_set_layout_, nullptr);
+    }
+    if (drawtmp_set_layout_) {
+        vkDestroyDescriptorSetLayout(dev, drawtmp_set_layout_, nullptr);
     }
     if (compute_layout_) {
         vkDestroyDescriptorSetLayout(dev, compute_layout_, nullptr);
@@ -367,7 +372,8 @@ FrameContext Frames::Begin(Resources& resources, Allocator& alloc, SwapChain& sc
     fc.cmd.gfx_ = graphics_cmds_[cf];
     fc.cmd.comp_ = compute_cmds_[cf];
     fc.cmd.device_ = dev;
-    fc.cmd.dyn_ubo_set_ = dyn_ubo_sets_[cf];
+    fc.cmd.globals_set_ = globals_sets_[cf];
+    fc.cmd.drawtmp_set_ = drawtmp_sets_[cf];
     fc.cmd.compute_set_ = compute_sets_[cf];
     fc.cmd.point_set_ = point_sets_[cf];
     return fc;

@@ -11,7 +11,7 @@ layout(set = 0, binding = 0) uniform GlobalsUBO {
     vec4 screen_params;
 } globals;
 
-layout(set = 0, binding = 2) uniform DrawTmpUBO {
+layout(set = 2, binding = 0) uniform DrawTmpUBO {
     mat4 model_matrix;
     uint mesh_id;
     uint tex_id;

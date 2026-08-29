@@ -92,30 +92,36 @@ void CommandRecorder::BeginRenderPass(SwapChain& sc, const RenderPassDesc& desc)
 
 void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDrawList& list) {
     VkCommandBuffer cb = gfx_;
-    VkDescriptorSet dyn_set = dyn_ubo_set_;
 
+    // Aaltonen frequency split: globals = set 0 (one dynamic UBO, bound once per
+    // frame), drawtmp = set 2 (one dynamic UBO, one offset per draw). Each is its own
+    // descriptor set so the per-draw bind carries a single dynamic offset.
     VkBuffer bump_buf = res.GetVkBumpMasterBuffer(alloc, Memory::kDynamic);
-    std::array<VkWriteDescriptorSet, 3> writes{};
-    std::array<VkDescriptorBufferInfo, 3> buf_infos{};
-    const uint32_t ranges[3] = {static_cast<uint32_t>(sizeof(RenderPassGlobals)),
-                                static_cast<uint32_t>(sizeof(MaterialGpu)),
+    std::array<VkWriteDescriptorSet, 2> writes{};
+    std::array<VkDescriptorBufferInfo, 2> buf_infos{};
+    const VkDescriptorSet sets[2] = {globals_set_, drawtmp_set_};
+    const uint32_t ranges[2] = {static_cast<uint32_t>(sizeof(RenderPassGlobals)),
                                 static_cast<uint32_t>(sizeof(DrawTmp))};
-    for (uint32_t i = 0; i < 3; ++i) {
+    for (uint32_t i = 0; i < 2; ++i) {
         buf_infos[i].buffer = bump_buf;
         buf_infos[i].offset = 0;
         buf_infos[i].range = ranges[i];
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = dyn_set;
-        writes[i].dstBinding = i;
+        writes[i].dstSet = sets[i];
+        writes[i].dstBinding = 0;
         writes[i].dstArrayElement = 0;
         writes[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         writes[i].descriptorCount = 1;
         writes[i].pBufferInfo = &buf_infos[i];
     }
-    vkUpdateDescriptorSets(device_, 3, writes.data(), 0, nullptr);
+    vkUpdateDescriptorSets(device_, 2, writes.data(), 0, nullptr);
 
     Shader::Hot* unlit = res.GetHot(list.pipeline);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_pipeline);
+
+    // set 0 globals: bind once for the whole pass.
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_layout, 0, 1,
+                            &globals_set_, 1, &list.globals_offset);
 
     // Pack-meshes (Aaltonen slide 26): bind each stream at its mesh-region base
     // and select the primitive via baseVertex/baseIndex in the draw call, so the
@@ -165,11 +171,9 @@ void CommandRecorder::DrawMeshes(Resources& res, Allocator& alloc, const MeshDra
             vkCmdBindIndexBuffer(cb, idx_buf, idx_base, VK_INDEX_TYPE_UINT32);
         }
         const uint32_t first_index = (draw.index_offset - idx_base) / sizeof(uint32_t);
-        std::array<uint32_t, 3> dyn_offsets = {list.globals_offset,
-                                               draw.dynamic_buffer_offsets[0],
-                                               draw.dynamic_buffer_offsets[1]};
-        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_layout, 0, 1,
-                                &dyn_set, 3, dyn_offsets.data());
+        // set 2 drawtmp: the only per-draw dynamic offset.
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, unlit->vk_layout, 2, 1,
+                                &drawtmp_set_, 1, &draw.dynamic_buffer_offsets[1]);
         vkCmdDrawIndexed(cb, draw.triangle_count * 3, draw.instance_count, first_index,
                          static_cast<int32_t>(draw.vertex_offset), draw.instance_offset);
     }

@@ -305,8 +305,9 @@ Handle<Shader> Pipelines::CreateGraphicsPipeline(
     pc_range.size = desc.push_constant_bytes;
     std::vector<VkDescriptorSetLayout> set_layouts;
     if (desc.logical_shader && std::string(desc.logical_shader) == "unlit") {
-        set_layouts = {frames.dyn_ubo_layout_,        // set 0: per-draw dynamic UBOs
-                       resources.MaterialSetLayout()};  // set 1: per-material
+        set_layouts = {frames.globals_set_layout_,      // set 0: globals (once/frame)
+                       resources.MaterialSetLayout(),   // set 1: per-material
+                       frames.drawtmp_set_layout_};     // set 2: drawtmp (per draw)
     } else {
         set_layouts = {frames.point_layout_};
     }

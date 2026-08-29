@@ -69,10 +69,12 @@ public:
     std::vector<VkFence> in_flight_;
     std::vector<VkFence> compute_in_flight_;
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout dyn_ubo_layout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout globals_set_layout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout drawtmp_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout compute_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout point_layout_ = VK_NULL_HANDLE;
-    std::vector<VkDescriptorSet> dyn_ubo_sets_;
+    std::vector<VkDescriptorSet> globals_sets_;
+    std::vector<VkDescriptorSet> drawtmp_sets_;
     std::vector<VkDescriptorSet> compute_sets_;
     std::vector<VkDescriptorSet> point_sets_;
 #elif CAIRNS_METAL

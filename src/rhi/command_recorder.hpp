@@ -99,7 +99,8 @@ public:
     VkCommandBuffer gfx_ = VK_NULL_HANDLE;
     VkCommandBuffer comp_ = VK_NULL_HANDLE;
     VkDevice device_ = VK_NULL_HANDLE;
-    VkDescriptorSet dyn_ubo_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet globals_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet drawtmp_set_ = VK_NULL_HANDLE;
     VkDescriptorSet compute_set_ = VK_NULL_HANDLE;
     VkDescriptorSet point_set_ = VK_NULL_HANDLE;
 #elif CAIRNS_METAL
