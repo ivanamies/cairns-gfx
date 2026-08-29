@@ -3,9 +3,11 @@
 #include "util/define.hpp"
 
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
 #include <string_view>
 #include <filesystem>
+#include <mutex>
 #include <thread>
 #include <fstream>
 #include <iostream>
@@ -35,7 +37,6 @@
 #include "render/render_scene.hpp"
 #include "render/render_graph.hpp"
 #include "util/imgui_snapshot.hpp"
-#include "util/spsc_queue.hpp"
 #include "rhi/rhi.hpp"
 #include "rhi/resource_manager.hpp"
 #include "rhi/command_recorder.hpp"
@@ -295,30 +296,36 @@ public:
         }
 
         // Spawn the render thread. From here on, RecordFrame runs there;
-        // the game (main) thread only pushes packets via forward_queue_.
+        // the game (main) thread fills packets_[slot] and signals the slot's
+        // condition_variable; render thread waits on that.
         render_thread_ = std::thread(&Engine::RenderThreadLoop, this);
         return true;
     }
 
     void RenderThreadLoop() {
-        fprintf(stderr, "[R] start\n");
-        while (!render_stop_.load(std::memory_order_acquire)) {
-            fprintf(stderr, "[R] wait pop\n");
-            cairns::FramePacket* pkt = forward_queue_.Pop();
-            fprintf(stderr, "[R] popped pkt=%p\n", (void*)pkt);
-            if (pkt == nullptr) {
-                break;
+        for (;;) {
+            const uint32_t s = consumer_frame_ % rhi::kFramesInFlight;
+            {
+                std::unique_lock<std::mutex> lk(slot_mu_[s]);
+                slot_cv_[s].wait(lk, [&] {
+                    return slot_state_[s] != SlotState::kConsumerDone;
+                });
+                if (slot_state_[s] == SlotState::kShutdown) {
+                    return;
+                }
             }
-            fprintf(stderr, "[R] frame_idx=%u request_dump=%d\n",
-                    pkt->frame_idx, pkt->request_dump);
-            RecordFrame(*pkt);
-            fprintf(stderr, "[R] RecordFrame done\n");
-            if (pkt->request_dump) {
-                dump_done_sem_.release();
+            // Slot is ours until we mark kConsumerDone below.
+            RecordFrame(packets_[s]);
+            {
+                std::lock_guard<std::mutex> lk(slot_mu_[s]);
+                if (slot_state_[s] == SlotState::kShutdown) {
+                    return;  // deinit fired mid-RecordFrame; honor it.
+                }
+                slot_state_[s] = SlotState::kConsumerDone;
             }
-            render_done_sem_.release();
+            slot_cv_[s].notify_one();
+            ++consumer_frame_;
         }
-        fprintf(stderr, "[R] exit\n");
     }
 
     bool BuildMeshOpaqueDraws(cairns::FramePacket& pkt) {
@@ -778,10 +785,17 @@ public:
             return drawParallelPath();
         }
 
-        cairns::FramePacket& pkt = packets_[frame_ % rhi::kFramesInFlight];
-        // Release the previous occupant's ImGui snapshot before we overwrite
-        // the slot (the render thread is done with it -- we waited on
-        // render_done_sem_ kFramesInFlight times below before reusing).
+        const uint32_t s = frame_ % rhi::kFramesInFlight;
+        // Take the slot. Initial state is kConsumerDone so the first two
+        // iterations don't actually wait; subsequent iterations block until
+        // the render thread finishes RecordFrame for this slot.
+        {
+            std::unique_lock<std::mutex> lk(slot_mu_[s]);
+            slot_cv_[s].wait(lk, [&] {
+                return slot_state_[s] == SlotState::kConsumerDone;
+            });
+        }
+        cairns::FramePacket& pkt = packets_[s];
         if (pkt.imgui != nullptr) {
             cairns::FreeImGuiSnapshot(pkt.imgui);
             pkt.imgui = nullptr;
@@ -811,21 +825,25 @@ public:
             pkt.dump_path.clear();
         }
 
-        fprintf(stderr, "[G] frame_=%u BuildFrame begin\n", frame_);
         if (!BuildFrame(pkt)) {
             return false;
         }
-        fprintf(stderr, "[G] frame_=%u BuildFrame done\n", frame_);
         if (pkt.imgui != nullptr) {
             pkt.imgui = cairns::CloneImGuiDrawData(pkt.imgui);
         }
-        fprintf(stderr, "[G] frame_=%u Push begin\n", frame_);
-        forward_queue_.Push(&pkt);
-        fprintf(stderr, "[G] frame_=%u Push done\n", frame_);
+        {
+            std::lock_guard<std::mutex> lk(slot_mu_[s]);
+            slot_state_[s] = SlotState::kProducerFilled;
+        }
+        slot_cv_[s].notify_one();
         if (pkt.request_dump) {
             // Deterministic golden handshake: wait until the render thread has
-            // dumped before we let the game thread proceed to exit().
-            dump_done_sem_.acquire();
+            // dumped (slot returned to kConsumerDone) before letting the
+            // game thread fall through to the next iteration's exit gate.
+            std::unique_lock<std::mutex> lk(slot_mu_[s]);
+            slot_cv_[s].wait(lk, [&] {
+                return slot_state_[s] == SlotState::kConsumerDone;
+            });
         }
 
         t_frame.End();
@@ -894,7 +912,7 @@ public:
         }
 
         cairns::Timer t_rg_build("render graph build", 6);
-        pkt.graph = &graph_;
+        pkt.graph = &graphs_[pkt.frame_idx % rhi::kFramesInFlight];
         pkt.graph->Reset();
         pkt.graph->AddPass(
             "particle_sim", rhi::PassType::kCompute,
@@ -1363,8 +1381,13 @@ public:
         // null sentinel so RenderThreadLoop's Pop wakes and returns; if it
         // was mid-frame on the last live packet, we wait for that too.
         if (render_thread_.joinable()) {
-            render_stop_.store(true, std::memory_order_release);
-            forward_queue_.Push(nullptr);
+            for (uint32_t s = 0; s < rhi::kFramesInFlight; ++s) {
+                {
+                    std::lock_guard<std::mutex> lk(slot_mu_[s]);
+                    slot_state_[s] = SlotState::kShutdown;
+                }
+                slot_cv_[s].notify_all();
+            }
             render_thread_.join();
         }
         for (cairns::FramePacket& p : packets_) {
@@ -1418,16 +1441,24 @@ private:
 
     cairns::SceneWorld world_;
     cairns::RenderProxyArrays proxies_;
-    // Per-slot FramePacket ring (depth kFramesInFlight=2). frame_ %
-    // kFramesInFlight selects which slot the game thread fills, then pushes
-    // a pointer onto forward_queue_; the render thread pops, runs
-    // RecordFrame, and releases render_done_sem_.
+    // Per-slot FramePacket ring (depth kFramesInFlight=2). One mutex + one
+    // condition_variable per slot. State machine per slot:
+    //   kConsumerDone   -> producer owns the slot, fills packet, transitions
+    //                      to kProducerFilled, notifies.
+    //   kProducerFilled -> consumer owns the slot, runs RecordFrame,
+    //                      transitions back to kConsumerDone, notifies.
+    //   kShutdown       -> set by deinit() under each slot's mutex; render
+    //                      thread wakes, sees shutdown, exits.
+    // Initial state is kConsumerDone on both slots so the producer can fill
+    // kFramesInFlight packets before the consumer has done anything.
     cairns::FramePacket packets_[rhi::kFramesInFlight];
-    cairns::SpscQueue<cairns::FramePacket*, rhi::kFramesInFlight> forward_queue_;
-    std::counting_semaphore<rhi::kFramesInFlight> render_done_sem_{0};
-    std::binary_semaphore dump_done_sem_{0};
+    enum class SlotState : uint8_t { kConsumerDone, kProducerFilled, kShutdown };
+    std::mutex slot_mu_[rhi::kFramesInFlight];
+    std::condition_variable slot_cv_[rhi::kFramesInFlight];
+    SlotState slot_state_[rhi::kFramesInFlight] = {SlotState::kConsumerDone,
+                                                    SlotState::kConsumerDone};
     std::thread render_thread_;
-    std::atomic<bool> render_stop_{false};
+    uint32_t consumer_frame_ = 0;  // render-thread frame counter
     // CAIRNS_RG_PARALLEL: scratch + per-branch subset draw lists.
     cairns::RenderProxyArrays subset_proxies_;
     std::vector<cairns::Draw> glb1_draws_;
@@ -1439,6 +1470,14 @@ private:
 
     rhi::Rhi rhi_;
     rhi::Handle<rhi::Buffer> mesh_master_handle_ = rhi::Handle<rhi::Buffer>::Null;
+    // Per-slot RenderGraph (game thread builds slot N+1 while render thread
+    // executes slot N -- one graph each, no aliasing). Indexed by
+    // frame_ % kFramesInFlight; pkt.graph points into this array.
+    rhi::RenderGraph graphs_[rhi::kFramesInFlight] = {
+        rhi::RenderGraph(rhi_.resources, rhi_.alloc),
+        rhi::RenderGraph(rhi_.resources, rhi_.alloc)
+    };
+    // Single graph kept for drawParallelPath only (CAIRNS_RG_PARALLEL test).
     rhi::RenderGraph graph_{rhi_.resources, rhi_.alloc};
 
     cairns::rhi::SwapChain swapchain_;
