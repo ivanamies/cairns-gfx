@@ -1,7 +1,9 @@
 #include "control/handlers/entity_ops.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstdint>
+#include <vector>
 #include <stdexcept>
 #include <string>
 
@@ -255,6 +257,111 @@ void RegisterEntityOps(CommandRegistry& registry, cairns::Engine& engine) {
                     {"t", {t[0], t[1], t[2]}},
                     {"r", {r[0], r[1], r[2], r[3]}},
                     {"s", {s[0], s[1], s[2]}}};
+        });
+
+    registry.Register(
+        "cairns.entity.setJointPose",
+        json::object(),
+        "Drive a skinned entity's joints directly, bypassing clip sampling. "
+        "Args: {scene?, entity, joints:[{joint (uint, SKIN joint index -- see "
+        "cairns.entity.jointNames), r:[x,y,z,w] quat OR axis:[x,y,z]+angle "
+        "(radians), t:[x,y,z], s:[x,y,z]}]}. Every component is optional and "
+        "an omitted one keeps its current value, which starts at the prefab's "
+        "bind pose -- so a caller names only the DoFs it drives. The pose is "
+        "static state, not a one-frame nudge: it holds until setJointPose "
+        "changes it or clearJointPose hands the actor back to its clip, and it "
+        "is time-independent, so a posed frame byte-gates. Set poses AFTER "
+        "loading prefabs: a later cairns.prefab.load can force a full "
+        "anim-table rebuild, which re-applies live poses but not ones set on "
+        "an entity whose skin was recreated. Returns {ok, entity, joints}.",
+        [&engine](const json& args) -> json {
+            const uint32_t entity = args.value("entity", UINT32_MAX);
+            std::vector<uint32_t> ids;
+            std::vector<uint32_t> masks;
+            std::vector<float> trs10;
+            if (args.contains("joints") && args["joints"].is_array()) {
+                const auto& arr = args["joints"];
+                ids.reserve(arr.size());
+                masks.reserve(arr.size());
+                trs10.reserve(arr.size() * 10u);
+                for (const json& j : arr) {
+                    ids.push_back(j.value("joint", UINT32_MAX));
+                    uint32_t mask = 0;
+                    const std::array<float, 3> t =
+                        ReadVec<3>(j, "t", {0.0f, 0.0f, 0.0f});
+                    std::array<float, 4> r = {0.0f, 0.0f, 0.0f, 1.0f};
+                    const std::array<float, 3> sc =
+                        ReadVec<3>(j, "s", {1.0f, 1.0f, 1.0f});
+                    if (j.contains("t")) { mask |= 1u; }
+                    if (j.contains("s")) { mask |= 4u; }
+                    if (j.contains("r")) {
+                        r = ReadVec<4>(j, "r", r);
+                        mask |= 2u;
+                    } else if (j.contains("axis")) {
+                        // Hinge form: the natural one for an MJCF-derived rig,
+                        // where a joint node is one revolute DoF about a fixed
+                        // axis. Normalised here so a caller can pass the raw
+                        // MJCF axis.
+                        const std::array<float, 3> ax =
+                            ReadVec<3>(j, "axis", {0.0f, 1.0f, 0.0f});
+                        const float angle = j.value("angle", 0.0f);
+                        float len = std::sqrt(ax[0] * ax[0] + ax[1] * ax[1] +
+                                              ax[2] * ax[2]);
+                        if (len <= 0.0f) { len = 1.0f; }
+                        const float half = angle * 0.5f;
+                        const float sn = std::sin(half) / len;
+                        r = {ax[0] * sn, ax[1] * sn, ax[2] * sn,
+                             std::cos(half)};
+                        mask |= 2u;
+                    }
+                    masks.push_back(mask);
+                    trs10.insert(trs10.end(),
+                                 {t[0], t[1], t[2], r[0], r[1], r[2], r[3],
+                                  sc[0], sc[1], sc[2]});
+                }
+            }
+            const bool ok = cairns::headless::SetEntityJointPose(
+                &engine, SceneArg(args), entity, ids.data(), masks.data(),
+                trs10.data(), static_cast<uint32_t>(ids.size()));
+            return {{"ok", ok},
+                    {"entity", entity},
+                    {"joints", ids.size()}};
+        });
+
+    registry.Register(
+        "cairns.entity.clearJointPose",
+        json::object(),
+        "Drop an entity's joint-pose override and hand the actor back to its "
+        "animation clip. Args: {scene?, entity}. Returns {ok, entity}. An "
+        "entity that was never posed is a no-op success.",
+        [&engine](const json& args) -> json {
+            const uint32_t entity = args.value("entity", UINT32_MAX);
+            return {{"ok", cairns::headless::ClearEntityJointPose(
+                               &engine, SceneArg(args), entity)},
+                    {"entity", entity}};
+        });
+
+    registry.Register(
+        "cairns.entity.jointNames",
+        json::object(),
+        "Skin joint index -> node name for a skinned entity, so a script can "
+        "resolve a rig's joint by name instead of hardcoding an index. Args: "
+        "{scene?, entity}. Returns {ok, joints:[{index, node, name}]}.",
+        [&engine](const json& args) -> json {
+            const uint32_t entity = args.value("entity", UINT32_MAX);
+            std::vector<int32_t> nodes;
+            std::vector<std::string> names;
+            if (!cairns::headless::ListEntityJointNames(
+                    &engine, SceneArg(args), entity, nodes, names)) {
+                return {{"ok", false}};
+            }
+            json joints = json::array();
+            for (size_t i = 0; i < nodes.size(); ++i) {
+                joints.push_back({{"index", i},
+                                  {"node", nodes[i]},
+                                  {"name", names[i]}});
+            }
+            return {{"ok", true}, {"joints", std::move(joints)}};
         });
 
     registry.Register(

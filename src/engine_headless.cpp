@@ -207,6 +207,24 @@ bool SetEntityTransform(Engine* engine, uint32_t entity_int,
     return engine->SetEntityTransform(entity_int, m);
 }
 
+bool SetEntityJointPose(Engine* engine, int scene_index, uint32_t entity,
+                        const uint32_t* joints, const uint32_t* masks,
+                        const float* trs10, uint32_t count) {
+    return engine ? engine->SetEntityJointPose(scene_index, entity, joints,
+                                               masks, trs10, count)
+                  : false;
+}
+bool ClearEntityJointPose(Engine* engine, int scene_index, uint32_t entity) {
+    return engine ? engine->ClearEntityJointPose(scene_index, entity) : false;
+}
+bool ListEntityJointNames(Engine* engine, int scene_index, uint32_t entity,
+                          std::vector<int32_t>& out_nodes,
+                          std::vector<std::string>& out_names) {
+    return engine ? engine->ListEntityJointNames(scene_index, entity, out_nodes,
+                                                 out_names)
+                  : false;
+}
+
 bool DestroyEntity(Engine* engine, int scene_index, uint32_t entity) {
     return engine ? engine->DestroyEntity(scene_index, entity) : false;
 }

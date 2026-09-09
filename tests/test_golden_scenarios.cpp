@@ -960,3 +960,120 @@ SCENARIO("scenario picker renders clean: picker only, no HUD/particles/depth",
     REQUIRE(picker_bright > 0);   // (1) the scenario picker rendered
     REQUIRE(stray_bright == 0);   // (2) no HUD, (3) no particles, (4) no depth PIP
 }
+
+// ---- Drosophila arena: joints driven programmatically, no clock ------------
+// The one subject whose pose comes from the script rather than from a clip.
+// cairns.entity.setJointPose replaces the actor's node-local TRS wholesale, so
+// nothing here depends on time, on time_phase, or on which clip the loader
+// happened to select -- which is exactly why it byte-gates like a static
+// subject even though the mesh goes through the full skinning path.
+//
+// Joint-axis convention comes from the MJCF the rig was converted from (see
+// tools/mjcf_to_rigged_glb.py + assets/fly.joints.json): a `_yaw` DoF turns
+// about X, a `_roll` DoF about Z, and a bare one about Y. Joints are resolved
+// by NAME through cairns.entity.jointNames so a re-export that renumbers the
+// skeleton doesn't silently repose the fly.
+SCENARIO("subject: fly arena (programmatic joint poses)",
+         "[scenarios][golden][subject]") {
+    cairns::golden::RunJsSubject("fly_pose", 512, 512, {"fly.glb"}, R"JS(
+        // primitive.create returns only its type, so diff the entity list to
+        // learn which id it made -- listEntities order is registry order, not
+        // creation order, and guessing it silently swapped floor and drop.
+        function listEnts() {
+            return cairns.dispatch("cairns.scene.listEntities", {}).result.entities;
+        }
+        function created(before) {
+            for (const e of listEnts()) {
+                if (before.indexOf(e) < 0) { return e; }
+            }
+            throw new Error("primitive.create produced no entity");
+        }
+        let seen = listEnts();
+        cairns.dispatch("cairns.primitive.create",
+                        { type: "ellipse", color: [0.28, 0.30, 0.34, 1] });
+        const floor = created(seen);
+        seen = listEnts();
+        cairns.dispatch("cairns.primitive.create",
+                        { type: "ellipsoid", color: [0.95, 0.90, 0.58, 1] });
+        const drop = created(seen);
+        // Arena floor: the ellipse is a unit disk in XY, so lay it flat about X.
+        cairns.dispatch("cairns.entity.setTRS", {
+            entity: floor, t: [0, -1.0, 0],
+            r: [-0.70710678, 0, 0, 0.70710678], s: [7, 7, 7] });
+        // Sugar drop, sitting on the floor a little in front of the flies.
+        cairns.dispatch("cairns.entity.setTRS", {
+            entity: drop, t: [1.35, -0.86, 0.9],
+            r: [0, 0, 0, 1], s: [0.26, 0.26, 0.26] });
+
+        const fly = cairns.dispatch("cairns.prefab.load",
+                                    { path: "fly.glb" }).result.prefab;
+        const stance = cairns.dispatch("cairns.scene.instantiate",
+            { prefab: fly, x: -1.1, y: -0.55, z: 0.0, scale: 0.30 }).result.entity;
+        const swing = cairns.dispatch("cairns.scene.instantiate",
+            { prefab: fly, x:  1.1, y: -0.55, z: 0.0, scale: 0.30 }).result.entity;
+
+        const sun = cairns.dispatch("cairns.entity.new", { name: "sun" });
+        cairns.dispatch("cairns.entity.addComponent", {
+            entity: sun.result.entity, type: "DirectionalLight",
+            props: { dirX: -0.45, dirY: -1.0, dirZ: -0.35,
+                     colorR: 1.0, colorG: 0.97, colorB: 0.9, intensity: 1.2,
+                     ambientR: 0.16, ambientG: 0.16, ambientB: 0.19 } });
+        cairns.dispatch("cairns.scene.setMaterialShaderAll", { shader: "lit" });
+        cairns.dispatch("cairns.viewport.setCamera",
+                        { viewport: 0, x: 0, y: 0.15, z: 3.1, pitch: -0.06 });
+
+        // name -> skin joint index, per entity (both share a rig, but resolve
+        // per entity so the op surface is what the test exercises).
+        function jointMap(e) {
+            const r = cairns.dispatch("cairns.entity.jointNames", { entity: e });
+            const m = {};
+            for (const j of r.result.joints) { m[j.name] = j.index; }
+            return m;
+        }
+        function axisOf(name) {
+            if (name.endsWith("_yaw"))  { return [1, 0, 0]; }
+            if (name.endsWith("_roll")) { return [0, 0, 1]; }
+            return [0, 1, 0];
+        }
+        // `angles[name]` is either a bare angle (axis implied by the DoF's name
+        // suffix) or an explicit [ax, ay, az, angle].
+        function pose(e, angles) {
+            const m = jointMap(e);
+            const joints = [];
+            for (const name in angles) {
+                if (!(name in m)) { throw new Error("no joint " + name); }
+                const a = angles[name];
+                const explicit = Array.isArray(a);
+                joints.push({ joint: m[name],
+                              axis: explicit ? [a[0], a[1], a[2]] : axisOf(name),
+                              angle: explicit ? a[3] : a });
+            }
+            const r = cairns.dispatch("cairns.entity.setJointPose",
+                                      { entity: e, joints: joints });
+            if (!r.result.ok) { throw new Error("setJointPose failed"); }
+        }
+        // Wings are their own bodies in the MJCF (no DoF of their own), so
+        // raising them poses the body node directly -- the override array is
+        // node-indexed, not restricted to articulated joints.
+        // The MJCF long axis is X, so a wing lifts by rolling about X.
+        const wings = { "LWing": [1, 0, 0, 0.55], "RWing": [1, 0, 0, -0.55] };
+        // Alternating tripod: LF/RM/LH plant, RF/LM/RH are lifted mid-swing.
+        function tripod(planted, lifted) {
+            const a = {};
+            for (const leg of planted) {
+                a["joint_" + leg + "Coxa"]  = -0.35;
+                a["joint_" + leg + "Femur"] = -0.85;
+                a["joint_" + leg + "Tibia"] =  1.30;
+            }
+            for (const leg of lifted) {
+                a["joint_" + leg + "Coxa"]  =  0.30;
+                a["joint_" + leg + "Femur"] = -1.45;
+                a["joint_" + leg + "Tibia"] =  0.55;
+            }
+            for (const w in wings) { a[w] = wings[w]; }
+            return a;
+        }
+        pose(stance, tripod(["LF", "RM", "LH"], ["RF", "LM", "RH"]));
+        pose(swing,  tripod(["RF", "LM", "RH"], ["LF", "RM", "LH"]));
+    )JS");
+}

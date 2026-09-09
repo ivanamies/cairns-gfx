@@ -90,6 +90,19 @@ const char* PlatformKey() {
     return "macos-unknown";
 #    endif
 #  endif
+#elif defined(__linux__)
+    // Desktop Linux. As on Android, the backend alone does not pin the
+    // rasteriser -- the discrete driver and the software one (lavapipe) both
+    // answer to CAIRNS_VULKAN. This key is the discrete-GPU baseline; the
+    // software path uses CAIRNS_PLATFORM_KEY=linux-vk-lvp, exactly as the
+    // AVD uses android-vk-emu against a device's android-vk.
+#  if CAIRNS_VULKAN
+    return "linux-vk";
+#  elif CAIRNS_WEBGPU
+    return "linux-webgpu";
+#  else
+    return "linux-unknown";
+#  endif
 #else
     return "unknown";
 #endif

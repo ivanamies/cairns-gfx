@@ -1,0 +1,1763 @@
+[
+ {
+  "index": 0,
+  "name": "FlyBody",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": -1
+ },
+ {
+  "index": 1,
+  "name": "Thorax",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 0
+ },
+ {
+  "index": 2,
+  "name": "A1A2",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 1
+ },
+ {
+  "index": 3,
+  "name": "A3",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 2
+ },
+ {
+  "index": 4,
+  "name": "A4",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 3
+ },
+ {
+  "index": 5,
+  "name": "A5",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 4
+ },
+ {
+  "index": 6,
+  "name": "A6",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 5
+ },
+ {
+  "index": 7,
+  "name": "LHaltere",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 1
+ },
+ {
+  "index": 8,
+  "name": "LWing",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 1
+ },
+ {
+  "index": 9,
+  "name": "RHaltere",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 1
+ },
+ {
+  "index": 10,
+  "name": "RWing",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 1
+ },
+ {
+  "index": 11,
+  "name": "LFCoxa",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 1
+ },
+ {
+  "index": 12,
+  "name": "joint_LFCoxa_yaw",
+  "kind": "joint",
+  "mjcf_joint": "joint_LFCoxa_yaw",
+  "axis": [
+   1.0,
+   0.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 11
+ },
+ {
+  "index": 13,
+  "name": "joint_LFCoxa",
+  "kind": "joint",
+  "mjcf_joint": "joint_LFCoxa",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 12
+ },
+ {
+  "index": 14,
+  "name": "joint_LFCoxa_roll",
+  "kind": "joint",
+  "mjcf_joint": "joint_LFCoxa_roll",
+  "axis": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "range": null,
+  "parent": 13
+ },
+ {
+  "index": 15,
+  "name": "LFFemur",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 14
+ },
+ {
+  "index": 16,
+  "name": "joint_LFFemur",
+  "kind": "joint",
+  "mjcf_joint": "joint_LFFemur",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 15
+ },
+ {
+  "index": 17,
+  "name": "joint_LFFemur_roll",
+  "kind": "joint",
+  "mjcf_joint": "joint_LFFemur_roll",
+  "axis": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "range": null,
+  "parent": 16
+ },
+ {
+  "index": 18,
+  "name": "LFTibia",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 17
+ },
+ {
+  "index": 19,
+  "name": "joint_LFTibia",
+  "kind": "joint",
+  "mjcf_joint": "joint_LFTibia",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 18
+ },
+ {
+  "index": 20,
+  "name": "LFTarsus1",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 19
+ },
+ {
+  "index": 21,
+  "name": "joint_LFTarsus1",
+  "kind": "joint",
+  "mjcf_joint": "joint_LFTarsus1",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 20
+ },
+ {
+  "index": 22,
+  "name": "LFTarsus2",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 21
+ },
+ {
+  "index": 23,
+  "name": "joint_LFTarsus2",
+  "kind": "joint",
+  "mjcf_joint": "joint_LFTarsus2",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 22
+ },
+ {
+  "index": 24,
+  "name": "LFTarsus3",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 23
+ },
+ {
+  "index": 25,
+  "name": "joint_LFTarsus3",
+  "kind": "joint",
+  "mjcf_joint": "joint_LFTarsus3",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 24
+ },
+ {
+  "index": 26,
+  "name": "LFTarsus4",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 25
+ },
+ {
+  "index": 27,
+  "name": "joint_LFTarsus4",
+  "kind": "joint",
+  "mjcf_joint": "joint_LFTarsus4",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 26
+ },
+ {
+  "index": 28,
+  "name": "LFTarsus5",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 27
+ },
+ {
+  "index": 29,
+  "name": "joint_LFTarsus5",
+  "kind": "joint",
+  "mjcf_joint": "joint_LFTarsus5",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 28
+ },
+ {
+  "index": 30,
+  "name": "LHCoxa",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 1
+ },
+ {
+  "index": 31,
+  "name": "joint_LHCoxa_yaw",
+  "kind": "joint",
+  "mjcf_joint": "joint_LHCoxa_yaw",
+  "axis": [
+   1.0,
+   0.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 30
+ },
+ {
+  "index": 32,
+  "name": "joint_LHCoxa",
+  "kind": "joint",
+  "mjcf_joint": "joint_LHCoxa",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 31
+ },
+ {
+  "index": 33,
+  "name": "joint_LHCoxa_roll",
+  "kind": "joint",
+  "mjcf_joint": "joint_LHCoxa_roll",
+  "axis": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "range": null,
+  "parent": 32
+ },
+ {
+  "index": 34,
+  "name": "LHFemur",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 33
+ },
+ {
+  "index": 35,
+  "name": "joint_LHFemur",
+  "kind": "joint",
+  "mjcf_joint": "joint_LHFemur",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 34
+ },
+ {
+  "index": 36,
+  "name": "joint_LHFemur_roll",
+  "kind": "joint",
+  "mjcf_joint": "joint_LHFemur_roll",
+  "axis": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "range": null,
+  "parent": 35
+ },
+ {
+  "index": 37,
+  "name": "LHTibia",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 36
+ },
+ {
+  "index": 38,
+  "name": "joint_LHTibia",
+  "kind": "joint",
+  "mjcf_joint": "joint_LHTibia",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 37
+ },
+ {
+  "index": 39,
+  "name": "LHTarsus1",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 38
+ },
+ {
+  "index": 40,
+  "name": "joint_LHTarsus1",
+  "kind": "joint",
+  "mjcf_joint": "joint_LHTarsus1",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 39
+ },
+ {
+  "index": 41,
+  "name": "LHTarsus2",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 40
+ },
+ {
+  "index": 42,
+  "name": "joint_LHTarsus2",
+  "kind": "joint",
+  "mjcf_joint": "joint_LHTarsus2",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 41
+ },
+ {
+  "index": 43,
+  "name": "LHTarsus3",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 42
+ },
+ {
+  "index": 44,
+  "name": "joint_LHTarsus3",
+  "kind": "joint",
+  "mjcf_joint": "joint_LHTarsus3",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 43
+ },
+ {
+  "index": 45,
+  "name": "LHTarsus4",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 44
+ },
+ {
+  "index": 46,
+  "name": "joint_LHTarsus4",
+  "kind": "joint",
+  "mjcf_joint": "joint_LHTarsus4",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 45
+ },
+ {
+  "index": 47,
+  "name": "LHTarsus5",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 46
+ },
+ {
+  "index": 48,
+  "name": "joint_LHTarsus5",
+  "kind": "joint",
+  "mjcf_joint": "joint_LHTarsus5",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 47
+ },
+ {
+  "index": 49,
+  "name": "LMCoxa",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 1
+ },
+ {
+  "index": 50,
+  "name": "joint_LMCoxa_yaw",
+  "kind": "joint",
+  "mjcf_joint": "joint_LMCoxa_yaw",
+  "axis": [
+   1.0,
+   0.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 49
+ },
+ {
+  "index": 51,
+  "name": "joint_LMCoxa",
+  "kind": "joint",
+  "mjcf_joint": "joint_LMCoxa",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 50
+ },
+ {
+  "index": 52,
+  "name": "joint_LMCoxa_roll",
+  "kind": "joint",
+  "mjcf_joint": "joint_LMCoxa_roll",
+  "axis": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "range": null,
+  "parent": 51
+ },
+ {
+  "index": 53,
+  "name": "LMFemur",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 52
+ },
+ {
+  "index": 54,
+  "name": "joint_LMFemur",
+  "kind": "joint",
+  "mjcf_joint": "joint_LMFemur",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 53
+ },
+ {
+  "index": 55,
+  "name": "joint_LMFemur_roll",
+  "kind": "joint",
+  "mjcf_joint": "joint_LMFemur_roll",
+  "axis": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "range": null,
+  "parent": 54
+ },
+ {
+  "index": 56,
+  "name": "LMTibia",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 55
+ },
+ {
+  "index": 57,
+  "name": "joint_LMTibia",
+  "kind": "joint",
+  "mjcf_joint": "joint_LMTibia",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 56
+ },
+ {
+  "index": 58,
+  "name": "LMTarsus1",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 57
+ },
+ {
+  "index": 59,
+  "name": "joint_LMTarsus1",
+  "kind": "joint",
+  "mjcf_joint": "joint_LMTarsus1",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 58
+ },
+ {
+  "index": 60,
+  "name": "LMTarsus2",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 59
+ },
+ {
+  "index": 61,
+  "name": "joint_LMTarsus2",
+  "kind": "joint",
+  "mjcf_joint": "joint_LMTarsus2",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 60
+ },
+ {
+  "index": 62,
+  "name": "LMTarsus3",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 61
+ },
+ {
+  "index": 63,
+  "name": "joint_LMTarsus3",
+  "kind": "joint",
+  "mjcf_joint": "joint_LMTarsus3",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 62
+ },
+ {
+  "index": 64,
+  "name": "LMTarsus4",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 63
+ },
+ {
+  "index": 65,
+  "name": "joint_LMTarsus4",
+  "kind": "joint",
+  "mjcf_joint": "joint_LMTarsus4",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 64
+ },
+ {
+  "index": 66,
+  "name": "LMTarsus5",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 65
+ },
+ {
+  "index": 67,
+  "name": "joint_LMTarsus5",
+  "kind": "joint",
+  "mjcf_joint": "joint_LMTarsus5",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 66
+ },
+ {
+  "index": 68,
+  "name": "RHCoxa",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 1
+ },
+ {
+  "index": 69,
+  "name": "joint_RHCoxa_yaw",
+  "kind": "joint",
+  "mjcf_joint": "joint_RHCoxa_yaw",
+  "axis": [
+   1.0,
+   0.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 68
+ },
+ {
+  "index": 70,
+  "name": "joint_RHCoxa",
+  "kind": "joint",
+  "mjcf_joint": "joint_RHCoxa",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 69
+ },
+ {
+  "index": 71,
+  "name": "joint_RHCoxa_roll",
+  "kind": "joint",
+  "mjcf_joint": "joint_RHCoxa_roll",
+  "axis": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "range": null,
+  "parent": 70
+ },
+ {
+  "index": 72,
+  "name": "RHFemur",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 71
+ },
+ {
+  "index": 73,
+  "name": "joint_RHFemur",
+  "kind": "joint",
+  "mjcf_joint": "joint_RHFemur",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 72
+ },
+ {
+  "index": 74,
+  "name": "joint_RHFemur_roll",
+  "kind": "joint",
+  "mjcf_joint": "joint_RHFemur_roll",
+  "axis": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "range": null,
+  "parent": 73
+ },
+ {
+  "index": 75,
+  "name": "RHTibia",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 74
+ },
+ {
+  "index": 76,
+  "name": "joint_RHTibia",
+  "kind": "joint",
+  "mjcf_joint": "joint_RHTibia",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 75
+ },
+ {
+  "index": 77,
+  "name": "RHTarsus1",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 76
+ },
+ {
+  "index": 78,
+  "name": "joint_RHTarsus1",
+  "kind": "joint",
+  "mjcf_joint": "joint_RHTarsus1",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 77
+ },
+ {
+  "index": 79,
+  "name": "RHTarsus2",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 78
+ },
+ {
+  "index": 80,
+  "name": "joint_RHTarsus2",
+  "kind": "joint",
+  "mjcf_joint": "joint_RHTarsus2",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 79
+ },
+ {
+  "index": 81,
+  "name": "RHTarsus3",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 80
+ },
+ {
+  "index": 82,
+  "name": "joint_RHTarsus3",
+  "kind": "joint",
+  "mjcf_joint": "joint_RHTarsus3",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 81
+ },
+ {
+  "index": 83,
+  "name": "RHTarsus4",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 82
+ },
+ {
+  "index": 84,
+  "name": "joint_RHTarsus4",
+  "kind": "joint",
+  "mjcf_joint": "joint_RHTarsus4",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 83
+ },
+ {
+  "index": 85,
+  "name": "RHTarsus5",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 84
+ },
+ {
+  "index": 86,
+  "name": "joint_RHTarsus5",
+  "kind": "joint",
+  "mjcf_joint": "joint_RHTarsus5",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 85
+ },
+ {
+  "index": 87,
+  "name": "RMCoxa",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 1
+ },
+ {
+  "index": 88,
+  "name": "joint_RMCoxa_yaw",
+  "kind": "joint",
+  "mjcf_joint": "joint_RMCoxa_yaw",
+  "axis": [
+   1.0,
+   0.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 87
+ },
+ {
+  "index": 89,
+  "name": "joint_RMCoxa",
+  "kind": "joint",
+  "mjcf_joint": "joint_RMCoxa",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 88
+ },
+ {
+  "index": 90,
+  "name": "joint_RMCoxa_roll",
+  "kind": "joint",
+  "mjcf_joint": "joint_RMCoxa_roll",
+  "axis": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "range": null,
+  "parent": 89
+ },
+ {
+  "index": 91,
+  "name": "RMFemur",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 90
+ },
+ {
+  "index": 92,
+  "name": "joint_RMFemur",
+  "kind": "joint",
+  "mjcf_joint": "joint_RMFemur",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 91
+ },
+ {
+  "index": 93,
+  "name": "joint_RMFemur_roll",
+  "kind": "joint",
+  "mjcf_joint": "joint_RMFemur_roll",
+  "axis": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "range": null,
+  "parent": 92
+ },
+ {
+  "index": 94,
+  "name": "RMTibia",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 93
+ },
+ {
+  "index": 95,
+  "name": "joint_RMTibia",
+  "kind": "joint",
+  "mjcf_joint": "joint_RMTibia",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 94
+ },
+ {
+  "index": 96,
+  "name": "RMTarsus1",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 95
+ },
+ {
+  "index": 97,
+  "name": "joint_RMTarsus1",
+  "kind": "joint",
+  "mjcf_joint": "joint_RMTarsus1",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 96
+ },
+ {
+  "index": 98,
+  "name": "RMTarsus2",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 97
+ },
+ {
+  "index": 99,
+  "name": "joint_RMTarsus2",
+  "kind": "joint",
+  "mjcf_joint": "joint_RMTarsus2",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 98
+ },
+ {
+  "index": 100,
+  "name": "RMTarsus3",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 99
+ },
+ {
+  "index": 101,
+  "name": "joint_RMTarsus3",
+  "kind": "joint",
+  "mjcf_joint": "joint_RMTarsus3",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 100
+ },
+ {
+  "index": 102,
+  "name": "RMTarsus4",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 101
+ },
+ {
+  "index": 103,
+  "name": "joint_RMTarsus4",
+  "kind": "joint",
+  "mjcf_joint": "joint_RMTarsus4",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 102
+ },
+ {
+  "index": 104,
+  "name": "RMTarsus5",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 103
+ },
+ {
+  "index": 105,
+  "name": "joint_RMTarsus5",
+  "kind": "joint",
+  "mjcf_joint": "joint_RMTarsus5",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 104
+ },
+ {
+  "index": 106,
+  "name": "RFCoxa",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 1
+ },
+ {
+  "index": 107,
+  "name": "joint_RFCoxa_yaw",
+  "kind": "joint",
+  "mjcf_joint": "joint_RFCoxa_yaw",
+  "axis": [
+   1.0,
+   0.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 106
+ },
+ {
+  "index": 108,
+  "name": "joint_RFCoxa",
+  "kind": "joint",
+  "mjcf_joint": "joint_RFCoxa",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 107
+ },
+ {
+  "index": 109,
+  "name": "joint_RFCoxa_roll",
+  "kind": "joint",
+  "mjcf_joint": "joint_RFCoxa_roll",
+  "axis": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "range": null,
+  "parent": 108
+ },
+ {
+  "index": 110,
+  "name": "RFFemur",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 109
+ },
+ {
+  "index": 111,
+  "name": "joint_RFFemur",
+  "kind": "joint",
+  "mjcf_joint": "joint_RFFemur",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 110
+ },
+ {
+  "index": 112,
+  "name": "joint_RFFemur_roll",
+  "kind": "joint",
+  "mjcf_joint": "joint_RFFemur_roll",
+  "axis": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "range": null,
+  "parent": 111
+ },
+ {
+  "index": 113,
+  "name": "RFTibia",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 112
+ },
+ {
+  "index": 114,
+  "name": "joint_RFTibia",
+  "kind": "joint",
+  "mjcf_joint": "joint_RFTibia",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 113
+ },
+ {
+  "index": 115,
+  "name": "RFTarsus1",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 114
+ },
+ {
+  "index": 116,
+  "name": "joint_RFTarsus1",
+  "kind": "joint",
+  "mjcf_joint": "joint_RFTarsus1",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 115
+ },
+ {
+  "index": 117,
+  "name": "RFTarsus2",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 116
+ },
+ {
+  "index": 118,
+  "name": "joint_RFTarsus2",
+  "kind": "joint",
+  "mjcf_joint": "joint_RFTarsus2",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 117
+ },
+ {
+  "index": 119,
+  "name": "RFTarsus3",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 118
+ },
+ {
+  "index": 120,
+  "name": "joint_RFTarsus3",
+  "kind": "joint",
+  "mjcf_joint": "joint_RFTarsus3",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 119
+ },
+ {
+  "index": 121,
+  "name": "RFTarsus4",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 120
+ },
+ {
+  "index": 122,
+  "name": "joint_RFTarsus4",
+  "kind": "joint",
+  "mjcf_joint": "joint_RFTarsus4",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 121
+ },
+ {
+  "index": 123,
+  "name": "RFTarsus5",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 122
+ },
+ {
+  "index": 124,
+  "name": "joint_RFTarsus5",
+  "kind": "joint",
+  "mjcf_joint": "joint_RFTarsus5",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 123
+ },
+ {
+  "index": 125,
+  "name": "Head",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 1
+ },
+ {
+  "index": 126,
+  "name": "joint_Head_yaw",
+  "kind": "joint",
+  "mjcf_joint": "joint_Head_yaw",
+  "axis": [
+   1.0,
+   0.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 125
+ },
+ {
+  "index": 127,
+  "name": "joint_Head",
+  "kind": "joint",
+  "mjcf_joint": "joint_Head",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 126
+ },
+ {
+  "index": 128,
+  "name": "joint_Head_roll",
+  "kind": "joint",
+  "mjcf_joint": "joint_Head_roll",
+  "axis": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "range": null,
+  "parent": 127
+ },
+ {
+  "index": 129,
+  "name": "LEye",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 128
+ },
+ {
+  "index": 130,
+  "name": "REye",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 128
+ },
+ {
+  "index": 131,
+  "name": "Rostrum",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 128
+ },
+ {
+  "index": 132,
+  "name": "Haustellum",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 131
+ },
+ {
+  "index": 133,
+  "name": "LPedicel",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 128
+ },
+ {
+  "index": 134,
+  "name": "joint_LPedicel_yaw",
+  "kind": "joint",
+  "mjcf_joint": "joint_LPedicel_yaw",
+  "axis": [
+   1.0,
+   0.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 133
+ },
+ {
+  "index": 135,
+  "name": "joint_LPedicel",
+  "kind": "joint",
+  "mjcf_joint": "joint_LPedicel",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 134
+ },
+ {
+  "index": 136,
+  "name": "joint_LPedicel_roll",
+  "kind": "joint",
+  "mjcf_joint": "joint_LPedicel_roll",
+  "axis": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "range": null,
+  "parent": 135
+ },
+ {
+  "index": 137,
+  "name": "LFuniculus",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 136
+ },
+ {
+  "index": 138,
+  "name": "joint_LFuniculus_yaw",
+  "kind": "joint",
+  "mjcf_joint": "joint_LFuniculus_yaw",
+  "axis": [
+   1.0,
+   0.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 137
+ },
+ {
+  "index": 139,
+  "name": "joint_LFuniculus",
+  "kind": "joint",
+  "mjcf_joint": "joint_LFuniculus",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 138
+ },
+ {
+  "index": 140,
+  "name": "joint_LFuniculus_roll",
+  "kind": "joint",
+  "mjcf_joint": "joint_LFuniculus_roll",
+  "axis": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "range": null,
+  "parent": 139
+ },
+ {
+  "index": 141,
+  "name": "LArista",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 140
+ },
+ {
+  "index": 142,
+  "name": "joint_LArista_yaw",
+  "kind": "joint",
+  "mjcf_joint": "joint_LArista_yaw",
+  "axis": [
+   1.0,
+   0.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 141
+ },
+ {
+  "index": 143,
+  "name": "joint_LArista",
+  "kind": "joint",
+  "mjcf_joint": "joint_LArista",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 142
+ },
+ {
+  "index": 144,
+  "name": "joint_LArista_roll",
+  "kind": "joint",
+  "mjcf_joint": "joint_LArista_roll",
+  "axis": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "range": null,
+  "parent": 143
+ },
+ {
+  "index": 145,
+  "name": "RPedicel",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 128
+ },
+ {
+  "index": 146,
+  "name": "joint_RPedicel_yaw",
+  "kind": "joint",
+  "mjcf_joint": "joint_RPedicel_yaw",
+  "axis": [
+   1.0,
+   0.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 145
+ },
+ {
+  "index": 147,
+  "name": "joint_RPedicel",
+  "kind": "joint",
+  "mjcf_joint": "joint_RPedicel",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 146
+ },
+ {
+  "index": 148,
+  "name": "joint_RPedicel_roll",
+  "kind": "joint",
+  "mjcf_joint": "joint_RPedicel_roll",
+  "axis": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "range": null,
+  "parent": 147
+ },
+ {
+  "index": 149,
+  "name": "RFuniculus",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 148
+ },
+ {
+  "index": 150,
+  "name": "joint_RFuniculus_yaw",
+  "kind": "joint",
+  "mjcf_joint": "joint_RFuniculus_yaw",
+  "axis": [
+   1.0,
+   0.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 149
+ },
+ {
+  "index": 151,
+  "name": "joint_RFuniculus",
+  "kind": "joint",
+  "mjcf_joint": "joint_RFuniculus",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 150
+ },
+ {
+  "index": 152,
+  "name": "joint_RFuniculus_roll",
+  "kind": "joint",
+  "mjcf_joint": "joint_RFuniculus_roll",
+  "axis": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "range": null,
+  "parent": 151
+ },
+ {
+  "index": 153,
+  "name": "RArista",
+  "kind": "body",
+  "mjcf_joint": null,
+  "axis": null,
+  "range": null,
+  "parent": 152
+ },
+ {
+  "index": 154,
+  "name": "joint_RArista_yaw",
+  "kind": "joint",
+  "mjcf_joint": "joint_RArista_yaw",
+  "axis": [
+   1.0,
+   0.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 153
+ },
+ {
+  "index": 155,
+  "name": "joint_RArista",
+  "kind": "joint",
+  "mjcf_joint": "joint_RArista",
+  "axis": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "range": null,
+  "parent": 154
+ },
+ {
+  "index": 156,
+  "name": "joint_RArista_roll",
+  "kind": "joint",
+  "mjcf_joint": "joint_RArista_roll",
+  "axis": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "range": null,
+  "parent": 155
+ }
+]

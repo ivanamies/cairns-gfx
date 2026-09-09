@@ -5,6 +5,10 @@ imgui.ini
 
 # media assets (incl. third-party) — kept local, not tracked
 assets/*.glb
+# ...except the fly rig, which a committed golden (fly_pose) depends on. Every
+# other GLB is an external staging asset; this one is generated in-repo by
+# tools/mjcf_to_rigged_glb.py and is only ~3 MB.
+!assets/fly.glb
 assets/*.png
 # generated-in-repo effect textures (scripts/make_*.py) ARE tracked
 !assets/wc_paper_noise.png

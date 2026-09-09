@@ -11,6 +11,50 @@
 
 namespace cairns {
 
+bool Engine::uploadAnimBufferAt(const void* data, size_t bytes,
+                               size_t byte_off, size_t total_bytes,
+                               rhi::Handle<rhi::Buffer>& out) {
+        if (total_bytes == 0) {
+            total_bytes = 16;
+        }
+        const uint32_t need = static_cast<uint32_t>(total_bytes);
+        uint32_t have = 0;
+        if (!out.IsNull()) {
+            have = rhi_.resources.GetBufferByteSize(out);
+        }
+        if (out.IsNull() || have < need) {
+            if (!out.IsNull()) {
+                rhi_.device.WaitIdle();
+                rhi_.resources.Destroy(rhi_.alloc, out);
+            }
+            // Growth pad: 4x need (Aaltonen reserve-and-grow), min 4 KB,
+            // so steady-state appends stay on the delta path.
+            rhi::BufferDesc bd{};
+            uint32_t alloc_size = need * 4;
+            if (alloc_size < 4096) {
+                alloc_size = 4096;
+            }
+            bd.byte_size = alloc_size;
+            bd.usage = rhi::kUsageStorage;
+            bd.memory = rhi::Memory::kDefault;
+            out = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
+            if (out.IsNull()) {
+                return false;
+            }
+            // The dyn_anim_eval descriptor set captured the old buffer
+            // handle at creation time; mark it for recreation.
+            skinning_.dyn_dirty = true;
+        }
+        if (data && bytes > 0) {
+            rhi_.resources.UploadBuffer(
+                rhi_.alloc, out,
+                static_cast<uint32_t>(byte_off),
+                std::span<const uint8_t>(
+                    static_cast<const uint8_t*>(data), bytes));
+        }
+        return true;
+    }
+
 void Engine::uploadAnimTablesGpu() {
         if (skinning_.eval_kernel.IsNull()) {
             return;
@@ -139,6 +183,14 @@ void Engine::uploadAnimTablesGpu() {
                     base.headers + static_cast<uint32_t>(headers.size());
                 headers.push_back(sh);
             }
+            // A full rebuild re-emits every prefab from scratch, so the live
+            // pose-override blocks + header clones have to be re-appended in
+            // the same pass -- otherwise their bind_pose_off would point into
+            // the region the rebuild just overwrote.
+            if (full_rebuild) {
+                rebuildPoseOverrides(base.headers, base.vec4, headers,
+                                     vec4_flat);
+            }
             if (headers.empty()) {
                 // No new prefabs had anim data. Cursors unchanged; bump
                 // uploaded count so we don't re-walk these on the next
@@ -182,49 +234,12 @@ void Engine::uploadAnimTablesGpu() {
         // Upload helper: writes `bytes` of `data` into `out` at byte
         // offset `byte_off`. Allocates / grows `out` so it can hold at
         // least `total_bytes`; recycles the existing handle when its
-        // capacity suffices.
+        // capacity suffices. Body lives in uploadAnimBufferAt so the
+        // pose-override append can share it.
         auto upload_at = [&](const void* data, size_t bytes,
                              size_t byte_off, size_t total_bytes,
                              rhi::Handle<rhi::Buffer>& out) -> bool {
-            if (total_bytes == 0) {
-                total_bytes = 16;
-            }
-            const uint32_t need = static_cast<uint32_t>(total_bytes);
-            uint32_t have = 0;
-            if (!out.IsNull()) {
-                have = rhi_.resources.GetBufferByteSize(out);
-            }
-            if (out.IsNull() || have < need) {
-                if (!out.IsNull()) {
-                    rhi_.device.WaitIdle();
-                    rhi_.resources.Destroy(rhi_.alloc, out);
-                }
-                // Growth pad: 4x need (Aaltonen reserve-and-grow), min 4 KB,
-                // so steady-state appends stay on the delta path.
-                rhi::BufferDesc bd{};
-                uint32_t alloc_size = need * 4;
-                if (alloc_size < 4096) {
-                    alloc_size = 4096;
-                }
-                bd.byte_size = alloc_size;
-                bd.usage = rhi::kUsageStorage;
-                bd.memory = rhi::Memory::kDefault;
-                out = rhi_.resources.CreateBuffer(rhi_.alloc, bd);
-                if (out.IsNull()) {
-                    return false;
-                }
-                // The dyn_anim_eval descriptor set captured the old buffer
-                // handle at creation time; mark it for recreation.
-                skinning_.dyn_dirty = true;
-            }
-            if (data && bytes > 0) {
-                rhi_.resources.UploadBuffer(
-                    rhi_.alloc, out,
-                    static_cast<uint32_t>(byte_off),
-                    std::span<const uint8_t>(
-                        static_cast<const uint8_t*>(data), bytes));
-            }
-            return true;
+            return uploadAnimBufferAt(data, bytes, byte_off, total_bytes, out);
         };
         if (!upload_at(headers.data(),
                        headers.size() * sizeof(cairns::GpuSceneHeader),
@@ -249,6 +264,13 @@ void Engine::uploadAnimTablesGpu() {
             return;
         }
         skinning_.cur = target;
+        // Keep the CPU header mirror index-parallel with scene_headers_buf; a
+        // pose override clones out of it.
+        if (full_rebuild) {
+            skinning_.headers_cpu.clear();
+        }
+        skinning_.headers_cpu.insert(skinning_.headers_cpu.end(),
+                                     headers.begin(), headers.end());
         skinning_.uploaded_prefab_count =
             static_cast<uint32_t>(prefab_ids.size());
         skinning_.eval_tables_uploaded = true;
@@ -5302,6 +5324,321 @@ bool Engine::SetEntityTransform(uint32_t entity_int, const glm::mat4& world) {
         }
         if (auto* wh = scene_mgr_.pool.GetHot(scene_mgr_.active)) {
             wh->dirty = true;
+        }
+        return true;
+    }
+
+// ---------------------------------------------------------------------------
+// Programmatic joint poses (plans/gfx_fly-pose-override.md).
+//
+// An override is a full node-local TRS block for ONE actor, appended to the
+// packed ae_vec4 table, plus a GpuSceneHeader clone of that actor's prefab
+// header whose bind_pose_off points at the block and whose channel_count is 0.
+// anim_eval stage 1 then seeds from the block and stage 2 (clip sampling) has
+// nothing to sample. No shader edit, no extra binding, no field on the
+// per-frame GpuActorRecord -- which is why Metal and WebGPU get this for free.
+// ---------------------------------------------------------------------------
+
+uint32_t Engine::findPoseOverride(cairns::SkinId sid) {
+        for (size_t i = 0; i < skinning_.pose_skins.size(); ++i) {
+            if (skinning_.pose_skins[i] == sid) {
+                return static_cast<uint32_t>(i);
+            }
+        }
+        return UINT32_MAX;
+    }
+
+uint32_t Engine::ensurePoseOverride(cairns::SkinId sid) {
+        const uint32_t found = findPoseOverride(sid);
+        if (found != UINT32_MAX) {
+            return found;
+        }
+        cairns::SkinnedAttachment::Cold* sc = skinning_.skins.GetCold(sid);
+        if (!sc) {
+            return UINT32_MAX;
+        }
+        cairns::Prefab::Hot* ph = prefab_store_.prefabs.GetHot(sc->scene);
+        cairns::Prefab::Cold* pc = prefab_store_.prefabs.GetCold(sc->scene);
+        if (!ph || !pc) {
+            return UINT32_MAX;
+        }
+        // No anim tables for this prefab (no skin / no clip / no nodes) means
+        // there is no header to clone and no palette eval to override.
+        const uint32_t prefab_hdr = ph->gpu_prefab_header_idx;
+        if (prefab_hdr == UINT32_MAX ||
+            prefab_hdr >= skinning_.headers_cpu.size()) {
+            return UINT32_MAX;
+        }
+        const uint32_t node_count =
+            static_cast<uint32_t>(pc->gpu_bind_pose.size());
+        if (node_count == 0 || node_count > kAnimMaxNodes) {
+            return UINT32_MAX;
+        }
+        // CPU mirror first: the block starts as the prefab's bind pose, so a
+        // caller that names three joints gets bind pose everywhere else.
+        const uint32_t trs_off =
+            static_cast<uint32_t>(skinning_.pose_trs.size());
+        skinning_.pose_trs.insert(skinning_.pose_trs.end(),
+                                  pc->gpu_bind_pose.begin(),
+                                  pc->gpu_bind_pose.end());
+        // Append the block to ae_vec4 and the header clone to scene_headers.
+        const uint32_t vec4_off = skinning_.cur.vec4;
+        const uint32_t vec4_end = vec4_off + node_count * 3u;
+        const uint32_t hdr_idx = skinning_.cur.headers;
+        cairns::GpuSceneHeader hdr = skinning_.headers_cpu[prefab_hdr];
+        hdr.bind_pose_off = vec4_off;
+        hdr.channel_count = 0;  // the clip bypass
+        hdr.sampler_count = 0;
+        // Register the slot before uploading: the fallback below is a FULL
+        // table rebuild, and rebuildPoseOverrides re-emits from these arrays.
+        const uint32_t slot =
+            static_cast<uint32_t>(skinning_.pose_skins.size());
+        skinning_.pose_skins.push_back(sid);
+        skinning_.pose_vec4_off.push_back(vec4_off);
+        skinning_.pose_header_idx.push_back(hdr_idx);
+        skinning_.pose_trs_off.push_back(trs_off);
+        skinning_.pose_node_count.push_back(node_count);
+        skinning_.pose_active.push_back(0);
+        // uploadAnimBufferAt GROWS by destroy-and-recreate, which drops
+        // everything already in the buffer -- the same reason the delta path
+        // above falls back to a full rebuild. So append in place only while
+        // both buffers still fit; otherwise re-emit the whole table set, which
+        // picks the new slot up through rebuildPoseOverrides.
+        const uint32_t have_vec4 =
+            skinning_.ae_vec4_buf.IsNull()
+                ? 0u
+                : rhi_.resources.GetBufferByteSize(skinning_.ae_vec4_buf);
+        const uint32_t have_hdr =
+            skinning_.scene_headers_buf.IsNull()
+                ? 0u
+                : rhi_.resources.GetBufferByteSize(skinning_.scene_headers_buf);
+        const bool fits_in_place =
+            have_vec4 >= vec4_end * sizeof(glm::vec4) &&
+            have_hdr >= (hdr_idx + 1) * sizeof(cairns::GpuSceneHeader);
+        if (!fits_in_place) {
+            skinning_.uploaded_prefab_count = 0;  // force FULL
+            uploadAnimTablesGpu();
+            return slot;
+        }
+        if (!uploadAnimBufferAt(skinning_.pose_trs.data() + trs_off,
+                                node_count * sizeof(cairns::GpuTRS),
+                                vec4_off * sizeof(glm::vec4),
+                                vec4_end * sizeof(glm::vec4),
+                                skinning_.ae_vec4_buf) ||
+            !uploadAnimBufferAt(&hdr, sizeof(cairns::GpuSceneHeader),
+                                hdr_idx * sizeof(cairns::GpuSceneHeader),
+                                (hdr_idx + 1) * sizeof(cairns::GpuSceneHeader),
+                                skinning_.scene_headers_buf)) {
+            return UINT32_MAX;
+        }
+        skinning_.cur.vec4 = vec4_end;
+        skinning_.cur.headers = hdr_idx + 1;
+        skinning_.headers_cpu.push_back(hdr);
+        if (skinning_.dyn_dirty) {
+            recreateAnimDynBindings();
+            recreateSkinGroupB();
+            skinning_.dyn_dirty = false;
+        }
+        return slot;
+    }
+
+void Engine::rebuildPoseOverrides(
+    uint32_t base_headers, uint32_t base_vec4,
+    std::vector<cairns::GpuSceneHeader>& headers,
+    std::vector<glm::vec4>& vec4_flat) {
+        for (size_t i = 0; i < skinning_.pose_skins.size(); ++i) {
+            cairns::SkinnedAttachment::Hot* sh =
+                skinning_.skins.GetHot(skinning_.pose_skins[i]);
+            cairns::SkinnedAttachment::Cold* sc =
+                skinning_.skins.GetCold(skinning_.pose_skins[i]);
+            if (!sh || !sc) {
+                continue;  // actor died; its block is simply not re-emitted
+            }
+            cairns::Prefab::Hot* ph = prefab_store_.prefabs.GetHot(sc->scene);
+            if (!ph || ph->gpu_prefab_header_idx == UINT32_MAX) {
+                continue;
+            }
+            const uint32_t src = ph->gpu_prefab_header_idx;
+            if (src < base_headers ||
+                (src - base_headers) >= headers.size()) {
+                continue;
+            }
+            const uint32_t node_count = skinning_.pose_node_count[i];
+            cairns::GpuSceneHeader hdr = headers[src - base_headers];
+            hdr.bind_pose_off =
+                base_vec4 + static_cast<uint32_t>(vec4_flat.size());
+            hdr.channel_count = 0;
+            hdr.sampler_count = 0;
+            const cairns::GpuTRS* block =
+                skinning_.pose_trs.data() + skinning_.pose_trs_off[i];
+            for (uint32_t n = 0; n < node_count; ++n) {
+                vec4_flat.push_back(block[n].T);
+                vec4_flat.push_back(block[n].R);
+                vec4_flat.push_back(block[n].S);
+            }
+            skinning_.pose_vec4_off[i] = hdr.bind_pose_off;
+            skinning_.pose_header_idx[i] =
+                base_headers + static_cast<uint32_t>(headers.size());
+            sh->gpu_prefab_header_idx =
+                skinning_.pose_active[i] ? skinning_.pose_header_idx[i] : src;
+            headers.push_back(hdr);
+        }
+    }
+
+bool Engine::SetEntityJointPose(int scene_index, uint32_t entity_int,
+                                const uint32_t* joints, const uint32_t* masks,
+                                const float* trs10, uint32_t count) {
+        if (!joints || !masks || !trs10) {
+            return false;
+        }
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!reg.valid(e) || !reg.all_of<cairns::SkinRef>(e)) {
+            return false;
+        }
+        const cairns::SkinId sid = reg.get<cairns::SkinRef>(e).id;
+        cairns::SkinnedAttachment::Cold* sc = skinning_.skins.GetCold(sid);
+        if (!sc) {
+            return false;
+        }
+        cairns::Prefab::Cold* pc = prefab_store_.prefabs.GetCold(sc->scene);
+        if (!pc) {
+            return false;
+        }
+        const uint32_t slot = ensurePoseOverride(sid);
+        if (slot == UINT32_MAX) {
+            return false;
+        }
+        const uint32_t node_count = skinning_.pose_node_count[slot];
+        // Validate every entry BEFORE writing any of them: a half-applied pose
+        // is worse than a rejected one, and the caller only sees one bool.
+        for (uint32_t i = 0; i < count; ++i) {
+            if (joints[i] >= pc->gpu_joint_nodes.size()) {
+                return false;
+            }
+            const int32_t node = pc->gpu_joint_nodes[joints[i]];
+            if (node < 0 || static_cast<uint32_t>(node) >= node_count) {
+                return false;
+            }
+        }
+        cairns::GpuTRS* block =
+            skinning_.pose_trs.data() + skinning_.pose_trs_off[slot];
+        for (uint32_t i = 0; i < count; ++i) {
+            cairns::GpuTRS& trs =
+                block[static_cast<uint32_t>(pc->gpu_joint_nodes[joints[i]])];
+            const float* v = trs10 + static_cast<size_t>(i) * 10u;
+            if (masks[i] & kJointPoseT) {
+                trs.T = glm::vec4(v[0], v[1], v[2], 0.0f);
+            }
+            if (masks[i] & kJointPoseR) {
+                trs.R = glm::vec4(v[3], v[4], v[5], v[6]);
+            }
+            if (masks[i] & kJointPoseS) {
+                trs.S = glm::vec4(v[7], v[8], v[9], 0.0f);
+            }
+        }
+        if (!uploadAnimBufferAt(block, node_count * sizeof(cairns::GpuTRS),
+                                skinning_.pose_vec4_off[slot] *
+                                    sizeof(glm::vec4),
+                                skinning_.cur.vec4 * sizeof(glm::vec4),
+                                skinning_.ae_vec4_buf)) {
+            return false;
+        }
+        if (cairns::SkinnedAttachment::Hot* sh = skinning_.skins.GetHot(sid)) {
+            sh->gpu_prefab_header_idx = skinning_.pose_header_idx[slot];
+        }
+        skinning_.pose_active[slot] = 1;
+        if (skinning_.dyn_dirty) {
+            recreateAnimDynBindings();
+            recreateSkinGroupB();
+            skinning_.dyn_dirty = false;
+        }
+        return true;
+    }
+
+bool Engine::ClearEntityJointPose(int scene_index, uint32_t entity_int) {
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!reg.valid(e) || !reg.all_of<cairns::SkinRef>(e)) {
+            return false;
+        }
+        const cairns::SkinId sid = reg.get<cairns::SkinRef>(e).id;
+        const uint32_t slot = findPoseOverride(sid);
+        if (slot == UINT32_MAX) {
+            return true;  // never overridden: already on the clip
+        }
+        cairns::SkinnedAttachment::Hot* sh = skinning_.skins.GetHot(sid);
+        cairns::SkinnedAttachment::Cold* sc = skinning_.skins.GetCold(sid);
+        if (!sh || !sc) {
+            return false;
+        }
+        cairns::Prefab::Hot* ph = prefab_store_.prefabs.GetHot(sc->scene);
+        if (!ph || ph->gpu_prefab_header_idx == UINT32_MAX) {
+            return false;
+        }
+        // The slot stays allocated (the packed tables are append-only), but it
+        // goes back to bind pose so a later set starts from a known state.
+        cairns::Prefab::Cold* pc = prefab_store_.prefabs.GetCold(sc->scene);
+        const uint32_t node_count = skinning_.pose_node_count[slot];
+        if (pc && pc->gpu_bind_pose.size() >= node_count) {
+            cairns::GpuTRS* block =
+                skinning_.pose_trs.data() + skinning_.pose_trs_off[slot];
+            for (uint32_t n = 0; n < node_count; ++n) {
+                block[n] = pc->gpu_bind_pose[n];
+            }
+            (void)uploadAnimBufferAt(block, node_count * sizeof(cairns::GpuTRS),
+                                     skinning_.pose_vec4_off[slot] *
+                                         sizeof(glm::vec4),
+                                     skinning_.cur.vec4 * sizeof(glm::vec4),
+                                     skinning_.ae_vec4_buf);
+        }
+        sh->gpu_prefab_header_idx = ph->gpu_prefab_header_idx;
+        skinning_.pose_active[slot] = 0;
+        return true;
+    }
+
+bool Engine::ListEntityJointNames(int scene_index, uint32_t entity_int,
+                                  std::vector<int32_t>& out_nodes,
+                                  std::vector<std::string>& out_names) {
+        out_nodes.clear();
+        out_names.clear();
+        cairns::Scene::Cold* wc = EntitySceneCold(scene_index);
+        if (!wc) {
+            return false;
+        }
+        auto& reg = wc->registry;
+        const entt::entity e = static_cast<entt::entity>(entity_int);
+        if (!reg.valid(e) || !reg.all_of<cairns::SkinRef>(e)) {
+            return false;
+        }
+        cairns::SkinnedAttachment::Cold* sc =
+            skinning_.skins.GetCold(reg.get<cairns::SkinRef>(e).id);
+        if (!sc) {
+            return false;
+        }
+        cairns::Prefab::Cold* pc = prefab_store_.prefabs.GetCold(sc->scene);
+        if (!pc) {
+            return false;
+        }
+        out_nodes.reserve(pc->gpu_joint_nodes.size());
+        out_names.reserve(pc->gpu_joint_nodes.size());
+        for (int32_t node : pc->gpu_joint_nodes) {
+            out_nodes.push_back(node);
+            if (node >= 0 && static_cast<size_t>(node) < pc->nodes.size()) {
+                const std::string_view nm =
+                    cairns::ResolveName(prefab_arena_, pc->nodes[node].name);
+                out_names.emplace_back(nm);
+            } else {
+                out_names.emplace_back();
+            }
         }
         return true;
     }

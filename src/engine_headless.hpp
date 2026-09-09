@@ -110,6 +110,19 @@ bool GetEntityTRS(Engine* engine, int scene_index, uint32_t entity,
                   float out_t3[3], float out_r4[4], float out_s3[3]);
 bool SetEntityParent(Engine* engine, int scene_index, uint32_t entity,
                      uint32_t parent, bool clear);
+// Joint-pose override: drive a skinned actor's joints directly, bypassing clip
+// sampling. Parallel arrays of `count` entries -- `joints[i]` is a SKIN joint
+// index, `masks[i]` is which of T/R/S that entry writes (1|2|4), and `trs10`
+// holds 10 floats per entry {tx,ty,tz, qx,qy,qz,qw, sx,sy,sz}. Unmasked
+// components keep the actor's current override value, which starts at the
+// prefab's bind pose. Time-independent: the pose holds until changed.
+bool SetEntityJointPose(Engine* engine, int scene_index, uint32_t entity,
+                        const uint32_t* joints, const uint32_t* masks,
+                        const float* trs10, uint32_t count);
+bool ClearEntityJointPose(Engine* engine, int scene_index, uint32_t entity);
+bool ListEntityJointNames(Engine* engine, int scene_index, uint32_t entity,
+                          std::vector<int32_t>& out_nodes,
+                          std::vector<std::string>& out_names);
 uint32_t FindEntityByName(Engine* engine, int scene_index,
                           const std::string& name);
 bool SetEntityName(Engine* engine, int scene_index, uint32_t entity,

@@ -9,6 +9,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <chrono>
 #include <thread>
 
 #include "imgui.h"
@@ -19,6 +20,7 @@ namespace cairns::platform {
 uint64_t TicksMs() { return SDL_GetTicks(); }
 
 uint64_t TimestampNs() {
+#if defined(__aarch64__)
     // Apple Silicon / ARM generic timer: count (cntvct_el0) scaled by freq.
     uint64_t freq;
     asm volatile("mrs %0, cntfrq_el0" : "=r"(freq));
@@ -28,10 +30,19 @@ uint64_t TimestampNs() {
     if (freq == 1'000'000'000ull) { return count; }
     return static_cast<uint64_t>(
         (static_cast<__uint128_t>(count) * 1'000'000'000ull) / freq);
+#else
+    // x86-64 has no user-space generic-timer register with a stable,
+    // documented frequency (rdtsc is invariant-TSC dependent), so use the
+    // monotonic clock. Same ns unit, same monotonicity contract.
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+#endif
 }
 
 std::string DefaultBasePath() {
-#if CAIRNS_APPLE
+#if CAIRNS_APPLE || (defined(__linux__) && !defined(__ANDROID__))
     const char* p = SDL_GetBasePath();
     return p ? std::string(p) : std::string();
 #else

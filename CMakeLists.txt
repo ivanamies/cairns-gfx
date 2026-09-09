@@ -93,6 +93,14 @@ set(FASTGLTF_ENABLE_ASSET_DEBUGGER OFF CACHE BOOL "" FORCE)
 set(FASTGLTF_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(FASTGLTF_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/fastgltf EXCLUDE_FROM_ALL)
+# fastgltf's public headers use #pragma region and take unused parameters in a
+# few inline templates; consumers here compile with -Wall -Wextra -Werror.
+# Mark its include dirs SYSTEM so vendor warnings can't fail our build.
+get_target_property(_fastgltf_inc fastgltf INTERFACE_INCLUDE_DIRECTORIES)
+if(_fastgltf_inc)
+    set_target_properties(fastgltf PROPERTIES
+        INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_fastgltf_inc}")
+endif()
 
 # SDL3. Image/font/audio satellites are gone -- texture decode is stb_image,
 # imgui uses its built-in font atlas, and there is no audio path.
@@ -141,6 +149,11 @@ target_include_directories(quickjs PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/QuickJS")
 target_compile_definitions(quickjs PRIVATE
     CONFIG_VERSION="cairns-vendored")
+# glibc only declares `environ` (quickjs-libc's js_os_exec) under _GNU_SOURCE;
+# Apple's unistd.h declares it unconditionally, so this is Linux-only.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_compile_definitions(quickjs PRIVATE _GNU_SOURCE)
+endif()
 # quickjs's own warnings would trip a -Werror build; relax for its TUs only.
 target_compile_options(quickjs PRIVATE -Wno-everything)
 
@@ -236,7 +249,10 @@ target_compile_definitions(cairns_render_thread PRIVATE
     $<$<BOOL:${CAIRNS_GFX_BACKEND_METAL}>:CAIRNS_METAL=1>
     $<$<BOOL:${CAIRNS_GFX_BACKEND_VULKAN}>:CAIRNS_VULKAN=1>
     $<$<BOOL:${CAIRNS_GFX_BACKEND_WEBGPU}>:CAIRNS_WEBGPU=1>)
-if (CAIRNS_GFX_BACKEND_VULKAN AND APPLE)
+if (CAIRNS_GFX_BACKEND_VULKAN AND NOT ANDROID AND NOT EMSCRIPTEN)
+    # Desktop (macOS/MoltenVK + Linux) links the loader; Android links the
+    # NDK's `vulkan` stub instead (handled with cairns_core below).
+    find_package(Vulkan REQUIRED)
     target_link_libraries(cairns_render_thread PRIVATE Vulkan::Vulkan)
 endif()
 if (CAIRNS_GFX_BACKEND_WEBGPU)
@@ -317,12 +333,12 @@ endif()
 
 # Vulkan.
 if(CAIRNS_GFX_BACKEND_VULKAN)
-    if (APPLE)
-        message("tagiamies using vulkan too!!")
+    if (ANDROID)
+        target_link_libraries(cairns_core PUBLIC vulkan android log)
+    else()
+        # macOS (MoltenVK) and Linux both resolve through the Vulkan loader.
         find_package(Vulkan REQUIRED)
         target_link_libraries(cairns_core PUBLIC Vulkan::Vulkan)
-    elseif (ANDROID)
-        target_link_libraries(cairns_core PUBLIC vulkan android log)
     endif()
 endif()
 
@@ -506,6 +522,20 @@ if (NOT ANDROID AND NOT IOS AND NOT EMSCRIPTEN)
                     "${CMAKE_BINARY_DIR}/$<CONFIGURATION>/${_asset}"
             )
         endif()
+    endforeach()
+    # In-repo GLBs (assets/*.glb -- the generated fly rig) land next to
+    # cairns_serve too, so `cairns.prefab.load {path:"fly.glb"}` resolves over
+    # NDJSON the same way it does in cairns_golden_tests.
+    file(GLOB _cairns_serve_local_glbs CONFIGURE_DEPENDS
+         "${CMAKE_CURRENT_SOURCE_DIR}/assets/*.glb")
+    foreach(_glb ${_cairns_serve_local_glbs})
+        get_filename_component(_glb_name "${_glb}" NAME)
+        add_custom_command(POST_BUILD
+            TARGET cairns_serve
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_glb}"
+                "${CMAKE_BINARY_DIR}/$<CONFIGURATION>/${_glb_name}"
+        )
     endforeach()
     # Mirror the sdl-min asset bundle for cairns_serve: every glb under
     # EXTERNAL_ASSETS_DIR lands next to the binary so the engine's

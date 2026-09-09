@@ -47,6 +47,15 @@
 #include "util/json.hpp"
 #include "util/misc.hpp"  // GetBasePathSafe
 
+#ifndef __EMSCRIPTEN__
+// SDL_mixer is not vendored in third_party/, so MIX_Track only reaches this TU
+// transitively on platforms whose SDL headers pull it in. `AppContext::track`
+// is a placeholder that is never dereferenced, so an opaque forward
+// declaration is enough; a repeated typedef of the same type is legal, making
+// this a no-op where SDL_mixer.h is already in the include graph.
+typedef struct MIX_Track MIX_Track;
+#endif
+
 struct AppContext {
     SDL_Window* window = nullptr;
     // Backend-specific shell handle (metal: SDL_MetalView; vk: nullptr).

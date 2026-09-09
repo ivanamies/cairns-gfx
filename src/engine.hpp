@@ -574,6 +574,30 @@ public:
     // Returns false if entity isn't live in scene_mgr_.active's registry.
     bool SetEntityTransform(uint32_t entity_int, const glm::mat4& world);
 
+    // ---- Programmatic joint poses ----------------------------------------
+    // Override an actor's node-local TRS directly, bypassing clip sampling.
+    // `joints` are SKIN joint indices (0..joint_count); `masks` says which of
+    // T/R/S each entry writes (kJointPoseT/R/S, OR-ed); `trs10` is `count`
+    // packed entries of {tx,ty,tz, qx,qy,qz,qw, sx,sy,sz}. Components not in
+    // the mask keep whatever the override block already holds, which starts as
+    // the prefab's bind pose -- so a caller names only the DoFs it drives.
+    // The pose is static state: it survives every frame until it is changed or
+    // cleared, and it is time-independent, which is what makes it byte-gate.
+    // Returns false if the entity has no skin or a joint index is out of range.
+    static constexpr uint32_t kJointPoseT = 1u;
+    static constexpr uint32_t kJointPoseR = 2u;
+    static constexpr uint32_t kJointPoseS = 4u;
+    bool SetEntityJointPose(int scene_index, uint32_t entity_int,
+                            const uint32_t* joints, const uint32_t* masks,
+                            const float* trs10, uint32_t count);
+    // Drop the override and hand the actor back to its clip.
+    bool ClearEntityJointPose(int scene_index, uint32_t entity_int);
+    // Skin joint index -> (node index, node name) for a skinned entity, so a
+    // script can resolve "joint_LFFemur" without shipping a sidecar table.
+    bool ListEntityJointNames(int scene_index, uint32_t entity_int,
+                              std::vector<int32_t>& out_nodes,
+                              std::vector<std::string>& out_names);
+
     // Entity ops. scene_index: 0 primary / 1 secondary, -1 = active.
     // Explicit-scene-first (the N-scene compositor needs it); defaulting
     // to the active scene is only a convenience.
@@ -1683,6 +1707,27 @@ public:
     //        inverse_bind, one mat4 per joint per actor. The skin kernel consumes
     //        it. (binding 0 is the per-frame ActorRecord UBO, not packed here.)
     void uploadAnimTablesGpu();
+
+    // Write `bytes` of `data` into `out` at byte offset `byte_off`, growing
+    // `out` (4x reserve, 4 KB floor) so it holds at least `total_bytes` and
+    // latching skinning_.dyn_dirty when the handle had to be recreated. Shared
+    // by the anim-table upload and the pose-override append.
+    bool uploadAnimBufferAt(const void* data, size_t bytes, size_t byte_off,
+                            size_t total_bytes, rhi::Handle<rhi::Buffer>& out);
+
+    // Index into skinning_.pose_* for `sid`, or UINT32_MAX if it has none.
+    uint32_t findPoseOverride(cairns::SkinId sid);
+    // findPoseOverride, but appends a bind-pose-seeded block + a header clone
+    // to the packed tables when the actor has none yet. UINT32_MAX on failure
+    // (dead handle, prefab with no anim tables, upload failure).
+    uint32_t ensurePoseOverride(cairns::SkinId sid);
+    // Re-emit every live override block + header clone into a full rebuild's
+    // staging vectors, re-stamping pose_vec4_off / pose_header_idx and every
+    // overridden actor's SkinnedAttachment::Hot::gpu_prefab_header_idx.
+    void rebuildPoseOverrides(
+        uint32_t base_headers, uint32_t base_vec4,
+        std::vector<cairns::GpuSceneHeader>& headers,
+        std::vector<glm::vec4>& vec4_flat);
 
     // Best-effort load of the skin compute kernel. A failed load (missing
     // skin.comp.spv / skin.metal) leaves skinning_.skin_kernel Null; the
