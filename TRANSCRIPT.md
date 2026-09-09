@@ -97,6 +97,14 @@ One trap specific to VLMs: it may "plan" by literally emitting text ("target is 
 
 Bigger picture: if the VLM builds a compass and a goal vector and a phase comparator without being told to, you've shown that architecture is a convergent solution to embodied navigation, not a quirk of insect evolution. That's a result people outside both fields would care about.
 
+- Path integration. The same brain region computes an allocentric travel-direction vector by literally adding phase-shifted sinusoids (PFN → hΔB neurons; Lyu, Abbott & Maimon 2022) and stores a vector memory of "where food was." It's vector arithmetic in a phasor representation, validated by imaging and perturbation. If the VLM has to return to a start point after a random walk, does it build phasor addition? Cleaner than steering because the math is more specific and there are fewer ways to fake it.
+- Mushroom body associative learning. This is the one that connects to your field. Odors get a sparse random expansion (~2,000 Kenyon cells from ~50 glomeruli), a dopamine teaching signal that looks like a reward prediction error writes onto the KC→MBON synapses, and MBONs read out valence. Every piece is causally validated, and it's the same architecture as a sparse-expansion associative memory / one-shot in-context learning. If the fly must learn in-episode that odor A means sugar, the VLM has to do in-context association — and you get to ask whether it does it with an induction-head-like mechanism, a sparse expansion, or something else. That maps directly onto the induction-head literature you've already been ablating.
+- Steering (EPG/FC2/PFL3), as discussed. Still excellent, but it's a servo. Which is exactly the problem with your 99.999% number.
+
+[Request interrupted by user]
+
+> are you frozen or something?
+
 > oh wait hold on
 > this might be simple enough to do true training in real time
 > that would be nuts
