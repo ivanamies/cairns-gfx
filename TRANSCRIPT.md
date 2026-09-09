@@ -97,6 +97,28 @@ One trap specific to VLMs: it may "plan" by literally emitting text ("target is 
 
 Bigger picture: if the VLM builds a compass and a goal vector and a phase comparator without being told to, you've shown that architecture is a convergent solution to embodied navigation, not a quirk of insect evolution. That's a result people outside both fields would care about.
 
+> oh wait hold on
+> this might be simple enough to do true training in real time
+> that would be nuts
+
+It is nuts, and it's the right instinct. Let me separate the versions, because one of them is the fly's actual trick and the others are traps.
+
+What "real time" means here. The fly's learning is slow: one odor–sugar pairing produces a measurable memory over seconds, and the mushroom-body plasticity that stores it has time constants of seconds to minutes. Your control loop is 5 Hz. So "real time" is one weight update every few hundred milliseconds of sim time, and sim time isn't wall time — MuJoCo runs a fly at thousands of steps per second, and you can run a batch of flies in parallel, so a batch of flies is a batch of gradients. A LoRA step on a sub-1B model at 1 Hz is nothing. Compute is not the obstacle.
+
+The obstacle is the teacher. Behavior cloning has a teacher. Online, you don't; you have sugar. That's the thing you have to build: a scalar reward signal, and that's not incidental — it's the dopamine neuron. In the fly, dopamine carries something close to a reward prediction error, broadcast to all KC→MBON synapses, and the synapse changes as a function of pre-activity × post-activity × dopamine, with sign depending on timing. Three-factor rule. And here's the part you'll like: that is Widrow–Hoff. LMS. A scalar error broadcast to every tap of an adaptive filter. The mushroom body is an adaptive equalizer trained on the sugar channel.
+
+The three versions.
+
+1. Backprop the whole VLM online with RL. Possible, and the one that will fail interestingly: catastrophic forgetting, reward hacking on sim exploits, and no biological analogue. The fly never does this. Keep it as a baseline.
+2. Freeze the VLM, learn in-context. Give it the episode history in its context and let it "learn" without weight updates. This is what transformers naturally do, and it's the crucial contrast: the fly learns in weights, the LLM learns in activations. Which one a VLM prefers when it has both available is itself a question nobody has answered in an embodied setting.
+3. The fly-faithful one, which I think is the actual project. Frozen VLM (or frozen flyvis) for features → a small plastic module with the mushroom body's architecture: sparse random expansion (say 2,000 units from a few hundred features, ~5% active), a linear readout to valence/steering gain, and a three-factor local rule gated by a reward-prediction-error signal you compute from sugar contact. No backprop through the module. It trains at physics rate, it can't forget the rest of the model because the rest is frozen, and every "synapse" is inspectable. The fly solved continual learning by making the plastic part tiny and modular; steal that.
+
+Then the experiment is a Drosophila learning assay run in silico with a readable brain: single-pairing acquisition, extinction, reversal learning (MBs do reversal), and the killer one — does hunger state change gain on the learned readout rather than the readout itself, the way it does in the fly. Kill bars: learns within N pairings, reverses within M, generalizes to a novel odor at chance. All of this has real-fly numbers to compare against.
+
+Where the interp gets sharp. Versions 2 and 3 give you two systems that solve the same one-shot association with different substrates. Compare them: does the VLM's in-context solution build something like a sparse expansion in activation space? Does its attention pattern for "odor A → sugar" look like an induction head doing associative recall, i.e. the same thing you were ablating in GPT-2? And the trap to pre-register: if you use LoRA for version 1, the update is low-rank by construction, so "we found a low-rank update on a sparse code" would be your tooling, not the model. Use full-parameter on a tiny head or don't make that claim.
+
+The thing that actually excites me: a real fly's learning curve is observable from the outside and from a few dozen neurons at a time. Yours would be observable at every weight at every step, in a system whose reference architecture is known. You'd be watching the equalizer converge, tap by tap, with the biology telling you what the taps should look like.
+
 ---
 
 ## Build log, 2026-09-09 (Claude Code session in claude_box)
